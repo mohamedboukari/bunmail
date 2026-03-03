@@ -14,14 +14,36 @@ function shouldLog(level: LogLevel): boolean {
   return LOG_LEVELS[level] >= current;
 }
 
+/** ANSI color codes for terminal output */
+const COLORS: Record<LogLevel, string> = {
+  debug: "\x1b[90m",  // gray
+  info:  "\x1b[36m",  // cyan
+  warn:  "\x1b[33m",  // yellow
+  error: "\x1b[31m",  // red
+};
+
+/** Emoji prefix per log level */
+const EMOJIS: Record<LogLevel, string> = {
+  debug: "🔍",
+  info:  "✅",
+  warn:  "⚠️",
+  error: "❌",
+};
+
+/** ANSI reset code */
+const RESET = "\x1b[0m";
+
 function formatLog(level: LogLevel, message: string, data?: Record<string, unknown>): string {
-  const entry: Record<string, unknown> = {
-    timestamp: new Date().toISOString(),
-    level,
-    message,
-    ...data,
-  };
-  return JSON.stringify(entry);
+  const timestamp = new Date().toISOString();
+  const color = COLORS[level];
+  const emoji = EMOJIS[level];
+  const tag = `${color}${level.toUpperCase()}${RESET}`;
+  const MAGENTA = "\x1b[35m";
+  const meta = data && Object.keys(data).length > 0
+    ? ` ${MAGENTA}${JSON.stringify(data)}${RESET}`
+    : "";
+
+  return `${MAGENTA}${timestamp}${RESET} ${emoji} ${tag} ${message}${meta}`;
 }
 
 /* eslint-disable no-console -- This IS the logger; console is the intended output */

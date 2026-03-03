@@ -1,10 +1,12 @@
 import { Elysia } from "elysia";
+import { html } from "@elysiajs/html";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { emailsPlugin } from "./modules/emails/emails.plugin.ts";
 import { apiKeysPlugin } from "./modules/api-keys/api-keys.plugin.ts";
 import { domainsPlugin } from "./modules/domains/domains.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
+import { LandingPage } from "./pages/routes/landing.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 
 /**
@@ -14,6 +16,10 @@ import * as queueService from "./modules/emails/services/queue.service.ts";
  * Each module exposes an Elysia plugin that gets .use()'d here.
  */
 const app = new Elysia()
+  /** Enable JSX rendering for the landing page */
+  .use(html())
+  /** Root — developer-focused landing page */
+  .get("/", () => LandingPage())
   /** Health check — used by Docker, load balancers, and uptime monitors */
   .get("/health", () => ({
     status: "ok",
