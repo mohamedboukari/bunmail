@@ -1,0 +1,56 @@
+{
+  "name": "bunmail",
+  "version": "0.1.0",
+  "description": "Self-hosted email API for developers — free alternative to SendGrid/Resend",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "knip": "knip",
+    "test": "bun test",
+    "release": "bumpp",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "bash -c 'bunx tsc --noEmit'"
+    ]
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.2",
+    "@commitlint/config-conventional": "^20.4.2",
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "latest",
+    "@types/nodemailer": "^7.0.11",
+    "bumpp": "^10.4.1",
+    "drizzle-kit": "^0.31.9",
+    "eslint": "^10.0.2",
+    "globals": "^17.4.0",
+    "husky": "^9.1.7",
+    "knip": "^5.85.0",
+    "lint-staged": "^16.3.1",
+    "postgres": "^3.4.8",
+    "typescript-eslint": "^8.56.1"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@elysiajs/html": "^1.4.0",
+    "@kitajs/html": "^4.2.13",
+    "drizzle-orm": "^0.45.1",
+    "elysia": "^1.4.27",
+    "nodemailer": "^8.0.1"
+  }
+}
