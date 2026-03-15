@@ -16,26 +16,15 @@ export type Email = InferSelectModel<typeof emails>;
  * the validated DTO body into this shape before calling the service.
  */
 export interface SendEmailInput {
-  /** Sender email address (e.g. "hello@example.com") */
   from: string;
-
-  /** Recipient email address */
   to: string;
-
-  /** Optional comma-separated CC recipients */
   cc?: string;
-
-  /** Optional comma-separated BCC recipients */
   bcc?: string;
-
-  /** Email subject line */
-  subject: string;
-
-  /** Optional HTML body */
+  subject?: string;
   html?: string;
-
-  /** Optional plain text body (fallback for non-HTML clients) */
   text?: string;
+  templateId?: string;
+  variables?: Record<string, string>;
 }
 
 /**

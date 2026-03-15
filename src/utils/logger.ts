@@ -33,7 +33,22 @@ const EMOJIS: Record<LogLevel, string> = {
 /** ANSI reset code */
 const RESET = "\x1b[0m";
 
+/**
+ * Formats a log message as a structured JSON string (production)
+ * or a colored, human-readable string (development).
+ */
 function formatLog(level: LogLevel, message: string, data?: Record<string, unknown>): string {
+  /** Production: structured JSON for log aggregators (Grafana, Datadog, etc.) */
+  if (config.env === "production") {
+    return JSON.stringify({
+      level,
+      message,
+      timestamp: new Date().toISOString(),
+      ...data,
+    });
+  }
+
+  /** Development: colored terminal output */
   const timestamp = new Date().toISOString();
   const color = COLORS[level];
   const emoji = EMOJIS[level];

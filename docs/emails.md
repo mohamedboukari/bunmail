@@ -1,6 +1,6 @@
 # Emails Module
 
-Handles email queuing, delivery, and retrieval. Emails are queued via the REST API and delivered asynchronously using Nodemailer's direct SMTP mode.
+Handles email queuing, delivery, and retrieval. Emails are queued via the REST API and delivered asynchronously using Nodemailer's direct SMTP mode with DKIM signing.
 
 ## Schema
 
@@ -10,7 +10,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 |-----------------|----------------|-------------------------|---------------------------------------------|
 | `id`            | varchar(36)    | PK                      | Prefixed ID (`msg_<24 hex>`)                |
 | `api_key_id`    | varchar(36)    | NOT NULL, FK → api_keys | Which API key queued this email              |
-| `domain_id`     | varchar(36)    | nullable, FK → domains  | Sender domain (for DKIM, Phase 5)           |
+| `domain_id`     | varchar(36)    | nullable, FK → domains  | Sender domain (auto-linked for DKIM signing) |
 | `from_address`  | varchar(255)   | NOT NULL                | Sender email address                        |
 | `to_address`    | varchar(255)   | NOT NULL                | Recipient email address                     |
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
@@ -28,7 +28,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 
 **Indexes:**
 
-- `idx_emails_status_created` — `(status, created_at)` — queue processor uses this to find pending emails
+- `idx_emails_status_created` — `(status, created_at)` — queue processor uses this
 - `idx_emails_api_key_id` — `(api_key_id)` — fast filtering by API key
 
 ## Module Layout
@@ -39,76 +39,96 @@ src/modules/emails/
 ├── models/
 │   └── email.schema.ts             ← Drizzle pgTable + indexes
 ├── dtos/
-│   ├── send-email.dto.ts           ← Send email validation
+│   ├── send-email.dto.ts           ← Send email validation (direct + template)
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
-│   ├── email.service.ts            ← CRUD operations (create, list, getById)
-│   ├── mailer.service.ts           ← Nodemailer direct SMTP transport
-│   └── queue.service.ts            ← Async queue processor with retries
+│   ├── email.service.ts            ← CRUD + template resolution + domain linking
+│   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
+│   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
+│   └── stats.service.ts            ← Dashboard stats aggregation
 ├── serializations/
 │   └── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
 └── types/
     └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters
 ```
 
+## Sending Modes
+
+### Direct content
+
+Provide `subject`, `html`, and/or `text` inline:
+
+```json
+{
+  "from": "hello@example.com",
+  "to": "user@example.com",
+  "subject": "Hello!",
+  "html": "<h1>Hello</h1>"
+}
+```
+
+### Template-based
+
+Provide `templateId` and `variables` — subject/body are rendered from the template:
+
+```json
+{
+  "from": "hello@example.com",
+  "to": "user@example.com",
+  "templateId": "tpl_abc123...",
+  "variables": { "name": "Alice" }
+}
+```
+
+## Domain Linking
+
+When an email is created, the sender's domain (from `from` address) is looked up in the `domains` table:
+
+- If found, `domain_id` is set and DKIM signing uses the domain's private key
+- In **production** mode (`BUNMAIL_ENV=production`), the domain must be registered or the request is rejected
+- In **development** mode, unregistered domains are allowed (`domain_id` stays null)
+
 ## Service Methods
 
 ### email.service.ts
 
-#### `createEmail(input: SendEmailInput, apiKeyId: string): Promise<Email>`
+#### `createEmail(input, apiKeyId): Promise<Email>`
+Creates an email record with status `queued`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing.
 
-Inserts a new email into the database with status `queued`. The queue processor picks it up asynchronously.
+#### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
+Retrieves an email scoped to the requesting API key.
 
-#### `getEmailById(id: string, apiKeyId: string): Promise<Email | undefined>`
-
-Retrieves a single email by ID, scoped to the requesting API key. Prevents cross-tenant data leakage.
-
-#### `listEmails(apiKeyId: string, filters: ListEmailsFilters): Promise<{ data: Email[]; total: number }>`
-
-Paginated listing with optional status filter. Returns data + total count for pagination.
+#### `listEmails(apiKeyId, filters): Promise<{ data, total }>`
+Paginated listing with optional status filter.
 
 ### mailer.service.ts
 
-#### `sendMail(options: SendMailOptions): Promise<{ messageId: string }>`
-
-Sends an email via Nodemailer's direct SMTP mode. No relay server needed — connects directly to the recipient's MX server.
-
-**Configuration:**
-- `direct: true` — bypasses SMTP relay
-- `name` — hostname used in SMTP HELO (from `MAIL_HOSTNAME` env var)
+#### `sendMail(options): Promise<{ messageId }>`
+Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key.
 
 ### queue.service.ts
 
 #### `start(): void`
-
-Starts the queue processor. On startup, recovers any emails stuck in `sending` status (crash recovery) by resetting them to `queued`. Then starts polling every 2 seconds.
+Starts the queue processor. Recovers interrupted emails, then polls every 2 seconds.
 
 #### `stop(): void`
+Stops the queue processor gracefully.
 
-Stops the queue processor gracefully. No new emails are picked up after this call.
-
-#### `processQueue(): Promise<void>`
-
-Fetches up to 5 `queued` emails and processes them in parallel.
-
-#### `processEmail(email: Email): Promise<void>`
-
-Handles a single email:
-1. Set status → `sending`, increment `attempts`
-2. Call `mailerService.sendMail()`
-3. On success → set status `sent`, record `messageId` and `sentAt`
-4. On failure:
-   - If `attempts >= 3` → set status `failed`, record error
-   - Otherwise → set status back to `queued` for retry
+#### `processEmail(email): Promise<void>`
+1. Marks as `sending`, increments attempts
+2. Looks up DKIM keys for the sender's domain
+3. Sends via SMTP with DKIM signing (if keys available)
+4. On success: marks `sent`, fires `email.sent` webhook
+5. On failure after 3 attempts: marks `failed`, fires `email.failed` webhook
 
 ## Status Flow
 
 ```
-queued ──→ sending ──→ sent ✓
+queued ──→ sending ──→ sent ✓  → webhook: email.sent
   ↑           │
   └───────────┘ (retry, attempts < 3)
               │
-              └──→ failed ✗ (attempts >= 3)
+              └──→ failed ✗ (attempts >= 3) → webhook: email.failed
 ```
 
 ## Queue Architecture
@@ -116,6 +136,6 @@ queued ──→ sending ──→ sent ✓
 - **Polling interval:** 2 seconds
 - **Batch size:** 5 emails per cycle
 - **Max attempts:** 3
-- **Crash recovery:** On startup, `sending` → `queued` (for emails interrupted by server crash)
-- **Storage:** Database-backed (survives restarts)
-- **Processing:** In-memory poll loop (no Redis dependency for MVP)
+- **Crash recovery:** On startup, `sending` → `queued`
+- **DKIM:** Automatically signs with domain's RSA key when available
+- **Webhooks:** Dispatches `email.sent` and `email.failed` events

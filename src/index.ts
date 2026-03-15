@@ -4,9 +4,13 @@ import { logger } from "./utils/logger.ts";
 import { emailsPlugin } from "./modules/emails/emails.plugin.ts";
 import { apiKeysPlugin } from "./modules/api-keys/api-keys.plugin.ts";
 import { domainsPlugin } from "./modules/domains/domains.plugin.ts";
+import { webhooksPlugin } from "./modules/webhooks/webhooks.plugin.ts";
+import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
+import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
+import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 
 /**
  * Main Elysia application.
@@ -15,6 +19,22 @@ import * as queueService from "./modules/emails/services/queue.service.ts";
  * Each module exposes an Elysia plugin that gets .use()'d here.
  */
 const app = new Elysia()
+  /**
+   * Global error handler — catches unhandled errors from all routes
+   * and returns a consistent JSON response. Prevents stack traces
+   * from leaking in production.
+   */
+  .onError(({ error, set }) => {
+    const message = error instanceof Error ? error.message : "Internal server error";
+
+    logger.error("Unhandled error", {
+      error: message,
+      stack: config.env === "development" && error instanceof Error ? error.stack : undefined,
+    });
+
+    set.status = 500;
+    return { success: false, error: message };
+  })
   /** Root — developer-focused landing page */
   .use(landingPlugin)
   /** Health check — used by Docker, load balancers, and uptime monitors */
@@ -26,8 +46,14 @@ const app = new Elysia()
   .use(emailsPlugin)
   /** API Keys module — POST /, GET /, DELETE /:id */
   .use(apiKeysPlugin)
-  /** Domains module — POST /, GET /, GET /:id, DELETE /:id */
+  /** Domains module — POST /, GET /, GET /:id, DELETE /:id, POST /:id/verify */
   .use(domainsPlugin)
+  /** Webhooks module — POST /, GET /, DELETE /:id */
+  .use(webhooksPlugin)
+  /** Templates module — POST /, GET /, GET /:id, PUT /:id, DELETE /:id */
+  .use(templatesPlugin)
+  /** Inbound module — GET / (list), GET /:id */
+  .use(inboundPlugin)
   /** Dashboard — server-rendered UI under /dashboard */
   .use(pagesPlugin)
   .listen({
@@ -47,6 +73,14 @@ logger.info("BunMail server started", {
 queueService.start();
 
 /**
+ * Start the inbound SMTP server (if enabled).
+ * Listens for incoming emails and stores them in the database.
+ */
+if (config.smtp.enabled) {
+  smtpReceiver.start();
+}
+
+/**
  * Graceful shutdown handler.
  * Stops the queue processor first (no new emails picked up),
  * then stops the HTTP server.
@@ -54,6 +88,7 @@ queueService.start();
 function shutdown() {
   logger.info("Shutting down...");
   queueService.stop();
+  smtpReceiver.stop();
   app.stop();
   process.exit(0);
 }

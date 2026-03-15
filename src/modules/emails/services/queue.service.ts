@@ -1,7 +1,10 @@
 import { eq, asc } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
+import { domains } from "../../domains/models/domain.schema.ts";
 import { sendMail } from "./mailer.service.ts";
+import type { DkimOptions } from "./mailer.service.ts";
+import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 
 /** How often the queue checks for new emails to send (in ms) */
@@ -17,8 +20,7 @@ const MAX_ATTEMPTS = 3;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Starts the queue proc
- * essor.
+ * Starts the queue processor.
  *
  * First recovers any emails stuck in "sending" state (from a previous
  * crash), then begins polling every 2 seconds for queued emails.
@@ -131,6 +133,30 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     .where(eq(emails.id, emailId));
 
   try {
+    /** Look up DKIM keys for the sender's domain */
+    const senderDomain = email.fromAddress.split("@")[1];
+    let dkim: DkimOptions | undefined;
+
+    if (senderDomain) {
+      const [domain] = await db
+        .select({
+          name: domains.name,
+          dkimSelector: domains.dkimSelector,
+          dkimPrivateKey: domains.dkimPrivateKey,
+        })
+        .from(domains)
+        .where(eq(domains.name, senderDomain));
+
+      if (domain?.dkimPrivateKey) {
+        dkim = {
+          domainName: domain.name,
+          keySelector: domain.dkimSelector,
+          privateKey: domain.dkimPrivateKey,
+        };
+        logger.debug("DKIM signing enabled", { domain: domain.name, selector: domain.dkimSelector });
+      }
+    }
+
     /** Step 2: Attempt SMTP delivery */
     const result = await sendMail({
       from: email.fromAddress,
@@ -140,6 +166,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       subject: email.subject,
       html: email.html,
       text: email.textContent,
+      dkim,
     });
 
     /** Step 3a: Success — mark as "sent" and record the SMTP Message-ID */
@@ -157,6 +184,14 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       emailId,
       messageId: result.messageId,
       attempt,
+    });
+
+    dispatchEvent("email.sent", {
+      emailId,
+      from: email.fromAddress,
+      to: email.toAddress,
+      subject: email.subject,
+      messageId: result.messageId,
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -176,6 +211,14 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       logger.error("Email permanently failed after max attempts", {
         emailId,
         attempt,
+        error: errorMessage,
+      });
+
+      dispatchEvent("email.failed", {
+        emailId,
+        from: email.fromAddress,
+        to: email.toAddress,
+        subject: email.subject,
         error: errorMessage,
       });
     } else {

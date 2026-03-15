@@ -3,28 +3,23 @@ import { t } from "elysia";
 /**
  * Validation schema for POST /api/v1/emails/send request body.
  *
- * Elysia validates the incoming JSON against this schema before the
- * route handler runs. Invalid requests get a 422 response automatically.
+ * Supports two modes:
+ * 1. Direct — provide subject, html, and/or text inline.
+ * 2. Template — provide templateId + variables and the subject/body
+ *    are rendered from the template.
  */
 export const sendEmailDto = t.Object({
-  /** Sender email address — must be a valid email format */
   from: t.String({ format: "email" }),
-
-  /** Recipient email address — must be a valid email format */
   to: t.String({ format: "email" }),
-
-  /** Optional CC recipients (comma-separated email addresses) */
   cc: t.Optional(t.String()),
-
-  /** Optional BCC recipients (comma-separated email addresses) */
   bcc: t.Optional(t.String()),
 
-  /** Email subject line — max 500 characters */
-  subject: t.String({ maxLength: 500 }),
-
-  /** Optional HTML body of the email */
+  /** Required when not using a template */
+  subject: t.Optional(t.String({ maxLength: 500 })),
   html: t.Optional(t.String()),
-
-  /** Optional plain text body of the email */
   text: t.Optional(t.String()),
+
+  /** Template-based sending — takes precedence over inline content when set */
+  templateId: t.Optional(t.String()),
+  variables: t.Optional(t.Record(t.String(), t.String())),
 });
