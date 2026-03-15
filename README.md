@@ -212,18 +212,31 @@ See [docs/self-hosting.md](docs/self-hosting.md) for the full deployment guide.
 
 ## Deliverability (Avoiding Spam)
 
-To ensure emails land in the inbox, not spam, you need all of these:
+To ensure emails land in the inbox, not spam, you need all of the following DNS records configured for your domain:
 
-| Requirement | How to check |
-|---|---|
-| **SPF record** | `dig TXT yourdomain.com +short` |
-| **DKIM record** | `dig TXT bunmail._domainkey.yourdomain.com +short` |
-| **DMARC record** | `dig TXT _dmarc.yourdomain.com +short` |
-| **MX record** | `dig MX yourdomain.com +short` |
-| **Reverse DNS (PTR)** | `dig -x YOUR_IP +short` → must show `mail.yourdomain.com.` |
-| **Clean IP** | Check at [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx) |
+| Record | Example Value | Purpose |
+|--------|---------------|---------|
+| **SPF** | `v=spf1 a mx ip4:YOUR_IP ~all` | Tells receiving servers which IPs are allowed to send email on behalf of your domain. Prevents spoofing. |
+| **DKIM** | 2048-bit RSA key (auto-generated) | Cryptographically signs outgoing emails so recipients can verify the message wasn't tampered with in transit. BunMail generates and manages DKIM keys automatically when you register a domain. |
+| **DMARC** | `v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com` | Instructs receiving servers how to handle emails that fail SPF/DKIM checks (`none` = monitor, `quarantine` = mark as spam, `reject` = drop). The `rua` address receives aggregate reports. |
+| **MX** | `10 mail.yourdomain.com` | Points your domain's incoming mail to your server. Required even for outbound-only setups — many spam filters reject mail from domains without an MX record. The number (`10`) is priority (lower = preferred). |
+| **PTR (rDNS)** | `mail.yourdomain.com.` | Maps your server IP back to a hostname. Must match your `MAIL_HOSTNAME`. Set by your VPS/hosting provider (not in your DNS panel). Many mail servers reject messages from IPs without a valid PTR record. |
+| **A record** | `mail.yourdomain.com → YOUR_IP` | Maps your mail hostname to your server IP. Required for the MX and PTR records to resolve correctly. |
 
-Test your setup at [mail-tester.com](https://www.mail-tester.com) — aim for a score of 8+/10.
+### How to verify
+
+```bash
+dig TXT yourdomain.com +short                           # SPF
+dig TXT bunmail._domainkey.yourdomain.com +short        # DKIM
+dig TXT _dmarc.yourdomain.com +short                    # DMARC
+dig MX yourdomain.com +short                             # MX
+dig -x YOUR_SERVER_IP +short                             # PTR (rDNS)
+dig A mail.yourdomain.com +short                         # A record
+```
+
+### Test your score
+
+Send a test email to [mail-tester.com](https://www.mail-tester.com) — aim for **8+/10**. Check your IP reputation at [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx).
 
 See [docs/self-hosting.md](docs/self-hosting.md#preventing-spam-deliverability-guide) for the full deliverability guide.
 
