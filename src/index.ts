@@ -10,6 +10,7 @@ import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
 import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
+import { faviconPlugin } from "./pages/favicon.ts";
 import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
@@ -89,6 +90,8 @@ const app = new Elysia()
     set.status = 500;
     return { success: false, error: message };
   })
+  /** Favicon — SVG served at /favicon.svg */
+  .use(faviconPlugin)
   /** Root — developer-focused landing page */
   .use(landingPlugin)
   /** Health check — used by Docker, load balancers, and uptime monitors */

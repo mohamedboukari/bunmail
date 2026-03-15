@@ -9,6 +9,7 @@ export function LandingPage() {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title>BunMail — Self-hosted Email API for Developers</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
@@ -265,7 +266,7 @@ export function LandingPage() {
                 </div>
                 <h3 class="font-medium text-sm mb-2">Clone the repo</h3>
                 <div class="bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3">
-                  <code class="text-xs text-gray-100">git clone https://github.com/your-org/bunmail.git</code>
+                  <code class="text-xs text-gray-100">git clone https://github.com/mohamedboukari/bunmail.git</code>
                 </div>
               </div>
 
@@ -301,7 +302,7 @@ export function LandingPage() {
           <div class="max-w-5xl mx-auto px-4 flex items-center justify-between text-sm text-gray-500 dark:text-gray-400">
             <span>Built with Bun + Elysia</span>
             <a
-              href="https://github.com/your-org/bunmail"
+              href="https://github.com/mohamedboukari/bunmail"
               target="_blank"
               rel="noopener noreferrer"
               class="hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
