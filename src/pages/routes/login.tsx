@@ -9,6 +9,7 @@ export function LoginPage({ error }: { error?: string }) {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title>Login — BunMail</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
@@ -84,6 +85,7 @@ export function DashboardDisabledPage() {
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title>Dashboard Disabled — BunMail</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
