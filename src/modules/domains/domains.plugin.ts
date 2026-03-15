@@ -47,16 +47,16 @@ export const domainsPlugin = new Elysia({
       };
     },
     {
-      /** Validate request body against the create domain DTO */
       body: createDomainDto,
+      detail: {
+        tags: ["Domains"],
+        summary: "Register domain",
+        description: "Registers a new sender domain and generates DKIM keys.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * GET /api/v1/domains
-   *
-   * Returns all registered domains with their verification status.
-   */
   .get("/", async () => {
     logger.info("GET /api/v1/domains");
 
@@ -66,14 +66,15 @@ export const domainsPlugin = new Elysia({
       success: true,
       data: domains.map(serializeDomain),
     };
+  }, {
+    detail: {
+      tags: ["Domains"],
+      summary: "List domains",
+      description: "Returns all registered domains with their verification status.",
+      security: [{ bearerAuth: [] }],
+    },
   })
 
-  /**
-   * GET /api/v1/domains/:id
-   *
-   * Returns a single domain by its ID.
-   * Returns 404 if the domain doesn't exist.
-   */
   .get(
     "/:id",
     async ({ params, set }) => {
@@ -83,31 +84,22 @@ export const domainsPlugin = new Elysia({
 
       if (!domain) {
         set.status = 404;
-        return {
-          success: false,
-          error: "Domain not found",
-        };
+        return { success: false, error: "Domain not found" };
       }
 
-      return {
-        success: true,
-        data: serializeDomain(domain),
-      };
+      return { success: true, data: serializeDomain(domain) };
     },
     {
-      /** Validate the :id URL parameter */
-      params: t.Object({
-        id: t.String(),
-      }),
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Get domain by ID",
+        description: "Returns a single domain by its ID.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * DELETE /api/v1/domains/:id
-   *
-   * Removes a domain from the database (hard delete).
-   * Returns 404 if the domain doesn't exist.
-   */
   .delete(
     "/:id",
     async ({ params, set }) => {
@@ -117,31 +109,22 @@ export const domainsPlugin = new Elysia({
 
       if (!domain) {
         set.status = 404;
-        return {
-          success: false,
-          error: "Domain not found",
-        };
+        return { success: false, error: "Domain not found" };
       }
 
-      return {
-        success: true,
-        data: serializeDomain(domain),
-      };
+      return { success: true, data: serializeDomain(domain) };
     },
     {
-      /** Validate the :id URL parameter */
-      params: t.Object({
-        id: t.String(),
-      }),
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Delete domain",
+        description: "Removes a domain from the database (hard delete).",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * POST /api/v1/domains/:id/verify
-   *
-   * Triggers DNS verification (SPF, DKIM, DMARC) for a domain.
-   * Returns the updated domain with fresh verification status.
-   */
   .post(
     "/:id/verify",
     async ({ params, set }) => {
@@ -151,14 +134,10 @@ export const domainsPlugin = new Elysia({
 
       if (!domain) {
         set.status = 404;
-        return {
-          success: false,
-          error: "Domain not found",
-        };
+        return { success: false, error: "Domain not found" };
       }
 
       const result = await verifyDomain(domain);
-
       const updated = await domainService.getDomainById(params.id);
 
       return {
@@ -168,8 +147,12 @@ export const domainsPlugin = new Elysia({
       };
     },
     {
-      params: t.Object({
-        id: t.String(),
-      }),
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Verify domain DNS",
+        description: "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   );

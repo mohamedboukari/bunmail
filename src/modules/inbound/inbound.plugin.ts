@@ -64,14 +64,15 @@ export const inboundPlugin = new Elysia({
         page: t.Optional(t.Number({ minimum: 1 })),
         limit: t.Optional(t.Number({ minimum: 1, maximum: 100 })),
       }),
+      detail: {
+        tags: ["Inbound"],
+        summary: "List inbound emails",
+        description: "Returns a paginated list of received emails, newest first.",
+        security: [{ bearerAuth: [] }],
+      },
     },
   )
 
-  /**
-   * GET /api/v1/inbound/:id
-   *
-   * Returns a single inbound email by its ID.
-   */
   .get(
     "/:id",
     async ({ params, set }) => {
@@ -91,5 +92,11 @@ export const inboundPlugin = new Elysia({
     },
     {
       params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Inbound"],
+        summary: "Get inbound email by ID",
+        description: "Returns a single inbound email by its ID.",
+        security: [{ bearerAuth: [] }],
+      },
     },
   );

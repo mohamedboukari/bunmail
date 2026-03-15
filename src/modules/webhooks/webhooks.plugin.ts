@@ -41,7 +41,15 @@ export const webhooksPlugin = new Elysia({
         },
       };
     },
-    { body: createWebhookDto },
+    {
+      body: createWebhookDto,
+      detail: {
+        tags: ["Webhooks"],
+        summary: "Create webhook",
+        description: "Registers a new webhook endpoint. Returns the signing secret once — store it securely.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
   )
 
   .get("/", async (context) => {
@@ -53,6 +61,13 @@ export const webhooksPlugin = new Elysia({
       success: true,
       data: hooks.map(serializeWebhook),
     };
+  }, {
+    detail: {
+      tags: ["Webhooks"],
+      summary: "List webhooks",
+      description: "Returns all webhooks for the current API key.",
+      security: [{ bearerAuth: [] }],
+    },
   })
 
   .delete(
@@ -74,5 +89,11 @@ export const webhooksPlugin = new Elysia({
     },
     {
       params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Webhooks"],
+        summary: "Delete webhook",
+        description: "Removes a webhook endpoint.",
+        security: [{ bearerAuth: [] }],
+      },
     },
   );

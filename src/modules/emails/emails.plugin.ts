@@ -56,21 +56,19 @@ export const emailsPlugin = new Elysia({
       };
     },
     {
-      /** Validate request body against the send email DTO */
       body: sendEmailDto,
+      detail: {
+        tags: ["Emails"],
+        summary: "Send an email",
+        description: "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * GET /api/v1/emails
-   *
-   * Returns a paginated list of emails for the current API key.
-   * Supports optional `status` filter and `page`/`limit` query params.
-   */
   .get(
     "/",
     async (context) => {
-      /** apiKeyId from auth middleware derive() */
       const { query, apiKeyId } = context as typeof context & { apiKeyId: string };
 
       logger.info("GET /api/v1/emails", { apiKeyId, ...query });
@@ -92,29 +90,25 @@ export const emailsPlugin = new Elysia({
       };
     },
     {
-      /** Validate query parameters against the list emails DTO */
       query: listEmailsDto,
+      detail: {
+        tags: ["Emails"],
+        summary: "List emails",
+        description: "Returns a paginated list of emails for the current API key. Supports optional status filter.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * GET /api/v1/emails/:id
-   *
-   * Returns a single email by its ID. Scoped to the current API key —
-   * users can only see emails they created. Returns 404 if not found.
-   */
   .get(
     "/:id",
     async (context) => {
-      /** apiKeyId from auth middleware derive() */
       const { params, apiKeyId, set } = context as typeof context & { apiKeyId: string };
 
       logger.info("GET /api/v1/emails/:id", { emailId: params.id, apiKeyId });
 
-      /** Pass apiKeyId to ensure users can only see their own emails */
       const email = await emailService.getEmailById(params.id, apiKeyId);
 
-      /** Return 404 if no email matches the given ID and API key */
       if (!email) {
         set.status = 404;
         return {
@@ -129,9 +123,14 @@ export const emailsPlugin = new Elysia({
       };
     },
     {
-      /** Validate the :id URL parameter */
       params: t.Object({
         id: t.String(),
       }),
+      detail: {
+        tags: ["Emails"],
+        summary: "Get email by ID",
+        description: "Returns a single email by its ID. Scoped to the current API key.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   );

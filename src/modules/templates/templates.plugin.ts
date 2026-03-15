@@ -43,7 +43,15 @@ export const templatesPlugin = new Elysia({
 
       return { success: true, data: serializeTemplate(template) };
     },
-    { body: createTemplateDto },
+    {
+      body: createTemplateDto,
+      detail: {
+        tags: ["Templates"],
+        summary: "Create template",
+        description: "Creates a new email template with optional Mustache-style {{variable}} substitution.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
   )
 
   .get("/", async (context) => {
@@ -52,6 +60,13 @@ export const templatesPlugin = new Elysia({
     const list = await templateService.listTemplates(apiKeyId);
 
     return { success: true, data: list.map(serializeTemplate) };
+  }, {
+    detail: {
+      tags: ["Templates"],
+      summary: "List templates",
+      description: "Returns all templates for the current API key.",
+      security: [{ bearerAuth: [] }],
+    },
   })
 
   .get(
@@ -68,7 +83,15 @@ export const templatesPlugin = new Elysia({
 
       return { success: true, data: serializeTemplate(template) };
     },
-    { params: t.Object({ id: t.String() }) },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Templates"],
+        summary: "Get template by ID",
+        description: "Returns a single template by its ID.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
   )
 
   .put(
@@ -94,6 +117,12 @@ export const templatesPlugin = new Elysia({
     {
       params: t.Object({ id: t.String() }),
       body: updateTemplateDto,
+      detail: {
+        tags: ["Templates"],
+        summary: "Update template",
+        description: "Updates an existing template. All fields are optional.",
+        security: [{ bearerAuth: [] }],
+      },
     },
   )
 
@@ -111,5 +140,13 @@ export const templatesPlugin = new Elysia({
 
       return { success: true, data: serializeTemplate(template) };
     },
-    { params: t.Object({ id: t.String() }) },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Templates"],
+        summary: "Delete template",
+        description: "Permanently deletes a template.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
   );

@@ -275,17 +275,144 @@ git pull
 docker compose down && docker compose up -d --build
 ```
 
+## Preventing Spam (Deliverability Guide)
+
+If your emails land in spam, follow this checklist. Each step contributes to your sender reputation — skip none of them.
+
+### 1. DNS Authentication (Required)
+
+All three must be set correctly. Verify with:
+
+```bash
+# SPF
+dig TXT yourdomain.com +short
+# Expected: "v=spf1 a mx ip4:YOUR_SERVER_IP ~all"
+
+# DKIM
+dig TXT bunmail._domainkey.yourdomain.com +short
+# Expected: "v=DKIM1; k=rsa; p=MIIBIj..."
+
+# DMARC
+dig TXT _dmarc.yourdomain.com +short
+# Expected: "v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com"
+```
+
+| Record | What it does | Without it |
+|--------|-------------|------------|
+| **SPF** | Authorizes your server IP to send mail for your domain | Gmail marks as suspicious |
+| **DKIM** | Cryptographically signs every email so recipients can verify it wasn't tampered with | Fails authentication checks |
+| **DMARC** | Tells receivers what to do when SPF/DKIM fail (quarantine, reject, or report) | No policy = no trust signal |
+
+### 2. Reverse DNS / PTR Record (Critical)
+
+This is the **#1 reason** new servers land in spam. The PTR record maps your server IP back to your domain. Without it, Gmail and other providers see a generic datacenter hostname and immediately flag the email.
+
+```bash
+# Check your current PTR
+dig -x YOUR_SERVER_IP +short
+
+# Bad:  123-45-67-89-host.colocrossing.com.
+# Good: mail.yourdomain.com.
+```
+
+**How to set it:** Contact your VPS provider's support team and ask them to set the PTR record for your IP to `mail.yourdomain.com`. Most providers (RackNerd, Hetzner, OVH) handle this via a support ticket within a few hours.
+
+The PTR hostname must:
+- Match your `MAIL_HOSTNAME` in `.env`
+- Have a matching A record pointing back to the same IP (forward-confirmed reverse DNS)
+
+### 3. MX Record (Required)
+
+Even if you only send email, having an MX record tells other servers your domain is a legitimate mail domain:
+
+```bash
+dig MX yourdomain.com +short
+# Expected: 10 mail.yourdomain.com.
+```
+
+### 4. Server Hostname
+
+Set the system hostname to match your PTR and `MAIL_HOSTNAME`:
+
+```bash
+hostnamectl set-hostname mail.yourdomain.com
+```
+
+This ensures the SMTP EHLO/HELO greeting matches the PTR, which is verified by receiving servers.
+
+### 5. IP Reputation
+
+New IPs have no reputation, which is treated as suspicious. Build it gradually:
+
+- **Start slow** — send 10-20 emails per day for the first week
+- **Increase gradually** — double volume each week
+- **Send to engaged recipients** — avoid sending to lists that haven't opted in
+- **Monitor bounces** — high bounce rates destroy reputation fast
+
+Check if your IP is blacklisted:
+
+```bash
+# Check major blacklists
+# Visit: https://mxtoolbox.com/blacklists.aspx
+# Enter: YOUR_SERVER_IP
+```
+
+### 6. Email Content Best Practices
+
+Even with perfect DNS, bad content triggers spam filters:
+
+- **Always include a plain text version** — use both `html` and `text` fields in the API
+- **Avoid spam trigger words** — "free", "limited time", "act now", excessive caps/exclamation marks
+- **Include an unsubscribe link** — required by most email providers for bulk mail
+- **Use a real From address** — `hello@yourdomain.com` is better than `noreply@yourdomain.com`
+- **Don't send HTML-only** — always include a text fallback
+- **Keep image-to-text ratio reasonable** — don't send an email that's just one big image
+
+### 7. Verify Your Setup
+
+After configuring everything, use these tools to verify:
+
+| Tool | URL | What it checks |
+|------|-----|----------------|
+| **MXToolbox** | [mxtoolbox.com/SuperTool.aspx](https://mxtoolbox.com/SuperTool.aspx) | SPF, DKIM, DMARC, PTR, blacklists |
+| **Mail Tester** | [mail-tester.com](https://www.mail-tester.com) | Send a test email and get a deliverability score (0-10) |
+| **Google Postmaster** | [postmaster.google.com](https://postmaster.google.com) | Gmail-specific reputation and delivery stats |
+| **DKIM Validator** | [dkimvalidator.com](https://dkimvalidator.com) | Send a test email to verify DKIM signing works |
+
+### 8. Gmail "Show Original" Trick
+
+When testing, open the email in Gmail, click the three dots menu → **"Show original"**. This shows the raw authentication results:
+
+```
+SPF:   PASS with IP 23.95.164.177
+DKIM:  PASS with domain yourdomain.com
+DMARC: PASS
+```
+
+If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
+
+### Quick Checklist
+
+```
+[ ] SPF TXT record added
+[ ] DKIM TXT record added (from BunMail domain registration)
+[ ] DMARC TXT record added
+[ ] MX record pointing to mail.yourdomain.com
+[ ] A record for mail.yourdomain.com → server IP
+[ ] PTR (reverse DNS) set to mail.yourdomain.com
+[ ] Server hostname matches PTR
+[ ] MAIL_HOSTNAME in .env matches PTR
+[ ] IP not on any blacklists
+[ ] Tested with mail-tester.com (aim for 8+/10)
+```
+
+---
+
 ## Troubleshooting
 
 **Container keeps restarting:**
 - Check logs: `docker compose logs app`
 - Common cause: missing env vars or database connection issues
-
-**Emails land in spam:**
-- Ensure SPF, DKIM, and DMARC records are correctly configured
-- Ensure PTR (reverse DNS) record matches `MAIL_HOSTNAME`
-- Check your server IP reputation at [MXToolbox](https://mxtoolbox.com/blacklists.aspx)
-- New server IPs have no reputation — start with low volume and build up
 
 **"Failed to connect" errors:**
 - Outbound port 25 is blocked — contact your VPS provider or choose one from the recommended list

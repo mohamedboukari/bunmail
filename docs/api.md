@@ -2,6 +2,13 @@
 
 Base URL: `http://localhost:3000`
 
+## OpenAPI Specification
+
+BunMail exposes an auto-generated OpenAPI 3.0 spec:
+
+- **Interactive docs (Scalar):** `GET /api/docs`
+- **Raw JSON spec:** `GET /api/docs/json`
+
 ## Authentication
 
 All endpoints (except `/health`) require a Bearer token in the `Authorization` header:
