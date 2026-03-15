@@ -51,17 +51,16 @@ export const apiKeysPlugin = new Elysia({
       };
     },
     {
-      /** Validate request body against the create API key DTO */
       body: createApiKeyDto,
+      detail: {
+        tags: ["API Keys"],
+        summary: "Create API key",
+        description: "Creates a new API key. The raw key is returned once — store it securely.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   )
 
-  /**
-   * GET /api/v1/api-keys
-   *
-   * Returns all API keys (active and revoked). Hashes are stripped by
-   * the serializer — only the prefix is shown for identification.
-   */
   .get("/", async () => {
     logger.info("GET /api/v1/api-keys");
 
@@ -71,15 +70,15 @@ export const apiKeysPlugin = new Elysia({
       success: true,
       data: keys.map(serializeApiKey),
     };
+  }, {
+    detail: {
+      tags: ["API Keys"],
+      summary: "List API keys",
+      description: "Returns all API keys (active and revoked). Key hashes are hidden.",
+      security: [{ bearerAuth: [] }],
+    },
   })
 
-  /**
-   * DELETE /api/v1/api-keys/:id
-   *
-   * Revokes an API key by setting `is_active` to false.
-   * The key stays in the DB for audit — it just stops working.
-   * Returns 404 if the key ID doesn't exist.
-   */
   .delete(
     "/:id",
     async ({ params, set }) => {
@@ -87,7 +86,6 @@ export const apiKeysPlugin = new Elysia({
 
       const apiKey = await apiKeyService.revokeApiKey(params.id);
 
-      /** Return 404 if no key matches the given ID */
       if (!apiKey) {
         set.status = 404;
         return {
@@ -102,9 +100,14 @@ export const apiKeysPlugin = new Elysia({
       };
     },
     {
-      /** Validate the :id URL parameter */
       params: t.Object({
         id: t.String(),
       }),
+      detail: {
+        tags: ["API Keys"],
+        summary: "Revoke API key",
+        description: "Soft-deletes an API key by setting is_active to false. The key remains for audit purposes.",
+        security: [{ bearerAuth: [] }],
+      },
     }
   );

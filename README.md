@@ -15,6 +15,7 @@ BunMail is a REST API for sending transactional emails with direct SMTP delivery
 - **Inbound SMTP** — receive and store incoming emails
 - **API key auth** — SHA-256 hashed Bearer tokens with rate limiting
 - **Web dashboard** — server-rendered UI for managing emails, domains, keys, and templates
+- **OpenAPI spec** — auto-generated OpenAPI 3.0 docs at `/api/docs`
 - **Docker ready** — one command to run the full stack
 
 ## Tech Stack
@@ -208,6 +209,23 @@ docker compose up -d
 This starts BunMail + PostgreSQL. The app auto-runs database migrations on boot. API runs on port 3000, inbound SMTP on port 2525.
 
 See [docs/self-hosting.md](docs/self-hosting.md) for the full deployment guide.
+
+## Deliverability (Avoiding Spam)
+
+To ensure emails land in the inbox, not spam, you need all of these:
+
+| Requirement | How to check |
+|---|---|
+| **SPF record** | `dig TXT yourdomain.com +short` |
+| **DKIM record** | `dig TXT bunmail._domainkey.yourdomain.com +short` |
+| **DMARC record** | `dig TXT _dmarc.yourdomain.com +short` |
+| **MX record** | `dig MX yourdomain.com +short` |
+| **Reverse DNS (PTR)** | `dig -x YOUR_IP +short` → must show `mail.yourdomain.com.` |
+| **Clean IP** | Check at [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx) |
+
+Test your setup at [mail-tester.com](https://www.mail-tester.com) — aim for a score of 8+/10.
+
+See [docs/self-hosting.md](docs/self-hosting.md#preventing-spam-deliverability-guide) for the full deliverability guide.
 
 ## Documentation
 

@@ -1,4 +1,5 @@
 import { Elysia } from "elysia";
+import { openapi } from "@elysiajs/openapi";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { emailsPlugin } from "./modules/emails/emails.plugin.ts";
@@ -9,6 +10,7 @@ import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
 import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
+import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 
@@ -19,12 +21,61 @@ import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.
  * Each module exposes an Elysia plugin that gets .use()'d here.
  */
 const app = new Elysia()
+  .use(
+    openapi({
+      path: "/api/docs",
+      documentation: {
+        info: {
+          title: "BunMail API",
+          version: "0.1.0",
+          description:
+            "Self-hosted email API for developers — free alternative to SendGrid/Resend. " +
+            "Send transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, " +
+            "email queue with retries, templates, and webhooks.",
+          license: { name: "MIT", url: "https://github.com/mohamedboukari/bunmail/blob/main/LICENSE" },
+          contact: { name: "BunMail", url: "https://github.com/mohamedboukari/bunmail" },
+        },
+        tags: [
+          { name: "Emails", description: "Send and track transactional emails" },
+          { name: "API Keys", description: "Create and manage API keys for authentication" },
+          { name: "Domains", description: "Register sender domains and verify DNS records" },
+          { name: "Webhooks", description: "Subscribe to email delivery events" },
+          { name: "Templates", description: "Create reusable email templates with variable substitution" },
+          { name: "Inbound", description: "View received inbound emails" },
+          { name: "Health", description: "Server health checks" },
+        ],
+        components: {
+          securitySchemes: {
+            bearerAuth: {
+              type: "http",
+              scheme: "bearer",
+              description: "API key obtained from the /api/v1/api-keys endpoint or seed script",
+            },
+          },
+        },
+      },
+    }),
+  )
   /**
    * Global error handler — catches unhandled errors from all routes
    * and returns a consistent JSON response. Prevents stack traces
    * from leaking in production.
    */
-  .onError(({ error, set }) => {
+  .onError(({ error, code, set, request }) => {
+    if (code === "NOT_FOUND") {
+      set.status = 404;
+
+      const accept = request.headers.get("accept") ?? "";
+      if (accept.includes("text/html")) {
+        return new Response("<!doctype html>" + NotFoundPage(), {
+          status: 404,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      }
+
+      return { success: false, error: "Not found" };
+    }
+
     const message = error instanceof Error ? error.message : "Internal server error";
 
     logger.error("Unhandled error", {
@@ -41,7 +92,9 @@ const app = new Elysia()
   .get("/health", () => ({
     status: "ok",
     timestamp: new Date().toISOString(),
-  }))
+  }), {
+    detail: { tags: ["Health"], summary: "Health check", description: "Returns server health status — used by Docker, load balancers, and uptime monitors." },
+  })
   /** Emails module — POST /send, GET /, GET /:id */
   .use(emailsPlugin)
   /** API Keys module — POST /, GET /, DELETE /:id */
