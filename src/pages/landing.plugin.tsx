@@ -10,4 +10,4 @@ export const landingPlugin = new Elysia()
     return new Response("<!doctype html>" + LandingPage(), {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
-  });
+  }, { detail: { hide: true } });

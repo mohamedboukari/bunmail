@@ -24,6 +24,9 @@ const app = new Elysia()
   .use(
     openapi({
       path: "/api/docs",
+      scalar: {
+        spec: { url: "/api/docs/json" },
+      },
       documentation: {
         info: {
           title: "BunMail API",

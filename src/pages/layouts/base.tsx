@@ -8,7 +8,7 @@ interface BaseLayoutProps {
   /** Page title — appended to "BunMail" in the <title> tag */
   title: string;
   /** Currently active nav item — used to highlight the active link */
-  activeNav?: "home" | "emails" | "api-keys" | "domains";
+  activeNav?: "home" | "emails" | "send" | "api-keys" | "domains" | "templates" | "webhooks" | "inbound";
 }
 
 /**
@@ -67,8 +67,12 @@ function Nav({ activeNav }: { activeNav?: string }) {
   const links = [
     { id: "home", label: "Dashboard", href: "/dashboard", icon: HomeIcon },
     { id: "emails", label: "Emails", href: "/dashboard/emails", icon: EmailIcon },
+    { id: "send", label: "Send Email", href: "/dashboard/send", icon: SendIcon },
     { id: "api-keys", label: "API Keys", href: "/dashboard/api-keys", icon: KeyIcon },
+    { id: "templates", label: "Templates", href: "/dashboard/templates", icon: TemplateIcon },
     { id: "domains", label: "Domains", href: "/dashboard/domains", icon: GlobeIcon },
+    { id: "webhooks", label: "Webhooks", href: "/dashboard/webhooks", icon: WebhookIcon },
+    { id: "inbound", label: "Inbound", href: "/dashboard/inbound", icon: InboundIcon },
   ];
 
   return (
@@ -153,10 +157,42 @@ function EmailIcon() {
   );
 }
 
+function SendIcon() {
+  return (
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12m0 0h7.5M5.999 12l9.894-5.553M5.999 12l9.894 5.553" />
+    </svg>
+  );
+}
+
 function KeyIcon() {
   return (
     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
       <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
+    </svg>
+  );
+}
+
+function WebhookIcon() {
+  return (
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244" />
+    </svg>
+  );
+}
+
+function InboundIcon() {
+  return (
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 012.012 1.244l.256.512a2.25 2.25 0 002.013 1.244h3.218a2.25 2.25 0 002.013-1.244l.256-.512a2.25 2.25 0 012.013-1.244h3.86m-19.5 2.25c.18.324.283.696.283 1.089v7.5c0 1.035.84 1.875 1.875 1.875h15.75c1.035 0 1.875-.84 1.875-1.875v-7.5c0-.393.104-.765.283-1.09m-19.5 2.25h19.5" />
+    </svg>
+  );
+}
+
+function TemplateIcon() {
+  return (
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
     </svg>
   );
 }
