@@ -53,6 +53,21 @@ export function BaseLayout({ title, activeNav, children }: PropsWithChildren<Bas
             {children}
           </main>
         </div>
+        {/* Prevent double form submissions — disables button + shows spinner on first click */}
+        <script>
+          {`
+            document.querySelectorAll('form').forEach(function(form) {
+              form.addEventListener('submit', function() {
+                var btn = form.querySelector('button[type="submit"]');
+                if (!btn || btn.disabled) return;
+                btn.disabled = true;
+                btn.dataset.originalText = btn.textContent;
+                btn.textContent = 'Processing\u2026';
+                btn.classList.add('opacity-60', 'cursor-not-allowed');
+              });
+            });
+          `}
+        </script>
       </body>
     </html>
   );
