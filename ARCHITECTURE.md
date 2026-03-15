@@ -169,16 +169,25 @@ bunmail/
 │   │           └── inbound.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
+│       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
 │       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav
 │       ├── routes/
 │       │   ├── login.tsx                 ← Login form (standalone, no nav)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
+│       │   ├── landing.tsx               ← Public marketing page
+│       │   ├── not-found.tsx             ← Custom 404 page
+│       │   ├── send-email.tsx            ← Compose & send email form
 │       │   ├── emails.tsx                ← Email logs table + filters
 │       │   ├── email-detail.tsx          ← Single email view
 │       │   ├── api-keys.tsx              ← API keys list + create + revoke
 │       │   ├── domains.tsx               ← Domains list + add + delete
-│       │   └── domain-detail.tsx         ← Domain verification status
+│       │   ├── domain-detail.tsx         ← Domain verification status
+│       │   ├── templates.tsx             ← Templates list + create
+│       │   ├── template-detail.tsx       ← Template edit form
+│       │   ├── webhooks.tsx              ← Webhooks list + create
+│       │   ├── inbound.tsx               ← Inbound emails list
+│       │   └── inbound-detail.tsx        ← Inbound email detail + preview
 │       └── components/
 │           ├── stats-card.tsx            ← Stat card (label, value, accent)
 │           ├── status-badge.tsx          ← Status + verification badges
@@ -467,21 +476,34 @@ domains   ──1:N──▶ emails
 
 ### Dashboard (HTML)
 
-| Method | Path                               | Description           | Auth     |
-|--------|------------------------------------|-----------------------|----------|
-| GET    | /dashboard/login                   | Login form            | No       |
-| POST   | /dashboard/login                   | Validate password     | No       |
-| POST   | /dashboard/logout                  | Clear session         | No       |
-| GET    | /dashboard                         | Stats overview        | Session  |
-| GET    | /dashboard/emails                  | Email logs + filters  | Session  |
-| GET    | /dashboard/emails/:id              | Email detail          | Session  |
-| GET    | /dashboard/api-keys                | API keys management   | Session  |
-| POST   | /dashboard/api-keys                | Create API key        | Session  |
-| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key        | Session  |
-| GET    | /dashboard/domains                 | Domains management    | Session  |
-| POST   | /dashboard/domains                 | Add domain            | Session  |
-| POST   | /dashboard/domains/:id/delete      | Delete domain         | Session  |
-| GET    | /dashboard/domains/:id             | Domain detail         | Session  |
+| Method | Path                               | Description             | Auth     |
+|--------|------------------------------------|-------------------------|----------|
+| GET    | /dashboard/login                   | Login form              | No       |
+| POST   | /dashboard/login                   | Validate password       | No       |
+| POST   | /dashboard/logout                  | Clear session           | No       |
+| GET    | /dashboard                         | Stats overview          | Session  |
+| GET    | /dashboard/send                    | Compose & send email    | Session  |
+| POST   | /dashboard/send                    | Queue email for send    | Session  |
+| GET    | /dashboard/emails                  | Email logs + filters    | Session  |
+| GET    | /dashboard/emails/:id              | Email detail            | Session  |
+| GET    | /dashboard/api-keys                | API keys management     | Session  |
+| POST   | /dashboard/api-keys                | Create API key          | Session  |
+| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key          | Session  |
+| GET    | /dashboard/domains                 | Domains management      | Session  |
+| POST   | /dashboard/domains                 | Add domain              | Session  |
+| POST   | /dashboard/domains/:id/delete      | Delete domain           | Session  |
+| POST   | /dashboard/domains/:id/verify      | Verify domain DNS       | Session  |
+| GET    | /dashboard/domains/:id             | Domain detail           | Session  |
+| GET    | /dashboard/templates               | Templates management    | Session  |
+| POST   | /dashboard/templates               | Create template         | Session  |
+| GET    | /dashboard/templates/:id           | Template detail + edit  | Session  |
+| POST   | /dashboard/templates/:id/edit      | Update template         | Session  |
+| POST   | /dashboard/templates/:id/delete    | Delete template         | Session  |
+| GET    | /dashboard/webhooks                | Webhooks management     | Session  |
+| POST   | /dashboard/webhooks                | Create webhook          | Session  |
+| POST   | /dashboard/webhooks/:id/delete     | Delete webhook          | Session  |
+| GET    | /dashboard/inbound                 | Inbound emails list     | Session  |
+| GET    | /dashboard/inbound/:id             | Inbound email detail    | Session  |
 
 Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry).
 

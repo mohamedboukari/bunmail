@@ -14,7 +14,7 @@ BunMail is a REST API for sending transactional emails with direct SMTP delivery
 - **Email templates** — Mustache-style `{{variable}}` substitution
 - **Inbound SMTP** — receive and store incoming emails
 - **API key auth** — SHA-256 hashed Bearer tokens with rate limiting
-- **Web dashboard** — server-rendered UI for managing emails, domains, keys, and templates
+- **Web dashboard** — server-rendered UI for sending emails, managing templates, webhooks, domains, keys, and viewing inbound mail
 - **OpenAPI spec** — auto-generated OpenAPI 3.0 docs at `/api/docs`
 - **Docker ready** — one command to run the full stack
 
