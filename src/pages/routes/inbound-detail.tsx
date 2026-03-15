@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
 
 /**
@@ -41,14 +42,10 @@ export function InboundDetailPage({ email }: InboundDetailPageProps) {
       {email.html && (
         <div class="mb-6">
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">HTML Content</h2>
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto max-h-96">
-            <iframe
-              srcdoc={email.html}
-              class="w-full min-h-[200px] border-0"
-              sandbox=""
-              title="Email HTML preview"
-            ></iframe>
+          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto">
+            <HtmlPreview html={email.html} title="Inbound email HTML preview" />
           </div>
+          <HtmlPreviewScript />
         </div>
       )}
 
