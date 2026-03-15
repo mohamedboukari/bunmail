@@ -9,6 +9,8 @@ export default {
     "subject-empty": [2, "never"],
     /** Require non-empty type */
     "type-empty": [2, "never"],
+    "body-max-line-length": [0],
+    "subject-case": [0],
     /** Require type to be one of the conventional set */
     "type-enum": [
       2,
