@@ -15,6 +15,27 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    env:
+      DATABASE_URL: postgresql://bunmail:bunmail@localhost:5432/bunmail_test
+      API_KEY_SEED: ci_test_key_not_real
+      DASHBOARD_PASSWORD: ci_test_pass
+      MAIL_HOSTNAME: localhost
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: bunmail
+          POSTGRES_PASSWORD: bunmail
+          POSTGRES_DB: bunmail_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U bunmail"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +46,7 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       - name: Type check
         run: bunx tsc --noEmit

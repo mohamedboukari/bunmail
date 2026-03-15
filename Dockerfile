@@ -28,9 +28,6 @@ COPY --from=install /app/node_modules ./node_modules
 COPY package.json tsconfig.json drizzle.config.ts ./
 COPY src/ ./src/
 
-# Generate Drizzle migration files from the schema
-RUN bun run db:generate
-
 # Expose the HTTP API port and (optionally) the inbound SMTP port
 EXPOSE 3000 2525
 
@@ -38,5 +35,5 @@ EXPOSE 3000 2525
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD bun -e "const r = await fetch('http://localhost:3000/health'); if (!r.ok) process.exit(1);"
 
-# Run database migrations then start the server
-CMD ["sh", "-c", "bun run db:migrate && bun run start"]
+# Push schema to DB (creates/alters tables as needed) then start the server
+CMD ["sh", "-c", "bun run db:push && bun run start"]
