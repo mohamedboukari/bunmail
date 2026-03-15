@@ -11,7 +11,8 @@ services:
     build: .
     ports:
       - "3000:3000"   # HTTP API + Dashboard
-      - "2525:2525"   # Inbound SMTP (optional)
+      - "25:2525"     # Inbound SMTP (external 25 → internal 2525)
+      - "2525:2525"   # Inbound SMTP (direct, for testing)
     env_file: .env
     environment:
       DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
