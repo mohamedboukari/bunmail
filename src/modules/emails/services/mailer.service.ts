@@ -10,42 +10,32 @@ import { logger } from "../../../utils/logger.ts";
  * the recipient's mail server without an intermediate SMTP relay.
  */
 interface DirectTransportOptions {
-  /** Enable direct MX delivery (no relay server) */
   direct: true;
-  /** Hostname used in the SMTP HELO command */
   name: string;
 }
 
-/**
- * Nodemailer transport configured in "direct" mode.
- *
- * Direct mode means emails are sent straight to the recipient's MX server
- * without going through an SMTP relay (no SendGrid, no Gmail SMTP, etc.).
- * The `name` option is used in the SMTP HELO command — it should match
- * the server's PTR record for best deliverability.
- */
 const transport = nodemailer.createTransport({
   direct: true,
   name: config.mail.hostname,
 } as DirectTransportOptions as nodemailer.TransportOptions);
 
-/**
- * The result returned after a successful SMTP send.
- */
 export interface SendMailResult {
-  /** The SMTP Message-ID assigned by the receiving server */
   messageId: string;
+}
+
+/** DKIM signing options passed from the queue processor. */
+export interface DkimOptions {
+  domainName: string;
+  keySelector: string;
+  privateKey: string;
 }
 
 /**
  * Sends a single email via SMTP direct delivery.
  *
- * This is called by the queue processor for each email it picks up.
- * It resolves the recipient's MX records and delivers directly.
- * Throws on failure (network error, rejected by MX server, etc.).
- *
- * @param options - Standard email fields (from, to, subject, html/text)
- * @returns The SMTP Message-ID on success
+ * When DKIM options are provided, signs the outgoing message with the
+ * domain's private key so the recipient's server can verify the signature
+ * via DNS TXT lookup.
  */
 export async function sendMail(options: {
   from: string;
@@ -55,17 +45,15 @@ export async function sendMail(options: {
   subject: string;
   html?: string | null;
   text?: string | null;
+  dkim?: DkimOptions;
 }): Promise<SendMailResult> {
   logger.info("Sending email via SMTP", {
     from: options.from,
     to: options.to,
     subject: options.subject,
+    dkim: options.dkim ? options.dkim.domainName : "none",
   });
 
-  /**
-   * Build the Nodemailer message options.
-   * Undefined fields are omitted — Nodemailer ignores them.
-   */
   const mailOptions: Mail.Options = {
     from: options.from,
     to: options.to,
@@ -76,7 +64,14 @@ export async function sendMail(options: {
     text: options.text ?? undefined,
   };
 
-  /** Send the email and capture the SMTP response */
+  if (options.dkim) {
+    mailOptions.dkim = {
+      domainName: options.dkim.domainName,
+      keySelector: options.dkim.keySelector,
+      privateKey: options.dkim.privateKey,
+    };
+  }
+
   const info = await transport.sendMail(mailOptions);
 
   logger.info("Email sent successfully", {

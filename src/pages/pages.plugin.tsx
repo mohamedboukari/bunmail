@@ -18,6 +18,7 @@ import * as statsService from "../modules/emails/services/stats.service.ts";
 import * as emailService from "../modules/emails/services/email.service.ts";
 import * as apiKeyService from "../modules/api-keys/services/api-key.service.ts";
 import * as domainService from "../modules/domains/services/domain.service.ts";
+import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
 
 /* ─── Session Helpers ─── */
 
@@ -413,10 +414,40 @@ export const pagesPlugin = new Elysia({
   })
 
   /**
+   * POST /dashboard/domains/:id/verify
+   * Triggers DNS verification and redirects back to domain detail.
+   */
+  .post("/domains/:id/verify", async ({ params, set }) => {
+    const domain = await domainService.getDomainById(params.id);
+
+    if (!domain) {
+      set.status = 302;
+      set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+      return "";
+    }
+
+    const result = await verifyDomain(domain);
+    const allPassed = result.spf && result.dkim && result.dmarc;
+    const message = allPassed
+      ? "All DNS records verified successfully!"
+      : `Verification: SPF ${result.spf ? "✓" : "✗"}, DKIM ${result.dkim ? "✓" : "✗"}, DMARC ${result.dmarc ? "✓" : "✗"}`;
+
+    logger.info("Domain DNS verification via dashboard", { id: params.id, ...result });
+
+    set.status = 302;
+    set.headers["location"] = `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${allPassed ? "success" : "error"}`;
+    return "";
+  }, {
+    params: t.Object({
+      id: t.String(),
+    }),
+  })
+
+  /**
    * GET /dashboard/domains/:id
    * Single domain detail view with DNS verification status.
    */
-  .get("/domains/:id", async ({ params, set }) => {
+  .get("/domains/:id", async ({ params, set, query }) => {
     const domain = await domainService.getDomainById(params.id);
 
     if (!domain) {
@@ -424,9 +455,17 @@ export const pagesPlugin = new Elysia({
       return "Domain not found";
     }
 
-    return <DomainDetailPage domain={domain} />;
+    const flash = query.flash
+      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
+      : undefined;
+
+    return <DomainDetailPage domain={domain} flash={flash} />;
   }, {
     params: t.Object({
       id: t.String(),
+    }),
+    query: t.Object({
+      flash: t.Optional(t.String()),
+      flashType: t.Optional(t.String()),
     }),
   });

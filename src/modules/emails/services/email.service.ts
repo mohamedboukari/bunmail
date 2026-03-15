@@ -1,43 +1,91 @@
 import { eq, desc, and, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
+import { domains } from "../../domains/models/domain.schema.ts";
+import { templates } from "../../templates/models/template.schema.ts";
+import { renderTemplate } from "../../templates/services/template.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { config } from "../../../config.ts";
 import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.types.ts";
 
 /**
  * Creates a new email record in the database with status `queued`.
  *
- * The queue processor will pick it up on its next poll cycle and
- * attempt SMTP delivery. The raw email data is stored as-is — no
- * transformation happens here.
+ * Supports two modes:
+ * 1. Direct content — subject, html, text provided inline.
+ * 2. Template — templateId + variables resolved from the templates table.
  *
- * @param input - The email content (from, to, subject, html/text, etc.)
- * @param apiKeyId - The ID of the API key used to send this email
- * @returns The newly created email row
+ * Also links the sender's domain for DKIM signing.
  */
 export async function createEmail(input: SendEmailInput, apiKeyId: string): Promise<Email> {
-  /** Generate a unique prefixed ID for this email */
   const id = generateId("msg");
+  const senderDomain = input.from.split("@")[1];
 
   logger.info("Creating email", { id, from: input.from, to: input.to, apiKeyId });
+
+  let subject = input.subject ?? "";
+  let htmlContent = input.html ?? null;
+  let textContent = input.text ?? null;
+
+  if (input.templateId) {
+    const [tpl] = await db
+      .select()
+      .from(templates)
+      .where(and(eq(templates.id, input.templateId), eq(templates.apiKeyId, apiKeyId)));
+
+    if (!tpl) {
+      throw new Error(`Template "${input.templateId}" not found`);
+    }
+
+    const vars = input.variables ?? {};
+    subject = renderTemplate(tpl.subject, vars);
+    htmlContent = tpl.html ? renderTemplate(tpl.html, vars) : null;
+    textContent = tpl.textContent ? renderTemplate(tpl.textContent, vars) : null;
+  }
+
+  if (!subject) {
+    throw new Error("Subject is required — provide it inline or via a template.");
+  }
+
+  let domainId: string | null = null;
+
+  if (senderDomain) {
+    const [domain] = await db
+      .select({ id: domains.id, dkimVerified: domains.dkimVerified })
+      .from(domains)
+      .where(eq(domains.name, senderDomain));
+
+    if (domain) {
+      domainId = domain.id;
+    } else if (config.env === "production") {
+      throw new Error(
+        `Domain "${senderDomain}" is not registered. Add it via the API or dashboard before sending.`,
+      );
+    }
+
+    if (config.env === "production" && domain && !domain.dkimVerified) {
+      logger.warn("Sending from unverified domain", { domain: senderDomain });
+    }
+  }
 
   const [email] = await db
     .insert(emails)
     .values({
       id,
       apiKeyId,
+      domainId,
       fromAddress: input.from,
       toAddress: input.to,
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
-      subject: input.subject,
-      html: input.html ?? null,
-      textContent: input.text ?? null,
+      subject,
+      html: htmlContent,
+      textContent,
     })
     .returning();
 
-  logger.debug("Email created and queued", { id, status: email!.status });
+  logger.debug("Email created and queued", { id, status: email!.status, domainId });
 
   return email!;
 }

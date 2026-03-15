@@ -1,0 +1,40 @@
+# BunMail — Docker Compose
+#
+# Starts the BunMail API server and a PostgreSQL database.
+# Usage: docker compose up -d
+#
+# The app waits for PostgreSQL to be healthy before starting,
+# then automatically runs database migrations on boot.
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"   # HTTP API + Dashboard
+      - "2525:2525"   # Inbound SMTP (optional)
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
+      BUNMAIL_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bunmail
+      POSTGRES_PASSWORD: bunmail
+      POSTGRES_DB: bunmail
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bunmail"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:

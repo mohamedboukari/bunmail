@@ -2,6 +2,7 @@ import { Elysia, t } from "elysia";
 import { createDomainDto } from "./dtos/create-domain.dto.ts";
 import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
+import { verifyDomain } from "./services/dns-verification.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -129,6 +130,44 @@ export const domainsPlugin = new Elysia({
     },
     {
       /** Validate the :id URL parameter */
+      params: t.Object({
+        id: t.String(),
+      }),
+    }
+  )
+
+  /**
+   * POST /api/v1/domains/:id/verify
+   *
+   * Triggers DNS verification (SPF, DKIM, DMARC) for a domain.
+   * Returns the updated domain with fresh verification status.
+   */
+  .post(
+    "/:id/verify",
+    async ({ params, set }) => {
+      logger.info("POST /api/v1/domains/:id/verify", { domainId: params.id });
+
+      const domain = await domainService.getDomainById(params.id);
+
+      if (!domain) {
+        set.status = 404;
+        return {
+          success: false,
+          error: "Domain not found",
+        };
+      }
+
+      const result = await verifyDomain(domain);
+
+      const updated = await domainService.getDomainById(params.id);
+
+      return {
+        success: true,
+        data: serializeDomain(updated!),
+        verification: result,
+      };
+    },
+    {
       params: t.Object({
         id: t.String(),
       }),

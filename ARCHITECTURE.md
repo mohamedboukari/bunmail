@@ -119,18 +119,54 @@ bunmail/
 │   │   │   │   └── api-key.serialization.ts
 │   │   │   └── types/
 │   │   │       └── api-key.types.ts
-│   │   └── domains/
-│   │       ├── domains.plugin.ts         ← CRUD routes
+│   │   ├── domains/
+│   │   │   ├── domains.plugin.ts         ← CRUD + verify routes
+│   │   │   ├── services/
+│   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
+│   │   │   │   └── dns-verification.service.ts ← SPF/DKIM/DMARC checks
+│   │   │   ├── dtos/
+│   │   │   │   └── create-domain.dto.ts
+│   │   │   ├── models/
+│   │   │   │   └── domain.schema.ts      ← domains pgTable
+│   │   │   ├── serializations/
+│   │   │   │   └── domain.serialization.ts
+│   │   │   └── types/
+│   │   │       └── domain.types.ts
+│   │   ├── webhooks/
+│   │   │   ├── webhooks.plugin.ts        ← CRUD routes
+│   │   │   ├── services/
+│   │   │   │   ├── webhook.service.ts    ← CRUD operations
+│   │   │   │   └── webhook-dispatch.service.ts ← Event delivery + retries
+│   │   │   ├── dtos/
+│   │   │   │   └── create-webhook.dto.ts
+│   │   │   ├── models/
+│   │   │   │   └── webhook.schema.ts     ← webhooks pgTable
+│   │   │   ├── serializations/
+│   │   │   │   └── webhook.serialization.ts
+│   │   │   └── types/
+│   │   │       └── webhook.types.ts
+│   │   ├── templates/
+│   │   │   ├── templates.plugin.ts       ← CRUD routes
+│   │   │   ├── services/
+│   │   │   │   └── template.service.ts   ← CRUD + renderTemplate()
+│   │   │   ├── dtos/
+│   │   │   │   └── create-template.dto.ts
+│   │   │   ├── models/
+│   │   │   │   └── template.schema.ts    ← templates pgTable
+│   │   │   ├── serializations/
+│   │   │   │   └── template.serialization.ts
+│   │   │   └── types/
+│   │   │       └── template.types.ts
+│   │   └── inbound/
+│   │       ├── inbound.plugin.ts         ← GET / (list), GET /:id
 │   │       ├── services/
-│   │       │   └── domain.service.ts     ← Domain CRUD operations
-│   │       ├── dtos/
-│   │       │   └── create-domain.dto.ts
+│   │       │   └── smtp-receiver.service.ts ← SMTP server (smtp-server)
 │   │       ├── models/
-│   │       │   └── domain.schema.ts      ← domains pgTable
+│   │       │   └── inbound-email.schema.ts ← inbound_emails pgTable
 │   │       ├── serializations/
-│   │       │   └── domain.serialization.ts
+│   │       │   └── inbound.serialization.ts
 │   │       └── types/
-│   │           └── domain.types.ts
+│   │           └── inbound.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
 │       ├── layouts/
@@ -325,11 +361,53 @@ queued → sending → sent
 | created_at       | timestamp      | NOT NULL, default `now()`    |
 | updated_at       | timestamp      | NOT NULL, default `now()`    |
 
+### `webhooks`
+
+| Column       | Type           | Constraints                     |
+|--------------|----------------|---------------------------------|
+| id           | varchar(36)    | PK, prefixed `whk_`            |
+| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL      |
+| url          | text           | NOT NULL                        |
+| events       | jsonb          | NOT NULL, default `[]`          |
+| secret       | varchar(64)    | NOT NULL                        |
+| is_active    | boolean        | NOT NULL, default `true`        |
+| created_at   | timestamp      | NOT NULL, default `now()`       |
+| updated_at   | timestamp      | NOT NULL, default `now()`       |
+
+### `templates`
+
+| Column       | Type           | Constraints                     |
+|--------------|----------------|---------------------------------|
+| id           | varchar(36)    | PK, prefixed `tpl_`            |
+| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL      |
+| name         | varchar(255)   | NOT NULL                        |
+| subject      | varchar(500)   | NOT NULL                        |
+| html         | text           | nullable                        |
+| text_content | text           | nullable                        |
+| variables    | jsonb          | NOT NULL, default `[]`          |
+| created_at   | timestamp      | NOT NULL, default `now()`       |
+| updated_at   | timestamp      | NOT NULL, default `now()`       |
+
+### `inbound_emails`
+
+| Column       | Type           | Constraints                     |
+|--------------|----------------|---------------------------------|
+| id           | varchar(36)    | PK, prefixed `inb_`            |
+| from_address | varchar(255)   | NOT NULL                        |
+| to_address   | varchar(255)   | NOT NULL                        |
+| subject      | varchar(500)   | nullable                        |
+| html         | text           | nullable                        |
+| text_content | text           | nullable                        |
+| raw_message  | text           | nullable                        |
+| received_at  | timestamp      | NOT NULL, default `now()`       |
+
 ### Relationships
 
 ```
-api_keys ──1:N──▶ emails
-domains  ──1:N──▶ emails
+api_keys  ──1:N──▶ emails
+api_keys  ──1:N──▶ webhooks
+api_keys  ──1:N──▶ templates
+domains   ──1:N──▶ emails
 ```
 
 ---
@@ -356,10 +434,36 @@ domains  ──1:N──▶ emails
 
 | Method | Path                          | Description           | Auth |
 |--------|-------------------------------|-----------------------|------|
-| POST   | /api/v1/domains               | Add domain            | Yes  |
+| POST   | /api/v1/domains               | Add domain (auto-DKIM)| Yes  |
 | GET    | /api/v1/domains               | List domains          | Yes  |
 | GET    | /api/v1/domains/:id           | Get domain details    | Yes  |
+| POST   | /api/v1/domains/:id/verify    | Verify DNS records    | Yes  |
 | DELETE | /api/v1/domains/:id           | Remove domain         | Yes  |
+
+### Webhooks
+
+| Method | Path                          | Description           | Auth |
+|--------|-------------------------------|-----------------------|------|
+| POST   | /api/v1/webhooks              | Register webhook      | Yes  |
+| GET    | /api/v1/webhooks              | List webhooks         | Yes  |
+| DELETE | /api/v1/webhooks/:id          | Delete webhook        | Yes  |
+
+### Templates
+
+| Method | Path                          | Description           | Auth |
+|--------|-------------------------------|-----------------------|------|
+| POST   | /api/v1/templates             | Create template       | Yes  |
+| GET    | /api/v1/templates             | List templates        | Yes  |
+| GET    | /api/v1/templates/:id         | Get template          | Yes  |
+| PUT    | /api/v1/templates/:id         | Update template       | Yes  |
+| DELETE | /api/v1/templates/:id         | Delete template       | Yes  |
+
+### Inbound
+
+| Method | Path                          | Description           | Auth |
+|--------|-------------------------------|-----------------------|------|
+| GET    | /api/v1/inbound               | List received emails  | Yes  |
+| GET    | /api/v1/inbound/:id           | Get received email    | Yes  |
 
 ### Dashboard (HTML)
 
@@ -469,9 +573,6 @@ volumes:
 
 ## Future (v2+)
 
-- Incoming email (SMTP server via `smtp-server`)
-- Email templates engine with variables
-- Webhooks (bounce, delivery, open, click)
 - Open/click tracking
 - Multiple API keys with permissions
 - Team access / multi-user
@@ -480,3 +581,4 @@ volumes:
 - CLI tool (`bunx bunmail init`)
 - Scheduled emails
 - Suppression list (unsubscribes, bounces)
+- Redis-backed rate limiting for multi-instance deploys
