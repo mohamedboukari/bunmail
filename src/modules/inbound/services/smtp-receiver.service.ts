@@ -24,14 +24,9 @@ export function start(): void {
   const port = config.smtp.port;
 
   server = new SMTPServer({
-    /** Accept connections without TLS (STARTTLS can be enabled later) */
     secure: false,
-    disabledCommands: ["STARTTLS"],
-
-    /** Accept all authentication — inbound server doesn't require auth */
-    onAuth(auth, _session, callback) {
-      callback(null, { user: auth.username });
-    },
+    authOptional: true,
+    disabledCommands: ["STARTTLS", "AUTH"],
 
     /**
      * Called for each incoming email.
