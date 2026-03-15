@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
+import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 
 /**
@@ -47,15 +48,10 @@ export function EmailDetailPage({ email }: { email: Email }) {
       {email.html && (
         <div class="mb-6">
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">HTML Preview</h2>
-          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto max-h-96">
-            {/* Render HTML content in a sandboxed iframe */}
-            <iframe
-              srcdoc={email.html}
-              class="w-full min-h-[200px] border-0"
-              sandbox=""
-              title="Email HTML preview"
-            ></iframe>
+          <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto">
+            <HtmlPreview html={email.html} title="Email HTML preview" />
           </div>
+          <HtmlPreviewScript />
         </div>
       )}
 
