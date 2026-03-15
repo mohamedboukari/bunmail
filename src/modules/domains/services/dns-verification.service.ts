@@ -1,4 +1,4 @@
-import { resolve } from "dns/promises";
+import { resolveTxt as dnsResolveTxt } from "dns/promises";
 import { eq } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { domains } from "../models/domain.schema.ts";
@@ -17,10 +17,8 @@ export interface VerificationResult {
  */
 async function resolveTxt(hostname: string): Promise<string[]> {
   try {
-    const records = await resolve(hostname, "TXT");
-    return records.map((parts) =>
-      Array.isArray(parts) ? parts.join("") : String(parts),
-    );
+    const records = await dnsResolveTxt(hostname);
+    return records.map((parts) => parts.join(""));
   } catch {
     return [];
   }
@@ -49,6 +47,10 @@ async function verifySPF(domainName: string): Promise<boolean> {
 /**
  * Checks whether the domain has a valid DKIM TXT record at
  * `<selector>._domainkey.<domain>` containing the expected public key.
+ *
+ * Some DNS providers split long TXT values across multiple records
+ * rather than multiple chunks within a single record, so we also
+ * check the concatenation of all records.
  */
 async function verifyDKIM(
   domainName: string,
@@ -61,7 +63,12 @@ async function verifyDKIM(
   const records = await resolveTxt(host);
   const expectedKey = extractPubKeyBase64(publicKeyPem);
 
-  return records.some((r) => {
+  const allCandidates = [
+    ...records,
+    records.join(""),
+  ];
+
+  return allCandidates.some((r) => {
     const cleaned = r.replace(/\s/g, "");
     return cleaned.includes("v=DKIM1") && cleaned.includes(`p=${expectedKey}`);
   });
