@@ -57,6 +57,20 @@ export async function listTemplates(apiKeyId: string): Promise<Template[]> {
     .where(eq(templates.apiKeyId, apiKeyId));
 }
 
+/** Returns all templates across all API keys (dashboard use). */
+export async function listAllTemplates(): Promise<Template[]> {
+  return db.select().from(templates);
+}
+
+/** Returns a template by ID without API key scoping (dashboard use). */
+export async function getTemplateByIdUnscoped(id: string): Promise<Template | undefined> {
+  const [row] = await db
+    .select()
+    .from(templates)
+    .where(eq(templates.id, id));
+  return row;
+}
+
 /** Returns a template by ID, scoped to the requesting API key. */
 export async function getTemplateById(
   id: string,
