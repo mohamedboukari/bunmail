@@ -13,8 +13,8 @@ WORKDIR /app
 # Copy only the files needed for dependency resolution
 COPY package.json bun.lock ./
 
-# Install production dependencies only
-RUN bun install --frozen-lockfile --production
+# Install production dependencies only (skip husky prepare script)
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # ── Stage 2: Run ──
 FROM oven/bun:1 AS run
