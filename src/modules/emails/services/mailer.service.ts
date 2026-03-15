@@ -1,23 +1,8 @@
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
+import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
-
-/**
- * Direct transport options — not included in @types/nodemailer
- * because it's a lesser-known Nodemailer feature. The `direct` flag
- * tells Nodemailer to resolve MX records and deliver straight to
- * the recipient's mail server without an intermediate SMTP relay.
- */
-interface DirectTransportOptions {
-  direct: true;
-  name: string;
-}
-
-const transport = nodemailer.createTransport({
-  direct: true,
-  name: config.mail.hostname,
-} as DirectTransportOptions as nodemailer.TransportOptions);
 
 export interface SendMailResult {
   messageId: string;
@@ -31,7 +16,28 @@ export interface DkimOptions {
 }
 
 /**
- * Sends a single email via SMTP direct delivery.
+ * Resolves the MX server for a recipient's domain and returns
+ * the lowest-priority (highest preference) mail exchange host.
+ */
+async function getMxHost(email: string): Promise<string> {
+  const domain = email.split("@")[1];
+  if (!domain) throw new Error(`Invalid email address: ${email}`);
+
+  const records = await resolveMx(domain);
+  if (!records || records.length === 0) {
+    throw new Error(`No MX records found for domain: ${domain}`);
+  }
+
+  records.sort((a, b) => a.priority - b.priority);
+  return records[0]!.exchange;
+}
+
+/**
+ * Sends a single email via direct SMTP delivery.
+ *
+ * Instead of relying on Nodemailer's `direct: true` mode (which can
+ * fall back to localhost:587 inside Docker), we manually resolve the
+ * recipient's MX record and connect to it on port 25.
  *
  * When DKIM options are provided, signs the outgoing message with the
  * domain's private key so the recipient's server can verify the signature
@@ -52,6 +58,25 @@ export async function sendMail(options: {
     to: options.to,
     subject: options.subject,
     dkim: options.dkim ? options.dkim.domainName : "none",
+  });
+
+  /** Resolve the recipient's MX server */
+  const mxHost = await getMxHost(options.to);
+  logger.debug("Resolved MX host", { to: options.to, mxHost });
+
+  /**
+   * Create a transport that connects directly to the recipient's MX
+   * server on port 25. A new transport per message ensures we always
+   * connect to the correct MX for the recipient's domain.
+   */
+  const transport = nodemailer.createTransport({
+    host: mxHost,
+    port: 25,
+    secure: false,
+    name: config.mail.hostname,
+    tls: {
+      rejectUnauthorized: false,
+    },
   });
 
   const mailOptions: Mail.Options = {
@@ -77,6 +102,7 @@ export async function sendMail(options: {
   logger.info("Email sent successfully", {
     messageId: info.messageId,
     to: options.to,
+    mxHost,
   });
 
   return { messageId: info.messageId };
