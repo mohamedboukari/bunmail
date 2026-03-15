@@ -27,7 +27,9 @@ COPY --from=install /app/node_modules ./node_modules
 # Copy application source
 COPY package.json bun.lock tsconfig.json drizzle.config.ts ./
 COPY src/ ./src/
-COPY drizzle/ ./drizzle/
+
+# Generate Drizzle migration files from the schema
+RUN bun run db:generate
 
 # Expose the HTTP API port and (optionally) the inbound SMTP port
 EXPOSE 3000 2525
