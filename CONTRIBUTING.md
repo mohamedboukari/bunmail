@@ -6,7 +6,7 @@ Thanks for your interest in contributing! BunMail is an open-source project and 
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-username/bunmail.git
+git clone https://github.com/mohamedboukari/bunmail.git
 cd bunmail
 
 # Install dependencies

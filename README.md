@@ -1,5 +1,14 @@
 # BunMail
 
+[![CI](https://github.com/mohamedboukari/bunmail/actions/workflows/ci.yml/badge.svg)](https://github.com/mohamedboukari/bunmail/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/mohamedboukari/bunmail/actions/workflows/codeql.yml/badge.svg)](https://github.com/mohamedboukari/bunmail/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1?logo=bun)](https://bun.sh)
+[![Elysia](https://img.shields.io/badge/framework-Elysia-7c6aef?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48Y2lyY2xlIGN4PSIyNTYiIGN5PSIyNTYiIHI9IjI1NiIgZmlsbD0iIzdjNmFlZiIvPjwvc3ZnPg==)](https://elysiajs.com)
+[![Drizzle ORM](https://img.shields.io/badge/ORM-Drizzle-c5f74f?logo=drizzle)](https://orm.drizzle.team)
+[![Nodemailer](https://img.shields.io/badge/SMTP-Nodemailer-0f9dce)](https://nodemailer.com)
+[![PostgreSQL](https://img.shields.io/badge/DB-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
+
 > Self-hosted email API for developers. No SendGrid. No limits. No cost.
 
 BunMail is a REST API for sending transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, an email queue with retries, webhooks, email templates, inbound email receiving, and a web dashboard.
@@ -42,7 +51,7 @@ BunMail is a REST API for sending transactional emails with direct SMTP delivery
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/bunmail.git
+git clone https://github.com/mohamedboukari/bunmail.git
 cd bunmail
 
 # Install dependencies
