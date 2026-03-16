@@ -42,7 +42,7 @@ mock.module("../../src/modules/emails/services/stats.service.ts", () => ({
       totalApiKeys: 5,
       activeApiKeys: 4,
       totalDomains: 2,
-    })
+    }),
   ),
 }));
 
@@ -51,7 +51,7 @@ mock.module("../../src/modules/emails/services/email.service.ts", () => ({
     Promise.resolve({
       data: [],
       total: 0,
-    })
+    }),
   ),
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   createEmail: mock(() => Promise.resolve({})),
@@ -73,7 +73,7 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
         createdAt: new Date(),
       },
       rawKey: "bm_live_test1234567890abcdef12345678",
-    })
+    }),
   ),
   revokeApiKey: mock(() =>
     Promise.resolve({
@@ -84,7 +84,7 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
       isActive: false,
       lastUsedAt: null,
       createdAt: new Date(),
-    })
+    }),
   ),
 }));
 
@@ -103,7 +103,7 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
       verifiedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
-    })
+    }),
   ),
   getDomainById: mock(() => Promise.resolve(undefined)),
   deleteDomain: mock(() => Promise.resolve(undefined)),
@@ -120,9 +120,7 @@ const app = new Elysia().use(pagesPlugin);
 describe("Dashboard E2E", () => {
   describe("GET /dashboard/login", () => {
     test("returns 200 with login form", async () => {
-      const response = await app.handle(
-        new Request("http://localhost/dashboard/login")
-      );
+      const response = await app.handle(new Request("http://localhost/dashboard/login"));
       expect(response.status).toBe(200);
       const html = await response.text();
       expect(html).toContain("Sign in");
@@ -131,7 +129,7 @@ describe("Dashboard E2E", () => {
 
     test("shows error message when error=invalid query param", async () => {
       const response = await app.handle(
-        new Request("http://localhost/dashboard/login?error=invalid")
+        new Request("http://localhost/dashboard/login?error=invalid"),
       );
       expect(response.status).toBe(200);
       const html = await response.text();
@@ -146,7 +144,7 @@ describe("Dashboard E2E", () => {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: "password=test123",
-        })
+        }),
       );
       /** Should redirect (302) */
       expect(response.status).toBe(302);
@@ -163,7 +161,7 @@ describe("Dashboard E2E", () => {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: "password=wrongpassword",
-        })
+        }),
       );
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe("/dashboard/login?error=invalid");
@@ -172,17 +170,13 @@ describe("Dashboard E2E", () => {
 
   describe("Protected routes without session", () => {
     test("GET /dashboard redirects to login", async () => {
-      const response = await app.handle(
-        new Request("http://localhost/dashboard")
-      );
+      const response = await app.handle(new Request("http://localhost/dashboard"));
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe("/dashboard/login");
     });
 
     test("GET /dashboard/emails redirects to login", async () => {
-      const response = await app.handle(
-        new Request("http://localhost/dashboard/emails")
-      );
+      const response = await app.handle(new Request("http://localhost/dashboard/emails"));
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe("/dashboard/login");
     });
@@ -198,7 +192,7 @@ describe("Dashboard E2E", () => {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: "password=test123",
-        })
+        }),
       );
       const setCookie = loginResponse.headers.get("set-cookie")!;
       /** Extract just the cookie value (bm_session=<value>) */
@@ -210,7 +204,7 @@ describe("Dashboard E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard", {
           headers: { cookie: sessionCookie },
-        })
+        }),
       );
       expect(response.status).toBe(200);
       const html = await response.text();
@@ -222,7 +216,7 @@ describe("Dashboard E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/emails", {
           headers: { cookie: sessionCookie },
-        })
+        }),
       );
       expect(response.status).toBe(200);
       const html = await response.text();
@@ -233,7 +227,7 @@ describe("Dashboard E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/api-keys", {
           headers: { cookie: sessionCookie },
-        })
+        }),
       );
       expect(response.status).toBe(200);
       const html = await response.text();
@@ -244,7 +238,7 @@ describe("Dashboard E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/domains", {
           headers: { cookie: sessionCookie },
-        })
+        }),
       );
       expect(response.status).toBe(200);
       const html = await response.text();
@@ -260,7 +254,7 @@ describe("Dashboard E2E", () => {
             "content-type": "application/x-www-form-urlencoded",
           },
           body: "name=TestKey",
-        })
+        }),
       );
       expect(response.status).toBe(302);
       const location = response.headers.get("location")!;
@@ -277,7 +271,7 @@ describe("Dashboard E2E", () => {
             "content-type": "application/x-www-form-urlencoded",
           },
           body: "name=example.com",
-        })
+        }),
       );
       expect(response.status).toBe(302);
       const location = response.headers.get("location")!;
@@ -291,7 +285,7 @@ describe("Dashboard E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/logout", {
           method: "POST",
-        })
+        }),
       );
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe("/dashboard/login");

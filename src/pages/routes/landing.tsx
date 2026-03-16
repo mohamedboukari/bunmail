@@ -32,7 +32,6 @@ export function LandingPage() {
         </script>
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
-
         {/* ─── Nav Bar ─── */}
         <nav class="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
           <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
@@ -76,7 +75,6 @@ export function LandingPage() {
         </nav>
 
         <main class="max-w-5xl mx-auto px-4 py-16">
-
           {/* ─── Hero Section ─── */}
           <section class="text-center mb-20">
             {/* Inline SVG illustration — envelope with code brackets */}
@@ -148,8 +146,8 @@ export function LandingPage() {
               Self-hosted email API for developers
             </p>
             <p class="text-base text-gray-500 dark:text-gray-400 max-w-2xl mx-auto mb-8">
-              Free alternative to SendGrid and Resend. Direct SMTP delivery with DKIM signing,
-              email queue, and a built-in dashboard.
+              Free alternative to SendGrid and Resend. Direct SMTP delivery with DKIM
+              signing, email queue, and a built-in dashboard.
             </p>
 
             {/* CTA buttons */}
@@ -171,7 +169,9 @@ export function LandingPage() {
 
           {/* ─── Code Snippet Section ─── */}
           <section class="mb-20">
-            <h2 class="text-lg font-semibold text-center mb-6">Send an email in one request</h2>
+            <h2 class="text-lg font-semibold text-center mb-6">
+              Send an email in one request
+            </h2>
             <div class="bg-gray-900 dark:bg-gray-800 rounded-lg p-6 overflow-x-auto">
               <pre class="text-sm text-gray-100 leading-relaxed">
                 <code>{`curl -X POST http://localhost:3000/api/v1/emails/send \\
@@ -191,74 +191,120 @@ export function LandingPage() {
           <section class="mb-20">
             <h2 class="text-lg font-semibold text-center mb-8">Features</h2>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
               {/* Direct SMTP */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
                   </svg>
                   <h3 class="font-medium text-sm">Direct SMTP</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">No third-party email provider needed</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  No third-party email provider needed
+                </p>
               </div>
 
               {/* DKIM / SPF / DMARC */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                   </svg>
                   <h3 class="font-medium text-sm">DKIM / SPF / DMARC</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Email authentication built in</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Email authentication built in
+                </p>
               </div>
 
               {/* Email Queue */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <path d="M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z" />
                   </svg>
                   <h3 class="font-medium text-sm">Email Queue</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Automatic retries (3 attempts)</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Automatic retries (3 attempts)
+                </p>
               </div>
 
               {/* API Key Auth */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
                   </svg>
                   <h3 class="font-medium text-sm">API Key Auth</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">SHA-256 hashed, rate-limited</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  SHA-256 hashed, rate-limited
+                </p>
               </div>
 
               {/* REST API */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />
                   </svg>
                   <h3 class="font-medium text-sm">REST API</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Simple JSON endpoints for everything</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Simple JSON endpoints for everything
+                </p>
               </div>
 
               {/* Dashboard */}
               <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
                 <div class="flex items-center gap-3 mb-2">
-                  <svg class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg
+                    class="w-5 h-5 text-gray-500 dark:text-gray-400 shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    viewBox="0 0 24 24"
+                  >
                     <rect x="3" y="3" width="18" height="18" rx="2" />
                     <path d="M3 9h18M9 21V9" />
                   </svg>
                   <h3 class="font-medium text-sm">Dashboard</h3>
                 </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400">Server-rendered UI to manage it all</p>
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Server-rendered UI to manage it all
+                </p>
               </div>
-
             </div>
           </section>
 
@@ -266,7 +312,6 @@ export function LandingPage() {
           <section id="quick-start" class="mb-20">
             <h2 class="text-lg font-semibold text-center mb-8">Quick Start</h2>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-
               {/* Step 1 */}
               <div class="text-center">
                 <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-bold mb-3">
@@ -274,7 +319,9 @@ export function LandingPage() {
                 </div>
                 <h3 class="font-medium text-sm mb-2">Clone the repo</h3>
                 <div class="bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3">
-                  <code class="text-xs text-gray-100">git clone https://github.com/mohamedboukari/bunmail.git</code>
+                  <code class="text-xs text-gray-100">
+                    git clone https://github.com/mohamedboukari/bunmail.git
+                  </code>
                 </div>
               </div>
 
@@ -299,10 +346,8 @@ export function LandingPage() {
                   <code class="text-xs text-gray-100">bun install && bun run dev</code>
                 </div>
               </div>
-
             </div>
           </section>
-
         </main>
 
         {/* ─── Footer ─── */}
@@ -319,7 +364,6 @@ export function LandingPage() {
             </a>
           </div>
         </footer>
-
       </body>
     </html>
   );

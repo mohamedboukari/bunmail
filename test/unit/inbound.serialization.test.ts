@@ -56,7 +56,12 @@ describe("serializeInboundEmail", () => {
   });
 
   test("handles null subject, html, textContent", () => {
-    const result = serializeInboundEmail({ ...email, subject: null, html: null, textContent: null });
+    const result = serializeInboundEmail({
+      ...email,
+      subject: null,
+      html: null,
+      textContent: null,
+    });
     expect(result.subject).toBeNull();
     expect(result.html).toBeNull();
     expect(result.text).toBeNull();

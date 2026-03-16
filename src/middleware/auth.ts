@@ -40,7 +40,10 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     if (!authHeader.startsWith("Bearer ")) {
       logger.warn("Auth failed: invalid Authorization scheme");
       set.status = 401;
-      return { success: false, error: "Invalid Authorization scheme — expected Bearer token" };
+      return {
+        success: false,
+        error: "Invalid Authorization scheme — expected Bearer token",
+      };
     }
 
     /** Extract the raw token after "Bearer " */

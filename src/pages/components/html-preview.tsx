@@ -32,7 +32,11 @@ html[data-theme="dark"] img { opacity: 0.9; color: initial !important; }
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">${styleBlock}</head><body>${html}</body></html>`;
 }
 
-export function HtmlPreview({ html, title = "HTML preview", minHeight = "400px" }: HtmlPreviewProps) {
+export function HtmlPreview({
+  html,
+  title = "HTML preview",
+  minHeight = "400px",
+}: HtmlPreviewProps) {
   const wrappedHtml = wrapWithDarkModeStyles(html);
 
   return (

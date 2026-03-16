@@ -76,10 +76,7 @@ export async function deleteWebhook(
  * Used by the dispatch service to know where to send events.
  */
 export async function findWebhooksForEvent(event: string): Promise<Webhook[]> {
-  const all = await db
-    .select()
-    .from(webhooks)
-    .where(eq(webhooks.isActive, true));
+  const all = await db.select().from(webhooks).where(eq(webhooks.isActive, true));
 
   return all.filter((w) => w.events.includes(event));
 }

@@ -46,29 +46,34 @@ export const webhooksPlugin = new Elysia({
       detail: {
         tags: ["Webhooks"],
         summary: "Create webhook",
-        description: "Registers a new webhook endpoint. Returns the signing secret once — store it securely.",
+        description:
+          "Registers a new webhook endpoint. Returns the signing secret once — store it securely.",
         security: [{ bearerAuth: [] }],
       },
     },
   )
 
-  .get("/", async (context) => {
-    const { apiKeyId } = context as typeof context & { apiKeyId: string };
+  .get(
+    "/",
+    async (context) => {
+      const { apiKeyId } = context as typeof context & { apiKeyId: string };
 
-    const hooks = await webhookService.listWebhooks(apiKeyId);
+      const hooks = await webhookService.listWebhooks(apiKeyId);
 
-    return {
-      success: true,
-      data: hooks.map(serializeWebhook),
-    };
-  }, {
-    detail: {
-      tags: ["Webhooks"],
-      summary: "List webhooks",
-      description: "Returns all webhooks for the current API key.",
-      security: [{ bearerAuth: [] }],
+      return {
+        success: true,
+        data: hooks.map(serializeWebhook),
+      };
     },
-  })
+    {
+      detail: {
+        tags: ["Webhooks"],
+        summary: "List webhooks",
+        description: "Returns all webhooks for the current API key.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
 
   .delete(
     "/:id",

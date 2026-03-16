@@ -63,10 +63,7 @@ async function verifyDKIM(
   const records = await resolveTxt(host);
   const expectedKey = extractPubKeyBase64(publicKeyPem);
 
-  const allCandidates = [
-    ...records,
-    records.join(""),
-  ];
+  const allCandidates = [...records, records.join("")];
 
   return allCandidates.some((r) => {
     const cleaned = r.replace(/\s/g, "");

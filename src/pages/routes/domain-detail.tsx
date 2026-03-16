@@ -94,10 +94,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
           <DetailField label="DKIM Selector" value={domain.dkimSelector} />
           <DetailField label="Created" value={domain.createdAt.toISOString()} />
           {domain.verifiedAt && (
-            <DetailField
-              label="Last Verified"
-              value={domain.verifiedAt.toISOString()}
-            />
+            <DetailField label="Last Verified" value={domain.verifiedAt.toISOString()} />
           )}
         </div>
       </div>
@@ -109,13 +106,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
  * Verification card — shows a single DNS record's verification status.
  * Displayed in a 3-column grid on the domain detail page.
  */
-function VerificationCard({
-  label,
-  verified,
-}: {
-  label: string;
-  verified: boolean;
-}) {
+function VerificationCard({ label, verified }: { label: string; verified: boolean }) {
   return (
     <div class="text-center">
       <div class="mb-2">
@@ -131,7 +122,17 @@ function VerificationCard({
 /**
  * DNS record entry — shows host, type, and value for a DNS record the user must add.
  */
-function DnsRecordEntry({ type, host, value, label }: { type: string; host: string; value: string; label: string }) {
+function DnsRecordEntry({
+  type,
+  host,
+  value,
+  label,
+}: {
+  type: string;
+  host: string;
+  value: string;
+  label: string;
+}) {
   return (
     <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
       <p class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{label}</p>
@@ -142,11 +143,15 @@ function DnsRecordEntry({ type, host, value, label }: { type: string; host: stri
         </div>
         <div class="flex gap-2">
           <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Host:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>{host}</span>
+          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>
+            {host}
+          </span>
         </div>
         <div class="flex gap-2">
           <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Value:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>{value}</span>
+          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>
+            {value}
+          </span>
         </div>
       </div>
     </div>

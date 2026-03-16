@@ -10,12 +10,14 @@ const FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 10
  * Serves the BunMail favicon as /favicon.svg with aggressive caching.
  * All pages reference this via `<link rel="icon" href="/favicon.svg">`.
  */
-export const faviconPlugin = new Elysia({ detail: { hide: true } })
-  .get("/favicon.svg", () => {
+export const faviconPlugin = new Elysia({ detail: { hide: true } }).get(
+  "/favicon.svg",
+  () => {
     return new Response(FAVICON_SVG, {
       headers: {
         "content-type": "image/svg+xml",
         "cache-control": "public, max-age=31536000, immutable",
       },
     });
-  });
+  },
+);

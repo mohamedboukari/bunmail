@@ -21,7 +21,15 @@ interface BaseLayoutProps {
   /** Page title — appended to "BunMail" in the <title> tag */
   title: string;
   /** Currently active nav item — used to highlight the active link */
-  activeNav?: "home" | "emails" | "send" | "api-keys" | "domains" | "templates" | "webhooks" | "inbound";
+  activeNav?:
+    | "home"
+    | "emails"
+    | "send"
+    | "api-keys"
+    | "domains"
+    | "templates"
+    | "webhooks"
+    | "inbound";
 }
 
 /**
@@ -30,7 +38,11 @@ interface BaseLayoutProps {
  * Includes Tailwind CDN, dark mode inline script (prevents flash),
  * sidebar navigation, and a main content area.
  */
-export function BaseLayout({ title, activeNav, children }: PropsWithChildren<BaseLayoutProps>) {
+export function BaseLayout({
+  title,
+  activeNav,
+  children,
+}: PropsWithChildren<BaseLayoutProps>) {
   return (
     <html lang="en" class="h-full">
       <head>
@@ -63,9 +75,7 @@ export function BaseLayout({ title, activeNav, children }: PropsWithChildren<Bas
           <Nav activeNav={activeNav} />
 
           {/* Main content area */}
-          <main class="flex-1 overflow-y-auto p-6 lg:p-8">
-            {children}
-          </main>
+          <main class="flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
         </div>
         {/* Prevent double form submissions — disables button + shows spinner on first click */}
         <script>
@@ -98,7 +108,12 @@ function Nav({ activeNav }: { activeNav?: string }) {
     { id: "emails", label: "Emails", href: "/dashboard/emails", icon: EmailIcon },
     { id: "send", label: "Send Email", href: "/dashboard/send", icon: SendIcon },
     { id: "api-keys", label: "API Keys", href: "/dashboard/api-keys", icon: KeyIcon },
-    { id: "templates", label: "Templates", href: "/dashboard/templates", icon: TemplateIcon },
+    {
+      id: "templates",
+      label: "Templates",
+      href: "/dashboard/templates",
+      icon: TemplateIcon,
+    },
     { id: "domains", label: "Domains", href: "/dashboard/domains", icon: GlobeIcon },
     { id: "webhooks", label: "Webhooks", href: "/dashboard/webhooks", icon: WebhookIcon },
     { id: "inbound", label: "Inbound", href: "/dashboard/inbound", icon: InboundIcon },
@@ -111,7 +126,9 @@ function Nav({ activeNav }: { activeNav?: string }) {
         <a href="/dashboard" class="text-lg font-semibold tracking-tight">
           BunMail
         </a>
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Self-hosted email API</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+          Self-hosted email API
+        </p>
       </div>
 
       {/* Navigation links */}
@@ -174,4 +191,3 @@ function Nav({ activeNav }: { activeNav?: string }) {
     </aside>
   );
 }
-

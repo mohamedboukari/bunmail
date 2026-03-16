@@ -12,7 +12,7 @@ interface SendEmailPageProps {
 /**
  * Send Email page — compose and send emails via the dashboard.
  */
-export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
+export function SendEmailPage({ flash }: SendEmailPageProps) {
   return (
     <BaseLayout title="Send Email" activeNav="send">
       <h1 class="text-xl font-semibold mb-6">Send Email</h1>
@@ -26,7 +26,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
           {/* from / to */}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label for="from" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                for="from"
+                class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 From
               </label>
               <input
@@ -39,7 +42,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
               />
             </div>
             <div>
-              <label for="to" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                for="to"
+                class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 To
               </label>
               <input
@@ -56,7 +62,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
           {/* cc / bcc */}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label for="cc" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                for="cc"
+                class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 CC
               </label>
               <input
@@ -68,7 +77,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
               />
             </div>
             <div>
-              <label for="bcc" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              <label
+                for="bcc"
+                class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
                 BCC
               </label>
               <input
@@ -83,7 +95,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
 
           {/* subject */}
           <div>
-            <label for="subject" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="subject"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Subject
             </label>
             <input
@@ -99,7 +114,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
 
           {/* html */}
           <div>
-            <label for="html" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="html"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               HTML Body
             </label>
             <textarea
@@ -113,7 +131,10 @@ export function SendEmailPage({ flash, domains }: SendEmailPageProps) {
 
           {/* text */}
           <div>
-            <label for="text" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="text"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Plain Text (optional)
             </label>
             <textarea

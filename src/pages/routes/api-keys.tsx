@@ -30,7 +30,9 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
       {/* Raw key shown once after creation */}
       {rawKey && (
         <div class="bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm mb-4">
-          <p class="font-medium mb-1">API key created — copy it now, it won't be shown again:</p>
+          <p class="font-medium mb-1">
+            API key created — copy it now, it won't be shown again:
+          </p>
           <code class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all">
             {rawKey}
           </code>
@@ -64,12 +66,24 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-gray-200 dark:border-gray-800">
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Name</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Prefix</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Status</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Last Used</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Created</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Actions</th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Name
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Prefix
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Status
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Last Used
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-800">

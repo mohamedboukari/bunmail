@@ -16,6 +16,8 @@
     "typecheck": "bunx tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "knip": "knip",
     "test": "bun test",
     "release": "bumpp",
@@ -23,8 +25,12 @@
   },
   "lint-staged": {
     "*.{ts,tsx}": [
+      "prettier --write",
       "eslint --fix",
       "bash -c 'bunx tsc --noEmit'"
+    ],
+    "*.{json,yml,yaml}": [
+      "prettier --write"
     ]
   },
   "devDependencies": {
@@ -38,11 +44,14 @@
     "bumpp": "^10.4.1",
     "drizzle-kit": "^0.31.9",
     "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.5",
     "globals": "^17.4.0",
     "husky": "^9.1.7",
     "knip": "^5.85.0",
     "lint-staged": "^16.3.1",
     "postgres": "^3.4.8",
+    "prettier": "^3.8.1",
     "typescript-eslint": "^8.56.1"
   },
   "peerDependencies": {

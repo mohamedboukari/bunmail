@@ -153,7 +153,10 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
           keySelector: domain.dkimSelector,
           privateKey: domain.dkimPrivateKey,
         };
-        logger.debug("DKIM signing enabled", { domain: domain.name, selector: domain.dkimSelector });
+        logger.debug("DKIM signing enabled", {
+          domain: domain.name,
+          selector: domain.dkimSelector,
+        });
       }
     }
 

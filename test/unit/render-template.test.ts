@@ -15,10 +15,10 @@ describe("renderTemplate", () => {
   });
 
   test("replaces multiple different variables in one string", () => {
-    const result = renderTemplate(
-      "Hi {{name}}, your code is {{code}}",
-      { name: "Bob", code: "42" },
-    );
+    const result = renderTemplate("Hi {{name}}, your code is {{code}}", {
+      name: "Bob",
+      code: "42",
+    });
     expect(result).toBe("Hi Bob, your code is 42");
   });
 
@@ -43,10 +43,7 @@ describe("renderTemplate", () => {
   });
 
   test("does not replace partial patterns like {name} or {{name}", () => {
-    const result = renderTemplate(
-      "{name} and {​{name} are not valid",
-      { name: "Alice" },
-    );
+    const result = renderTemplate("{name} and {​{name} are not valid", { name: "Alice" });
     expect(result).not.toContain("Alice");
   });
 

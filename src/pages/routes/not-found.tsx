@@ -31,11 +31,12 @@ export function NotFoundPage() {
         </script>
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
-
         {/* Nav Bar */}
         <nav class="border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
           <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
-            <a href="/" class="text-lg font-semibold tracking-tight">BunMail</a>
+            <a href="/" class="text-lg font-semibold tracking-tight">
+              BunMail
+            </a>
             <div class="flex items-center gap-4">
               <button
                 type="button"
@@ -128,7 +129,6 @@ export function NotFoundPage() {
             </a>
           </div>
         </main>
-
       </body>
     </html>
   );

@@ -32,8 +32,12 @@ export function LoginPage({ error }: { error?: string }) {
         <div class="w-full max-w-sm mx-auto px-4">
           {/* Brand */}
           <div class="text-center mb-8">
-            <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">BunMail</h1>
-            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Sign in to your dashboard</p>
+            <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+              BunMail
+            </h1>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              Sign in to your dashboard
+            </p>
           </div>
 
           {/* Login card */}
@@ -106,9 +110,15 @@ export function DashboardDisabledPage() {
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
         <div class="text-center px-4">
-          <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">Dashboard Disabled</h1>
+          <h1 class="text-2xl font-semibold text-gray-900 dark:text-gray-100">
+            Dashboard Disabled
+          </h1>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-md">
-            Set the <code class="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-xs font-mono">DASHBOARD_PASSWORD</code> environment variable to enable the dashboard.
+            Set the{" "}
+            <code class="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-xs font-mono">
+              DASHBOARD_PASSWORD
+            </code>{" "}
+            environment variable to enable the dashboard.
           </p>
         </div>
       </body>

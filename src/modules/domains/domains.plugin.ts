@@ -54,26 +54,30 @@ export const domainsPlugin = new Elysia({
         description: "Registers a new sender domain and generates DKIM keys.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
-  .get("/", async () => {
-    logger.info("GET /api/v1/domains");
+  .get(
+    "/",
+    async () => {
+      logger.info("GET /api/v1/domains");
 
-    const domains = await domainService.listDomains();
+      const domains = await domainService.listDomains();
 
-    return {
-      success: true,
-      data: domains.map(serializeDomain),
-    };
-  }, {
-    detail: {
-      tags: ["Domains"],
-      summary: "List domains",
-      description: "Returns all registered domains with their verification status.",
-      security: [{ bearerAuth: [] }],
+      return {
+        success: true,
+        data: domains.map(serializeDomain),
+      };
     },
-  })
+    {
+      detail: {
+        tags: ["Domains"],
+        summary: "List domains",
+        description: "Returns all registered domains with their verification status.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
 
   .get(
     "/:id",
@@ -97,7 +101,7 @@ export const domainsPlugin = new Elysia({
         description: "Returns a single domain by its ID.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
   .delete(
@@ -122,7 +126,7 @@ export const domainsPlugin = new Elysia({
         description: "Removes a domain from the database (hard delete).",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
   .post(
@@ -151,8 +155,9 @@ export const domainsPlugin = new Elysia({
       detail: {
         tags: ["Domains"],
         summary: "Verify domain DNS",
-        description: "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status.",
+        description:
+          "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   );

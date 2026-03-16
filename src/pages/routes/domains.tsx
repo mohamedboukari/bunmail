@@ -53,19 +53,35 @@ export function DomainsPage({ domains, flash }: DomainsPageProps) {
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-gray-200 dark:border-gray-800">
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Domain</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">SPF</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">DKIM</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">DMARC</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Created</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Actions</th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Domain
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  SPF
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  DKIM
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  DMARC
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
               {domains.map((domain) => (
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                   <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">
-                    <a href={`/dashboard/domains/${domain.id}`} class="hover:underline" safe>
+                    <a
+                      href={`/dashboard/domains/${domain.id}`}
+                      class="hover:underline"
+                      safe
+                    >
                       {domain.name}
                     </a>
                   </td>

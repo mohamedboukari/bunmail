@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { createHmac } from "crypto";
 
 /**
@@ -20,9 +20,7 @@ const SESSION_MAX_AGE = 86400;
  */
 function createSessionCookie(secret: string): string {
   const timestamp = Math.floor(Date.now() / 1000);
-  const hmac = createHmac("sha256", secret)
-    .update(String(timestamp))
-    .digest("hex");
+  const hmac = createHmac("sha256", secret).update(String(timestamp)).digest("hex");
   return `${timestamp}.${hmac}`;
 }
 
@@ -42,9 +40,7 @@ function validateSessionCookie(cookie: string, secret: string): boolean {
   const now = Math.floor(Date.now() / 1000);
   if (now - ts > SESSION_MAX_AGE) return false;
 
-  const expectedHmac = createHmac("sha256", secret)
-    .update(timestamp)
-    .digest("hex");
+  const expectedHmac = createHmac("sha256", secret).update(timestamp).digest("hex");
 
   if (providedHmac.length !== expectedHmac.length) return false;
 
@@ -87,7 +83,9 @@ describe("session cookie", () => {
 
     test("rejects a cookie with tampered HMAC", () => {
       const cookie = createSessionCookie(TEST_SECRET);
-      const tampered = cookie.split(".")[0] + ".0000000000000000000000000000000000000000000000000000000000000000";
+      const tampered =
+        cookie.split(".")[0] +
+        ".0000000000000000000000000000000000000000000000000000000000000000";
       expect(validateSessionCookie(tampered, TEST_SECRET)).toBe(false);
     });
 

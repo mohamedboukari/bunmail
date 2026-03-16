@@ -36,15 +36,27 @@ const app = new Elysia()
             "Self-hosted email API for developers — free alternative to SendGrid/Resend. " +
             "Send transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, " +
             "email queue with retries, templates, and webhooks.",
-          license: { name: "MIT", url: "https://github.com/mohamedboukari/bunmail/blob/main/LICENSE" },
+          license: {
+            name: "MIT",
+            url: "https://github.com/mohamedboukari/bunmail/blob/main/LICENSE",
+          },
           contact: { name: "BunMail", url: "https://github.com/mohamedboukari/bunmail" },
         },
         tags: [
           { name: "Emails", description: "Send and track transactional emails" },
-          { name: "API Keys", description: "Create and manage API keys for authentication" },
-          { name: "Domains", description: "Register sender domains and verify DNS records" },
+          {
+            name: "API Keys",
+            description: "Create and manage API keys for authentication",
+          },
+          {
+            name: "Domains",
+            description: "Register sender domains and verify DNS records",
+          },
           { name: "Webhooks", description: "Subscribe to email delivery events" },
-          { name: "Templates", description: "Create reusable email templates with variable substitution" },
+          {
+            name: "Templates",
+            description: "Create reusable email templates with variable substitution",
+          },
           { name: "Inbound", description: "View received inbound emails" },
           { name: "Health", description: "Server health checks" },
         ],
@@ -53,7 +65,8 @@ const app = new Elysia()
             bearerAuth: {
               type: "http",
               scheme: "bearer",
-              description: "API key obtained from the /api/v1/api-keys endpoint or seed script",
+              description:
+                "API key obtained from the /api/v1/api-keys endpoint or seed script",
             },
           },
         },
@@ -84,7 +97,8 @@ const app = new Elysia()
 
     logger.error("Unhandled error", {
       error: message,
-      stack: config.env === "development" && error instanceof Error ? error.stack : undefined,
+      stack:
+        config.env === "development" && error instanceof Error ? error.stack : undefined,
     });
 
     set.status = 500;
@@ -95,12 +109,21 @@ const app = new Elysia()
   /** Root — developer-focused landing page */
   .use(landingPlugin)
   /** Health check — used by Docker, load balancers, and uptime monitors */
-  .get("/health", () => ({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-  }), {
-    detail: { tags: ["Health"], summary: "Health check", description: "Returns server health status — used by Docker, load balancers, and uptime monitors." },
-  })
+  .get(
+    "/health",
+    () => ({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+    }),
+    {
+      detail: {
+        tags: ["Health"],
+        summary: "Health check",
+        description:
+          "Returns server health status — used by Docker, load balancers, and uptime monitors.",
+      },
+    },
+  )
   /** Emails module — POST /send, GET /, GET /:id */
   .use(emailsPlugin)
   /** API Keys module — POST /, GET /, DELETE /:id */

@@ -105,10 +105,7 @@ export async function listDomains(): Promise<Domain[]> {
 export async function getDomainById(id: string): Promise<Domain | undefined> {
   logger.debug("Fetching domain by ID", { id });
 
-  const [domain] = await db
-    .select()
-    .from(domains)
-    .where(eq(domains.id, id));
+  const [domain] = await db.select().from(domains).where(eq(domains.id, id));
 
   if (!domain) {
     logger.debug("Domain not found", { id });
@@ -128,10 +125,7 @@ export async function getDomainById(id: string): Promise<Domain | undefined> {
 export async function deleteDomain(id: string): Promise<Domain | undefined> {
   logger.info("Deleting domain", { id });
 
-  const [domain] = await db
-    .delete(domains)
-    .where(eq(domains.id, id))
-    .returning();
+  const [domain] = await db.delete(domains).where(eq(domains.id, id)).returning();
 
   if (!domain) {
     logger.warn("Domain not found for deletion", { id });

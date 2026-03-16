@@ -72,7 +72,8 @@ mock.module("../../src/db/index.ts", () => ({
 const mockDomain = {
   id: "dom_test123",
   name: "example.com",
-  dkimPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
+  dkimPrivateKey:
+    "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
   dkimPublicKey: "-----BEGIN PUBLIC KEY-----\nPUBLIC\n-----END PUBLIC KEY-----",
   dkimSelector: "bunmail",
   spfVerified: false,
@@ -88,10 +89,10 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   createDomain: mock(() => Promise.resolve(mockDomain)),
   listDomains: mock(() => Promise.resolve([mockDomain])),
   getDomainById: mock((id: string) =>
-    Promise.resolve(id === "dom_test123" ? mockDomain : undefined)
+    Promise.resolve(id === "dom_test123" ? mockDomain : undefined),
   ),
   deleteDomain: mock((id: string) =>
-    Promise.resolve(id === "dom_test123" ? mockDomain : undefined)
+    Promise.resolve(id === "dom_test123" ? mockDomain : undefined),
   ),
 }));
 
@@ -108,9 +109,7 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { domainsPlugin } = await import(
-  "../../src/modules/domains/domains.plugin.ts"
-);
+const { domainsPlugin } = await import("../../src/modules/domains/domains.plugin.ts");
 
 /** Test app instance with the domains plugin */
 const app = new Elysia().use(domainsPlugin);
@@ -128,7 +127,7 @@ describe("Domains API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({ name: "example.com" }),
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -150,7 +149,7 @@ describe("Domains API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({}),
-        })
+        }),
       );
       expect(response.status).toBe(422);
     });
@@ -161,7 +160,7 @@ describe("Domains API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/domains", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -180,7 +179,7 @@ describe("Domains API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/domains/dom_test123", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -193,7 +192,7 @@ describe("Domains API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/domains/dom_nonexistent", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);
@@ -209,7 +208,7 @@ describe("Domains API E2E", () => {
         new Request("http://localhost/api/v1/domains/dom_test123", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -223,7 +222,7 @@ describe("Domains API E2E", () => {
         new Request("http://localhost/api/v1/domains/dom_nonexistent", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);

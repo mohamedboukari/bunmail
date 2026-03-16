@@ -48,26 +48,31 @@ export const templatesPlugin = new Elysia({
       detail: {
         tags: ["Templates"],
         summary: "Create template",
-        description: "Creates a new email template with optional Mustache-style {{variable}} substitution.",
+        description:
+          "Creates a new email template with optional Mustache-style {{variable}} substitution.",
         security: [{ bearerAuth: [] }],
       },
     },
   )
 
-  .get("/", async (context) => {
-    const { apiKeyId } = context as typeof context & { apiKeyId: string };
+  .get(
+    "/",
+    async (context) => {
+      const { apiKeyId } = context as typeof context & { apiKeyId: string };
 
-    const list = await templateService.listTemplates(apiKeyId);
+      const list = await templateService.listTemplates(apiKeyId);
 
-    return { success: true, data: list.map(serializeTemplate) };
-  }, {
-    detail: {
-      tags: ["Templates"],
-      summary: "List templates",
-      description: "Returns all templates for the current API key.",
-      security: [{ bearerAuth: [] }],
+      return { success: true, data: list.map(serializeTemplate) };
     },
-  })
+    {
+      detail: {
+        tags: ["Templates"],
+        summary: "List templates",
+        description: "Returns all templates for the current API key.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
 
   .get(
     "/:id",
@@ -97,7 +102,9 @@ export const templatesPlugin = new Elysia({
   .put(
     "/:id",
     async (context) => {
-      const { params, body, set, apiKeyId } = context as typeof context & { apiKeyId: string };
+      const { params, body, set, apiKeyId } = context as typeof context & {
+        apiKeyId: string;
+      };
 
       const template = await templateService.updateTemplate(params.id, apiKeyId, {
         name: body.name,
