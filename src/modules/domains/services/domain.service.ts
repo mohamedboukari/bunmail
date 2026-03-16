@@ -115,6 +115,22 @@ export async function getDomainById(id: string): Promise<Domain | undefined> {
 }
 
 /**
+ * Checks whether a domain name is registered in BunMail.
+ * Used by inbound SMTP spam protection to reject mail to unknown domains.
+ *
+ * @param name - The domain name to check (e.g. "example.com")
+ * @returns true if the domain exists in the database
+ */
+export async function domainExistsByName(name: string): Promise<boolean> {
+  const [domain] = await db
+    .select({ id: domains.id })
+    .from(domains)
+    .where(eq(domains.name, name))
+    .limit(1);
+  return !!domain;
+}
+
+/**
  * Deletes a domain by its ID (hard delete).
  *
  * Removes the domain row entirely from the database.

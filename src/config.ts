@@ -56,6 +56,23 @@ export const config = {
     port: parseInt(optionalEnv("SMTP_PORT", "2525"), 10),
     /** Set to "true" to enable the inbound SMTP server */
     enabled: optionalEnv("SMTP_ENABLED", "false") === "true",
+
+    /** Spam protection layers — all enabled by default when SMTP is on */
+    spamProtection: {
+      /** Check connecting IPs against a DNSBL (e.g. Spamhaus ZEN) */
+      dnsblEnabled: optionalEnv("SMTP_DNSBL_ENABLED", "true") === "true",
+      /** DNSBL zone to query (default: zen.spamhaus.org) */
+      dnsblZone: optionalEnv("SMTP_DNSBL_ZONE", "zen.spamhaus.org"),
+      /** Reject mail to domains not registered in BunMail */
+      recipientValidationEnabled:
+        optionalEnv("SMTP_RECIPIENT_VALIDATION", "true") === "true",
+      /** Per-IP SMTP connection rate limiting */
+      rateLimitEnabled: optionalEnv("SMTP_RATE_LIMIT_ENABLED", "true") === "true",
+      /** Max connections per IP per window */
+      rateLimitMax: parseInt(optionalEnv("SMTP_RATE_LIMIT_MAX", "10"), 10),
+      /** Rate limit window in seconds */
+      rateLimitWindowSec: parseInt(optionalEnv("SMTP_RATE_LIMIT_WINDOW", "60"), 10),
+    },
   },
 
   /** Password-protected web dashboard at /dashboard */
