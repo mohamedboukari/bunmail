@@ -94,6 +94,7 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   deleteDomain: mock((id: string) =>
     Promise.resolve(id === "dom_test123" ? mockDomain : undefined),
   ),
+  getDkimDnsRecord: mock(() => null),
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */

@@ -95,7 +95,11 @@ const mockEmail = {
 mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   createEmail: mock(() => Promise.resolve(mockEmail)),
   listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
+  listAllEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   getEmailById: mock((id: string) =>
+    Promise.resolve(id === "msg_test123" ? mockEmail : undefined),
+  ),
+  getEmailByIdUnscoped: mock((id: string) =>
     Promise.resolve(id === "msg_test123" ? mockEmail : undefined),
   ),
 }));
