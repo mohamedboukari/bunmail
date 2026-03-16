@@ -107,6 +107,56 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   ),
   getDomainById: mock(() => Promise.resolve(undefined)),
   deleteDomain: mock(() => Promise.resolve(undefined)),
+  getDkimDnsRecord: mock(() => null),
+}));
+
+mock.module("../../src/modules/domains/services/dns-verification.service.ts", () => ({
+  verifyDomain: mock(() => Promise.resolve()),
+}));
+
+mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+  renderTemplate: mock(() => ""),
+  createTemplate: mock(() => Promise.resolve({})),
+  listTemplates: mock(() => Promise.resolve([])),
+  listAllTemplates: mock(() => Promise.resolve([])),
+  getTemplateByIdUnscoped: mock(() => Promise.resolve(undefined)),
+  getTemplateById: mock(() => Promise.resolve(undefined)),
+  updateTemplate: mock(() => Promise.resolve({})),
+  deleteTemplate: mock(() => Promise.resolve(undefined)),
+}));
+
+mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
+  createWebhook: mock(() => Promise.resolve({})),
+  listWebhooks: mock(() => Promise.resolve([])),
+  listAllWebhooks: mock(() => Promise.resolve([])),
+  deleteWebhook: mock(() => Promise.resolve(undefined)),
+  findWebhooksForEvent: mock(() => Promise.resolve([])),
+}));
+
+mock.module("../../src/db/index.ts", () => ({
+  db: {
+    select: mock(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const chain: Record<string, any> = {
+        from: mock(() => chain),
+        where: mock(() => chain),
+        orderBy: mock(() => chain),
+        limit: mock(() => chain),
+        offset: mock(() => chain),
+        then: (resolve: (value: unknown) => void) => resolve([]),
+      };
+      return chain;
+    }),
+  },
+}));
+
+mock.module("drizzle-orm", () => ({
+  desc: mock(() => "desc"),
+  eq: mock(() => "eq"),
+  sql: Object.assign(
+    (_strings: TemplateStringsArray, ..._values: unknown[]) => "sql-tag",
+    { raw: (s: string) => s },
+  ),
 }));
 
 /* ─── Import plugin after mocking ─── */
