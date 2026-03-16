@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-16
+
+### Added
+
+- DNSBL IP check on inbound SMTP connections (Spamhaus ZEN by default)
+- Per-IP connection rate limiting on inbound SMTP (10/min default)
+- Recipient domain validation — rejects mail to unregistered domains
+- `domainExistsByName()` service method for domain lookups by name
+- 6 new env vars for configuring spam protection layers
+
+### Fixed
+
+- SPF record guidance changed from soft fail (`~all`) to hard fail (`-all`) for better deliverability
+
+### Changed
+
+- Open-source community files: SECURITY.md, CODE_OF_CONDUCT.md, CHANGELOG.md, LICENSE, issue/PR templates
+- CI: Bun dependency caching, CodeQL scanning, Dependabot, release + Docker GHCR workflows
+- README badges for CI, CodeQL, license, Bun, Elysia, Drizzle, Nodemailer, PostgreSQL
+
 ## [0.1.0] - 2026-03-16
 
 ### Added
