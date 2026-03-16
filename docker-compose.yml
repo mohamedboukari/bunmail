@@ -5,6 +5,9 @@
 #
 # The app waits for PostgreSQL to be healthy before starting,
 # then automatically runs database migrations on boot.
+#
+# Set POSTGRES_PASSWORD in your .env file (required).
+# Never commit real credentials to version control.
 
 services:
   app:
@@ -14,7 +17,7 @@ services:
       - "25:25"       # Inbound SMTP (set SMTP_PORT=25 in .env)
     env_file: .env
     environment:
-      DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
+      DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}
       BUNMAIL_ENV: production
     depends_on:
       db:
@@ -24,13 +27,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: bunmail
-      POSTGRES_PASSWORD: bunmail
-      POSTGRES_DB: bunmail
+      POSTGRES_USER: ${POSTGRES_USER:-bunmail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bunmail}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bunmail"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bunmail}"]
       interval: 5s
       timeout: 5s
       retries: 5
