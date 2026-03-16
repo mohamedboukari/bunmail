@@ -44,9 +44,7 @@ export const inboundPlugin = new Elysia({
           .orderBy(desc(inboundEmails.receivedAt))
           .limit(limit)
           .offset(offset),
-        db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(inboundEmails),
+        db.select({ count: sql<number>`count(*)::int` }).from(inboundEmails),
       ]);
 
       return {

@@ -16,17 +16,17 @@ function shouldLog(level: LogLevel): boolean {
 
 /** ANSI color codes for terminal output */
 const COLORS: Record<LogLevel, string> = {
-  debug: "\x1b[90m",  // gray
-  info:  "\x1b[36m",  // cyan
-  warn:  "\x1b[33m",  // yellow
-  error: "\x1b[31m",  // red
+  debug: "\x1b[90m", // gray
+  info: "\x1b[36m", // cyan
+  warn: "\x1b[33m", // yellow
+  error: "\x1b[31m", // red
 };
 
 /** Emoji prefix per log level */
 const EMOJIS: Record<LogLevel, string> = {
   debug: "🔍",
-  info:  "✅",
-  warn:  "⚠️",
+  info: "✅",
+  warn: "⚠️",
   error: "❌",
 };
 
@@ -37,7 +37,11 @@ const RESET = "\x1b[0m";
  * Formats a log message as a structured JSON string (production)
  * or a colored, human-readable string (development).
  */
-function formatLog(level: LogLevel, message: string, data?: Record<string, unknown>): string {
+function formatLog(
+  level: LogLevel,
+  message: string,
+  data?: Record<string, unknown>,
+): string {
   /** Production: structured JSON for log aggregators (Grafana, Datadog, etc.) */
   if (config.env === "production") {
     return JSON.stringify({
@@ -54,9 +58,10 @@ function formatLog(level: LogLevel, message: string, data?: Record<string, unkno
   const emoji = EMOJIS[level];
   const tag = `${color}${level.toUpperCase()}${RESET}`;
   const MAGENTA = "\x1b[35m";
-  const meta = data && Object.keys(data).length > 0
-    ? ` ${MAGENTA}${JSON.stringify(data)}${RESET}`
-    : "";
+  const meta =
+    data && Object.keys(data).length > 0
+      ? ` ${MAGENTA}${JSON.stringify(data)}${RESET}`
+      : "";
 
   return `${MAGENTA}${timestamp}${RESET} ${emoji} ${tag} ${message}${meta}`;
 }

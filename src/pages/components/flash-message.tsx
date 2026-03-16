@@ -19,8 +19,6 @@ export function FlashMessage({ message, type }: FlashMessageProps) {
       : "bg-red-50 text-red-800 border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-800";
 
   return (
-    <div class={`rounded-lg border px-4 py-3 text-sm mb-4 ${colors}`}>
-      {message}
-    </div>
+    <div class={`rounded-lg border px-4 py-3 text-sm mb-4 ${colors}`}>{message}</div>
   );
 }

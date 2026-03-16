@@ -148,9 +148,7 @@ export const pagesPlugin = new Elysia({
       }
       /** Show error message if redirected after wrong password */
       const error =
-        query.error === "invalid"
-          ? "Invalid password. Please try again."
-          : undefined;
+        query.error === "invalid" ? "Invalid password. Please try again." : undefined;
       return <LoginPage error={error} />;
     },
     {
@@ -747,9 +745,7 @@ export const pagesPlugin = new Elysia({
     "/templates/:id/edit",
     async ({ params, body, set }) => {
       try {
-        const existing = await templateService.getTemplateByIdUnscoped(
-          params.id,
-        );
+        const existing = await templateService.getTemplateByIdUnscoped(params.id);
         if (!existing) {
           set.status = 302;
           set.headers["location"] =
@@ -795,9 +791,7 @@ export const pagesPlugin = new Elysia({
     "/templates/:id/delete",
     async ({ params, set }) => {
       try {
-        const existing = await templateService.getTemplateByIdUnscoped(
-          params.id,
-        );
+        const existing = await templateService.getTemplateByIdUnscoped(params.id);
         if (!existing) {
           set.status = 302;
           set.headers["location"] =
@@ -808,7 +802,7 @@ export const pagesPlugin = new Elysia({
         set.status = 302;
         set.headers["location"] =
           `/dashboard/templates?flash=${encodeURIComponent("Template deleted")}`;
-      } catch (error) {
+      } catch {
         set.status = 302;
         set.headers["location"] =
           `/dashboard/templates?flash=${encodeURIComponent("Failed to delete template")}&flashType=error`;
@@ -832,9 +826,7 @@ export const pagesPlugin = new Elysia({
             type: (query.flashType ?? "success") as "success" | "error",
           }
         : undefined;
-      return (
-        <WebhooksPage webhooks={hooks} flash={flash} secret={query.secret} />
-      );
+      return <WebhooksPage webhooks={hooks} flash={flash} secret={query.secret} />;
     },
     {
       query: t.Object({
@@ -898,7 +890,7 @@ export const pagesPlugin = new Elysia({
         set.status = 302;
         set.headers["location"] =
           `/dashboard/webhooks?flash=${encodeURIComponent("Webhook deleted")}`;
-      } catch (error) {
+      } catch {
         set.status = 302;
         set.headers["location"] =
           `/dashboard/webhooks?flash=${encodeURIComponent("Failed to delete webhook")}&flashType=error`;

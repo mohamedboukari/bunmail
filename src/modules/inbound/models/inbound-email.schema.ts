@@ -34,7 +34,5 @@ export const inboundEmails = pgTable(
     /** When this email was received */
     receivedAt: timestamp("received_at").notNull().defaultNow(),
   },
-  (table) => [
-    index("idx_inbound_received_at").on(table.receivedAt),
-  ],
+  (table) => [index("idx_inbound_received_at").on(table.receivedAt)],
 );

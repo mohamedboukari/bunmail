@@ -13,8 +13,8 @@ services:
   app:
     build: .
     ports:
-      - "3000:3000"   # HTTP API + Dashboard
-      - "25:25"       # Inbound SMTP (set SMTP_PORT=25 in .env)
+      - "3000:3000" # HTTP API + Dashboard
+      - "25:25" # Inbound SMTP (set SMTP_PORT=25 in .env)
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}

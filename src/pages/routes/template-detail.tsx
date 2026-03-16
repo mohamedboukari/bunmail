@@ -12,9 +12,10 @@ interface TemplateDetailPageProps {
  * Template detail page — view and edit a single email template.
  */
 export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps) {
-  const variablesValue = template.variables && template.variables.length > 0
-    ? template.variables.join(", ")
-    : "";
+  const variablesValue =
+    template.variables && template.variables.length > 0
+      ? template.variables.join(", ")
+      : "";
 
   return (
     <BaseLayout title="Template Detail" activeNav="templates">
@@ -34,9 +35,16 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
 
       {/* Edit form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
-        <form method="POST" action={`/dashboard/templates/${template.id}/edit`} class="space-y-4">
+        <form
+          method="POST"
+          action={`/dashboard/templates/${template.id}/edit`}
+          class="space-y-4"
+        >
           <div>
-            <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="name"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Name
             </label>
             <input
@@ -50,7 +58,10 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
             />
           </div>
           <div>
-            <label for="subject" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="subject"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Subject
             </label>
             <input
@@ -64,21 +75,27 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
             />
           </div>
           <div>
-            <label for="html" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="html"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               HTML
             </label>
             <textarea
               id="html"
               name="html"
               rows="6"
-              placeholder={'<p>Hello {{name}}, welcome!</p>'}
+              placeholder={"<p>Hello {{name}}, welcome!</p>"}
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
             >
               {template.html ?? ""}
             </textarea>
           </div>
           <div>
-            <label for="text" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="text"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Plain Text (optional)
             </label>
             <textarea
@@ -92,7 +109,10 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
             </textarea>
           </div>
           <div>
-            <label for="variables" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="variables"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Variables (optional)
             </label>
             <input
@@ -114,7 +134,11 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
           </div>
         </form>
 
-        <form method="POST" action={`/dashboard/templates/${template.id}/delete`} class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800">
+        <form
+          method="POST"
+          action={`/dashboard/templates/${template.id}/delete`}
+          class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800"
+        >
           <button
             type="submit"
             class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"

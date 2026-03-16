@@ -66,11 +66,21 @@ export function EmailsPage({ emails, total, page, limit, status }: EmailsPagePro
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-gray-200 dark:border-gray-800">
-                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Status</th>
-                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">From</th>
-                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">To</th>
-                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Subject</th>
-                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Created</th>
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    Status
+                  </th>
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    From
+                  </th>
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    To
+                  </th>
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    Subject
+                  </th>
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    Created
+                  </th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
@@ -80,14 +90,24 @@ export function EmailsPage({ emails, total, page, limit, status }: EmailsPagePro
                       <StatusBadge status={email.status} />
                     </td>
                     <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]">
-                      <a href={`/dashboard/emails/${email.id}`} class="hover:underline" safe>
+                      <a
+                        href={`/dashboard/emails/${email.id}`}
+                        class="hover:underline"
+                        safe
+                      >
                         {email.fromAddress}
                       </a>
                     </td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]" safe>
+                    <td
+                      class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]"
+                      safe
+                    >
                       {email.toAddress}
                     </td>
-                    <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[200px]" safe>
+                    <td
+                      class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[200px]"
+                      safe
+                    >
                       {email.subject}
                     </td>
                     <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">

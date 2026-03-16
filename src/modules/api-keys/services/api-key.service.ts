@@ -17,7 +17,7 @@ import type { ApiKey, CreateApiKeyInput } from "../types/api-key.types.ts";
  * @returns The created API key row AND the raw key (shown once)
  */
 export async function createApiKey(
-  input: CreateApiKeyInput
+  input: CreateApiKeyInput,
 ): Promise<{ apiKey: ApiKey; rawKey: string }> {
   /** Generate a unique prefixed ID for this key */
   const id = generateId("key");
@@ -98,10 +98,7 @@ export async function revokeApiKey(id: string): Promise<ApiKey | undefined> {
  * @returns The matching API key row, or undefined if not found
  */
 export async function findByHash(hash: string): Promise<ApiKey | undefined> {
-  const [apiKey] = await db
-    .select()
-    .from(apiKeys)
-    .where(eq(apiKeys.keyHash, hash));
+  const [apiKey] = await db.select().from(apiKeys).where(eq(apiKeys.keyHash, hash));
 
   return apiKey;
 }

@@ -18,7 +18,13 @@ interface PaginationProps {
  * Pagination — prev/next page links at the bottom of table views.
  * Preserves existing query params (like status filters) when navigating.
  */
-export function Pagination({ page, limit, total, baseUrl, extraParams }: PaginationProps) {
+export function Pagination({
+  page,
+  limit,
+  total,
+  baseUrl,
+  extraParams,
+}: PaginationProps) {
   /** Total number of pages */
   const totalPages = Math.max(1, Math.ceil(total / limit));
   /** Whether there's a previous page */

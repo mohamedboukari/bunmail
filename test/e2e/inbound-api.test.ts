@@ -139,8 +139,7 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { inboundPlugin } =
-  await import("../../src/modules/inbound/inbound.plugin.ts");
+const { inboundPlugin } = await import("../../src/modules/inbound/inbound.plugin.ts");
 
 const app = new Elysia().use(inboundPlugin);
 

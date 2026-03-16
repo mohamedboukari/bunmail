@@ -22,7 +22,10 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
         <form method="POST" action="/dashboard/templates" class="space-y-4">
           <div>
-            <label for="name" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="name"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Name
             </label>
             <input
@@ -35,7 +38,10 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
             />
           </div>
           <div>
-            <label for="subject" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="subject"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Subject
             </label>
             <input
@@ -48,19 +54,25 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
             />
           </div>
           <div>
-            <label for="html" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="html"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               HTML
             </label>
             <textarea
               id="html"
               name="html"
               rows="6"
-              placeholder={'<p>Hello {{name}}, welcome!</p>'}
+              placeholder={"<p>Hello {{name}}, welcome!</p>"}
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
             />
           </div>
           <div>
-            <label for="text" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="text"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Plain Text (optional)
             </label>
             <textarea
@@ -72,7 +84,10 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
             />
           </div>
           <div>
-            <label for="variables" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            <label
+              for="variables"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
               Variables (optional)
             </label>
             <input
@@ -99,22 +114,39 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-gray-200 dark:border-gray-800">
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Name</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Subject</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Variables</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Created</th>
-                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">Actions</th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Name
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Subject
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Variables
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
               {templates.map((template) => (
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                   <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100">
-                    <a href={`/dashboard/templates/${template.id}`} class="hover:underline" safe>
+                    <a
+                      href={`/dashboard/templates/${template.id}`}
+                      class="hover:underline"
+                      safe
+                    >
                       {template.name}
                     </a>
                   </td>
-                  <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[200px]" safe>
+                  <td
+                    class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[200px]"
+                    safe
+                  >
                     {template.subject}
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400">
@@ -126,7 +158,10 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                     {template.createdAt.toLocaleDateString()}
                   </td>
                   <td class="px-4 py-3">
-                    <form method="POST" action={`/dashboard/templates/${template.id}/delete`}>
+                    <form
+                      method="POST"
+                      action={`/dashboard/templates/${template.id}/delete`}
+                    >
                       <button
                         type="submit"
                         class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"

@@ -1,0 +1,5 @@
+dist/
+drizzle/
+node_modules/
+bun.lock
+*.md

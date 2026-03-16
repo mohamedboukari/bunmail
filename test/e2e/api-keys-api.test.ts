@@ -102,8 +102,7 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { apiKeysPlugin } =
-  await import("../../src/modules/api-keys/api-keys.plugin.ts");
+const { apiKeysPlugin } = await import("../../src/modules/api-keys/api-keys.plugin.ts");
 
 const app = new Elysia().use(apiKeysPlugin);
 
@@ -131,9 +130,7 @@ describe("API Keys API E2E", () => {
       expect(body.data.keyPrefix).toBe("bm_live_test");
       expect(body.data.key).toBe("bm_live_test_fullkey123");
       /** keyHash must not be exposed */
-      expect(
-        (body.data as unknown as Record<string, unknown>).keyHash,
-      ).toBeUndefined();
+      expect((body.data as unknown as Record<string, unknown>).keyHash).toBeUndefined();
     });
 
     test("returns 422 on missing name", async () => {

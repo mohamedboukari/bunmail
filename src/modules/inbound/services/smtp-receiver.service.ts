@@ -51,12 +51,11 @@ export function start(): void {
             (mailFrom && typeof mailFrom === "object" ? mailFrom.address : undefined) ??
             "unknown";
 
-          const to =
-            parsed.to
-              ? (Array.isArray(parsed.to)
-                  ? parsed.to[0]?.value?.[0]?.address
-                  : parsed.to.value?.[0]?.address) ?? ""
-              : session.envelope.rcptTo?.[0]?.address ?? "unknown";
+          const to = parsed.to
+            ? ((Array.isArray(parsed.to)
+                ? parsed.to[0]?.value?.[0]?.address
+                : parsed.to.value?.[0]?.address) ?? "")
+            : (session.envelope.rcptTo?.[0]?.address ?? "unknown");
 
           const id = generateId("inb");
 

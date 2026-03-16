@@ -92,18 +92,13 @@ const mockEmail = {
 };
 
 /* ─── Mock email service ─── */
-mock.module(
-  "../../src/modules/emails/services/email.service.ts",
-  () => ({
-    createEmail: mock(() => Promise.resolve(mockEmail)),
-    listEmails: mock(() =>
-      Promise.resolve({ data: [mockEmail], total: 1 })
-    ),
-    getEmailById: mock((id: string) =>
-      Promise.resolve(id === "msg_test123" ? mockEmail : undefined)
-    ),
-  })
-);
+mock.module("../../src/modules/emails/services/email.service.ts", () => ({
+  createEmail: mock(() => Promise.resolve(mockEmail)),
+  listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
+  getEmailById: mock((id: string) =>
+    Promise.resolve(id === "msg_test123" ? mockEmail : undefined),
+  ),
+}));
 
 /* ─── Mock auth + rate limit middleware ─── */
 mock.module("../../src/middleware/auth.ts", () => ({
@@ -118,9 +113,7 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { emailsPlugin } = await import(
-  "../../src/modules/emails/emails.plugin.ts"
-);
+const { emailsPlugin } = await import("../../src/modules/emails/emails.plugin.ts");
 
 const app = new Elysia().use(emailsPlugin);
 
@@ -142,7 +135,7 @@ describe("Emails API E2E", () => {
             subject: "Test",
             html: "<p>Test</p>",
           }),
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -164,7 +157,7 @@ describe("Emails API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({}),
-        })
+        }),
       );
 
       expect(response.status).toBe(422);
@@ -176,7 +169,7 @@ describe("Emails API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/emails", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -193,7 +186,7 @@ describe("Emails API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/emails/msg_test123", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -206,7 +199,7 @@ describe("Emails API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/emails/msg_nonexistent", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);

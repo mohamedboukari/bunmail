@@ -83,22 +83,19 @@ const updatedTemplate = {
 };
 
 /* ─── Mock template service ─── */
-mock.module(
-  "../../src/modules/templates/services/template.service.ts",
-  () => ({
-    createTemplate: mock(() => Promise.resolve(mockTemplate)),
-    listTemplates: mock(() => Promise.resolve([mockTemplate])),
-    getTemplateById: mock((id: string) =>
-      Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined)
-    ),
-    updateTemplate: mock((id: string) =>
-      Promise.resolve(id === "tpl_test123" ? updatedTemplate : undefined)
-    ),
-    deleteTemplate: mock((id: string) =>
-      Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined)
-    ),
-  })
-);
+mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+  createTemplate: mock(() => Promise.resolve(mockTemplate)),
+  listTemplates: mock(() => Promise.resolve([mockTemplate])),
+  getTemplateById: mock((id: string) =>
+    Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
+  ),
+  updateTemplate: mock((id: string) =>
+    Promise.resolve(id === "tpl_test123" ? updatedTemplate : undefined),
+  ),
+  deleteTemplate: mock((id: string) =>
+    Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
+  ),
+}));
 
 /* ─── Mock auth + rate limit middleware ─── */
 mock.module("../../src/middleware/auth.ts", () => ({
@@ -113,9 +110,8 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { templatesPlugin } = await import(
-  "../../src/modules/templates/templates.plugin.ts"
-);
+const { templatesPlugin } =
+  await import("../../src/modules/templates/templates.plugin.ts");
 
 const app = new Elysia().use(templatesPlugin);
 
@@ -138,7 +134,7 @@ describe("Templates API E2E", () => {
             text: "Hi {{name}}",
             variables: ["name"],
           }),
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -159,7 +155,7 @@ describe("Templates API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({}),
-        })
+        }),
       );
 
       expect(response.status).toBe(422);
@@ -171,7 +167,7 @@ describe("Templates API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/templates", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -187,7 +183,7 @@ describe("Templates API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/templates/tpl_test123", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -200,7 +196,7 @@ describe("Templates API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/templates/tpl_nonexistent", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);
@@ -223,7 +219,7 @@ describe("Templates API E2E", () => {
             name: "Updated Welcome",
             subject: "Updated Welcome {{name}}",
           }),
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -242,7 +238,7 @@ describe("Templates API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({ name: "Nope" }),
-        })
+        }),
       );
 
       expect(response.status).toBe(404);
@@ -258,7 +254,7 @@ describe("Templates API E2E", () => {
         new Request("http://localhost/api/v1/templates/tpl_test123", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -272,7 +268,7 @@ describe("Templates API E2E", () => {
         new Request("http://localhost/api/v1/templates/tpl_nonexistent", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);

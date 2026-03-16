@@ -34,9 +34,8 @@ mock.module("../../src/db/index.ts", () => ({
 }));
 
 /* ─── Import after mocking ─── */
-const { getDkimDnsRecord } = await import(
-  "../../src/modules/domains/services/domain.service.ts"
-);
+const { getDkimDnsRecord } =
+  await import("../../src/modules/domains/services/domain.service.ts");
 
 /** Realistic PEM-encoded public key for testing */
 const SAMPLE_PEM = `-----BEGIN PUBLIC KEY-----
@@ -50,8 +49,7 @@ pJ5RE1O3EhJmEFnNkWMA6kG0p3doWBAzjiQMjdHPGf+MO6GgPGnGKkYImuwdP7Gy
 -----END PUBLIC KEY-----`;
 
 /** Expected base64 with PEM headers and whitespace stripped */
-const EXPECTED_B64 = SAMPLE_PEM
-  .replace(/-----BEGIN PUBLIC KEY-----/g, "")
+const EXPECTED_B64 = SAMPLE_PEM.replace(/-----BEGIN PUBLIC KEY-----/g, "")
   .replace(/-----END PUBLIC KEY-----/g, "")
   .replace(/\s/g, "");
 
@@ -60,7 +58,8 @@ function makeDomain(overrides: Record<string, unknown> = {}) {
   return {
     id: "dom_test123",
     name: "example.com",
-    dkimPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
+    dkimPrivateKey:
+      "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
     dkimPublicKey: SAMPLE_PEM,
     dkimSelector: "bunmail",
     spfVerified: false,

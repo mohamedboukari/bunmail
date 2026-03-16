@@ -78,18 +78,15 @@ const mockWebhook = {
 };
 
 /* ─── Mock webhook service ─── */
-mock.module(
-  "../../src/modules/webhooks/services/webhook.service.ts",
-  () => ({
-    createWebhook: mock(() =>
-      Promise.resolve({ webhook: mockWebhook, secret: "supersecret123" })
-    ),
-    listWebhooks: mock(() => Promise.resolve([mockWebhook])),
-    deleteWebhook: mock((id: string) =>
-      Promise.resolve(id === "whk_test123" ? mockWebhook : undefined)
-    ),
-  })
-);
+mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
+  createWebhook: mock(() =>
+    Promise.resolve({ webhook: mockWebhook, secret: "supersecret123" }),
+  ),
+  listWebhooks: mock(() => Promise.resolve([mockWebhook])),
+  deleteWebhook: mock((id: string) =>
+    Promise.resolve(id === "whk_test123" ? mockWebhook : undefined),
+  ),
+}));
 
 /* ─── Mock auth + rate limit middleware ─── */
 mock.module("../../src/middleware/auth.ts", () => ({
@@ -104,9 +101,7 @@ mock.module("../../src/middleware/rate-limit.ts", () => ({
 }));
 
 /* ─── Import plugin after mocking ─── */
-const { webhooksPlugin } = await import(
-  "../../src/modules/webhooks/webhooks.plugin.ts"
-);
+const { webhooksPlugin } = await import("../../src/modules/webhooks/webhooks.plugin.ts");
 
 const app = new Elysia().use(webhooksPlugin);
 
@@ -126,7 +121,7 @@ describe("Webhooks API E2E", () => {
             url: "https://example.com/hook",
             events: ["email.sent", "email.failed"],
           }),
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -147,7 +142,7 @@ describe("Webhooks API E2E", () => {
             authorization: "Bearer test_key",
           },
           body: JSON.stringify({}),
-        })
+        }),
       );
 
       expect(response.status).toBe(422);
@@ -159,7 +154,7 @@ describe("Webhooks API E2E", () => {
       const response = await app.handle(
         new Request("http://localhost/api/v1/webhooks", {
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -169,9 +164,7 @@ describe("Webhooks API E2E", () => {
       expect(body.data[0]!.id).toBe("whk_test123");
       expect(body.data[0]!.url).toBe("https://example.com/hook");
       /** Secret must not be exposed in list response */
-      expect(
-        (body.data[0] as unknown as Record<string, unknown>).secret
-      ).toBeUndefined();
+      expect((body.data[0] as unknown as Record<string, unknown>).secret).toBeUndefined();
     });
   });
 
@@ -181,7 +174,7 @@ describe("Webhooks API E2E", () => {
         new Request("http://localhost/api/v1/webhooks/whk_test123", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(200);
@@ -195,7 +188,7 @@ describe("Webhooks API E2E", () => {
         new Request("http://localhost/api/v1/webhooks/whk_nonexistent", {
           method: "DELETE",
           headers: { authorization: "Bearer test_key" },
-        })
+        }),
       );
 
       expect(response.status).toBe(404);

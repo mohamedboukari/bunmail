@@ -1,11 +1,17 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import globals from "globals";
+import prettierPlugin from "eslint-plugin-prettier";
+import prettierConfig from "eslint-config-prettier";
 
 export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  prettierConfig,
   {
+    plugins: {
+      prettier: prettierPlugin,
+    },
     languageOptions: {
       globals: {
         ...globals.node,
@@ -16,6 +22,7 @@ export default tseslint.config(
       },
     },
     rules: {
+      "prettier/prettier": "warn",
       /** No `any` — use proper types */
       "@typescript-eslint/no-explicit-any": "error",
       /** Allow unused vars prefixed with _ */
@@ -32,5 +39,5 @@ export default tseslint.config(
   {
     /** Ignore build output and generated files */
     ignores: ["dist/", "drizzle/", "node_modules/"],
-  }
+  },
 );

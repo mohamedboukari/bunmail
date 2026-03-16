@@ -18,21 +18,9 @@ export function HomePage({ stats }: { stats: DashboardStats }) {
           value={stats.totalEmails}
           accent="border-gray-400 dark:border-gray-500"
         />
-        <StatsCard
-          label="Sent"
-          value={stats.sentCount}
-          accent="border-emerald-500"
-        />
-        <StatsCard
-          label="Failed"
-          value={stats.failedCount}
-          accent="border-red-500"
-        />
-        <StatsCard
-          label="Queued"
-          value={stats.queuedCount}
-          accent="border-amber-500"
-        />
+        <StatsCard label="Sent" value={stats.sentCount} accent="border-emerald-500" />
+        <StatsCard label="Failed" value={stats.failedCount} accent="border-red-500" />
+        <StatsCard label="Queued" value={stats.queuedCount} accent="border-amber-500" />
         <StatsCard
           label="API Keys"
           value={stats.activeApiKeys}

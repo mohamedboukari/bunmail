@@ -9,7 +9,7 @@ function requiredEnv(key: string): string {
   if (!value) {
     throw new Error(
       `[config] Missing required environment variable: ${key}\n` +
-      `  → Copy .env.example to .env and fill in the values.`,
+        `  → Copy .env.example to .env and fill in the values.`,
     );
   }
   return value;

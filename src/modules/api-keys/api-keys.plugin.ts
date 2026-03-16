@@ -55,29 +55,34 @@ export const apiKeysPlugin = new Elysia({
       detail: {
         tags: ["API Keys"],
         summary: "Create API key",
-        description: "Creates a new API key. The raw key is returned once — store it securely.",
+        description:
+          "Creates a new API key. The raw key is returned once — store it securely.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
-  .get("/", async () => {
-    logger.info("GET /api/v1/api-keys");
+  .get(
+    "/",
+    async () => {
+      logger.info("GET /api/v1/api-keys");
 
-    const keys = await apiKeyService.listApiKeys();
+      const keys = await apiKeyService.listApiKeys();
 
-    return {
-      success: true,
-      data: keys.map(serializeApiKey),
-    };
-  }, {
-    detail: {
-      tags: ["API Keys"],
-      summary: "List API keys",
-      description: "Returns all API keys (active and revoked). Key hashes are hidden.",
-      security: [{ bearerAuth: [] }],
+      return {
+        success: true,
+        data: keys.map(serializeApiKey),
+      };
     },
-  })
+    {
+      detail: {
+        tags: ["API Keys"],
+        summary: "List API keys",
+        description: "Returns all API keys (active and revoked). Key hashes are hidden.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
 
   .delete(
     "/:id",
@@ -106,8 +111,9 @@ export const apiKeysPlugin = new Elysia({
       detail: {
         tags: ["API Keys"],
         summary: "Revoke API key",
-        description: "Soft-deletes an API key by setting is_active to false. The key remains for audit purposes.",
+        description:
+          "Soft-deletes an API key by setting is_active to false. The key remains for audit purposes.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   );

@@ -18,7 +18,10 @@ import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.ty
  *
  * Also links the sender's domain for DKIM signing.
  */
-export async function createEmail(input: SendEmailInput, apiKeyId: string): Promise<Email> {
+export async function createEmail(
+  input: SendEmailInput,
+  apiKeyId: string,
+): Promise<Email> {
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
 
@@ -100,7 +103,10 @@ export async function createEmail(input: SendEmailInput, apiKeyId: string): Prom
  * @param apiKeyId - The authenticated API key ID (scope filter)
  * @returns The email row, or undefined if not found or not owned by this key
  */
-export async function getEmailById(id: string, apiKeyId: string): Promise<Email | undefined> {
+export async function getEmailById(
+  id: string,
+  apiKeyId: string,
+): Promise<Email | undefined> {
   logger.debug("Fetching email by ID", { id, apiKeyId });
 
   const [email] = await db
@@ -127,7 +133,7 @@ export async function getEmailById(id: string, apiKeyId: string): Promise<Email 
  */
 export async function listEmails(
   apiKeyId: string,
-  filters: ListEmailsFilters
+  filters: ListEmailsFilters,
 ): Promise<{ data: Email[]; total: number }> {
   /** Calculate how many rows to skip based on page number */
   const offset = (filters.page - 1) * filters.limit;
@@ -172,16 +178,14 @@ export async function listEmails(
  * @returns Object with `data` (email rows) and `total` (count for pagination)
  */
 export async function listAllEmails(
-  filters: ListEmailsFilters
+  filters: ListEmailsFilters,
 ): Promise<{ data: Email[]; total: number }> {
   const offset = (filters.page - 1) * filters.limit;
 
   logger.debug("Listing all emails (unscoped)", { ...filters, offset });
 
   /** Build WHERE clause — only filter by status if provided */
-  const conditions = filters.status
-    ? eq(emails.status, filters.status)
-    : undefined;
+  const conditions = filters.status ? eq(emails.status, filters.status) : undefined;
 
   const [data, [countRow]] = await Promise.all([
     db
@@ -217,10 +221,7 @@ export async function listAllEmails(
 export async function getEmailByIdUnscoped(id: string): Promise<Email | undefined> {
   logger.debug("Fetching email by ID (unscoped)", { id });
 
-  const [email] = await db
-    .select()
-    .from(emails)
-    .where(eq(emails.id, id));
+  const [email] = await db.select().from(emails).where(eq(emails.id, id));
 
   if (!email) {
     logger.debug("Email not found (unscoped)", { id });

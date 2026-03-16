@@ -60,10 +60,11 @@ export const emailsPlugin = new Elysia({
       detail: {
         tags: ["Emails"],
         summary: "Send an email",
-        description: "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously.",
+        description:
+          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
   .get(
@@ -94,10 +95,11 @@ export const emailsPlugin = new Elysia({
       detail: {
         tags: ["Emails"],
         summary: "List emails",
-        description: "Returns a paginated list of emails for the current API key. Supports optional status filter.",
+        description:
+          "Returns a paginated list of emails for the current API key. Supports optional status filter.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   )
 
   .get(
@@ -132,5 +134,5 @@ export const emailsPlugin = new Elysia({
         description: "Returns a single email by its ID. Scoped to the current API key.",
         security: [{ bearerAuth: [] }],
       },
-    }
+    },
   );

@@ -12,7 +12,8 @@ describe("serializeDomain", () => {
   const domain = {
     id: "dom_abc123",
     name: "example.com",
-    dkimPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
+    dkimPrivateKey:
+      "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
     dkimPublicKey: "-----BEGIN PUBLIC KEY-----\nPUBLIC\n-----END PUBLIC KEY-----",
     dkimSelector: "bunmail",
     spfVerified: true,

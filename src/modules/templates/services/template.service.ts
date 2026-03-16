@@ -3,7 +3,11 @@ import { db } from "../../../db/index.ts";
 import { templates } from "../models/template.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
-import type { Template, CreateTemplateInput, UpdateTemplateInput } from "../types/template.types.ts";
+import type {
+  Template,
+  CreateTemplateInput,
+  UpdateTemplateInput,
+} from "../types/template.types.ts";
 
 /**
  * Simple Mustache-style variable substitution.
@@ -51,10 +55,7 @@ export async function createTemplate(
 
 /** Lists all templates belonging to the given API key. */
 export async function listTemplates(apiKeyId: string): Promise<Template[]> {
-  return db
-    .select()
-    .from(templates)
-    .where(eq(templates.apiKeyId, apiKeyId));
+  return db.select().from(templates).where(eq(templates.apiKeyId, apiKeyId));
 }
 
 /** Returns all templates across all API keys (dashboard use). */
@@ -64,10 +65,7 @@ export async function listAllTemplates(): Promise<Template[]> {
 
 /** Returns a template by ID without API key scoping (dashboard use). */
 export async function getTemplateByIdUnscoped(id: string): Promise<Template | undefined> {
-  const [row] = await db
-    .select()
-    .from(templates)
-    .where(eq(templates.id, id));
+  const [row] = await db.select().from(templates).where(eq(templates.id, id));
   return row;
 }
 

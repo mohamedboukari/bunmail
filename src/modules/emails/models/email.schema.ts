@@ -24,9 +24,7 @@ export const emails = pgTable(
       .references(() => apiKeys.id),
 
     /** Optional sender domain — FK to domains. Used for DKIM signing lookup */
-    domainId: varchar("domain_id", { length: 36 }).references(
-      () => domains.id
-    ),
+    domainId: varchar("domain_id", { length: 36 }).references(() => domains.id),
 
     /** Sender email address (e.g. "hello@example.com") */
     fromAddress: varchar("from_address", { length: 255 }).notNull(),
@@ -82,5 +80,5 @@ export const emails = pgTable(
 
     /** Index for filtering emails by API key (list emails endpoint) */
     index("idx_emails_api_key_id").on(table.apiKeyId),
-  ]
+  ],
 );
