@@ -84,9 +84,14 @@ const updatedTemplate = {
 
 /* ─── Mock template service ─── */
 mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+  renderTemplate: mock(() => ""),
   createTemplate: mock(() => Promise.resolve(mockTemplate)),
   listTemplates: mock(() => Promise.resolve([mockTemplate])),
+  listAllTemplates: mock(() => Promise.resolve([mockTemplate])),
   getTemplateById: mock((id: string) =>
+    Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
+  ),
+  getTemplateByIdUnscoped: mock((id: string) =>
     Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
   ),
   updateTemplate: mock((id: string) =>
