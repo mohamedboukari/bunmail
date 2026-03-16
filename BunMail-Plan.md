@@ -253,7 +253,7 @@ Priority: 10
 ```
 Type: TXT
 Host: @
-Value: v=spf1 a mx ip4:YOUR_SERVER_IP ~all
+Value: v=spf1 a mx ip4:YOUR_SERVER_IP -all
 ```
 
 ### DKIM Record
