@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
+import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
 
 /**
@@ -20,9 +21,7 @@ export function InboundDetailPage({ email }: InboundDetailPageProps) {
         href="/dashboard/inbound"
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 inline-flex items-center gap-1 mb-4"
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-        </svg>
+        <BackArrowIcon />
         Back to inbound
       </a>
 

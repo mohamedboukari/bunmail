@@ -76,10 +76,7 @@ function validateSessionCookie(cookie: string): boolean {
   /** Both must be the same length for timingSafeEqual */
   if (providedHmac.length !== expectedHmac.length) return false;
 
-  return timingSafeEqual(
-    Buffer.from(providedHmac),
-    Buffer.from(expectedHmac)
-  );
+  return timingSafeEqual(Buffer.from(providedHmac), Buffer.from(expectedHmac));
 }
 
 /**
@@ -143,51 +140,62 @@ export const pagesPlugin = new Elysia({
    * Shows the login form. If dashboard is disabled (no password set),
    * shows a "Dashboard disabled" page instead.
    */
-  .get("/login", ({ query }) => {
-    if (!config.dashboard.password) {
-      return <DashboardDisabledPage />;
-    }
-    /** Show error message if redirected after wrong password */
-    const error = query.error === "invalid" ? "Invalid password. Please try again." : undefined;
-    return <LoginPage error={error} />;
-  }, {
-    query: t.Object({
-      error: t.Optional(t.String()),
-    }),
-  })
+  .get(
+    "/login",
+    ({ query }) => {
+      if (!config.dashboard.password) {
+        return <DashboardDisabledPage />;
+      }
+      /** Show error message if redirected after wrong password */
+      const error =
+        query.error === "invalid"
+          ? "Invalid password. Please try again."
+          : undefined;
+      return <LoginPage error={error} />;
+    },
+    {
+      query: t.Object({
+        error: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/login
    * Validates the password and sets a session cookie on success.
    * Redirects back to login with error on failure.
    */
-  .post("/login", ({ body, set }) => {
-    if (!config.dashboard.password) {
-      set.status = 403;
-      return <DashboardDisabledPage />;
-    }
+  .post(
+    "/login",
+    ({ body, set }) => {
+      if (!config.dashboard.password) {
+        set.status = 403;
+        return <DashboardDisabledPage />;
+      }
 
-    if (!validatePassword(body.password)) {
-      logger.warn("Dashboard login failed: invalid password");
+      if (!validatePassword(body.password)) {
+        logger.warn("Dashboard login failed: invalid password");
+        set.status = 302;
+        set.headers["location"] = "/dashboard/login?error=invalid";
+        return "";
+      }
+
+      logger.info("Dashboard login successful");
+
+      /** Set session cookie — HttpOnly, SameSite=Lax, 24h expiry */
+      const sessionValue = createSessionCookie();
+      set.headers["set-cookie"] =
+        `bm_session=${sessionValue}; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=${SESSION_MAX_AGE}`;
       set.status = 302;
-      set.headers["location"] = "/dashboard/login?error=invalid";
+      set.headers["location"] = "/dashboard";
       return "";
-    }
-
-    logger.info("Dashboard login successful");
-
-    /** Set session cookie — HttpOnly, SameSite=Lax, 24h expiry */
-    const sessionValue = createSessionCookie();
-    set.headers["set-cookie"] =
-      `bm_session=${sessionValue}; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=${SESSION_MAX_AGE}`;
-    set.status = 302;
-    set.headers["location"] = "/dashboard";
-    return "";
-  }, {
-    body: t.Object({
-      password: t.String(),
-    }),
-  })
+    },
+    {
+      body: t.Object({
+        password: t.String(),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/logout
@@ -247,525 +255,713 @@ export const pagesPlugin = new Elysia({
    * GET /dashboard/send
    * Send email page — compose form with flash message support.
    */
-  .get("/send", async ({ query }) => {
-    const domainList = await domainService.listDomains();
-    const domains = domainList.map((d) => d.name);
+  .get(
+    "/send",
+    async ({ query }) => {
+      const domainList = await domainService.listDomains();
+      const domains = domainList.map((d) => d.name);
 
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
 
-    return <SendEmailPage flash={flash} domains={domains} />;
-  }, {
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-    }),
-  })
+      return <SendEmailPage flash={flash} domains={domains} />;
+    },
+    {
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/send
    * Sends an email via form submission. Uses the first active API key.
    */
-  .post("/send", async ({ body, set }) => {
-    const keys = await apiKeyService.listApiKeys();
-    const activeKey = keys.find((k) => k.isActive);
+  .post(
+    "/send",
+    async ({ body, set }) => {
+      const keys = await apiKeyService.listApiKeys();
+      const activeKey = keys.find((k) => k.isActive);
 
-    if (!activeKey) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/send?flash=${encodeURIComponent("No active API key. Create one first.")}&flashType=error`;
+      if (!activeKey) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/send?flash=${encodeURIComponent("No active API key. Create one first.")}&flashType=error`;
+        return "";
+      }
+
+      try {
+        await emailService.createEmail(
+          {
+            from: body.from,
+            to: body.to,
+            cc: body.cc || undefined,
+            bcc: body.bcc || undefined,
+            subject: body.subject,
+            html: body.html || undefined,
+            text: body.text || undefined,
+          },
+          activeKey.id,
+        );
+
+        logger.info("Email sent via dashboard", { to: body.to });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/send?flash=${encodeURIComponent("Email queued for delivery")}`;
+      } catch (error) {
+        logger.error("Failed to send email via dashboard", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/send?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to send email")}&flashType=error`;
+      }
       return "";
-    }
-
-    try {
-      await emailService.createEmail(
-        {
-          from: body.from,
-          to: body.to,
-          cc: body.cc || undefined,
-          bcc: body.bcc || undefined,
-          subject: body.subject,
-          html: body.html || undefined,
-          text: body.text || undefined,
-        },
-        activeKey.id
-      );
-
-      logger.info("Email sent via dashboard", { to: body.to });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/send?flash=${encodeURIComponent("Email queued for delivery")}`;
-    } catch (error) {
-      logger.error("Failed to send email via dashboard", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/send?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to send email")}&flashType=error`;
-    }
-    return "";
-  }, {
-    body: t.Object({
-      from: t.String({ format: "email" }),
-      to: t.String({ format: "email" }),
-      cc: t.Optional(t.String()),
-      bcc: t.Optional(t.String()),
-      subject: t.String({ maxLength: 500 }),
-      html: t.Optional(t.String()),
-      text: t.Optional(t.String()),
-    }),
-  })
+    },
+    {
+      body: t.Object({
+        from: t.String({ format: "email" }),
+        to: t.String({ format: "email" }),
+        cc: t.Optional(t.String()),
+        bcc: t.Optional(t.String()),
+        subject: t.String({ maxLength: 500 }),
+        html: t.Optional(t.String()),
+        text: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * GET /dashboard/emails
    * Email list with status filter tabs and pagination.
    */
-  .get("/emails", async ({ query }) => {
-    const page = query.page ? parseInt(query.page, 10) : 1;
-    const limit = query.limit ? parseInt(query.limit, 10) : 20;
-    const status = query.status || undefined;
+  .get(
+    "/emails",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const status = query.status || undefined;
 
-    const { data, total } = await emailService.listAllEmails({
-      page,
-      limit,
-      status: status as "queued" | "sending" | "sent" | "failed" | undefined,
-    });
+      const { data, total } = await emailService.listAllEmails({
+        page,
+        limit,
+        status: status as "queued" | "sending" | "sent" | "failed" | undefined,
+      });
 
-    return <EmailsPage emails={data} total={total} page={page} limit={limit} status={status} />;
-  }, {
-    query: t.Object({
-      page: t.Optional(t.String()),
-      limit: t.Optional(t.String()),
-      status: t.Optional(t.String()),
-    }),
-  })
+      return (
+        <EmailsPage
+          emails={data}
+          total={total}
+          page={page}
+          limit={limit}
+          status={status}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        status: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * GET /dashboard/emails/:id
    * Single email detail view.
    */
-  .get("/emails/:id", async ({ params, set }) => {
-    const email = await emailService.getEmailByIdUnscoped(params.id);
+  .get(
+    "/emails/:id",
+    async ({ params, set }) => {
+      const email = await emailService.getEmailByIdUnscoped(params.id);
 
-    if (!email) {
-      set.status = 404;
-      return "Email not found";
-    }
+      if (!email) {
+        set.status = 404;
+        return "Email not found";
+      }
 
-    return <EmailDetailPage email={email} />;
-  }, {
-    params: t.Object({
-      id: t.String(),
-    }),
-  })
+      return <EmailDetailPage email={email} />;
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+    },
+  )
 
   /**
    * GET /dashboard/api-keys
    * API keys list with create form. Shows flash messages from query params.
    */
-  .get("/api-keys", async ({ query }) => {
-    const keys = await apiKeyService.listApiKeys();
+  .get(
+    "/api-keys",
+    async ({ query }) => {
+      const keys = await apiKeyService.listApiKeys();
 
-    /** Parse flash message from query params (set after create/revoke) */
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
+      /** Parse flash message from query params (set after create/revoke) */
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
 
-    return <ApiKeysPage keys={keys} flash={flash} rawKey={query.rawKey} />;
-  }, {
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-      rawKey: t.Optional(t.String()),
-    }),
-  })
+      return <ApiKeysPage keys={keys} flash={flash} rawKey={query.rawKey} />;
+    },
+    {
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+        rawKey: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/api-keys
    * Creates a new API key via form submission.
    * Redirects back to the list with the raw key shown once.
    */
-  .post("/api-keys", async ({ body, set }) => {
-    try {
-      const { rawKey } = await apiKeyService.createApiKey({ name: body.name });
+  .post(
+    "/api-keys",
+    async ({ body, set }) => {
+      try {
+        const { rawKey } = await apiKeyService.createApiKey({
+          name: body.name,
+        });
 
-      logger.info("API key created via dashboard", { name: body.name });
+        logger.info("API key created via dashboard", { name: body.name });
 
-      /** Redirect with raw key in query — shown once in a flash message */
-      set.status = 302;
-      set.headers["location"] = `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&rawKey=${encodeURIComponent(rawKey)}`;
-    } catch (error) {
-      logger.error("Failed to create API key via dashboard", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/api-keys?flash=${encodeURIComponent("Failed to create API key")}&flashType=error`;
-    }
-    return "";
-  }, {
-    body: t.Object({
-      name: t.String(),
-    }),
-  })
+        /** Redirect with raw key in query — shown once in a flash message */
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&rawKey=${encodeURIComponent(rawKey)}`;
+      } catch (error) {
+        logger.error("Failed to create API key via dashboard", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/api-keys?flash=${encodeURIComponent("Failed to create API key")}&flashType=error`;
+      }
+      return "";
+    },
+    {
+      body: t.Object({
+        name: t.String(),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/api-keys/:id/revoke
    * Revokes an API key via form submission.
    */
-  .post("/api-keys/:id/revoke", async ({ params, set }) => {
-    const apiKey = await apiKeyService.revokeApiKey(params.id);
+  .post(
+    "/api-keys/:id/revoke",
+    async ({ params, set }) => {
+      const apiKey = await apiKeyService.revokeApiKey(params.id);
 
-    if (!apiKey) {
+      if (!apiKey) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+        return "";
+      }
+
+      logger.info("API key revoked via dashboard", { id: params.id });
       set.status = 302;
-      set.headers["location"] = `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+      set.headers["location"] =
+        `/dashboard/api-keys?flash=${encodeURIComponent("API key revoked")}`;
       return "";
-    }
-
-    logger.info("API key revoked via dashboard", { id: params.id });
-    set.status = 302;
-    set.headers["location"] = `/dashboard/api-keys?flash=${encodeURIComponent("API key revoked")}`;
-    return "";
-  }, {
-    params: t.Object({
-      id: t.String(),
-    }),
-  })
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+    },
+  )
 
   /**
    * GET /dashboard/domains
    * Domains list with add form. Shows flash messages from query params.
    */
-  .get("/domains", async ({ query }) => {
-    const domainList = await domainService.listDomains();
+  .get(
+    "/domains",
+    async ({ query }) => {
+      const domainList = await domainService.listDomains();
 
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
 
-    return <DomainsPage domains={domainList} flash={flash} />;
-  }, {
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-    }),
-  })
+      return <DomainsPage domains={domainList} flash={flash} />;
+    },
+    {
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/domains
    * Adds a new domain via form submission.
    */
-  .post("/domains", async ({ body, set }) => {
-    try {
-      await domainService.createDomain({ name: body.name });
+  .post(
+    "/domains",
+    async ({ body, set }) => {
+      try {
+        await domainService.createDomain({ name: body.name });
 
-      logger.info("Domain added via dashboard", { name: body.name });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Domain added successfully")}`;
-    } catch (error) {
-      logger.error("Failed to add domain via dashboard", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Failed to add domain")}&flashType=error`;
-    }
-    return "";
-  }, {
-    body: t.Object({
-      name: t.String(),
-    }),
-  })
+        logger.info("Domain added via dashboard", { name: body.name });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Domain added successfully")}`;
+      } catch (error) {
+        logger.error("Failed to add domain via dashboard", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Failed to add domain")}&flashType=error`;
+      }
+      return "";
+    },
+    {
+      body: t.Object({
+        name: t.String(),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/domains/:id/delete
    * Deletes a domain via form submission.
    */
-  .post("/domains/:id/delete", async ({ params, set }) => {
-    const domain = await domainService.deleteDomain(params.id);
+  .post(
+    "/domains/:id/delete",
+    async ({ params, set }) => {
+      const domain = await domainService.deleteDomain(params.id);
 
-    if (!domain) {
+      if (!domain) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+        return "";
+      }
+
+      logger.info("Domain deleted via dashboard", { id: params.id });
       set.status = 302;
-      set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+      set.headers["location"] =
+        `/dashboard/domains?flash=${encodeURIComponent("Domain deleted")}`;
       return "";
-    }
-
-    logger.info("Domain deleted via dashboard", { id: params.id });
-    set.status = 302;
-    set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Domain deleted")}`;
-    return "";
-  }, {
-    params: t.Object({
-      id: t.String(),
-    }),
-  })
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+    },
+  )
 
   /**
    * POST /dashboard/domains/:id/verify
    * Triggers DNS verification and redirects back to domain detail.
    */
-  .post("/domains/:id/verify", async ({ params, set }) => {
-    const domain = await domainService.getDomainById(params.id);
+  .post(
+    "/domains/:id/verify",
+    async ({ params, set }) => {
+      const domain = await domainService.getDomainById(params.id);
 
-    if (!domain) {
+      if (!domain) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+        return "";
+      }
+
+      const result = await verifyDomain(domain);
+      const allPassed = result.spf && result.dkim && result.dmarc;
+      const message = allPassed
+        ? "All DNS records verified successfully!"
+        : `Verification: SPF ${result.spf ? "✓" : "✗"}, DKIM ${result.dkim ? "✓" : "✗"}, DMARC ${result.dmarc ? "✓" : "✗"}`;
+
+      logger.info("Domain DNS verification via dashboard", {
+        id: params.id,
+        ...result,
+      });
+
       set.status = 302;
-      set.headers["location"] = `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+      set.headers["location"] =
+        `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${allPassed ? "success" : "error"}`;
       return "";
-    }
-
-    const result = await verifyDomain(domain);
-    const allPassed = result.spf && result.dkim && result.dmarc;
-    const message = allPassed
-      ? "All DNS records verified successfully!"
-      : `Verification: SPF ${result.spf ? "✓" : "✗"}, DKIM ${result.dkim ? "✓" : "✗"}, DMARC ${result.dmarc ? "✓" : "✗"}`;
-
-    logger.info("Domain DNS verification via dashboard", { id: params.id, ...result });
-
-    set.status = 302;
-    set.headers["location"] = `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${allPassed ? "success" : "error"}`;
-    return "";
-  }, {
-    params: t.Object({
-      id: t.String(),
-    }),
-  })
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+    },
+  )
 
   /**
    * GET /dashboard/domains/:id
    * Single domain detail view with DNS verification status.
    */
-  .get("/domains/:id", async ({ params, set, query }) => {
-    const domain = await domainService.getDomainById(params.id);
+  .get(
+    "/domains/:id",
+    async ({ params, set, query }) => {
+      const domain = await domainService.getDomainById(params.id);
 
-    if (!domain) {
-      set.status = 404;
-      return "Domain not found";
-    }
+      if (!domain) {
+        set.status = 404;
+        return "Domain not found";
+      }
 
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
 
-    return <DomainDetailPage domain={domain} flash={flash} />;
-  }, {
-    params: t.Object({
-      id: t.String(),
-    }),
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-    }),
-  })
+      return <DomainDetailPage domain={domain} flash={flash} />;
+    },
+    {
+      params: t.Object({
+        id: t.String(),
+      }),
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
 
   /* ─── Templates ─── */
 
-  .get("/templates", async ({ query }) => {
-    const list = await templateService.listAllTemplates();
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
-    return <TemplatesPage templates={list} flash={flash} />;
-  }, {
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-    }),
-  })
-
-  .post("/templates", async ({ body, set }) => {
-    try {
-      const keys = await apiKeyService.listApiKeys();
-      const activeKey = keys.find((k) => k.isActive);
-      if (!activeKey) {
-        set.status = 302;
-        set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("No active API key")}&flashType=error`;
-        return "";
-      }
-      const variables = body.variables
-        ? body.variables.split(",").map((v: string) => v.trim()).filter(Boolean)
+  .get(
+    "/templates",
+    async ({ query }) => {
+      const list = await templateService.listAllTemplates();
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
         : undefined;
-      await templateService.createTemplate(
-        { name: body.name, subject: body.subject, html: body.html || undefined, text: body.text || undefined, variables },
-        activeKey.id,
-      );
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("Template created")}`;
-    } catch (error) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create template")}&flashType=error`;
-    }
-    return "";
-  }, {
-    body: t.Object({
-      name: t.String(),
-      subject: t.String(),
-      html: t.Optional(t.String()),
-      text: t.Optional(t.String()),
-      variables: t.Optional(t.String()),
-    }),
-  })
+      return <TemplatesPage templates={list} flash={flash} />;
+    },
+    {
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
 
-  .get("/templates/:id", async ({ params, set, query }) => {
-    const template = await templateService.getTemplateByIdUnscoped(params.id);
-    if (!template) {
-      set.status = 404;
-      return "Template not found";
-    }
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
-    return <TemplateDetailPage template={template} flash={flash} />;
-  }, {
-    params: t.Object({ id: t.String() }),
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-    }),
-  })
-
-  .post("/templates/:id/edit", async ({ params, body, set }) => {
-    try {
-      const existing = await templateService.getTemplateByIdUnscoped(params.id);
-      if (!existing) {
+  .post(
+    "/templates",
+    async ({ body, set }) => {
+      try {
+        const keys = await apiKeyService.listApiKeys();
+        const activeKey = keys.find((k) => k.isActive);
+        if (!activeKey) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/templates?flash=${encodeURIComponent("No active API key")}&flashType=error`;
+          return "";
+        }
+        const variables = body.variables
+          ? body.variables
+              .split(",")
+              .map((v: string) => v.trim())
+              .filter(Boolean)
+          : undefined;
+        await templateService.createTemplate(
+          {
+            name: body.name,
+            subject: body.subject,
+            html: body.html || undefined,
+            text: body.text || undefined,
+            variables,
+          },
+          activeKey.id,
+        );
         set.status = 302;
-        set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
-        return "";
+        set.headers["location"] =
+          `/dashboard/templates?flash=${encodeURIComponent("Template created")}`;
+      } catch (error) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/templates?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create template")}&flashType=error`;
       }
-      const variables = body.variables
-        ? body.variables.split(",").map((v: string) => v.trim()).filter(Boolean)
+      return "";
+    },
+    {
+      body: t.Object({
+        name: t.String(),
+        subject: t.String(),
+        html: t.Optional(t.String()),
+        text: t.Optional(t.String()),
+        variables: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  .get(
+    "/templates/:id",
+    async ({ params, set, query }) => {
+      const template = await templateService.getTemplateByIdUnscoped(params.id);
+      if (!template) {
+        set.status = 404;
+        return "Template not found";
+      }
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
         : undefined;
-      await templateService.updateTemplate(params.id, existing.apiKeyId, {
-        name: body.name || undefined,
-        subject: body.subject || undefined,
-        html: body.html || undefined,
-        text: body.text || undefined,
-        variables,
-      });
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates/${params.id}?flash=${encodeURIComponent("Template updated")}`;
-    } catch (error) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates/${params.id}?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to update")}&flashType=error`;
-    }
-    return "";
-  }, {
-    params: t.Object({ id: t.String() }),
-    body: t.Object({
-      name: t.Optional(t.String()),
-      subject: t.Optional(t.String()),
-      html: t.Optional(t.String()),
-      text: t.Optional(t.String()),
-      variables: t.Optional(t.String()),
-    }),
-  })
+      return <TemplateDetailPage template={template} flash={flash} />;
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
 
-  .post("/templates/:id/delete", async ({ params, set }) => {
-    try {
-      const existing = await templateService.getTemplateByIdUnscoped(params.id);
-      if (!existing) {
+  .post(
+    "/templates/:id/edit",
+    async ({ params, body, set }) => {
+      try {
+        const existing = await templateService.getTemplateByIdUnscoped(
+          params.id,
+        );
+        if (!existing) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
+          return "";
+        }
+        const variables = body.variables
+          ? body.variables
+              .split(",")
+              .map((v: string) => v.trim())
+              .filter(Boolean)
+          : undefined;
+        await templateService.updateTemplate(params.id, existing.apiKeyId, {
+          name: body.name || undefined,
+          subject: body.subject || undefined,
+          html: body.html || undefined,
+          text: body.text || undefined,
+          variables,
+        });
         set.status = 302;
-        set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
-        return "";
+        set.headers["location"] =
+          `/dashboard/templates/${params.id}?flash=${encodeURIComponent("Template updated")}`;
+      } catch (error) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/templates/${params.id}?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to update")}&flashType=error`;
       }
-      await templateService.deleteTemplate(params.id, existing.apiKeyId);
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("Template deleted")}`;
-    } catch (error) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/templates?flash=${encodeURIComponent("Failed to delete template")}&flashType=error`;
-    }
-    return "";
-  }, {
-    params: t.Object({ id: t.String() }),
-  })
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        name: t.Optional(t.String()),
+        subject: t.Optional(t.String()),
+        html: t.Optional(t.String()),
+        text: t.Optional(t.String()),
+        variables: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  .post(
+    "/templates/:id/delete",
+    async ({ params, set }) => {
+      try {
+        const existing = await templateService.getTemplateByIdUnscoped(
+          params.id,
+        );
+        if (!existing) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
+          return "";
+        }
+        await templateService.deleteTemplate(params.id, existing.apiKeyId);
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/templates?flash=${encodeURIComponent("Template deleted")}`;
+      } catch (error) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/templates?flash=${encodeURIComponent("Failed to delete template")}&flashType=error`;
+      }
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  )
 
   /* ─── Webhooks ─── */
 
-  .get("/webhooks", async ({ query }) => {
-    const hooks = await webhookService.listAllWebhooks();
-    const flash = query.flash
-      ? { message: query.flash, type: (query.flashType ?? "success") as "success" | "error" }
-      : undefined;
-    return <WebhooksPage webhooks={hooks} flash={flash} secret={query.secret} />;
-  }, {
-    query: t.Object({
-      flash: t.Optional(t.String()),
-      flashType: t.Optional(t.String()),
-      secret: t.Optional(t.String()),
-    }),
-  })
-
-  .post("/webhooks", async ({ body, set }) => {
-    try {
-      const keys = await apiKeyService.listApiKeys();
-      const activeKey = keys.find((k) => k.isActive);
-      if (!activeKey) {
-        set.status = 302;
-        set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent("No active API key")}&flashType=error`;
-        return "";
-      }
-      const events = Array.isArray(body.events) ? body.events : [body.events].filter(Boolean);
-      const { secret } = await webhookService.createWebhook({ url: body.url, events }, activeKey.id);
-      set.status = 302;
-      set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&secret=${encodeURIComponent(secret)}`;
-    } catch (error) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create webhook")}&flashType=error`;
-    }
-    return "";
-  }, {
-    body: t.Object({
-      url: t.String(),
-      events: t.Union([t.String(), t.Array(t.String())]),
-    }),
-  })
-
-  .post("/webhooks/:id/delete", async ({ params, set }) => {
-    try {
+  .get(
+    "/webhooks",
+    async ({ query }) => {
       const hooks = await webhookService.listAllWebhooks();
-      const hook = hooks.find((h) => h.id === params.id);
-      if (!hook) {
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
+      return (
+        <WebhooksPage webhooks={hooks} flash={flash} secret={query.secret} />
+      );
+    },
+    {
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+        secret: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  .post(
+    "/webhooks",
+    async ({ body, set }) => {
+      try {
+        const keys = await apiKeyService.listApiKeys();
+        const activeKey = keys.find((k) => k.isActive);
+        if (!activeKey) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/webhooks?flash=${encodeURIComponent("No active API key")}&flashType=error`;
+          return "";
+        }
+        const events = Array.isArray(body.events)
+          ? body.events
+          : [body.events].filter(Boolean);
+        const { secret } = await webhookService.createWebhook(
+          { url: body.url, events },
+          activeKey.id,
+        );
         set.status = 302;
-        set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`;
-        return "";
+        set.headers["location"] =
+          `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&secret=${encodeURIComponent(secret)}`;
+      } catch (error) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/webhooks?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create webhook")}&flashType=error`;
       }
-      await webhookService.deleteWebhook(params.id, hook.apiKeyId);
-      set.status = 302;
-      set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent("Webhook deleted")}`;
-    } catch (error) {
-      set.status = 302;
-      set.headers["location"] = `/dashboard/webhooks?flash=${encodeURIComponent("Failed to delete webhook")}&flashType=error`;
-    }
-    return "";
-  }, {
-    params: t.Object({ id: t.String() }),
-  })
+      return "";
+    },
+    {
+      body: t.Object({
+        url: t.String(),
+        events: t.Union([t.String(), t.Array(t.String())]),
+      }),
+    },
+  )
+
+  .post(
+    "/webhooks/:id/delete",
+    async ({ params, set }) => {
+      try {
+        const hooks = await webhookService.listAllWebhooks();
+        const hook = hooks.find((h) => h.id === params.id);
+        if (!hook) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`;
+          return "";
+        }
+        await webhookService.deleteWebhook(params.id, hook.apiKeyId);
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/webhooks?flash=${encodeURIComponent("Webhook deleted")}`;
+      } catch (error) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/webhooks?flash=${encodeURIComponent("Failed to delete webhook")}&flashType=error`;
+      }
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  )
 
   /* ─── Inbound ─── */
 
-  .get("/inbound", async ({ query }) => {
-    const page = query.page ? parseInt(query.page, 10) : 1;
-    const limit = query.limit ? parseInt(query.limit, 10) : 20;
-    const offset = (page - 1) * limit;
+  .get(
+    "/inbound",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const offset = (page - 1) * limit;
 
-    const [data, [countRow]] = await Promise.all([
-      db.select().from(inboundEmails).orderBy(desc(inboundEmails.receivedAt)).limit(limit).offset(offset),
-      db.select({ count: sql<number>`count(*)::int` }).from(inboundEmails),
-    ]);
+      const [data, [countRow]] = await Promise.all([
+        db
+          .select()
+          .from(inboundEmails)
+          .orderBy(desc(inboundEmails.receivedAt))
+          .limit(limit)
+          .offset(offset),
+        db.select({ count: sql<number>`count(*)::int` }).from(inboundEmails),
+      ]);
 
-    return <InboundPage emails={data} total={countRow?.count ?? 0} page={page} limit={limit} />;
-  }, {
-    query: t.Object({
-      page: t.Optional(t.String()),
-      limit: t.Optional(t.String()),
-    }),
-  })
+      return (
+        <InboundPage
+          emails={data}
+          total={countRow?.count ?? 0}
+          page={page}
+          limit={limit}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+      }),
+    },
+  )
 
-  .get("/inbound/:id", async ({ params, set }) => {
-    const [email] = await db.select().from(inboundEmails).where(eq(inboundEmails.id, params.id));
+  .get(
+    "/inbound/:id",
+    async ({ params, set }) => {
+      const [email] = await db
+        .select()
+        .from(inboundEmails)
+        .where(eq(inboundEmails.id, params.id));
 
-    if (!email) {
-      set.status = 404;
-      return "Inbound email not found";
-    }
+      if (!email) {
+        set.status = 404;
+        return "Inbound email not found";
+      }
 
-    return <InboundDetailPage email={email} />;
-  }, {
-    params: t.Object({ id: t.String() }),
-  });
+      return <InboundDetailPage email={email} />;
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  );

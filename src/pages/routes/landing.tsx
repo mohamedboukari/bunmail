@@ -1,3 +1,5 @@
+import { SunIcon, MoonIcon } from "../assets/icons.tsx";
+
 /**
  * Landing page — standalone (no sidebar navigation).
  * Developer-focused home page introducing BunMail with hero,
@@ -45,18 +47,24 @@ export function LandingPage() {
                 class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                 onclick="(function(){var d=document.documentElement.classList;d.toggle('dark');localStorage.setItem('bm-theme',d.contains('dark')?'dark':'light')})()"
               >
-                {/* Sun icon (visible in dark mode) */}
-                <svg class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="5" />
-                  <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-                </svg>
-                {/* Moon icon (visible in light mode) */}
-                <svg class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                </svg>
+                <SunIcon />
+                <MoonIcon />
               </button>
 
-              {/* Dashboard link */}
+              <a
+                href="/api/docs"
+                class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+              >
+                API Docs
+              </a>
+              <a
+                href="https://github.com/mohamedboukari/bunmail"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors"
+              >
+                GitHub
+              </a>
               <a
                 href="/dashboard"
                 class="text-sm font-medium px-4 py-2 rounded-lg bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
