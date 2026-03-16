@@ -225,7 +225,7 @@ To ensure emails land in the inbox, not spam, you need all of the following DNS 
 
 | Record | Example Value | Purpose |
 |--------|---------------|---------|
-| **SPF** | `v=spf1 a mx ip4:YOUR_IP ~all` | Tells receiving servers which IPs are allowed to send email on behalf of your domain. Prevents spoofing. |
+| **SPF** | `v=spf1 a mx ip4:YOUR_IP -all` | Tells receiving servers which IPs are allowed to send email on behalf of your domain. Prevents spoofing. |
 | **DKIM** | 2048-bit RSA key (auto-generated) | Cryptographically signs outgoing emails so recipients can verify the message wasn't tampered with in transit. BunMail generates and manages DKIM keys automatically when you register a domain. |
 | **DMARC** | `v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com` | Instructs receiving servers how to handle emails that fail SPF/DKIM checks (`none` = monitor, `quarantine` = mark as spam, `reject` = drop). The `rua` address receives aggregate reports. |
 | **MX** | `10 mail.yourdomain.com` | Points your domain's incoming mail to your server. Required even for outbound-only setups — many spam filters reject mail from domains without an MX record. The number (`10`) is priority (lower = preferred). |

@@ -64,7 +64,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
           <DnsRecordEntry
             type="TXT"
             host={domain.name}
-            value={`v=spf1 a mx ip4:<YOUR_SERVER_IP> ~all`}
+            value={`v=spf1 a mx ip4:<YOUR_SERVER_IP> -all`}
             label="SPF Record"
           />
           {dkimRecord && (
