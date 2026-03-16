@@ -103,7 +103,7 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 
 | Type | Host | Value                                    |
 |------|------|------------------------------------------|
-| TXT  | `@`  | `v=spf1 a mx ip4:YOUR_SERVER_IP ~all`    |
+| TXT  | `@`  | `v=spf1 a mx ip4:YOUR_SERVER_IP -all`    |
 
 ### DMARC Record (tells receivers what to do with unauthenticated mail)
 
@@ -286,7 +286,7 @@ All three must be set correctly. Verify with:
 ```bash
 # SPF
 dig TXT yourdomain.com +short
-# Expected: "v=spf1 a mx ip4:YOUR_SERVER_IP ~all"
+# Expected: "v=spf1 a mx ip4:YOUR_SERVER_IP -all"
 
 # DKIM
 dig TXT bunmail._domainkey.yourdomain.com +short
