@@ -43,7 +43,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.10
 
       - name: Cache Bun dependencies
         uses: actions/cache@v5
@@ -64,5 +64,8 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Test
-        run: bun test
+      - name: Test (unit)
+        run: bun test test/unit
+
+      - name: Test (e2e)
+        run: bun test test/e2e
