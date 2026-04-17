@@ -64,5 +64,8 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Test
-        run: bun test
+      - name: Test (unit)
+        run: bun test test/unit
+
+      - name: Test (e2e)
+        run: bun test test/e2e
