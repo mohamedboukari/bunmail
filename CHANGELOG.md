@@ -5,15 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-04-26
 
 ### Added
 
 - Trash / soft-delete for outbound and inbound emails — Gmail-style trash with restore, permanent delete, and "empty trash"
 - Auto-purge service that permanently removes trashed emails after `TRASH_RETENTION_DAYS` (default `7`)
 - New API endpoints on `/api/v1/emails` and `/api/v1/inbound`: `DELETE /:id` (move to trash), `POST /bulk-delete`, `POST /:id/restore`, `DELETE /:id/permanent`, `GET /trash`, `POST /trash/empty`
-- `inbound.service.ts` — extracted business logic out of the inbound plugin to match the rest of the codebase
 - Dashboard: bulk-select and "Move to trash" actions on emails / inbound list pages, dedicated trash views, "Move to trash" button on detail pages
+- Richer dashboard home stats: 24h sent / failed, success rate, inbound totals, trash counts, templates and webhooks counts
 - `TRASH_RETENTION_DAYS` env var (default `7`)
 
 ### Fixed
@@ -23,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Email queue and dashboard stats now exclude trashed rows
-- `CLAUDE.md`: documented that `CHANGELOG.md` must be updated on every release
 
 ## [0.2.1] - 2026-04-17
 

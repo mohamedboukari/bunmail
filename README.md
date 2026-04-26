@@ -6,12 +6,66 @@
 [![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1?logo=bun)](https://bun.sh)
 [![Elysia](https://img.shields.io/badge/framework-Elysia-7c6aef?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48Y2lyY2xlIGN4PSIyNTYiIGN5PSIyNTYiIHI9IjI1NiIgZmlsbD0iIzdjNmFlZiIvPjwvc3ZnPg==)](https://elysiajs.com)
 [![Drizzle ORM](https://img.shields.io/badge/ORM-Drizzle-c5f74f?logo=drizzle)](https://orm.drizzle.team)
-[![Nodemailer](https://img.shields.io/badge/SMTP-Nodemailer-0f9dce)](https://nodemailer.com)
 [![PostgreSQL](https://img.shields.io/badge/DB-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 
-> Self-hosted email API for developers. No SendGrid. No limits. No cost.
+> **Send transactional email from your own server.** No subscriptions. No per-email pricing. No vendor lock-in.
 
-BunMail is a REST API for sending transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, an email queue with retries, webhooks, email templates, inbound email receiving, and a web dashboard.
+A self-hosted alternative to SendGrid, Resend, and Postmark — built in TypeScript on Bun + Elysia, with a REST API, web dashboard, DKIM signing, an email queue with retries, webhooks, templates, inbound SMTP, and Gmail-style trash. Ships in a single Docker container.
+
+## Why BunMail?
+
+| | BunMail | SendGrid / Resend | Postal | Mailcow |
+|---|---|---|---|---|
+| **Self-hosted** | ✅ | ❌ | ✅ | ✅ |
+| **Free** | ✅ MIT | $20/mo+ | ✅ MIT | ✅ |
+| **API-first** | ✅ | ✅ | ✅ | ❌ (mail hosting) |
+| **One container** | ✅ | n/a | ❌ (multiple services) | ❌ (heavy stack) |
+| **Modern stack** | Bun + Elysia + Drizzle | n/a | Ruby + RabbitMQ | PHP + many services |
+| **Web dashboard** | ✅ | ✅ | ✅ | ✅ |
+| **Templates** | ✅ | ✅ | ❌ | ❌ |
+| **Inbound SMTP** | ✅ | $$ | ✅ | ✅ |
+
+BunMail targets developers who want a **programmatic transactional email API** and nothing else — Postal is heavier, Mailcow targets full mail-server hosting with end-user webmail, and the SaaS options charge per email.
+
+## Quick Start (60 seconds)
+
+```bash
+git clone https://github.com/mohamedboukari/bunmail.git && cd bunmail
+cp .env.example .env
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+docker compose up -d
+```
+
+Then seed your first API key and send a test email:
+
+```bash
+docker compose exec app bun run src/db/seed.ts
+# copy the bm_live_... key it prints
+
+curl -X POST http://localhost:3000/api/v1/emails/send \
+  -H "Authorization: Bearer bm_live_YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "hello@yourdomain.com",
+    "to": "user@example.com",
+    "subject": "Hello from BunMail",
+    "html": "<p>It works.</p>"
+  }'
+```
+
+Open the dashboard at <http://localhost:3000/dashboard> (set `DASHBOARD_PASSWORD` in `.env` to enable).
+
+> Local dev without Docker? See [docs/self-hosting.md](docs/self-hosting.md).
+
+## Will my mail land in inbox?
+
+**Honest answer: it depends on your sending setup, not on BunMail.** Self-hosted transactional email is a reputation problem, not a code problem.
+
+- ✅ **You'll land in inbox** if you send from a domain with a clean reputation, your server's IP isn't on a blacklist, and you've published correct SPF / DKIM / DMARC records (BunMail handles SPF/DKIM/DMARC for you — see [docs/self-hosting.md](docs/self-hosting.md)).
+- ⚠️ **You'll likely land in spam** if you send from a brand-new `.xyz`/`.top`-style domain on a fresh budget VPS IP. That's not a BunMail bug — Gmail and Outlook penalise both factors heavily for any sender.
+- 🛠️ **Workarounds:** warm up your domain over 2–3 weeks (low volume, real recipients), or plug in a reputable SMTP relay (Postmark, SES, Resend) as the actual sender while keeping BunMail's queue, dashboard, and templates. *Relay mode is on the [roadmap](https://github.com/mohamedboukari/bunmail/issues).*
+
+Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score for your specific setup before deploying.
 
 ## Screenshots
 
@@ -36,94 +90,68 @@ BunMail is a REST API for sending transactional emails with direct SMTP delivery
 
 - **Direct SMTP delivery** — sends straight to recipient MX servers, no relay needed
 - **DKIM signing** — auto-generates 2048-bit RSA keys per domain
-- **DNS verification** — checks SPF, DKIM, and DMARC records
-- **Email queue** — DB-backed with 3 retries and crash recovery
-- **Webhooks** — HMAC-signed event notifications for email lifecycle events
-- **Email templates** — Mustache-style `{{variable}}` substitution
-- **Inbound SMTP** — receive and store incoming emails
-- **API key auth** — SHA-256 hashed Bearer tokens with rate limiting
-- **Trash & auto-purge** — Gmail-style soft-delete for outbound and inbound emails, restorable until auto-purged after `TRASH_RETENTION_DAYS` (default `7`)
-- **Web dashboard** — server-rendered UI with bulk-select, trash views, and richer overview stats (24h activity, success rate, trash counts)
-- **OpenAPI spec** — auto-generated OpenAPI 3.0 docs at `/api/docs`
-- **Docker ready** — one command to run the full stack
+- **SPF / DKIM / DMARC verification** — DNS checks built into the dashboard
+- **Email queue** — Postgres-backed with 3 retries, crash recovery, and exactly-once delivery semantics
+- **Templates** — Mustache-style `{{variable}}` substitution
+- **Webhooks** — HMAC-signed events: `email.sent`, `email.failed`, `email.received`
+- **Inbound SMTP** — receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
+- **API key auth** — SHA-256 hashed Bearer tokens with sliding-window rate limiting
+- **Trash + auto-purge** — Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
+- **Web dashboard** — server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth)
+- **OpenAPI 3.0** — interactive docs at `/api/docs`
+- **Type-safe** — strict TypeScript, Drizzle ORM, no `any`
 
-## Tech Stack
+## API Endpoints
 
-| Layer        | Technology                          |
-|--------------|-------------------------------------|
-| Runtime      | [Bun](https://bun.sh)              |
-| Backend      | [Elysia](https://elysiajs.com)     |
-| SMTP Sending | Nodemailer (direct mode + DKIM)     |
-| SMTP Receiving | smtp-server + mailparser          |
-| Database     | PostgreSQL                          |
-| ORM          | Drizzle ORM (`drizzle-orm/bun-sql`) |
-| Dashboard    | Elysia JSX (server-rendered)        |
-| Deployment   | Docker + Docker Compose             |
+All endpoints (except `/health`) require `Authorization: Bearer <api-key>`. Full reference: [docs/api.md](docs/api.md).
 
-## Quick Start
+### Emails
 
-### Prerequisites
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/emails/send` | Queue an email (direct or template) |
+| GET | `/api/v1/emails` | List emails (excludes trash) |
+| GET | `/api/v1/emails/trash` | List trashed emails |
+| GET | `/api/v1/emails/:id` | Get email by ID |
+| DELETE | `/api/v1/emails/:id` | Move to trash |
+| POST | `/api/v1/emails/bulk-delete` | Bulk move to trash |
+| POST | `/api/v1/emails/:id/restore` | Restore from trash |
+| DELETE | `/api/v1/emails/:id/permanent` | Permanently delete a trashed email |
+| POST | `/api/v1/emails/trash/empty` | Empty trash |
 
-- [Bun](https://bun.sh) v1.2+
-- PostgreSQL (or [Neon](https://neon.tech) free cloud DB)
+### Inbound
 
-### Setup
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/inbound` | List received emails |
+| GET | `/api/v1/inbound/trash` | List trashed inbound |
+| GET | `/api/v1/inbound/:id` | Get inbound email by ID |
+| DELETE | `/api/v1/inbound/:id` | Move to trash |
+| POST | `/api/v1/inbound/bulk-delete` | Bulk move to trash |
+| POST | `/api/v1/inbound/:id/restore` | Restore from trash |
+| DELETE | `/api/v1/inbound/:id/permanent` | Permanently delete a trashed inbound |
+| POST | `/api/v1/inbound/trash/empty` | Empty inbound trash |
 
-```bash
-# Clone the repository
-git clone https://github.com/mohamedboukari/bunmail.git
-cd bunmail
+### Domains, Templates, API Keys, Webhooks
 
-# Install dependencies
-bun install
+See [docs/api.md](docs/api.md) for full coverage of `/api/v1/domains`, `/api/v1/templates`, `/api/v1/api-keys`, `/api/v1/webhooks`.
 
-# Configure environment
-cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL
-
-# Push database schema (development)
-bun run db:push
-
-# Seed your first API key
-bun run src/db/seed.ts
-# Copy the raw key from the output — it's shown once!
-
-# Start the dev server
-bun run dev
-```
-
-### Send Your First Email
+## Send with a Template
 
 ```bash
-curl -X POST http://localhost:3000/api/v1/emails/send \
-  -H "Authorization: Bearer bm_live_YOUR_KEY_HERE" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "hello@yourdomain.com",
-    "to": "user@example.com",
-    "subject": "Hello from BunMail!",
-    "html": "<h1>It works!</h1>"
-  }'
-```
-
-### Send with a Template
-
-```bash
-# 1. Create a template
+# Create a template
 curl -X POST http://localhost:3000/api/v1/templates \
-  -H "Authorization: Bearer bm_live_YOUR_KEY_HERE" \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BM_KEY" -H "Content-Type: application/json" \
   -d '{
     "name": "Welcome",
     "subject": "Welcome, {{name}}!",
-    "html": "<h1>Hello {{name}}</h1><p>Welcome to {{company}}.</p>",
+    "html": "<h1>Hi {{name}}</h1><p>Welcome to {{company}}.</p>",
     "variables": ["name", "company"]
   }'
 
-# 2. Send using the template
+# Send using it
 curl -X POST http://localhost:3000/api/v1/emails/send \
-  -H "Authorization: Bearer bm_live_YOUR_KEY_HERE" \
-  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $BM_KEY" -H "Content-Type: application/json" \
   -d '{
     "from": "hello@yourdomain.com",
     "to": "user@example.com",
@@ -132,171 +160,90 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
   }'
 ```
 
-## API Endpoints
+## Tech Stack
 
-All endpoints (except `/health`) require `Authorization: Bearer <api-key>`.
-
-### Emails
-
-| Method | Path                                   | Description                                |
-|--------|----------------------------------------|--------------------------------------------|
-| POST   | `/api/v1/emails/send`                  | Queue an email (direct or template)        |
-| GET    | `/api/v1/emails`                       | List emails (excludes trash)               |
-| GET    | `/api/v1/emails/trash`                 | List trashed emails                        |
-| GET    | `/api/v1/emails/:id`                   | Get email by ID                            |
-| DELETE | `/api/v1/emails/:id`                   | Move to trash (soft delete, auto-purged)   |
-| POST   | `/api/v1/emails/bulk-delete`           | Bulk move to trash (`{ "ids": [...] }`)    |
-| POST   | `/api/v1/emails/:id/restore`           | Restore from trash                         |
-| DELETE | `/api/v1/emails/:id/permanent`         | Permanently delete a trashed email         |
-| POST   | `/api/v1/emails/trash/empty`           | Permanently delete all trashed emails      |
-
-### Domains
-
-| Method | Path                          | Description                 |
-|--------|-------------------------------|-----------------------------|
-| POST   | `/api/v1/domains`             | Register domain (auto-DKIM) |
-| GET    | `/api/v1/domains`             | List domains                |
-| GET    | `/api/v1/domains/:id`         | Get domain details          |
-| POST   | `/api/v1/domains/:id/verify`  | Verify DNS records          |
-| DELETE | `/api/v1/domains/:id`         | Delete domain               |
-
-### Templates
-
-| Method | Path                     | Description            |
-|--------|--------------------------|------------------------|
-| POST   | `/api/v1/templates`      | Create template        |
-| GET    | `/api/v1/templates`      | List templates         |
-| GET    | `/api/v1/templates/:id`  | Get template           |
-| PUT    | `/api/v1/templates/:id`  | Update template        |
-| DELETE | `/api/v1/templates/:id`  | Delete template        |
-
-### Webhooks
-
-| Method | Path                     | Description            |
-|--------|--------------------------|------------------------|
-| POST   | `/api/v1/webhooks`       | Register webhook       |
-| GET    | `/api/v1/webhooks`       | List webhooks          |
-| DELETE | `/api/v1/webhooks/:id`   | Delete webhook         |
-
-### Inbound
-
-| Method | Path                                    | Description                                |
-|--------|-----------------------------------------|--------------------------------------------|
-| GET    | `/api/v1/inbound`                       | List received emails (excludes trash)      |
-| GET    | `/api/v1/inbound/trash`                 | List trashed inbound                       |
-| GET    | `/api/v1/inbound/:id`                   | Get received email by ID                   |
-| DELETE | `/api/v1/inbound/:id`                   | Move to trash                              |
-| POST   | `/api/v1/inbound/bulk-delete`           | Bulk move to trash (`{ "ids": [...] }`)    |
-| POST   | `/api/v1/inbound/:id/restore`           | Restore from trash                         |
-| DELETE | `/api/v1/inbound/:id/permanent`         | Permanently delete a trashed inbound       |
-| POST   | `/api/v1/inbound/trash/empty`           | Permanently delete all trashed inbound     |
-
-### API Keys
-
-| Method | Path                     | Description            |
-|--------|--------------------------|------------------------|
-| POST   | `/api/v1/api-keys`       | Create API key         |
-| GET    | `/api/v1/api-keys`       | List all keys          |
-| DELETE | `/api/v1/api-keys/:id`   | Revoke a key           |
-
-### Health
-
-| Method | Path      | Description    | Auth |
-|--------|-----------|----------------|------|
-| GET    | `/health` | Health check   | No   |
-
-See [docs/api.md](docs/api.md) for the full API reference.
-
-## Development Commands
-
-```bash
-bun install              # Install dependencies
-bun run dev              # Start dev server (watch mode)
-bun run start            # Production start
-bun run build            # Build for production
-bun run db:generate      # Generate migration files
-bun run db:migrate       # Run migrations
-bun run db:push          # Push schema to DB (dev shortcut)
-bun run db:studio        # Drizzle Studio UI
-bunx tsc --noEmit        # Type-check
-bun run lint             # ESLint
-bun test                 # Run tests
-```
+| Layer | Technology |
+|-------|-----------|
+| Runtime | [Bun](https://bun.sh) |
+| Framework | [Elysia](https://elysiajs.com) |
+| ORM | [Drizzle ORM](https://orm.drizzle.team) (`drizzle-orm/bun-sql`) |
+| Database | PostgreSQL 16+ |
+| SMTP outbound | Nodemailer (direct mode + DKIM) |
+| SMTP inbound | smtp-server + mailparser |
+| Dashboard | Elysia JSX (`@elysiajs/html` + `@kitajs/html`) |
+| Deployment | Docker + Docker Compose |
 
 ## Architecture
 
 ```
-Elysia API (modules/) → Services → Database (PostgreSQL / Drizzle)
-                             ↓
-                        Queue (retries) → SMTP Send (Nodemailer + DKIM)
-                             ↓
-                        Webhooks → Your app (HMAC-signed POST)
+HTTP (REST API + dashboard)  ─────► Elysia plugins (modules/)
+                                          │
+                                          ▼
+                                    Services layer
+                                          │
+                            ┌─────────────┼─────────────┐
+                            ▼             ▼             ▼
+                       PostgreSQL    Email queue   Webhook dispatch
+                                       (poll)        (HMAC-signed)
+                                          │
+                                          ▼
+                              Nodemailer + DKIM signing
+                                          │
+                                          ▼
+                              Recipient MX servers (port 25)
 ```
 
-- **Modules** (`src/modules/`) — emails, domains, api-keys, webhooks, templates, inbound
-- **Services** — Business logic: mailer, queue, DKIM, DNS verification, webhook dispatch
-- **Middleware** (`src/middleware/`) — Bearer auth + sliding-window rate limiting
-- **Database** (`src/db/`) — Drizzle ORM with PostgreSQL
-- **Dashboard** (`src/pages/`) — Server-rendered JSX via `@elysiajs/html`
+Inbound mail arrives via the built-in SMTP server (port 25/2525), gets parsed by `mailparser`, and is stored in `inbound_emails`. Webhooks fire `email.received` on inbound and `email.sent` / `email.failed` on outbound. See [ARCHITECTURE.md](ARCHITECTURE.md) for full diagrams.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
-
-## Docker
+## Development
 
 ```bash
-docker compose up -d
+bun install
+bun run dev            # start dev server (--watch)
+bun test               # run all tests
+bun test test/unit     # unit tests only
+bun test test/e2e      # integration tests only
+bunx tsc --noEmit      # type check
+bun run lint           # eslint
+docker compose up -d   # full stack with Postgres
 ```
 
-This starts BunMail + PostgreSQL. The app auto-runs database migrations on boot. API runs on port 3000, inbound SMTP on port 2525.
+See [docs/](docs/) for module-level documentation:
 
-See [docs/self-hosting.md](docs/self-hosting.md) for the full deployment guide.
-
-## Deliverability (Avoiding Spam)
-
-To ensure emails land in the inbox, not spam, you need all of the following DNS records configured for your domain:
-
-| Record | Example Value | Purpose |
-|--------|---------------|---------|
-| **SPF** | `v=spf1 a mx ip4:YOUR_IP -all` | Tells receiving servers which IPs are allowed to send email on behalf of your domain. Prevents spoofing. |
-| **DKIM** | 2048-bit RSA key (auto-generated) | Cryptographically signs outgoing emails so recipients can verify the message wasn't tampered with in transit. BunMail generates and manages DKIM keys automatically when you register a domain. |
-| **DMARC** | `v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com` | Instructs receiving servers how to handle emails that fail SPF/DKIM checks (`none` = monitor, `quarantine` = mark as spam, `reject` = drop). The `rua` address receives aggregate reports. |
-| **MX** | `10 mail.yourdomain.com` | Points your domain's incoming mail to your server. Required even for outbound-only setups — many spam filters reject mail from domains without an MX record. The number (`10`) is priority (lower = preferred). |
-| **PTR (rDNS)** | `mail.yourdomain.com.` | Maps your server IP back to a hostname. Must match your `MAIL_HOSTNAME`. Set by your VPS/hosting provider (not in your DNS panel). Many mail servers reject messages from IPs without a valid PTR record. |
-| **A record** | `mail.yourdomain.com → YOUR_IP` | Maps your mail hostname to your server IP. Required for the MX and PTR records to resolve correctly. |
-
-### How to verify
-
-```bash
-dig TXT yourdomain.com +short                           # SPF
-dig TXT bunmail._domainkey.yourdomain.com +short        # DKIM
-dig TXT _dmarc.yourdomain.com +short                    # DMARC
-dig MX yourdomain.com +short                             # MX
-dig -x YOUR_SERVER_IP +short                             # PTR (rDNS)
-dig A mail.yourdomain.com +short                         # A record
-```
-
-### Test your score
-
-Send a test email to [mail-tester.com](https://www.mail-tester.com) — aim for **8+/10**. Check your IP reputation at [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx).
-
-See [docs/self-hosting.md](docs/self-hosting.md#preventing-spam-deliverability-guide) for the full deliverability guide.
-
-## Documentation
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) — System design and schemas
 - [docs/api.md](docs/api.md) — Full API reference
-- [docs/emails.md](docs/emails.md) — Emails module
-- [docs/api-keys.md](docs/api-keys.md) — API keys module
-- [docs/domains.md](docs/domains.md) — Domains module (DKIM + DNS verification)
-- [docs/webhooks.md](docs/webhooks.md) — Webhooks module
-- [docs/templates.md](docs/templates.md) — Templates module
-- [docs/inbound.md](docs/inbound.md) — Inbound SMTP module
-- [docs/dashboard.md](docs/dashboard.md) — Dashboard configuration
-- [docs/self-hosting.md](docs/self-hosting.md) — Self-hosting guide
+- [docs/dashboard.md](docs/dashboard.md) — Dashboard routes and structure
+- [docs/emails.md](docs/emails.md) — Outbound module
+- [docs/inbound.md](docs/inbound.md) — Inbound module
+- [docs/self-hosting.md](docs/self-hosting.md) — Production deployment with DNS records
+
+## Deliverability Setup
+
+For inbox placement on Gmail / Outlook / Yahoo, you need:
+
+1. **A clean sender domain** — older, no spam history.
+2. **A clean IP** — check at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists.aspx).
+3. **PTR (reverse DNS)** matching `MAIL_HOSTNAME` in `.env`.
+4. **SPF, DKIM, DMARC records** — BunMail's dashboard tells you exactly what to publish per domain.
+5. **Patience** — fresh domain + IP combos take 2–3 weeks of low-volume sending to build reputation.
+
+See [docs/self-hosting.md](docs/self-hosting.md#dns-records) for the exact DNS record values.
+
+## Roadmap
+
+Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/mohamedboukari/bunmail/issues)
+
+Near-term highlights:
+
+- Bounce parsing + suppression list (deliverability hardening)
+- Optional SMTP relay mode (use Resend / SES / Postmark as the underlying sender)
+- DSN handling and `email.bounced` webhook event
+- DMARC aggregate report ingestion
+- Webhook delivery persistence + replay
+- DKIM private key encryption at rest
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Issues, PRs, and discussions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issue](https://github.com/mohamedboukari/bunmail/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) label for ways to start.
 
 ## License
 
