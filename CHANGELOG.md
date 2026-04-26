@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Trash / soft-delete for outbound and inbound emails — Gmail-style trash with restore, permanent delete, and "empty trash"
+- Auto-purge service that permanently removes trashed emails after `TRASH_RETENTION_DAYS` (default `7`)
+- New API endpoints on `/api/v1/emails` and `/api/v1/inbound`: `DELETE /:id` (move to trash), `POST /bulk-delete`, `POST /:id/restore`, `DELETE /:id/permanent`, `GET /trash`, `POST /trash/empty`
+- `inbound.service.ts` — extracted business logic out of the inbound plugin to match the rest of the codebase
+- Dashboard: bulk-select and "Move to trash" actions on emails / inbound list pages, dedicated trash views, "Move to trash" button on detail pages
+- `TRASH_RETENTION_DAYS` env var (default `7`)
+
+### Fixed
+
+- Deleting a domain referenced by emails no longer fails — `emails.domain_id` FK now uses `ON DELETE SET NULL`, preserving the email audit log while detaching the domain
+
+### Changed
+
+- Email queue and dashboard stats now exclude trashed rows
+- `CLAUDE.md`: documented that `CHANGELOG.md` must be updated on every release
+
+## [0.2.1] - 2026-04-17
+
+### Changed
+
+- CI: pinned Bun to `1.3.10` and split unit/e2e test runs into separate processes to sandbox `mock.module()` leaks ([#16](https://github.com/mohamedboukari/bunmail/pull/16))
+- Dependencies: bumped `knip` to `6.4.1`, `@types/nodemailer` to `8.0.0`, `softprops/action-gh-release` to `v3`
+
 ## [0.2.0] - 2026-03-16
 
 ### Added

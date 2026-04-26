@@ -89,6 +89,13 @@ const mockEmail = {
   sentAt: null,
   createdAt: new Date("2024-01-01"),
   updatedAt: new Date("2024-01-01"),
+  deletedAt: null as Date | null,
+};
+
+const mockTrashedEmail = {
+  ...mockEmail,
+  id: "msg_trashed",
+  deletedAt: new Date("2024-02-01"),
 };
 
 /* ─── Mock email service ─── */
@@ -102,6 +109,35 @@ mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   getEmailByIdUnscoped: mock((id: string) =>
     Promise.resolve(id === "msg_test123" ? mockEmail : undefined),
   ),
+  getTrashedEmailByIdUnscoped: mock((id: string) =>
+    Promise.resolve(id === "msg_trashed" ? mockTrashedEmail : undefined),
+  ),
+  trashEmail: mock((id: string) =>
+    Promise.resolve(id === "msg_test123" ? mockTrashedEmail : undefined),
+  ),
+  trashEmails: mock((ids: string[]) => Promise.resolve(ids.length)),
+  listTrashedEmails: mock(() => Promise.resolve({ data: [mockTrashedEmail], total: 1 })),
+  listTrashedEmailsUnscoped: mock(() =>
+    Promise.resolve({ data: [mockTrashedEmail], total: 1 }),
+  ),
+  restoreEmail: mock((id: string) =>
+    Promise.resolve(id === "msg_trashed" ? mockEmail : undefined),
+  ),
+  restoreEmailUnscoped: mock((id: string) =>
+    Promise.resolve(id === "msg_trashed" ? mockEmail : undefined),
+  ),
+  permanentDeleteEmail: mock((id: string) =>
+    Promise.resolve(id === "msg_trashed" ? mockTrashedEmail : undefined),
+  ),
+  permanentDeleteEmailUnscoped: mock((id: string) =>
+    Promise.resolve(id === "msg_trashed" ? mockTrashedEmail : undefined),
+  ),
+  emptyEmailsTrash: mock(() => Promise.resolve(3)),
+  emptyEmailsTrashUnscoped: mock(() => Promise.resolve(3)),
+  trashEmailUnscoped: mock((id: string) =>
+    Promise.resolve(id === "msg_test123" ? mockTrashedEmail : undefined),
+  ),
+  trashEmailsUnscoped: mock((ids: string[]) => Promise.resolve(ids.length)),
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
@@ -210,6 +246,117 @@ describe("Emails API E2E", () => {
       const body = (await response.json()) as ErrorResponse;
       expect(body.success).toBe(false);
       expect(body.error).toBe("Email not found");
+    });
+  });
+
+  describe("Trash endpoints", () => {
+    test("DELETE /:id moves email to trash and returns it", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/msg_test123", {
+          method: "DELETE",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as EmailResponse;
+      expect(body.success).toBe(true);
+      expect(body.data.id).toBe("msg_trashed");
+    });
+
+    test("DELETE /:id returns 404 when email not found", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/msg_nope", {
+          method: "DELETE",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(404);
+    });
+
+    test("POST /bulk-delete returns the count trashed", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/bulk-delete", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({ ids: ["a", "b", "c"] }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { success: boolean; deleted: number };
+      expect(body.success).toBe(true);
+      expect(body.deleted).toBe(3);
+    });
+
+    test("GET /trash returns trashed emails", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/trash", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as EmailListResponse;
+      expect(body.success).toBe(true);
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]!.id).toBe("msg_trashed");
+    });
+
+    test("POST /:id/restore restores a trashed email", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/msg_trashed/restore", {
+          method: "POST",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as EmailResponse;
+      expect(body.success).toBe(true);
+      expect(body.data.id).toBe("msg_test123");
+    });
+
+    test("POST /:id/restore returns 404 when not in trash", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/msg_test123/restore", {
+          method: "POST",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(404);
+    });
+
+    test("DELETE /:id/permanent removes a trashed email", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/msg_trashed/permanent", {
+          method: "DELETE",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as EmailResponse;
+      expect(body.success).toBe(true);
+    });
+
+    test("POST /trash/empty returns total purged", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/trash/empty", {
+          method: "POST",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { success: boolean; deleted: number };
+      expect(body.success).toBe(true);
+      expect(body.deleted).toBe(3);
     });
   });
 });

@@ -103,7 +103,51 @@ List emails for the authenticated API key with pagination.
 
 #### `GET /api/v1/emails/:id`
 
-Get a single email by ID. Scoped to the authenticated API key.
+Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded — fetch them via `GET /api/v1/emails/trash`.
+
+---
+
+#### `DELETE /api/v1/emails/:id`
+
+Move an email to trash (soft-delete). The email is automatically purged after `TRASH_RETENTION_DAYS` days unless restored. Returns `404` if not found or not owned by the calling key.
+
+---
+
+#### `POST /api/v1/emails/bulk-delete`
+
+Bulk soft-delete. POST (not DELETE) because some HTTP clients/proxies strip request bodies on DELETE.
+
+Request body:
+
+```json
+{ "ids": ["msg_a", "msg_b", "msg_c"] }
+```
+
+Response: `{ "success": true, "deleted": 3 }`. Up to 100 ids per call.
+
+---
+
+#### `GET /api/v1/emails/trash`
+
+List emails currently in trash (newest-trashed first), scoped to the authenticated API key. Same pagination params as `GET /api/v1/emails`.
+
+---
+
+#### `POST /api/v1/emails/:id/restore`
+
+Restore a trashed email — clears the deletion marker so it reappears in normal lists. `404` if the email isn't currently in trash.
+
+---
+
+#### `DELETE /api/v1/emails/:id/permanent`
+
+Permanently delete a trashed email immediately. Only works on rows already in trash (protects against bypassing the soft-delete workflow). Irreversible.
+
+---
+
+#### `POST /api/v1/emails/trash/empty`
+
+Permanently delete every trashed email for the calling API key. Returns `{ "success": true, "deleted": <count> }`.
 
 ---
 
@@ -276,7 +320,43 @@ List received emails (paginated, newest first).
 
 #### `GET /api/v1/inbound/:id`
 
-Get a received email by ID.
+Get a received email by ID. Trashed inbound emails are excluded — fetch them via `GET /api/v1/inbound/trash`.
+
+---
+
+#### `DELETE /api/v1/inbound/:id`
+
+Move an inbound email to trash (soft-delete). Auto-purged after `TRASH_RETENTION_DAYS` days unless restored.
+
+---
+
+#### `POST /api/v1/inbound/bulk-delete`
+
+Bulk soft-delete inbound emails by IDs. Body: `{ "ids": ["inb_a", "inb_b"] }`. Up to 100 per call.
+
+---
+
+#### `GET /api/v1/inbound/trash`
+
+List trashed inbound emails (newest-trashed first). Same pagination params as `GET /api/v1/inbound`.
+
+---
+
+#### `POST /api/v1/inbound/:id/restore`
+
+Restore a trashed inbound email.
+
+---
+
+#### `DELETE /api/v1/inbound/:id/permanent`
+
+Permanently delete a trashed inbound email immediately. Irreversible.
+
+---
+
+#### `POST /api/v1/inbound/trash/empty`
+
+Permanently delete every trashed inbound email. Returns `{ "success": true, "deleted": <count> }`.
 
 ---
 
