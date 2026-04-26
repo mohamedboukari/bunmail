@@ -27,6 +27,7 @@ describe("serializeEmail", () => {
     sentAt: new Date("2024-06-01"),
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
+    deletedAt: null,
   };
 
   test("maps fromAddress to from", () => {

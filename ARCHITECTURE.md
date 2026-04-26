@@ -95,9 +95,10 @@ bunmail/
 │   │   ├── emails/
 │   │   │   ├── emails.plugin.ts          ← POST /send, GET /emails
 │   │   │   ├── services/
-│   │   │   │   ├── email.service.ts      ← Email CRUD + stats
+│   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
-│   │   │   │   └── queue.service.ts      ← Queue processor + retries
+│   │   │   │   ├── queue.service.ts      ← Queue processor + retries
+│   │   │   │   └── stats.service.ts      ← Dashboard stats aggregation
 │   │   │   ├── dtos/
 │   │   │   │   ├── send-email.dto.ts
 │   │   │   │   └── list-emails.dto.ts
@@ -157,16 +158,20 @@ bunmail/
 │   │   │   │   └── template.serialization.ts
 │   │   │   └── types/
 │   │   │       └── template.types.ts
-│   │   └── inbound/
-│   │       ├── inbound.plugin.ts         ← GET / (list), GET /:id
-│   │       ├── services/
-│   │       │   └── smtp-receiver.service.ts ← SMTP server (smtp-server)
-│   │       ├── models/
-│   │       │   └── inbound-email.schema.ts ← inbound_emails pgTable
-│   │       ├── serializations/
-│   │       │   └── inbound.serialization.ts
-│   │       └── types/
-│   │           └── inbound.types.ts
+│   │   ├── inbound/
+│   │   │   ├── inbound.plugin.ts         ← Routes: list, get, trash/restore/permanent/empty
+│   │   │   ├── services/
+│   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server)
+│   │   │   │   └── inbound.service.ts    ← Reads + trash/restore/permanent
+│   │   │   ├── models/
+│   │   │   │   └── inbound-email.schema.ts ← inbound_emails pgTable
+│   │   │   ├── serializations/
+│   │   │   │   └── inbound.serialization.ts
+│   │   │   └── types/
+│   │   │       └── inbound.types.ts
+│   │   └── trash/
+│   │       └── services/
+│   │           └── purge.service.ts      ← Periodic auto-purge of trashed rows
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
 │       ├── landing.plugin.tsx            ← Public landing page at /
@@ -186,8 +191,10 @@ bunmail/
 │       │   ├── templates.tsx             ← Templates list + create
 │       │   ├── template-detail.tsx       ← Template edit form
 │       │   ├── webhooks.tsx              ← Webhooks list + create
-│       │   ├── inbound.tsx               ← Inbound emails list
-│       │   └── inbound-detail.tsx        ← Inbound email detail + preview
+│       │   ├── inbound.tsx               ← Inbound emails list (bulk-select + trash)
+│       │   ├── inbound-detail.tsx        ← Inbound email detail + preview
+│       │   ├── inbound-trash.tsx         ← Trashed inbound view
+│       │   └── emails-trash.tsx          ← Trashed outbound view
 │       └── components/
 │           ├── stats-card.tsx            ← Stat card (label, value, accent)
 │           ├── status-badge.tsx          ← Status + verification badges
@@ -316,6 +323,32 @@ queued → sending → sent
          ↘ queued (retry on transient failure)
 ```
 
+The queue selector also filters `deleted_at IS NULL` so rows trashed while still queued are skipped instead of being sent.
+
+---
+
+## Trash & Auto-Purge
+
+Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Setting `deleted_at = NOW()` moves a row to trash; clearing it restores. All read paths filter `deleted_at IS NULL` so trashed rows are invisible to the normal API and dashboard until they're explicitly accessed via `/trash` endpoints.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Trash Purge (setInterval, every 6 hours, also on boot)  │
+│                                                         │
+│   cutoff = NOW() - TRASH_RETENTION_DAYS                 │
+│                                                         │
+│   DELETE FROM emails                                    │
+│     WHERE deleted_at IS NOT NULL                        │
+│       AND deleted_at < cutoff                           │
+│                                                         │
+│   DELETE FROM inbound_emails                            │
+│     WHERE deleted_at IS NOT NULL                        │
+│       AND deleted_at < cutoff                           │
+└─────────────────────────────────────────────────────────┘
+```
+
+`TRASH_RETENTION_DAYS` is configurable via env (default `7`). The purge runs once on boot to catch anything that aged out while the server was offline.
+
 ---
 
 ## Database Schema
@@ -341,6 +374,9 @@ queued → sending → sent
 | sent_at       | timestamp      | nullable                        |
 | created_at    | timestamp      | NOT NULL, default `now()`       |
 | updated_at    | timestamp      | NOT NULL, default `now()`       |
+| deleted_at    | timestamp      | nullable (soft-delete marker)   |
+
+`domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
 ### `api_keys`
 
@@ -409,6 +445,7 @@ queued → sending → sent
 | text_content | text           | nullable                        |
 | raw_message  | text           | nullable                        |
 | received_at  | timestamp      | NOT NULL, default `now()`       |
+| deleted_at   | timestamp      | nullable (soft-delete marker)   |
 
 ### Relationships
 
@@ -425,11 +462,17 @@ domains   ──1:N──▶ emails
 
 ### Emails
 
-| Method | Path                     | Description           | Auth |
-|--------|--------------------------|-----------------------|------|
-| POST   | /api/v1/emails/send      | Send an email         | Yes  |
-| GET    | /api/v1/emails           | List sent emails      | Yes  |
-| GET    | /api/v1/emails/:id       | Get email by ID       | Yes  |
+| Method | Path                                | Description                                | Auth |
+|--------|-------------------------------------|--------------------------------------------|------|
+| POST   | /api/v1/emails/send                 | Send an email                              | Yes  |
+| GET    | /api/v1/emails                      | List sent emails (excludes trash)          | Yes  |
+| GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
+| GET    | /api/v1/emails/:id                  | Get email by ID                            | Yes  |
+| DELETE | /api/v1/emails/:id                  | Move email to trash                        | Yes  |
+| POST   | /api/v1/emails/bulk-delete          | Bulk move to trash (`{ ids: [] }`)         | Yes  |
+| POST   | /api/v1/emails/:id/restore          | Restore from trash                         | Yes  |
+| DELETE | /api/v1/emails/:id/permanent        | Permanently delete a trashed email         | Yes  |
+| POST   | /api/v1/emails/trash/empty          | Permanently delete all trashed emails      | Yes  |
 
 ### API Keys
 
@@ -469,10 +512,16 @@ domains   ──1:N──▶ emails
 
 ### Inbound
 
-| Method | Path                          | Description           | Auth |
-|--------|-------------------------------|-----------------------|------|
-| GET    | /api/v1/inbound               | List received emails  | Yes  |
-| GET    | /api/v1/inbound/:id           | Get received email    | Yes  |
+| Method | Path                                | Description                                | Auth |
+|--------|-------------------------------------|--------------------------------------------|------|
+| GET    | /api/v1/inbound                     | List received emails (excludes trash)      | Yes  |
+| GET    | /api/v1/inbound/trash               | List trashed inbound                       | Yes  |
+| GET    | /api/v1/inbound/:id                 | Get received email                         | Yes  |
+| DELETE | /api/v1/inbound/:id                 | Move to trash                              | Yes  |
+| POST   | /api/v1/inbound/bulk-delete         | Bulk move to trash (`{ ids: [] }`)         | Yes  |
+| POST   | /api/v1/inbound/:id/restore         | Restore from trash                         | Yes  |
+| DELETE | /api/v1/inbound/:id/permanent       | Permanently delete a trashed inbound       | Yes  |
+| POST   | /api/v1/inbound/trash/empty         | Permanently delete all trashed inbound     | Yes  |
 
 ### Dashboard (HTML)
 
@@ -484,7 +533,15 @@ domains   ──1:N──▶ emails
 | GET    | /dashboard                         | Stats overview          | Session  |
 | GET    | /dashboard/send                    | Compose & send email    | Session  |
 | POST   | /dashboard/send                    | Queue email for send    | Session  |
-| GET    | /dashboard/emails                  | Email logs + filters    | Session  |
+| GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Session |
+| GET    | /dashboard/emails/trash            | Trashed emails view     | Session  |
+| POST   | /dashboard/emails/bulk-trash       | Bulk move to trash      | Session  |
+| POST   | /dashboard/emails/trash/bulk-restore   | Bulk restore        | Session  |
+| POST   | /dashboard/emails/trash/bulk-permanent | Bulk hard-delete    | Session  |
+| POST   | /dashboard/emails/trash/empty      | Empty email trash       | Session  |
+| POST   | /dashboard/emails/:id/trash        | Move single to trash    | Session  |
+| POST   | /dashboard/emails/:id/restore      | Restore single          | Session  |
+| POST   | /dashboard/emails/:id/permanent    | Hard-delete single      | Session  |
 | GET    | /dashboard/emails/:id              | Email detail            | Session  |
 | GET    | /dashboard/api-keys                | API keys management     | Session  |
 | POST   | /dashboard/api-keys                | Create API key          | Session  |
@@ -502,7 +559,15 @@ domains   ──1:N──▶ emails
 | GET    | /dashboard/webhooks                | Webhooks management     | Session  |
 | POST   | /dashboard/webhooks                | Create webhook          | Session  |
 | POST   | /dashboard/webhooks/:id/delete     | Delete webhook          | Session  |
-| GET    | /dashboard/inbound                 | Inbound emails list     | Session  |
+| GET    | /dashboard/inbound                 | Inbound emails list + bulk-select | Session |
+| GET    | /dashboard/inbound/trash           | Trashed inbound view    | Session  |
+| POST   | /dashboard/inbound/bulk-trash      | Bulk move to trash      | Session  |
+| POST   | /dashboard/inbound/trash/bulk-restore   | Bulk restore       | Session  |
+| POST   | /dashboard/inbound/trash/bulk-permanent | Bulk hard-delete   | Session  |
+| POST   | /dashboard/inbound/trash/empty     | Empty inbound trash     | Session  |
+| POST   | /dashboard/inbound/:id/trash       | Move single to trash    | Session  |
+| POST   | /dashboard/inbound/:id/restore     | Restore single          | Session  |
+| POST   | /dashboard/inbound/:id/permanent   | Hard-delete single      | Session  |
 | GET    | /dashboard/inbound/:id             | Inbound email detail    | Session  |
 
 Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry).

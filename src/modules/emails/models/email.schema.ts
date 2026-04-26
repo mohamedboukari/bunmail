@@ -23,8 +23,14 @@ export const emails = pgTable(
       .notNull()
       .references(() => apiKeys.id),
 
-    /** Optional sender domain — FK to domains. Used for DKIM signing lookup */
-    domainId: varchar("domain_id", { length: 36 }).references(() => domains.id),
+    /**
+     * Optional sender domain — FK to domains. Used for DKIM signing lookup.
+     * `onDelete: "set null"` lets us delete a domain without first detaching
+     * its emails — preserving the email audit log while removing the domain.
+     */
+    domainId: varchar("domain_id", { length: 36 }).references(() => domains.id, {
+      onDelete: "set null",
+    }),
 
     /** Sender email address (e.g. "hello@example.com") */
     fromAddress: varchar("from_address", { length: 255 }).notNull(),
@@ -73,6 +79,14 @@ export const emails = pgTable(
 
     /** Last status change timestamp */
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
+
+    /**
+     * Soft-delete marker — when set, the email is in "trash".
+     * The trash purge service permanently removes rows where
+     * `deleted_at < NOW() - TRASH_RETENTION_DAYS`. Normal list/get queries
+     * filter `deleted_at IS NULL` to hide trashed rows.
+     */
+    deletedAt: timestamp("deleted_at"),
   },
   (table) => [
     /** Composite index — the queue processor queries by status + created_at */
@@ -80,5 +94,8 @@ export const emails = pgTable(
 
     /** Index for filtering emails by API key (list emails endpoint) */
     index("idx_emails_api_key_id").on(table.apiKeyId),
+
+    /** Index for trash list and purge queries (api_key + deleted_at) */
+    index("idx_emails_api_key_deleted").on(table.apiKeyId, table.deletedAt),
   ],
 );

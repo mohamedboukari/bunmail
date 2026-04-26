@@ -13,6 +13,25 @@
 
 BunMail is a REST API for sending transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, an email queue with retries, webhooks, email templates, inbound email receiving, and a web dashboard.
 
+## Screenshots
+
+![Dashboard](public/dashboard.png)
+
+<table>
+  <tr>
+    <td><a href="public/Send-Email.png"><img src="public/Send-Email.png" alt="Send Email" /></a></td>
+    <td><a href="public/Emails.png"><img src="public/Emails.png" alt="Emails list" /></a></td>
+  </tr>
+  <tr>
+    <td><a href="public/Inbound.png"><img src="public/Inbound.png" alt="Inbound emails" /></a></td>
+    <td><a href="public/Templates.png"><img src="public/Templates.png" alt="Templates" /></a></td>
+  </tr>
+  <tr>
+    <td><a href="public/Domains.png"><img src="public/Domains.png" alt="Domains" /></a></td>
+    <td><a href="public/API-Keys.png"><img src="public/API-Keys.png" alt="API Keys" /></a></td>
+  </tr>
+</table>
+
 ## Features
 
 - **Direct SMTP delivery** — sends straight to recipient MX servers, no relay needed
@@ -23,7 +42,8 @@ BunMail is a REST API for sending transactional emails with direct SMTP delivery
 - **Email templates** — Mustache-style `{{variable}}` substitution
 - **Inbound SMTP** — receive and store incoming emails
 - **API key auth** — SHA-256 hashed Bearer tokens with rate limiting
-- **Web dashboard** — server-rendered UI for sending emails, managing templates, webhooks, domains, keys, and viewing inbound mail
+- **Trash & auto-purge** — Gmail-style soft-delete for outbound and inbound emails, restorable until auto-purged after `TRASH_RETENTION_DAYS` (default `7`)
+- **Web dashboard** — server-rendered UI with bulk-select, trash views, and richer overview stats (24h activity, success rate, trash counts)
 - **OpenAPI spec** — auto-generated OpenAPI 3.0 docs at `/api/docs`
 - **Docker ready** — one command to run the full stack
 
@@ -118,11 +138,17 @@ All endpoints (except `/health`) require `Authorization: Bearer <api-key>`.
 
 ### Emails
 
-| Method | Path                     | Description                     |
-|--------|--------------------------|---------------------------------|
-| POST   | `/api/v1/emails/send`    | Queue an email (direct or template) |
-| GET    | `/api/v1/emails`         | List emails (paginated)         |
-| GET    | `/api/v1/emails/:id`     | Get email by ID                 |
+| Method | Path                                   | Description                                |
+|--------|----------------------------------------|--------------------------------------------|
+| POST   | `/api/v1/emails/send`                  | Queue an email (direct or template)        |
+| GET    | `/api/v1/emails`                       | List emails (excludes trash)               |
+| GET    | `/api/v1/emails/trash`                 | List trashed emails                        |
+| GET    | `/api/v1/emails/:id`                   | Get email by ID                            |
+| DELETE | `/api/v1/emails/:id`                   | Move to trash (soft delete, auto-purged)   |
+| POST   | `/api/v1/emails/bulk-delete`           | Bulk move to trash (`{ "ids": [...] }`)    |
+| POST   | `/api/v1/emails/:id/restore`           | Restore from trash                         |
+| DELETE | `/api/v1/emails/:id/permanent`         | Permanently delete a trashed email         |
+| POST   | `/api/v1/emails/trash/empty`           | Permanently delete all trashed emails      |
 
 ### Domains
 
@@ -154,10 +180,16 @@ All endpoints (except `/health`) require `Authorization: Bearer <api-key>`.
 
 ### Inbound
 
-| Method | Path                     | Description                 |
-|--------|--------------------------|-----------------------------|
-| GET    | `/api/v1/inbound`        | List received emails        |
-| GET    | `/api/v1/inbound/:id`    | Get received email by ID    |
+| Method | Path                                    | Description                                |
+|--------|-----------------------------------------|--------------------------------------------|
+| GET    | `/api/v1/inbound`                       | List received emails (excludes trash)      |
+| GET    | `/api/v1/inbound/trash`                 | List trashed inbound                       |
+| GET    | `/api/v1/inbound/:id`                   | Get received email by ID                   |
+| DELETE | `/api/v1/inbound/:id`                   | Move to trash                              |
+| POST   | `/api/v1/inbound/bulk-delete`           | Bulk move to trash (`{ "ids": [...] }`)    |
+| POST   | `/api/v1/inbound/:id/restore`           | Restore from trash                         |
+| DELETE | `/api/v1/inbound/:id/permanent`         | Permanently delete a trashed inbound       |
+| POST   | `/api/v1/inbound/trash/empty`           | Permanently delete all trashed inbound     |
 
 ### API Keys
 

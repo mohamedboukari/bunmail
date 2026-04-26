@@ -85,4 +85,14 @@ export const config = {
 
   /** Log level: debug | info | warn | error */
   logLevel: optionalEnv("LOG_LEVEL", "info"),
+
+  /** Trash / soft-delete retention */
+  trash: {
+    /**
+     * How many days a soft-deleted email stays in trash before the purge
+     * service permanently removes it. Applies to both outbound and inbound
+     * emails. Default 7 days.
+     */
+    retentionDays: parseInt(optionalEnv("TRASH_RETENTION_DAYS", "7"), 10),
+  },
 } as const;

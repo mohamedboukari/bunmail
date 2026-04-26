@@ -39,24 +39,44 @@ mock.module("../../src/modules/emails/services/stats.service.ts", () => ({
       sentCount: 35,
       failedCount: 3,
       queuedCount: 4,
+      sentLast24h: 7,
+      failedLast24h: 0,
+      successRate: 35 / 38,
+      inboundTotal: 9,
+      inboundLast24h: 2,
+      emailsInTrash: 1,
+      inboundInTrash: 0,
       totalApiKeys: 5,
       activeApiKeys: 4,
       totalDomains: 2,
+      totalTemplates: 6,
+      totalWebhooks: 1,
     }),
   ),
 }));
 
 mock.module("../../src/modules/emails/services/email.service.ts", () => ({
-  listAllEmails: mock(() =>
-    Promise.resolve({
-      data: [],
-      total: 0,
-    }),
-  ),
-  getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
-  createEmail: mock(() => Promise.resolve({})),
-  getEmailById: mock(() => Promise.resolve(undefined)),
+  /** Reads */
+  listAllEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   listEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
+  getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
+  getEmailById: mock(() => Promise.resolve(undefined)),
+  createEmail: mock(() => Promise.resolve({})),
+  /** Trash — included so this mock can leak into other e2e tests
+   *  without stripping fields they depend on. */
+  trashEmail: mock(() => Promise.resolve(undefined)),
+  trashEmails: mock(() => Promise.resolve(0)),
+  trashEmailUnscoped: mock(() => Promise.resolve(undefined)),
+  trashEmailsUnscoped: mock(() => Promise.resolve(0)),
+  restoreEmail: mock(() => Promise.resolve(undefined)),
+  restoreEmailUnscoped: mock(() => Promise.resolve(undefined)),
+  permanentDeleteEmail: mock(() => Promise.resolve(undefined)),
+  permanentDeleteEmailUnscoped: mock(() => Promise.resolve(undefined)),
+  emptyEmailsTrash: mock(() => Promise.resolve(0)),
+  emptyEmailsTrashUnscoped: mock(() => Promise.resolve(0)),
+  listTrashedEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
+  listTrashedEmailsUnscoped: mock(() => Promise.resolve({ data: [], total: 0 })),
+  getTrashedEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
 }));
 
 mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
@@ -133,30 +153,20 @@ mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   findWebhooksForEvent: mock(() => Promise.resolve([])),
 }));
 
-mock.module("../../src/db/index.ts", () => ({
-  db: {
-    select: mock(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const chain: Record<string, any> = {
-        from: mock(() => chain),
-        where: mock(() => chain),
-        orderBy: mock(() => chain),
-        limit: mock(() => chain),
-        offset: mock(() => chain),
-        then: (resolve: (value: unknown) => void) => resolve([]),
-      };
-      return chain;
-    }),
-  },
+mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({
+  listInboundEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
+  listTrashedInboundEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
+  getInboundEmailById: mock(() => Promise.resolve(undefined)),
+  getTrashedInboundEmailById: mock(() => Promise.resolve(undefined)),
+  trashInboundEmail: mock(() => Promise.resolve(undefined)),
+  trashInboundEmails: mock(() => Promise.resolve(0)),
+  restoreInboundEmail: mock(() => Promise.resolve(undefined)),
+  permanentDeleteInboundEmail: mock(() => Promise.resolve(undefined)),
+  emptyInboundTrash: mock(() => Promise.resolve(0)),
 }));
 
-mock.module("drizzle-orm", () => ({
-  desc: mock(() => "desc"),
-  eq: mock(() => "eq"),
-  sql: Object.assign(
-    (_strings: TemplateStringsArray, ..._values: unknown[]) => "sql-tag",
-    { raw: (s: string) => s },
-  ),
+mock.module("../../src/db/index.ts", () => ({
+  db: {},
 }));
 
 /* ─── Import plugin after mocking ─── */

@@ -25,24 +25,30 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
 | `created_at`    | timestamp      | NOT NULL, default now   | When the email was queued                   |
 | `updated_at`    | timestamp      | NOT NULL, default now   | Last modification timestamp                 |
+| `deleted_at`    | timestamp      | nullable                | Soft-delete marker — when set, the email is in trash and excluded from normal lists. Auto-purged after `TRASH_RETENTION_DAYS`. |
+
+**Foreign keys:**
+
+- `domain_id → domains.id` — `ON DELETE SET NULL`. Deleting a domain detaches its emails instead of blocking, preserving the email history while removing the domain.
 
 **Indexes:**
 
 - `idx_emails_status_created` — `(status, created_at)` — queue processor uses this
 - `idx_emails_api_key_id` — `(api_key_id)` — fast filtering by API key
+- `idx_emails_api_key_deleted` — `(api_key_id, deleted_at)` — trash list / purge queries
 
 ## Module Layout
 
 ```
 src/modules/emails/
-├── emails.plugin.ts                ← Routes: POST /send, GET /, GET /:id
+├── emails.plugin.ts                ← Routes: send, list, get, trash/restore/permanent/empty
 ├── models/
 │   └── email.schema.ts             ← Drizzle pgTable + indexes
 ├── dtos/
 │   ├── send-email.dto.ts           ← Send email validation (direct + template)
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
-│   ├── email.service.ts            ← CRUD + template resolution + domain linking
+│   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
 │   └── stats.service.ts            ← Dashboard stats aggregation
@@ -92,14 +98,42 @@ When an email is created, the sender's domain (from `from` address) is looked up
 
 ### email.service.ts
 
+All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-specific methods explicitly target trashed rows.
+
+**Reads (live)**
+
 #### `createEmail(input, apiKeyId): Promise<Email>`
 Creates an email record with status `queued`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing.
 
 #### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
-Retrieves an email scoped to the requesting API key.
+Retrieves a non-trashed email scoped to the requesting API key.
 
-#### `listEmails(apiKeyId, filters): Promise<{ data, total }>`
-Paginated listing with optional status filter.
+#### `getEmailByIdUnscoped(id): Promise<Email | undefined>`
+Dashboard variant — no API-key scope. Excludes trashed.
+
+#### `listEmails(apiKeyId, filters): Promise<{ data, total }>` / `listAllEmails(filters)`
+Paginated listing with optional status filter. Trashed rows excluded.
+
+**Trash (scoped)**
+
+#### `trashEmail(id, apiKeyId)` / `trashEmails(ids[], apiKeyId)`
+Soft-delete (sets `deleted_at = NOW()`). Single or bulk. Idempotent. Returns the row or count.
+
+#### `listTrashedEmails(apiKeyId, filters)`
+Lists trashed rows for the API key, newest-trashed first.
+
+#### `restoreEmail(id, apiKeyId)`
+Clears `deleted_at`. Returns 404 if the row isn't currently trashed.
+
+#### `permanentDeleteEmail(id, apiKeyId)`
+Hard delete. Only operates on already-trashed rows.
+
+#### `emptyEmailsTrash(apiKeyId)`
+Permanently deletes every trashed email for the key. Returns count.
+
+**Trash (unscoped — dashboard only)**
+
+`trashEmailUnscoped`, `trashEmailsUnscoped`, `listTrashedEmailsUnscoped`, `getTrashedEmailByIdUnscoped`, `restoreEmailUnscoped`, `permanentDeleteEmailUnscoped`, `emptyEmailsTrashUnscoped` — same semantics, no API-key filter.
 
 ### mailer.service.ts
 

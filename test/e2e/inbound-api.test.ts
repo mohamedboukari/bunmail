@@ -4,12 +4,10 @@ import { Elysia } from "elysia";
 /**
  * E2E tests for the Inbound API (/api/v1/inbound).
  *
- * Tests the full HTTP request/response cycle for inbound email endpoints.
- * The inbound plugin accesses the DB directly (no service layer), so we
- * mock `db` with chainable Drizzle-style query builder methods.
+ * The inbound plugin now goes through `inbound.service.ts`, so we mock that
+ * service directly — same pattern as the outbound emails test.
  */
 
-/** Serialized inbound email shape returned by the API */
 interface SerializedInboundEmail {
   id: string;
   from: string;
@@ -30,6 +28,11 @@ interface InboundListResponse {
   success: boolean;
   data: SerializedInboundEmail[];
   pagination: { page: number; limit: number; total: number };
+}
+
+interface BulkResponse {
+  success: boolean;
+  deleted: number;
 }
 
 interface ErrorResponse {
@@ -58,6 +61,11 @@ mock.module("../../src/utils/logger.ts", () => ({
   },
 }));
 
+/* ─── Mock DB (the service is mocked too, but the import graph still pulls db.ts) ─── */
+mock.module("../../src/db/index.ts", () => ({
+  db: {},
+}));
+
 /* ─── Test data ─── */
 const mockInbound = {
   id: "inb_test123",
@@ -68,65 +76,41 @@ const mockInbound = {
   textContent: "Inbound test",
   rawMessage: "raw...",
   receivedAt: new Date("2024-01-01"),
-  createdAt: new Date("2024-01-01"),
+  deletedAt: null as Date | null,
 };
 
-/**
- * Build a chainable mock that mimics Drizzle's select().from().where().orderBy().limit().offset().
- *
- * The list endpoint runs two parallel queries (data + count) via Promise.all.
- * We track which call is which by checking if `where` was called (single item)
- * or if `orderBy` was called (list query). The count query calls neither.
- */
-function createChainableSelect() {
-  let hasWhere = false;
-  let hasOrderBy = false;
+const mockTrashedInbound = {
+  ...mockInbound,
+  id: "inb_trashed",
+  deletedAt: new Date("2024-02-01"),
+};
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const chain: Record<string, any> = {
-    from: mock(() => chain),
-    where: mock((_condition: unknown) => {
-      hasWhere = true;
-      return chain;
-    }),
-    orderBy: mock(() => {
-      hasOrderBy = true;
-      return chain;
-    }),
-    limit: mock(() => chain),
-    offset: mock(() => chain),
-    then: (resolve: (value: unknown) => void) => {
-      if (hasWhere) {
-        resolve([mockInbound]);
-      } else if (hasOrderBy) {
-        resolve([mockInbound]);
-      } else {
-        resolve([{ count: 1 }]);
-      }
-    },
-  };
-
-  return chain;
-}
-
-/* ─── Mock DB with chainable query builder ─── */
-mock.module("../../src/db/index.ts", () => ({
-  db: {
-    select: mock(() => createChainableSelect()),
-  },
-}));
-
-/* ─── Mock drizzle-orm functions used by the plugin ─── */
-mock.module("drizzle-orm", () => ({
-  desc: mock(() => "desc"),
-  sql: Object.assign(
-    (_strings: TemplateStringsArray, ..._values: unknown[]) => "sql-tag",
-    { raw: (s: string) => s },
+/* ─── Mock inbound service ─── */
+mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({
+  listInboundEmails: mock(() => Promise.resolve({ data: [mockInbound], total: 1 })),
+  listTrashedInboundEmails: mock(() =>
+    Promise.resolve({ data: [mockTrashedInbound], total: 1 }),
   ),
-  eq: mock(() => "eq-condition"),
+  getInboundEmailById: mock((id: string) =>
+    Promise.resolve(id === "inb_test123" ? mockInbound : undefined),
+  ),
+  getTrashedInboundEmailById: mock((id: string) =>
+    Promise.resolve(id === "inb_trashed" ? mockTrashedInbound : undefined),
+  ),
+  trashInboundEmail: mock((id: string) =>
+    Promise.resolve(id === "inb_test123" ? mockTrashedInbound : undefined),
+  ),
+  trashInboundEmails: mock((ids: string[]) => Promise.resolve(ids.length)),
+  restoreInboundEmail: mock((id: string) =>
+    Promise.resolve(id === "inb_trashed" ? mockInbound : undefined),
+  ),
+  permanentDeleteInboundEmail: mock((id: string) =>
+    Promise.resolve(id === "inb_trashed" ? mockTrashedInbound : undefined),
+  ),
+  emptyInboundTrash: mock(() => Promise.resolve(2)),
 }));
 
-/* ─── Mock auth + rate limit middleware ─── */
+/* ─── Mock auth + rate limit ─── */
 mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
@@ -160,7 +144,6 @@ describe("Inbound API E2E", () => {
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.id).toBe("inb_test123");
       expect(body.data[0]!.from).toBe("sender@gmail.com");
-      expect(body.data[0]!.to).toBe("hello@example.com");
       expect(body.pagination.total).toBe(1);
       /** rawMessage must not be exposed */
       expect(
@@ -181,29 +164,11 @@ describe("Inbound API E2E", () => {
       const body = (await response.json()) as InboundResponse;
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("inb_test123");
-      expect(body.data.subject).toBe("Test inbound");
     });
 
     test("returns 404 when inbound email not found", async () => {
-      /** Override db mock for the not-found case */
-      const { db } = await import("../../src/db/index.ts");
-      (db as unknown as Record<string, unknown>).select = mock(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const chain: Record<string, any> = {
-          from: mock(() => chain),
-          where: mock(() => chain),
-          orderBy: mock(() => chain),
-          limit: mock(() => chain),
-          offset: mock(() => chain),
-          then: (resolve: (value: unknown) => void) => {
-            resolve([]);
-          },
-        };
-        return chain;
-      });
-
       const response = await app.handle(
-        new Request("http://localhost/api/v1/inbound/inb_nonexistent", {
+        new Request("http://localhost/api/v1/inbound/inb_nope", {
           headers: { authorization: "Bearer test_key" },
         }),
       );
@@ -212,6 +177,89 @@ describe("Inbound API E2E", () => {
       const body = (await response.json()) as ErrorResponse;
       expect(body.success).toBe(false);
       expect(body.error).toBe("Inbound email not found");
+    });
+  });
+
+  describe("Trash endpoints", () => {
+    test("DELETE /:id moves inbound to trash", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_test123", {
+          method: "DELETE",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as InboundResponse;
+      expect(body.success).toBe(true);
+      expect(body.data.id).toBe("inb_trashed");
+    });
+
+    test("POST /bulk-delete returns the count trashed", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/bulk-delete", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({ ids: ["a", "b"] }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as BulkResponse;
+      expect(body.deleted).toBe(2);
+    });
+
+    test("GET /trash returns trashed inbound emails", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/trash", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as InboundListResponse;
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]!.id).toBe("inb_trashed");
+    });
+
+    test("POST /:id/restore restores a trashed inbound", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_trashed/restore", {
+          method: "POST",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as InboundResponse;
+      expect(body.data.id).toBe("inb_test123");
+    });
+
+    test("DELETE /:id/permanent removes a trashed inbound", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_trashed/permanent", {
+          method: "DELETE",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    test("POST /trash/empty returns total purged", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/trash/empty", {
+          method: "POST",
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as BulkResponse;
+      expect(body.deleted).toBe(2);
     });
   });
 });

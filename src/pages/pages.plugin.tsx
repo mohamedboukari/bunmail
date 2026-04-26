@@ -8,6 +8,7 @@ import { logger } from "../utils/logger.ts";
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
+import { EmailsTrashPage } from "./routes/emails-trash.tsx";
 import { EmailDetailPage } from "./routes/email-detail.tsx";
 import { ApiKeysPage } from "./routes/api-keys.tsx";
 import { DomainsPage } from "./routes/domains.tsx";
@@ -17,6 +18,7 @@ import { TemplatesPage } from "./routes/templates.tsx";
 import { TemplateDetailPage } from "./routes/template-detail.tsx";
 import { WebhooksPage } from "./routes/webhooks.tsx";
 import { InboundPage } from "./routes/inbound.tsx";
+import { InboundTrashPage } from "./routes/inbound-trash.tsx";
 import { InboundDetailPage } from "./routes/inbound-detail.tsx";
 
 /* ─── Services ─── */
@@ -26,10 +28,18 @@ import * as apiKeyService from "../modules/api-keys/services/api-key.service.ts"
 import * as domainService from "../modules/domains/services/domain.service.ts";
 import * as templateService from "../modules/templates/services/template.service.ts";
 import * as webhookService from "../modules/webhooks/services/webhook.service.ts";
-import { db } from "../db/index.ts";
-import { inboundEmails } from "../modules/inbound/models/inbound-email.schema.ts";
-import { desc, eq, sql } from "drizzle-orm";
+import * as inboundService from "../modules/inbound/services/inbound.service.ts";
 import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
+
+/**
+ * Normalises a form field that can come back either as a single string
+ * (one checkbox checked) or an array (many checkboxes). Repeated form
+ * fields like `ids=a&ids=b` produce different shapes depending on the
+ * runtime parser, so we always coerce to `string[]`.
+ */
+function toIdArray(input: string | string[]): string[] {
+  return Array.isArray(input) ? input : [input];
+}
 
 /* ─── Session Helpers ─── */
 
@@ -336,7 +346,8 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/emails
-   * Email list with status filter tabs and pagination.
+   * Email list with status filter tabs, bulk-select checkboxes, and pagination.
+   * Trashed rows are hidden — view them at /dashboard/emails/trash.
    */
   .get(
     "/emails",
@@ -351,6 +362,13 @@ export const pagesPlugin = new Elysia({
         status: status as "queued" | "sending" | "sent" | "failed" | undefined,
       });
 
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
+
       return (
         <EmailsPage
           emails={data}
@@ -358,6 +376,7 @@ export const pagesPlugin = new Elysia({
           page={page}
           limit={limit}
           status={status}
+          flash={flash}
         />
       );
     },
@@ -366,25 +385,237 @@ export const pagesPlugin = new Elysia({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         status: t.Optional(t.String()),
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
       }),
     },
   )
 
   /**
+   * GET /dashboard/emails/trash
+   * Trashed emails view — defined before /:id so the segment doesn't match.
+   */
+  .get(
+    "/emails/trash",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+
+      const { data, total } = await emailService.listTrashedEmailsUnscoped({
+        page,
+        limit,
+      });
+
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
+
+      return (
+        <EmailsTrashPage
+          emails={data}
+          total={total}
+          page={page}
+          limit={limit}
+          retentionDays={config.trash.retentionDays}
+          flash={flash}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/emails/bulk-trash
+   * Bulk soft-delete from the emails list page.
+   */
+  .post(
+    "/emails/bulk-trash",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      const count = await emailService.trashEmailsUnscoped(ids);
+      logger.info("Bulk-trashed emails via dashboard", { count });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails?flash=${encodeURIComponent(`${count} email(s) moved to trash`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/emails/trash/bulk-restore
+   * Bulk-restore from the trash page.
+   */
+  .post(
+    "/emails/trash/bulk-restore",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      let restored = 0;
+      for (const id of ids) {
+        const r = await emailService.restoreEmailUnscoped(id);
+        if (r) restored += 1;
+      }
+      logger.info("Bulk-restored emails via dashboard", { restored });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails/trash?flash=${encodeURIComponent(`${restored} email(s) restored`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/emails/trash/bulk-permanent
+   * Bulk-permanently-delete from the trash page.
+   */
+  .post(
+    "/emails/trash/bulk-permanent",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      let deleted = 0;
+      for (const id of ids) {
+        const r = await emailService.permanentDeleteEmailUnscoped(id);
+        if (r) deleted += 1;
+      }
+      logger.info("Bulk-permanent-deleted emails via dashboard", { deleted });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails/trash?flash=${encodeURIComponent(`${deleted} email(s) deleted forever`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/emails/trash/empty
+   * Empties the email trash entirely.
+   */
+  .post("/emails/trash/empty", async ({ set }) => {
+    const deleted = await emailService.emptyEmailsTrashUnscoped();
+    logger.info("Emptied emails trash via dashboard", { deleted });
+
+    set.status = 302;
+    set.headers["location"] =
+      `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied — ${deleted} email(s) permanently deleted`)}`;
+    return "";
+  })
+
+  /**
+   * POST /dashboard/emails/:id/trash
+   * Move single email to trash from the detail or list page.
+   */
+  .post(
+    "/emails/:id/trash",
+    async ({ params, set }) => {
+      const email = await emailService.trashEmailUnscoped(params.id);
+
+      if (!email) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/emails?flash=${encodeURIComponent("Email not found")}&flashType=error`;
+        return "";
+      }
+
+      logger.info("Email trashed via dashboard", { id: params.id });
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails?flash=${encodeURIComponent("Email moved to trash")}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  /**
+   * POST /dashboard/emails/:id/restore
+   * Restore a single trashed email — redirects back to trash view.
+   */
+  .post(
+    "/emails/:id/restore",
+    async ({ params, set }) => {
+      const email = await emailService.restoreEmailUnscoped(params.id);
+
+      const message = email ? "Email restored" : "Trashed email not found";
+      const type: "success" | "error" = email ? "success" : "error";
+
+      if (email) logger.info("Email restored via dashboard", { id: params.id });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  /**
+   * POST /dashboard/emails/:id/permanent
+   * Permanently delete a single trashed email.
+   */
+  .post(
+    "/emails/:id/permanent",
+    async ({ params, set }) => {
+      const email = await emailService.permanentDeleteEmailUnscoped(params.id);
+
+      const message = email ? "Email deleted forever" : "Trashed email not found";
+      const type: "success" | "error" = email ? "success" : "error";
+
+      if (email)
+        logger.info("Email permanently deleted via dashboard", { id: params.id });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  /**
    * GET /dashboard/emails/:id
-   * Single email detail view.
+   * Single email detail view. Falls back to the trashed copy if the email
+   * is in trash so users can navigate to it from the trash list.
    */
   .get(
     "/emails/:id",
     async ({ params, set }) => {
-      const email = await emailService.getEmailByIdUnscoped(params.id);
+      const live = await emailService.getEmailByIdUnscoped(params.id);
 
-      if (!email) {
-        set.status = 404;
-        return "Email not found";
+      if (live) {
+        return <EmailDetailPage email={live} isTrashed={false} />;
       }
 
-      return <EmailDetailPage email={email} />;
+      const trashed = await emailService.getTrashedEmailByIdUnscoped(params.id);
+      if (trashed) {
+        return <EmailDetailPage email={trashed} isTrashed={true} />;
+      }
+
+      set.status = 404;
+      return "Email not found";
     },
     {
       params: t.Object({
@@ -909,24 +1140,23 @@ export const pagesPlugin = new Elysia({
     async ({ query }) => {
       const page = query.page ? parseInt(query.page, 10) : 1;
       const limit = query.limit ? parseInt(query.limit, 10) : 20;
-      const offset = (page - 1) * limit;
 
-      const [data, [countRow]] = await Promise.all([
-        db
-          .select()
-          .from(inboundEmails)
-          .orderBy(desc(inboundEmails.receivedAt))
-          .limit(limit)
-          .offset(offset),
-        db.select({ count: sql<number>`count(*)::int` }).from(inboundEmails),
-      ]);
+      const { data, total } = await inboundService.listInboundEmails({ page, limit });
+
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
 
       return (
         <InboundPage
           emails={data}
-          total={countRow?.count ?? 0}
+          total={total}
           page={page}
           limit={limit}
+          flash={flash}
         />
       );
     },
@@ -934,24 +1164,203 @@ export const pagesPlugin = new Elysia({
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
       }),
     },
+  )
+
+  /**
+   * GET /dashboard/inbound/trash
+   * Trashed inbound emails — defined before /:id.
+   */
+  .get(
+    "/inbound/trash",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+
+      const { data, total } = await inboundService.listTrashedInboundEmails({
+        page,
+        limit,
+      });
+
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
+
+      return (
+        <InboundTrashPage
+          emails={data}
+          total={total}
+          page={page}
+          limit={limit}
+          retentionDays={config.trash.retentionDays}
+          flash={flash}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /** POST /dashboard/inbound/bulk-trash — bulk soft-delete from list page. */
+  .post(
+    "/inbound/bulk-trash",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      const count = await inboundService.trashInboundEmails(ids);
+      logger.info("Bulk-trashed inbound emails via dashboard", { count });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound?flash=${encodeURIComponent(`${count} email(s) moved to trash`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /** POST /dashboard/inbound/trash/bulk-restore — bulk restore from trash page. */
+  .post(
+    "/inbound/trash/bulk-restore",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      let restored = 0;
+      for (const id of ids) {
+        const r = await inboundService.restoreInboundEmail(id);
+        if (r) restored += 1;
+      }
+      logger.info("Bulk-restored inbound emails via dashboard", { restored });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound/trash?flash=${encodeURIComponent(`${restored} email(s) restored`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /** POST /dashboard/inbound/trash/bulk-permanent — bulk hard-delete from trash page. */
+  .post(
+    "/inbound/trash/bulk-permanent",
+    async ({ body, set }) => {
+      const ids = toIdArray(body.ids);
+      let deleted = 0;
+      for (const id of ids) {
+        const r = await inboundService.permanentDeleteInboundEmail(id);
+        if (r) deleted += 1;
+      }
+      logger.info("Bulk-permanent-deleted inbound emails via dashboard", { deleted });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound/trash?flash=${encodeURIComponent(`${deleted} email(s) deleted forever`)}`;
+      return "";
+    },
+    {
+      body: t.Object({
+        ids: t.Union([t.Array(t.String()), t.String()]),
+      }),
+    },
+  )
+
+  /** POST /dashboard/inbound/trash/empty — empty inbound trash entirely. */
+  .post("/inbound/trash/empty", async ({ set }) => {
+    const deleted = await inboundService.emptyInboundTrash();
+    logger.info("Emptied inbound trash via dashboard", { deleted });
+
+    set.status = 302;
+    set.headers["location"] =
+      `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied — ${deleted} email(s) permanently deleted`)}`;
+    return "";
+  })
+
+  /** POST /dashboard/inbound/:id/trash — move single inbound to trash. */
+  .post(
+    "/inbound/:id/trash",
+    async ({ params, set }) => {
+      const email = await inboundService.trashInboundEmail(params.id);
+
+      if (!email) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/inbound?flash=${encodeURIComponent("Inbound email not found")}&flashType=error`;
+        return "";
+      }
+
+      logger.info("Inbound email trashed via dashboard", { id: params.id });
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound?flash=${encodeURIComponent("Email moved to trash")}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  /** POST /dashboard/inbound/:id/restore — restore single trashed inbound. */
+  .post(
+    "/inbound/:id/restore",
+    async ({ params, set }) => {
+      const email = await inboundService.restoreInboundEmail(params.id);
+      const message = email ? "Email restored" : "Trashed email not found";
+      const type: "success" | "error" = email ? "success" : "error";
+      if (email) logger.info("Inbound restored via dashboard", { id: params.id });
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
+  )
+
+  /** POST /dashboard/inbound/:id/permanent — hard-delete single trashed inbound. */
+  .post(
+    "/inbound/:id/permanent",
+    async ({ params, set }) => {
+      const email = await inboundService.permanentDeleteInboundEmail(params.id);
+      const message = email ? "Email deleted forever" : "Trashed email not found";
+      const type: "success" | "error" = email ? "success" : "error";
+      if (email) {
+        logger.info("Inbound permanently deleted via dashboard", { id: params.id });
+      }
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+      return "";
+    },
+    { params: t.Object({ id: t.String() }) },
   )
 
   .get(
     "/inbound/:id",
     async ({ params, set }) => {
-      const [email] = await db
-        .select()
-        .from(inboundEmails)
-        .where(eq(inboundEmails.id, params.id));
+      const live = await inboundService.getInboundEmailById(params.id);
+      if (live) return <InboundDetailPage email={live} isTrashed={false} />;
 
-      if (!email) {
-        set.status = 404;
-        return "Inbound email not found";
-      }
+      const trashed = await inboundService.getTrashedInboundEmailById(params.id);
+      if (trashed) return <InboundDetailPage email={trashed} isTrashed={true} />;
 
-      return <InboundDetailPage email={email} />;
+      set.status = 404;
+      return "Inbound email not found";
     },
     {
       params: t.Object({ id: t.String() }),

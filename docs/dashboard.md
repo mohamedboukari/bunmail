@@ -21,21 +21,23 @@ If `DASHBOARD_PASSWORD` is not set, all dashboard routes show a "Dashboard disab
 
 ## Pages
 
-| Route                            | Description                           |
-|----------------------------------|---------------------------------------|
-| GET /dashboard/login             | Login form (standalone, no nav)       |
-| GET /dashboard                   | Stats overview (cards grid)           |
-| GET /dashboard/send              | Compose & send emails from dashboard  |
-| GET /dashboard/emails            | Email logs with status filters        |
-| GET /dashboard/emails/:id        | Single email detail + preview         |
-| GET /dashboard/api-keys          | API keys list + create form           |
-| GET /dashboard/domains           | Domains list + add form               |
-| GET /dashboard/domains/:id       | Domain detail + DNS status            |
-| GET /dashboard/templates         | Templates list + create form          |
-| GET /dashboard/templates/:id     | Template detail + edit form           |
-| GET /dashboard/webhooks          | Webhooks list + create form           |
-| GET /dashboard/inbound           | Inbound emails list (paginated)       |
-| GET /dashboard/inbound/:id       | Inbound email detail + HTML preview   |
+| Route                            | Description                                                       |
+|----------------------------------|-------------------------------------------------------------------|
+| GET /dashboard/login             | Login form (standalone, no nav)                                   |
+| GET /dashboard                   | Stats overview — outbound, inbound, configuration sections        |
+| GET /dashboard/send              | Compose & send emails from dashboard                              |
+| GET /dashboard/emails            | Email logs with status filters, bulk-select, per-row trash        |
+| GET /dashboard/emails/trash      | Trashed emails — bulk Restore / Delete-forever / Empty trash      |
+| GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
+| GET /dashboard/api-keys          | API keys list + create form                                       |
+| GET /dashboard/domains           | Domains list + add form                                           |
+| GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
+| GET /dashboard/templates         | Templates list + create form                                      |
+| GET /dashboard/templates/:id     | Template detail + edit form                                       |
+| GET /dashboard/webhooks          | Webhooks list + create form                                       |
+| GET /dashboard/inbound           | Inbound emails list — bulk-select, per-row trash                  |
+| GET /dashboard/inbound/trash     | Trashed inbound — bulk Restore / Delete-forever / Empty trash     |
+| GET /dashboard/inbound/:id       | Inbound email detail + HTML preview                               |
 
 ## Design System
 
@@ -67,8 +69,10 @@ src/pages/
 │   ├── templates.tsx         ← Templates list + create
 │   ├── template-detail.tsx   ← Template edit form
 │   ├── webhooks.tsx          ← Webhooks list + create
-│   ├── inbound.tsx           ← Inbound emails list
-│   └── inbound-detail.tsx    ← Inbound email detail + preview
+│   ├── inbound.tsx           ← Inbound emails list (bulk-select + trash)
+│   ├── inbound-detail.tsx    ← Inbound email detail + preview
+│   ├── inbound-trash.tsx     ← Trashed inbound (Restore / Delete-forever / Empty)
+│   └── emails-trash.tsx      ← Trashed outbound (Restore / Delete-forever / Empty)
 └── components/
     ├── stats-card.tsx        ← Metric display card
     ├── status-badge.tsx      ← Status + verification badges
@@ -79,12 +83,14 @@ src/pages/
 
 ## Form Actions
 
-Dashboard uses standard HTML forms with POST actions (no JavaScript required):
+Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash message in query params. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
+
+**General**
 - Send email → `POST /dashboard/send`
 - Create API key → `POST /dashboard/api-keys`
 - Revoke API key → `POST /dashboard/api-keys/:id/revoke`
 - Add domain → `POST /dashboard/domains`
-- Delete domain → `POST /dashboard/domains/:id/delete`
+- Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)
 - Verify domain DNS → `POST /dashboard/domains/:id/verify`
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
@@ -92,4 +98,13 @@ Dashboard uses standard HTML forms with POST actions (no JavaScript required):
 - Create webhook → `POST /dashboard/webhooks`
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
 
-After each action, the user is redirected back with a flash message in query params.
+**Email trash**
+- Move email to trash → `POST /dashboard/emails/:id/trash`
+- Bulk move to trash → `POST /dashboard/emails/bulk-trash` (form fields: `ids`)
+- Restore → `POST /dashboard/emails/:id/restore`
+- Permanently delete → `POST /dashboard/emails/:id/permanent`
+- Bulk restore → `POST /dashboard/emails/trash/bulk-restore` (uses `formaction` from the trash bar)
+- Bulk permanent delete → `POST /dashboard/emails/trash/bulk-permanent`
+- Empty trash → `POST /dashboard/emails/trash/empty`
+
+**Inbound trash** — same shape under `/dashboard/inbound/...`.

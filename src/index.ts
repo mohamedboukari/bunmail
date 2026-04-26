@@ -14,6 +14,7 @@ import { faviconPlugin } from "./pages/favicon.ts";
 import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
+import * as trashPurge from "./modules/trash/services/purge.service.ts";
 
 /**
  * Main Elysia application.
@@ -163,6 +164,12 @@ if (config.smtp.enabled) {
 }
 
 /**
+ * Start the trash purge — periodically removes soft-deleted emails
+ * older than TRASH_RETENTION_DAYS.
+ */
+trashPurge.start();
+
+/**
  * Graceful shutdown handler.
  * Stops the queue processor first (no new emails picked up),
  * then stops the HTTP server.
@@ -171,6 +178,7 @@ function shutdown() {
   logger.info("Shutting down...");
   queueService.stop();
   smtpReceiver.stop();
+  trashPurge.stop();
   app.stop();
   process.exit(0);
 }

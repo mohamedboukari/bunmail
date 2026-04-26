@@ -147,6 +147,7 @@ When adding a data model:
 - Keep docs concise: update only what changed.
 - Every module should have its own `docs/<module-name>.md` documenting schema, types, service methods, and module layout.
 - Every module's endpoints must be listed in `docs/api.md`.
+- **Update `CHANGELOG.md` on every release.** When `bumpp` cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
 
 ## Collaboration
 

@@ -33,6 +33,17 @@ export const inboundEmails = pgTable(
 
     /** When this email was received */
     receivedAt: timestamp("received_at").notNull().defaultNow(),
+
+    /**
+     * Soft-delete marker — when set, the inbound email is in "trash".
+     * The trash purge service permanently removes rows where
+     * `deleted_at < NOW() - TRASH_RETENTION_DAYS`.
+     */
+    deletedAt: timestamp("deleted_at"),
   },
-  (table) => [index("idx_inbound_received_at").on(table.receivedAt)],
+  (table) => [
+    index("idx_inbound_received_at").on(table.receivedAt),
+    /** Index for trash list and purge queries */
+    index("idx_inbound_deleted_at").on(table.deletedAt),
+  ],
 );

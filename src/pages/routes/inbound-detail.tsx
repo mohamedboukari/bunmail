@@ -8,26 +8,86 @@ import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts"
  */
 interface InboundDetailPageProps {
   email: InboundEmail;
+  /** When true, the email is in trash — show Restore + Delete forever instead. */
+  isTrashed: boolean;
 }
 
 /**
- * Inbound email detail page — shows full metadata, HTML preview, and text content.
+ * Inbound email detail page — shows full metadata, HTML preview, text content,
+ * and a destructive action button that varies based on trash state.
  */
-export function InboundDetailPage({ email }: InboundDetailPageProps) {
+export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) {
+  const backHref = isTrashed ? "/dashboard/inbound/trash" : "/dashboard/inbound";
+  const backLabel = isTrashed ? "Back to trash" : "Back to inbound";
+
   return (
     <BaseLayout title="Inbound Email" activeNav="inbound">
-      {/* Back link */}
       <a
-        href="/dashboard/inbound"
+        href={backHref}
         class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 inline-flex items-center gap-1 mb-4"
       >
         <BackArrowIcon />
-        Back to inbound
+        {backLabel}
       </a>
 
-      <h1 class="text-xl font-semibold mb-6" safe>
-        {email.subject ?? "(No subject)"}
-      </h1>
+      <div class="flex items-center justify-between gap-3 mb-6">
+        <div class="flex items-center gap-3 min-w-0">
+          <h1 class="text-xl font-semibold truncate" safe>
+            {email.subject ?? "(No subject)"}
+          </h1>
+          {isTrashed && (
+            <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+              In trash
+            </span>
+          )}
+        </div>
+
+        <div class="flex items-center gap-2 flex-shrink-0">
+          {isTrashed ? (
+            <>
+              <form
+                method="POST"
+                action={`/dashboard/inbound/${email.id}/restore`}
+                class="inline"
+              >
+                <button
+                  type="submit"
+                  class="px-3 py-1.5 rounded-md bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-200 dark:text-gray-900 text-sm font-medium"
+                >
+                  Restore
+                </button>
+              </form>
+              <form
+                method="POST"
+                action={`/dashboard/inbound/${email.id}/permanent`}
+                class="inline"
+                onsubmit="return confirm('Permanently delete this email? This cannot be undone.')"
+              >
+                <button
+                  type="submit"
+                  class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+                >
+                  Delete forever
+                </button>
+              </form>
+            </>
+          ) : (
+            <form
+              method="POST"
+              action={`/dashboard/inbound/${email.id}/trash`}
+              class="inline"
+              onsubmit="return confirm('Move this email to trash?')"
+            >
+              <button
+                type="submit"
+                class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+              >
+                Move to trash
+              </button>
+            </form>
+          )}
+        </div>
+      </div>
 
       {/* Details card */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">

@@ -3,105 +3,103 @@ import { StatusBadge } from "../components/status-badge.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { BackArrowIcon } from "../assets/icons.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 
-/**
- * Props for the emails list page.
- */
-interface EmailsPageProps {
-  /** The list of email rows to display */
+interface EmailsTrashPageProps {
   emails: Email[];
-  /** Total count across all pages (for pagination) */
   total: number;
-  /** Current page number */
   page: number;
-  /** Items per page */
   limit: number;
-  /** Currently active status filter (undefined = "all") */
-  status?: string;
-  /** Optional flash message shown after redirect (e.g. "Email moved to trash") */
+  retentionDays: number;
   flash?: { message: string; type: "success" | "error" };
 }
 
 /**
- * Emails list page — shows a filterable, bulk-selectable table of emails.
- * Includes status filter tabs, a Trash link, per-row checkboxes, a bulk
- * "Move to trash" action bar, and pagination.
+ * Trashed emails page — shows soft-deleted emails with bulk-select Restore /
+ * Delete-forever / Empty-trash actions.
+ *
+ * The same form wraps the table; two submit buttons inside the bulk bar use
+ * `formaction` to send the selected ids to either the restore or permanent
+ * endpoint without needing client-side state for the action.
  */
-export function EmailsPage({
+export function EmailsTrashPage({
   emails,
   total,
   page,
   limit,
-  status,
+  retentionDays,
   flash,
-}: EmailsPageProps) {
-  /** Available status filter tabs */
-  const filters = [
-    { label: "All", value: "" },
-    { label: "Queued", value: "queued" },
-    { label: "Sending", value: "sending" },
-    { label: "Sent", value: "sent" },
-    { label: "Failed", value: "failed" },
-  ];
-
+}: EmailsTrashPageProps) {
   return (
-    <BaseLayout title="Emails" activeNav="emails">
-      <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-semibold">Emails</h1>
-        <a
-          href="/dashboard/emails/trash"
-          class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-        >
-          Trash →
-        </a>
+    <BaseLayout title="Trashed Emails" activeNav="emails">
+      <a
+        href="/dashboard/emails"
+        class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 inline-flex items-center gap-1 mb-4"
+      >
+        <BackArrowIcon />
+        Back to emails
+      </a>
+
+      <div class="flex items-center justify-between mb-2">
+        <h1 class="text-xl font-semibold">Trashed Emails</h1>
+        {emails.length > 0 && (
+          <form
+            method="POST"
+            action="/dashboard/emails/trash/empty"
+            onsubmit="return confirm('Permanently delete every trashed email? This cannot be undone.')"
+          >
+            <button
+              type="submit"
+              class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+            >
+              Empty trash
+            </button>
+          </form>
+        )}
       </div>
+      <p class="text-xs text-gray-500 dark:text-gray-400 mb-6">
+        Trashed emails are permanently deleted after {retentionDays} day
+        {retentionDays === 1 ? "" : "s"}.
+      </p>
 
       {flash && <FlashMessage message={flash.message} type={flash.type} />}
 
-      {/* Status filter tabs */}
-      <div class="flex gap-1 mb-4">
-        {filters.map((filter) => {
-          const isActive = (status ?? "") === filter.value;
-          return (
-            <a
-              href={`/dashboard/emails${filter.value ? `?status=${filter.value}` : ""}`}
-              class={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                isActive
-                  ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
-                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-              }`}
-            >
-              {filter.label}
-            </a>
-          );
-        })}
-      </div>
-
       {emails.length === 0 ? (
-        <EmptyState message="No emails found. Send your first email via the API." />
+        <EmptyState message="Trash is empty." />
       ) : (
         <>
-          {/* Form wraps the table so the action bar can submit selected ids */}
-          <form method="POST" action="/dashboard/emails/bulk-trash" id="emails-bulk-form">
-            {/* Bulk action bar — visible only when at least one row is checked */}
+          <form
+            id="emails-trash-form"
+            method="POST"
+            action="/dashboard/emails/trash/bulk-restore"
+          >
             <div
-              id="emails-bulk-bar"
+              id="emails-trash-bar"
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
             >
               <span>
-                <span id="emails-bulk-count">0</span> selected
+                <span id="emails-trash-count">0</span> selected
               </span>
-              <button
-                type="submit"
-                class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-                onclick="return confirm('Move selected emails to trash?')"
-              >
-                Move to trash
-              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  type="submit"
+                  formaction="/dashboard/emails/trash/bulk-restore"
+                  class="px-3 py-1.5 rounded-md bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-200 dark:text-gray-900 text-sm font-medium"
+                >
+                  Restore
+                </button>
+                <button
+                  type="submit"
+                  formaction="/dashboard/emails/trash/bulk-permanent"
+                  class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+                  onclick="return confirm('Permanently delete selected emails? This cannot be undone.')"
+                >
+                  Delete forever
+                </button>
+              </div>
             </div>
 
-            {/* Emails table */}
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
               <table class="w-full text-sm">
                 <thead>
@@ -109,7 +107,7 @@ export function EmailsPage({
                     <th class="px-4 py-3 w-10">
                       <input
                         type="checkbox"
-                        id="emails-select-all"
+                        id="emails-trash-select-all"
                         class="h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                       />
                     </th>
@@ -126,10 +124,7 @@ export function EmailsPage({
                       Subject
                     </th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                      Created
-                    </th>
-                    <th class="text-right px-4 py-3 font-medium text-gray-500 dark:text-gray-400 w-24">
-                      Actions
+                      Trashed
                     </th>
                   </tr>
                 </thead>
@@ -141,7 +136,7 @@ export function EmailsPage({
                           type="checkbox"
                           name="ids"
                           value={email.id}
-                          class="emails-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
+                          class="emails-trash-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                         />
                       </td>
                       <td class="px-4 py-3">
@@ -169,18 +164,7 @@ export function EmailsPage({
                         {email.subject}
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {email.createdAt.toLocaleDateString()}
-                      </td>
-                      <td class="px-4 py-3 text-right">
-                        {/* Per-row trash submits its own one-id form */}
-                        <button
-                          type="submit"
-                          form={`emails-trash-${email.id}`}
-                          class="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                          onclick="return confirm('Move this email to trash?')"
-                        >
-                          Trash
-                        </button>
+                        {email.deletedAt?.toLocaleDateString() ?? "—"}
                       </td>
                     </tr>
                   ))}
@@ -189,36 +173,21 @@ export function EmailsPage({
             </div>
           </form>
 
-          {/* Hidden one-id forms for the per-row "Trash" buttons.
-              Kept outside the bulk form so a per-row click doesn't sweep up
-              unrelated checkboxes. */}
-          {emails.map((email) => (
-            <form
-              method="POST"
-              action={`/dashboard/emails/${email.id}/trash`}
-              id={`emails-trash-${email.id}`}
-              class="hidden"
-            />
-          ))}
-
-          {/* Pagination */}
           <Pagination
             page={page}
             limit={limit}
             total={total}
-            baseUrl="/dashboard/emails"
-            extraParams={status ? `status=${status}` : undefined}
+            baseUrl="/dashboard/emails/trash"
           />
 
-          {/* Selection-tracking script — toggles bulk bar and select-all checkbox */}
           <script>
             {`
               (function() {
-                var selectAll = document.getElementById('emails-select-all');
-                var bar = document.getElementById('emails-bulk-bar');
-                var count = document.getElementById('emails-bulk-count');
+                var selectAll = document.getElementById('emails-trash-select-all');
+                var bar = document.getElementById('emails-trash-bar');
+                var count = document.getElementById('emails-trash-count');
                 var rowChecks = function() {
-                  return Array.from(document.querySelectorAll('.emails-row-check'));
+                  return Array.from(document.querySelectorAll('.emails-trash-row-check'));
                 };
                 function refresh() {
                   var checked = rowChecks().filter(function(c) { return c.checked; });
