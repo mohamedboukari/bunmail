@@ -122,3 +122,56 @@ describe("rate-limit algorithm", () => {
     expect(result).toBeNull();
   });
 });
+
+/**
+ * Mirror of `pruneExpiredEntries` in `src/middleware/rate-limit.ts`.
+ * Kept here as a pure helper so unit tests don't pull in the real
+ * config/logger graph (which requires DATABASE_URL at import time).
+ */
+function prune(map: Map<string, RateLimitEntry>, now: number): number {
+  let removed = 0;
+  for (const [k, entry] of map) {
+    if (now - entry.windowStart >= WINDOW_MS) {
+      map.delete(k);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+describe("rate-limit cleanup", () => {
+  test("removes expired entries", () => {
+    const map = new Map<string, RateLimitEntry>();
+    const start = Date.now();
+
+    /** Mix of expired and live entries */
+    map.set("k_expired_1", { count: 5, windowStart: start });
+    map.set("k_expired_2", { count: 12, windowStart: start });
+    map.set("k_live", { count: 1, windowStart: start + WINDOW_MS });
+
+    const removed = prune(map, start + WINDOW_MS + 1);
+
+    expect(removed).toBe(2);
+    expect(map.has("k_expired_1")).toBe(false);
+    expect(map.has("k_expired_2")).toBe(false);
+    expect(map.has("k_live")).toBe(true);
+  });
+
+  test("keeps all entries when nothing has expired", () => {
+    const map = new Map<string, RateLimitEntry>();
+    const now = Date.now();
+    map.set("a", { count: 1, windowStart: now });
+    map.set("b", { count: 1, windowStart: now });
+
+    const removed = prune(map, now);
+
+    expect(removed).toBe(0);
+    expect(map.size).toBe(2);
+  });
+
+  test("handles an empty map without throwing", () => {
+    const map = new Map<string, RateLimitEntry>();
+    const removed = prune(map, Date.now());
+    expect(removed).toBe(0);
+  });
+});
