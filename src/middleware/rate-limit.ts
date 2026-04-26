@@ -7,6 +7,9 @@ const MAX_REQUESTS = 100;
 /** Window duration in milliseconds (60 seconds) */
 const WINDOW_MS = 60_000;
 
+/** How often the cleanup loop sweeps expired entries from the map. */
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
 /**
  * Tracks request counts per API key within a sliding time window.
  * Key: API key ID, Value: request count and window start timestamp.
@@ -21,7 +24,50 @@ interface RateLimitEntry {
   windowStart: number;
 }
 
-const rateLimitMap = new Map<string, RateLimitEntry>();
+export const rateLimitMap = new Map<string, RateLimitEntry>();
+
+/** Reference to the periodic cleanup timer; null when not running. */
+let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Removes entries whose window has fully expired.
+ * Exported for unit testing — the running server uses the interval below.
+ */
+export function pruneExpiredEntries(now: number = Date.now()): number {
+  let removed = 0;
+  for (const [key, entry] of rateLimitMap) {
+    if (now - entry.windowStart >= WINDOW_MS) {
+      rateLimitMap.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Starts a periodic sweep that drops expired entries from the in-memory
+ * rate-limit map. Without this, distinct API keys arriving over a long
+ * lifetime would grow the map unbounded.
+ *
+ * Idempotent — calling twice is a no-op while the interval is running.
+ * Mirrors the SMTP receiver's rate-limit cleanup pattern.
+ */
+export function startRateLimitCleanup(): void {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(() => pruneExpiredEntries(), CLEANUP_INTERVAL_MS);
+  logger.debug("HTTP rate-limit cleanup started", {
+    intervalMs: CLEANUP_INTERVAL_MS,
+  });
+}
+
+/** Stops the periodic sweep — called from the graceful shutdown handler. */
+export function stopRateLimitCleanup(): void {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+    logger.debug("HTTP rate-limit cleanup stopped");
+  }
+}
 
 /**
  * Rate-limit middleware — enforces per-API-key request limits.

@@ -15,6 +15,7 @@ import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
+import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
 
 /**
  * Main Elysia application.
@@ -170,6 +171,12 @@ if (config.smtp.enabled) {
 trashPurge.start();
 
 /**
+ * Start the periodic sweep that drops expired entries from the HTTP
+ * rate-limit map (prevents unbounded growth under many distinct keys).
+ */
+startRateLimitCleanup();
+
+/**
  * Graceful shutdown handler.
  * Stops the queue processor first (no new emails picked up),
  * then stops the HTTP server.
@@ -179,6 +186,7 @@ function shutdown() {
   queueService.stop();
   smtpReceiver.stop();
   trashPurge.stop();
+  stopRateLimitCleanup();
   app.stop();
   process.exit(0);
 }
