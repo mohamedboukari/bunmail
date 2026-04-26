@@ -22,6 +22,25 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+/** Allowed log-level values — must match the logger implementation. */
+const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+/**
+ * Reads `LOG_LEVEL` and validates it against the allowed union.
+ * Throws at startup with a clear message on a typo so the operator
+ * notices immediately rather than silently getting `info`-equivalent behaviour.
+ */
+function readLogLevel(): LogLevel {
+  const raw = optionalEnv("LOG_LEVEL", "info");
+  if (!(LOG_LEVELS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `[config] Invalid LOG_LEVEL "${raw}" — must be one of: ${LOG_LEVELS.join(", ")}`,
+    );
+  }
+  return raw as LogLevel;
+}
+
 /**
  * Central application configuration.
  *
@@ -83,8 +102,8 @@ export const config = {
     sessionSecret: optionalEnv("SESSION_SECRET", randomUUID()),
   },
 
-  /** Log level: debug | info | warn | error */
-  logLevel: optionalEnv("LOG_LEVEL", "info"),
+  /** Log level: debug | info | warn | error — validated at startup */
+  logLevel: readLogLevel(),
 
   /** Trash / soft-delete retention */
   trash: {
