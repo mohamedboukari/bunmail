@@ -311,41 +311,24 @@ export function LandingPage() {
           {/* ─── Quick Start (3 steps) ─── */}
           <section id="quick-start" class="mb-20">
             <h2 class="text-lg font-semibold text-center mb-8">Quick Start</h2>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-              {/* Step 1 */}
-              <div class="text-center">
-                <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-bold mb-3">
-                  1
-                </div>
-                <h3 class="font-medium text-sm mb-2">Clone the repo</h3>
-                <div class="bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3">
-                  <code class="text-xs text-gray-100">
-                    git clone https://github.com/mohamedboukari/bunmail.git
-                  </code>
-                </div>
-              </div>
-
-              {/* Step 2 */}
-              <div class="text-center">
-                <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-bold mb-3">
-                  2
-                </div>
-                <h3 class="font-medium text-sm mb-2">Configure environment</h3>
-                <div class="bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3">
-                  <code class="text-xs text-gray-100">cp .env.example .env</code>
-                </div>
-              </div>
-
-              {/* Step 3 */}
-              <div class="text-center">
-                <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-bold mb-3">
-                  3
-                </div>
-                <h3 class="font-medium text-sm mb-2">Start the server</h3>
-                <div class="bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3">
-                  <code class="text-xs text-gray-100">bun install && bun run dev</code>
-                </div>
-              </div>
+            {/* `items-stretch` + `h-full` on each step keeps cards equal-height
+                regardless of how long any single command is. */}
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 items-stretch">
+              <QuickStartStep
+                index={1}
+                title="Clone the repo"
+                command="git clone https://github.com/mohamedboukari/bunmail.git"
+              />
+              <QuickStartStep
+                index={2}
+                title="Configure environment"
+                command="cp .env.example .env"
+              />
+              <QuickStartStep
+                index={3}
+                title="Start the server"
+                command="bun install && bun run dev"
+              />
             </div>
           </section>
         </main>
@@ -366,5 +349,41 @@ export function LandingPage() {
         </footer>
       </body>
     </html>
+  );
+}
+
+/**
+ * One step in the Quick Start grid.
+ *
+ * Card uses flex column with `h-full` so all three steps stretch to the
+ * same height regardless of which command is longest. The code box gets
+ * `whitespace-nowrap overflow-x-auto` so a long command (the git clone URL)
+ * scrolls instead of wrapping — keeping all three cards visually aligned
+ * at one line of code.
+ */
+function QuickStartStep({
+  index,
+  title,
+  command,
+}: {
+  index: number;
+  title: string;
+  command: string;
+}) {
+  return (
+    <div class="flex flex-col items-center text-center h-full">
+      <div class="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-bold mb-3">
+        {index}
+      </div>
+      <h3 class="font-medium text-sm mb-2" safe>
+        {title}
+      </h3>
+      {/* Code block — fixed-height single line, horizontally scrollable on overflow */}
+      <div class="mt-auto w-full bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3 overflow-x-auto">
+        <code class="text-xs text-gray-100 whitespace-nowrap block" safe>
+          {command}
+        </code>
+      </div>
+    </div>
   );
 }

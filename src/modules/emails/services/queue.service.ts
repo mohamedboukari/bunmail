@@ -1,4 +1,4 @@
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, isNull } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
@@ -70,7 +70,7 @@ async function recoverInterrupted(): Promise<void> {
   const result = await db
     .update(emails)
     .set({ status: "queued", updatedAt: new Date() })
-    .where(eq(emails.status, "sending"))
+    .where(and(eq(emails.status, "sending"), isNull(emails.deletedAt)))
     .returning({ id: emails.id });
 
   if (result.length > 0) {
@@ -97,7 +97,7 @@ async function processQueue(): Promise<void> {
   const batch = await db
     .select()
     .from(emails)
-    .where(eq(emails.status, "queued"))
+    .where(and(eq(emails.status, "queued"), isNull(emails.deletedAt)))
     .orderBy(asc(emails.createdAt))
     .limit(BATCH_SIZE);
 

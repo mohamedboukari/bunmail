@@ -79,9 +79,12 @@ SESSION_SECRET=run-openssl-rand-hex-32-to-generate
 SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
+TRASH_RETENTION_DAYS=7
 ```
 
 > Generate a session secret: `openssl rand -hex 32`
+
+> `TRASH_RETENTION_DAYS` — how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
 ## 2. DNS Records
 

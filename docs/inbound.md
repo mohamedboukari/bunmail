@@ -6,9 +6,10 @@ Receives emails via a built-in SMTP server and stores them in the database.
 
 ```
 src/modules/inbound/
-├── inbound.plugin.ts                ← Elysia plugin (read-only API)
+├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
 ├── services/
-│   └── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
 ├── models/
 │   └── inbound-email.schema.ts      ← Drizzle pgTable definition
 ├── serializations/
@@ -31,8 +32,11 @@ Table: `inbound_emails`
 | text_content | text           | nullable                   |
 | raw_message  | text           | nullable (full RFC 822)    |
 | received_at  | timestamp      | NOT NULL, default `now()`  |
+| deleted_at   | timestamp      | nullable                   |
 
-**Indexes:** `idx_inbound_received_at`
+`deleted_at` is the soft-delete marker — set when an inbound email is moved to trash. Auto-purged after `TRASH_RETENTION_DAYS`.
+
+**Indexes:** `idx_inbound_received_at`, `idx_inbound_deleted_at`
 
 ## Configuration
 
@@ -90,17 +94,47 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 
 ## Service Methods
 
+### smtp-receiver.service.ts
+
 #### `start(): void`
 Starts the SMTP server on the configured port.
 
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
 
+### inbound.service.ts
+
+All read methods exclude trashed rows by default; trash methods explicitly target trashed rows.
+
+#### `listInboundEmails(filters)` / `getInboundEmailById(id)`
+Live (non-trashed) reads, used by the API and dashboard.
+
+#### `trashInboundEmail(id)` / `trashInboundEmails(ids[])`
+Soft-delete single or bulk. Idempotent.
+
+#### `listTrashedInboundEmails(filters)` / `getTrashedInboundEmailById(id)`
+Trash-only reads.
+
+#### `restoreInboundEmail(id)`
+Clears `deleted_at`. 404 if not currently trashed.
+
+#### `permanentDeleteInboundEmail(id)`
+Hard-delete a trashed row.
+
+#### `emptyInboundTrash()`
+Permanently deletes every trashed inbound email. Returns count.
+
 ## API Endpoints
 
 All routes require Bearer token auth and are rate-limited.
 
-| Method | Path                    | Description               |
-|--------|-------------------------|---------------------------|
-| GET    | /api/v1/inbound         | List received emails      |
-| GET    | /api/v1/inbound/:id     | Get received email by ID  |
+| Method | Path                                    | Description                           |
+|--------|-----------------------------------------|---------------------------------------|
+| GET    | `/api/v1/inbound`                       | List received emails (excludes trash) |
+| GET    | `/api/v1/inbound/trash`                 | List trashed inbound                  |
+| GET    | `/api/v1/inbound/:id`                   | Get inbound email by ID               |
+| DELETE | `/api/v1/inbound/:id`                   | Move to trash                         |
+| POST   | `/api/v1/inbound/bulk-delete`           | Bulk move to trash (`{ids: []}`)      |
+| POST   | `/api/v1/inbound/:id/restore`           | Restore from trash                    |
+| DELETE | `/api/v1/inbound/:id/permanent`         | Permanently delete a trashed row      |
+| POST   | `/api/v1/inbound/trash/empty`           | Empty inbound trash                   |

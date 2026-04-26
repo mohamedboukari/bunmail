@@ -1,62 +1,97 @@
 import { BaseLayout } from "../layouts/base.tsx";
-import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
+import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
 
-/**
- * Props for the inbound emails list page.
- */
-interface InboundPageProps {
+interface InboundTrashPageProps {
   emails: InboundEmail[];
   total: number;
   page: number;
   limit: number;
+  retentionDays: number;
   flash?: { message: string; type: "success" | "error" };
 }
 
 /**
- * Inbound emails list page — table of received emails with bulk-select trash
- * action, per-row trash button, Trash link, and pagination.
+ * Trashed inbound emails page — bulk-select Restore / Delete-forever / Empty.
  */
-export function InboundPage({ emails, total, page, limit, flash }: InboundPageProps) {
+export function InboundTrashPage({
+  emails,
+  total,
+  page,
+  limit,
+  retentionDays,
+  flash,
+}: InboundTrashPageProps) {
   return (
-    <BaseLayout title="Inbound Emails" activeNav="inbound">
-      <div class="flex items-center justify-between mb-6">
-        <h1 class="text-xl font-semibold">Inbound Emails</h1>
-        <a
-          href="/dashboard/inbound/trash"
-          class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-        >
-          Trash →
-        </a>
+    <BaseLayout title="Trashed Inbound" activeNav="inbound">
+      <a
+        href="/dashboard/inbound"
+        class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 inline-flex items-center gap-1 mb-4"
+      >
+        <BackArrowIcon />
+        Back to inbound
+      </a>
+
+      <div class="flex items-center justify-between mb-2">
+        <h1 class="text-xl font-semibold">Trashed Inbound</h1>
+        {emails.length > 0 && (
+          <form
+            method="POST"
+            action="/dashboard/inbound/trash/empty"
+            onsubmit="return confirm('Permanently delete every trashed inbound email? This cannot be undone.')"
+          >
+            <button
+              type="submit"
+              class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+            >
+              Empty trash
+            </button>
+          </form>
+        )}
       </div>
+      <p class="text-xs text-gray-500 dark:text-gray-400 mb-6">
+        Trashed emails are permanently deleted after {retentionDays} day
+        {retentionDays === 1 ? "" : "s"}.
+      </p>
 
       {flash && <FlashMessage message={flash.message} type={flash.type} />}
 
       {emails.length === 0 ? (
-        <EmptyState message="No inbound emails yet. Emails sent to your configured addresses will appear here." />
+        <EmptyState message="Trash is empty." />
       ) : (
         <>
           <form
+            id="inbound-trash-form"
             method="POST"
-            action="/dashboard/inbound/bulk-trash"
-            id="inbound-bulk-form"
+            action="/dashboard/inbound/trash/bulk-restore"
           >
             <div
-              id="inbound-bulk-bar"
+              id="inbound-trash-bar"
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
             >
               <span>
-                <span id="inbound-bulk-count">0</span> selected
+                <span id="inbound-trash-count">0</span> selected
               </span>
-              <button
-                type="submit"
-                class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-                onclick="return confirm('Move selected inbound emails to trash?')"
-              >
-                Move to trash
-              </button>
+              <div class="flex items-center gap-2">
+                <button
+                  type="submit"
+                  formaction="/dashboard/inbound/trash/bulk-restore"
+                  class="px-3 py-1.5 rounded-md bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-200 dark:text-gray-900 text-sm font-medium"
+                >
+                  Restore
+                </button>
+                <button
+                  type="submit"
+                  formaction="/dashboard/inbound/trash/bulk-permanent"
+                  class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+                  onclick="return confirm('Permanently delete selected emails? This cannot be undone.')"
+                >
+                  Delete forever
+                </button>
+              </div>
             </div>
 
             <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
@@ -66,7 +101,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                     <th class="px-4 py-3 w-10">
                       <input
                         type="checkbox"
-                        id="inbound-select-all"
+                        id="inbound-trash-select-all"
                         class="h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                       />
                     </th>
@@ -80,10 +115,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                       Subject
                     </th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
-                      Received At
-                    </th>
-                    <th class="text-right px-4 py-3 font-medium text-gray-500 dark:text-gray-400 w-24">
-                      Actions
+                      Trashed
                     </th>
                   </tr>
                 </thead>
@@ -95,7 +127,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                           type="checkbox"
                           name="ids"
                           value={email.id}
-                          class="inbound-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
+                          class="inbound-trash-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                         />
                       </td>
                       <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100 truncate max-w-[150px]">
@@ -120,17 +152,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                         {email.subject}
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {email.receivedAt.toLocaleDateString()}
-                      </td>
-                      <td class="px-4 py-3 text-right">
-                        <button
-                          type="submit"
-                          form={`inbound-trash-${email.id}`}
-                          class="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                          onclick="return confirm('Move this email to trash?')"
-                        >
-                          Trash
-                        </button>
+                        {email.deletedAt?.toLocaleDateString() ?? "—"}
                       </td>
                     </tr>
                   ))}
@@ -139,31 +161,21 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
             </div>
           </form>
 
-          {/* Hidden one-id forms for per-row "Trash" buttons */}
-          {emails.map((email) => (
-            <form
-              method="POST"
-              action={`/dashboard/inbound/${email.id}/trash`}
-              id={`inbound-trash-${email.id}`}
-              class="hidden"
-            />
-          ))}
-
           <Pagination
             page={page}
             limit={limit}
             total={total}
-            baseUrl="/dashboard/inbound"
+            baseUrl="/dashboard/inbound/trash"
           />
 
           <script>
             {`
               (function() {
-                var selectAll = document.getElementById('inbound-select-all');
-                var bar = document.getElementById('inbound-bulk-bar');
-                var count = document.getElementById('inbound-bulk-count');
+                var selectAll = document.getElementById('inbound-trash-select-all');
+                var bar = document.getElementById('inbound-trash-bar');
+                var count = document.getElementById('inbound-trash-count');
                 var rowChecks = function() {
-                  return Array.from(document.querySelectorAll('.inbound-row-check'));
+                  return Array.from(document.querySelectorAll('.inbound-trash-row-check'));
                 };
                 function refresh() {
                   var checked = rowChecks().filter(function(c) { return c.checked; });

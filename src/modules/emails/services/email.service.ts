@@ -1,4 +1,4 @@
-import { eq, desc, and, sql } from "drizzle-orm";
+import { eq, desc, and, sql, inArray, isNull, isNotNull } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
@@ -109,10 +109,13 @@ export async function getEmailById(
 ): Promise<Email | undefined> {
   logger.debug("Fetching email by ID", { id, apiKeyId });
 
+  /** Excludes trashed rows — they're only accessible via the trash endpoints */
   const [email] = await db
     .select()
     .from(emails)
-    .where(and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId)));
+    .where(
+      and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt)),
+    );
 
   if (!email) {
     logger.debug("Email not found", { id, apiKeyId });
@@ -140,10 +143,17 @@ export async function listEmails(
 
   logger.debug("Listing emails", { apiKeyId, ...filters, offset });
 
-  /** Build the WHERE clause — always filter by API key, optionally by status */
+  /**
+   * Build the WHERE clause — always filter by API key + exclude trashed,
+   * optionally by status.
+   */
   const conditions = filters.status
-    ? and(eq(emails.apiKeyId, apiKeyId), eq(emails.status, filters.status))
-    : eq(emails.apiKeyId, apiKeyId);
+    ? and(
+        eq(emails.apiKeyId, apiKeyId),
+        isNull(emails.deletedAt),
+        eq(emails.status, filters.status),
+      )
+    : and(eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt));
 
   /** Run data query and count query in parallel for better performance */
   const [data, [countRow]] = await Promise.all([
@@ -184,8 +194,10 @@ export async function listAllEmails(
 
   logger.debug("Listing all emails (unscoped)", { ...filters, offset });
 
-  /** Build WHERE clause — only filter by status if provided */
-  const conditions = filters.status ? eq(emails.status, filters.status) : undefined;
+  /** Build WHERE clause — exclude trashed; optionally filter by status */
+  const conditions = filters.status
+    ? and(isNull(emails.deletedAt), eq(emails.status, filters.status))
+    : isNull(emails.deletedAt);
 
   const [data, [countRow]] = await Promise.all([
     db
@@ -221,11 +233,247 @@ export async function listAllEmails(
 export async function getEmailByIdUnscoped(id: string): Promise<Email | undefined> {
   logger.debug("Fetching email by ID (unscoped)", { id });
 
-  const [email] = await db.select().from(emails).where(eq(emails.id, id));
+  /** Excludes trashed rows — dashboard hits separate trash endpoints */
+  const [email] = await db
+    .select()
+    .from(emails)
+    .where(and(eq(emails.id, id), isNull(emails.deletedAt)));
 
   if (!email) {
     logger.debug("Email not found (unscoped)", { id });
   }
 
   return email;
+}
+
+/* ─── Trash / Soft-Delete ─── */
+
+/**
+ * Moves an email to trash by setting `deletedAt = NOW()`. Scoped to apiKeyId
+ * so users can only trash their own emails. Idempotent — calling twice is
+ * harmless (deleted_at is just overwritten with NOW()).
+ *
+ * @returns The updated email row, or undefined if not found / wrong owner.
+ */
+export async function trashEmail(
+  id: string,
+  apiKeyId: string,
+): Promise<Email | undefined> {
+  logger.info("Trashing email", { id, apiKeyId });
+
+  const [email] = await db
+    .update(emails)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt)),
+    )
+    .returning();
+
+  return email;
+}
+
+/**
+ * Bulk-trash variant — moves many emails to trash in one query.
+ * Returns the count of rows actually trashed (already-trashed and
+ * not-owned rows are silently ignored).
+ */
+export async function trashEmails(ids: string[], apiKeyId: string): Promise<number> {
+  if (ids.length === 0) return 0;
+  logger.info("Bulk-trashing emails", { count: ids.length, apiKeyId });
+
+  const rows = await db
+    .update(emails)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(
+        inArray(emails.id, ids),
+        eq(emails.apiKeyId, apiKeyId),
+        isNull(emails.deletedAt),
+      ),
+    )
+    .returning({ id: emails.id });
+
+  return rows.length;
+}
+
+/**
+ * Lists trashed emails (deleted_at IS NOT NULL), scoped to apiKeyId.
+ * Newest-trashed first.
+ */
+export async function listTrashedEmails(
+  apiKeyId: string,
+  filters: ListEmailsFilters,
+): Promise<{ data: Email[]; total: number }> {
+  const offset = (filters.page - 1) * filters.limit;
+
+  const conditions = and(eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt));
+
+  const [data, [countRow]] = await Promise.all([
+    db
+      .select()
+      .from(emails)
+      .where(conditions)
+      .orderBy(desc(emails.deletedAt))
+      .limit(filters.limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(emails)
+      .where(conditions),
+  ]);
+
+  return { data, total: countRow?.count ?? 0 };
+}
+
+/**
+ * Restores a trashed email — clears `deletedAt`. Scoped to apiKeyId.
+ */
+export async function restoreEmail(
+  id: string,
+  apiKeyId: string,
+): Promise<Email | undefined> {
+  logger.info("Restoring email", { id, apiKeyId });
+
+  const [email] = await db
+    .update(emails)
+    .set({ deletedAt: null })
+    .where(
+      and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)),
+    )
+    .returning();
+
+  return email;
+}
+
+/**
+ * Permanently deletes a trashed email. Only works on rows that are already
+ * in trash — protects against accidentally bypassing the trash workflow.
+ */
+export async function permanentDeleteEmail(
+  id: string,
+  apiKeyId: string,
+): Promise<Email | undefined> {
+  logger.info("Permanently deleting email", { id, apiKeyId });
+
+  const [email] = await db
+    .delete(emails)
+    .where(
+      and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)),
+    )
+    .returning();
+
+  return email;
+}
+
+/**
+ * Empties the trash for a given API key — permanently deletes all
+ * trashed emails for that key. Returns the count purged.
+ */
+export async function emptyEmailsTrash(apiKeyId: string): Promise<number> {
+  logger.info("Emptying emails trash", { apiKeyId });
+
+  const rows = await db
+    .delete(emails)
+    .where(and(eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)))
+    .returning({ id: emails.id });
+
+  return rows.length;
+}
+
+/* ─── Unscoped variants for the dashboard ─── */
+
+/**
+ * Lists trashed emails across all API keys — used by the dashboard trash view.
+ */
+export async function listTrashedEmailsUnscoped(
+  filters: ListEmailsFilters,
+): Promise<{ data: Email[]; total: number }> {
+  const offset = (filters.page - 1) * filters.limit;
+  const conditions = isNotNull(emails.deletedAt);
+
+  const [data, [countRow]] = await Promise.all([
+    db
+      .select()
+      .from(emails)
+      .where(conditions)
+      .orderBy(desc(emails.deletedAt))
+      .limit(filters.limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(emails)
+      .where(conditions),
+  ]);
+
+  return { data, total: countRow?.count ?? 0 };
+}
+
+/**
+ * Dashboard variant of getEmailByIdUnscoped that explicitly returns
+ * trashed rows — used to render the trashed email's detail view.
+ */
+export async function getTrashedEmailByIdUnscoped(
+  id: string,
+): Promise<Email | undefined> {
+  const [email] = await db
+    .select()
+    .from(emails)
+    .where(and(eq(emails.id, id), isNotNull(emails.deletedAt)));
+  return email;
+}
+
+/** Dashboard: trash an email by id (no apiKey scoping). */
+export async function trashEmailUnscoped(id: string): Promise<Email | undefined> {
+  logger.info("Trashing email (unscoped)", { id });
+  const [email] = await db
+    .update(emails)
+    .set({ deletedAt: new Date() })
+    .where(and(eq(emails.id, id), isNull(emails.deletedAt)))
+    .returning();
+  return email;
+}
+
+/** Dashboard: bulk trash many ids (no apiKey scoping). */
+export async function trashEmailsUnscoped(ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  logger.info("Bulk-trashing emails (unscoped)", { count: ids.length });
+  const rows = await db
+    .update(emails)
+    .set({ deletedAt: new Date() })
+    .where(and(inArray(emails.id, ids), isNull(emails.deletedAt)))
+    .returning({ id: emails.id });
+  return rows.length;
+}
+
+/** Dashboard: restore a trashed email (no apiKey scoping). */
+export async function restoreEmailUnscoped(id: string): Promise<Email | undefined> {
+  logger.info("Restoring email (unscoped)", { id });
+  const [email] = await db
+    .update(emails)
+    .set({ deletedAt: null })
+    .where(and(eq(emails.id, id), isNotNull(emails.deletedAt)))
+    .returning();
+  return email;
+}
+
+/** Dashboard: permanently delete a trashed email (no apiKey scoping). */
+export async function permanentDeleteEmailUnscoped(
+  id: string,
+): Promise<Email | undefined> {
+  logger.info("Permanently deleting email (unscoped)", { id });
+  const [email] = await db
+    .delete(emails)
+    .where(and(eq(emails.id, id), isNotNull(emails.deletedAt)))
+    .returning();
+  return email;
+}
+
+/** Dashboard: empty trash across all API keys. */
+export async function emptyEmailsTrashUnscoped(): Promise<number> {
+  logger.info("Emptying emails trash (unscoped)");
+  const rows = await db
+    .delete(emails)
+    .where(isNotNull(emails.deletedAt))
+    .returning({ id: emails.id });
+  return rows.length;
 }
