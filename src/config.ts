@@ -42,6 +42,25 @@ function readLogLevel(): LogLevel {
 }
 
 /**
+ * Reads `DASHBOARD_PASSWORD` and refuses to boot in production with an empty
+ * value. The dashboard exposes unscoped read/write across all API keys, so a
+ * production instance with no password is a tenant-isolation incident waiting
+ * to happen. In development the empty default still disables the dashboard.
+ */
+function readDashboardPassword(env: "development" | "production"): string {
+  const password = optionalEnv("DASHBOARD_PASSWORD", "");
+  if (env === "production" && password === "") {
+    throw new Error(
+      "[config] DASHBOARD_PASSWORD must be set when BUNMAIL_ENV=production.\n" +
+        "  → The dashboard reads/writes across all API keys; an empty\n" +
+        "    password leaves it disabled but the routes still mount. Set a\n" +
+        "    strong value in your .env (or unset BUNMAIL_ENV for dev).",
+    );
+  }
+  return password;
+}
+
+/**
  * Central application configuration.
  *
  * Every setting is read from environment variables at import time.
@@ -96,8 +115,13 @@ export const config = {
 
   /** Password-protected web dashboard at /dashboard */
   dashboard: {
-    /** Empty = dashboard disabled */
-    password: optionalEnv("DASHBOARD_PASSWORD", ""),
+    /**
+     * Empty = dashboard disabled. In production an empty password causes
+     * `readDashboardPassword` to throw; see the helper for the rationale.
+     */
+    password: readDashboardPassword(
+      optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
+    ),
     /** HMAC secret for session cookies; random UUID by default (resets on restart) */
     sessionSecret: optionalEnv("SESSION_SECRET", randomUUID()),
   },

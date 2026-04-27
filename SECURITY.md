@@ -39,7 +39,7 @@ The following are in scope:
 
 ## Security Best Practices for Self-Hosters
 
-- Always set a strong `DASHBOARD_PASSWORD`
+- Always set a strong `DASHBOARD_PASSWORD` — BunMail refuses to boot in production with an empty value (`BUNMAIL_ENV=production` + empty `DASHBOARD_PASSWORD` throws at startup) because the dashboard reads/writes across all API keys.
 - Never expose the dashboard publicly without a reverse proxy + TLS
 - Rotate API keys periodically
 - Keep BunMail and its dependencies up to date
