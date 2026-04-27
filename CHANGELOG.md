@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - BunMail refuses to start in production with an empty `DASHBOARD_PASSWORD`. The dashboard mounts unscoped read/write routes across all API keys, so a deployment with `BUNMAIL_ENV=production` and no password is rejected with a clear error at config load. Development behaviour is unchanged (empty password disables the dashboard). (#19)
+- Inbound SMTP open-relay hardening: messages capped at 10 MB (advertised via the SIZE ESMTP extension and enforced inside the data stream), recipients capped at 50 per transaction (SMTP 452), and `MAIL FROM` validated for envelope shape (SMTP 553) — empty sender preserved for DSN bounces. (#18)
 
 ### Changed
 
