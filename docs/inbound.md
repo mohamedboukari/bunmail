@@ -80,6 +80,14 @@ Rejects mail addressed to domains not registered in BunMail's Domains table. Thi
 |-----------------------------|---------|-----------------------------------------|
 | `SMTP_RECIPIENT_VALIDATION` | `true`  | Enable/disable recipient domain checks  |
 
+### Layer 4 — Envelope and Stream Hardening
+
+Always-on protections (no env toggles):
+
+- **Message size cap:** 10 MB. Advertised via the `SIZE` ESMTP extension and enforced inside the data stream — oversize messages are rejected with SMTP 552 and the buffered chunks are dropped immediately.
+- **Recipient cap:** 50 RCPT TO commands per transaction. Beyond that the server replies SMTP 452 (too many recipients) so the connection can't be used as a fan-out relay.
+- **MAIL FROM validation:** rejects addresses that don't match a basic email shape with SMTP 553. The empty envelope sender (`<>`) is allowed because it's how DSN bounces address themselves per RFC 3464.
+
 ### Fail-Open Design
 
 All three layers fail open on errors (DNS timeout, DB unreachable). This means legitimate mail is never silently dropped due to transient failures.

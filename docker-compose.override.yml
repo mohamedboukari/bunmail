@@ -1,0 +1,16 @@
+# Local-development overrides for docker-compose.yml.
+#
+# Compose automatically merges this file on top of `docker-compose.yml`
+# when you run `docker compose up`. It is git-ignored implicitly via the
+# convention that `*.override.yml` is a developer-local concern, but it is
+# checked in here because the default we want for `bun run dev` is the
+# same for everyone: publish the postgres port to the host so the app can
+# connect from outside the compose network.
+#
+# In production, run with `docker compose -f docker-compose.yml up`
+# (skipping this override) so the database stays internal.
+
+services:
+  db:
+    ports:
+      - "5432:5432"
