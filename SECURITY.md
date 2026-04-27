@@ -44,3 +44,9 @@ The following are in scope:
 - Rotate API keys periodically
 - Keep BunMail and its dependencies up to date
 - Use a firewall to restrict SMTP port access (2525)
+
+## Outbound TLS
+
+BunMail enables **opportunistic STARTTLS** when delivering to recipient MX servers — every connection that advertises STARTTLS will be upgraded to TLS, and only legacy receivers that don't speak TLS at all stay in plaintext. Cipher / cert validation is intentionally relaxed (`rejectUnauthorized: false`) because MTA-to-MTA delivery routinely encounters self-signed and expired certificates; refusing them would mean dropping legitimate mail.
+
+If you need to **require** TLS for specific recipient domains (e.g. internal compliance), that's tracked in [#42](https://github.com/mohamedboukari/bunmail/issues/42). Per-message TLS observability metrics (cipher used, validation state) are tracked in [#37](https://github.com/mohamedboukari/bunmail/issues/37).

@@ -68,11 +68,20 @@ export async function sendMail(options: {
    * Create a transport that connects directly to the recipient's MX
    * server on port 25. A new transport per message ensures we always
    * connect to the correct MX for the recipient's domain.
+   *
+   * `opportunisticTLS` makes Nodemailer issue STARTTLS whenever the
+   * receiving server advertises support for it, but still allows
+   * delivery in the clear when the MX doesn't speak TLS at all (legacy
+   * receivers). Cipher / cert validation is intentionally relaxed
+   * (`rejectUnauthorized: false`) — MTA-to-MTA delivery routinely
+   * encounters self-signed and expired certs, and refusing them would
+   * mean dropping legitimate mail. Tracked in #42 for stricter handling.
    */
   const transport = nodemailer.createTransport({
     host: mxHost,
     port: 25,
     secure: false,
+    opportunisticTLS: true,
     name: config.mail.hostname,
     tls: {
       rejectUnauthorized: false,
