@@ -37,12 +37,14 @@ Table: `webhooks`
 
 ## Event Types
 
-| Event           | Fired when                          |
-|-----------------|-------------------------------------|
-| `email.queued`  | An email is inserted into the queue |
-| `email.sent`    | An email is successfully delivered  |
-| `email.failed`  | An email permanently fails (3 attempts) |
-| `email.bounced` | A bounce notification is received   |
+| Event              | Fired when                                                     |
+|--------------------|----------------------------------------------------------------|
+| `email.queued`     | An email is inserted into the queue                            |
+| `email.sent`       | An email is successfully delivered                             |
+| `email.failed`     | An email permanently fails (3 attempts)                        |
+| `email.bounced`    | A bounce notification is received (DSN parsing — see [#24](https://github.com/mohamedboukari/bunmail/issues/24)) |
+| `email.complained` | A recipient marked the message as spam (FBL — see [#24](https://github.com/mohamedboukari/bunmail/issues/24)) |
+| `email.received`   | An inbound email is accepted by the SMTP receiver              |
 
 ## Webhook Payload
 
