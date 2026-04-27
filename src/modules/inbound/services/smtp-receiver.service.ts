@@ -9,6 +9,28 @@ import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 
+/**
+ * Maximum size (bytes) of any single inbound message — RFC 5321 SIZE
+ * extension value advertised on connect, and the upper bound enforced
+ * inside `onData`. 10 MB matches typical receiving-MTA defaults.
+ */
+const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Maximum number of recipients accepted per SMTP transaction. Without
+ * a cap a single connection can RCPT-bomb us into using the server as
+ * a fan-out relay; legitimate transactional inbound rarely exceeds 5.
+ */
+const MAX_RECIPIENTS_PER_TRANSACTION = 50;
+
+/**
+ * Permissive RFC-5321-ish address validator — rejects obviously broken
+ * envelopes (`MAIL FROM:<>` is allowed for bounces, see `onMailFrom`).
+ * We don't enforce full RFC 5321 here because real-world senders are
+ * varied and a strict regex would drop legitimate mail.
+ */
+const BASIC_ADDRESS_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+
 /** Reference to the running SMTP server instance */
 let server: SMTPServer | null = null;
 
@@ -117,6 +139,14 @@ export function start(): void {
     disabledCommands: ["STARTTLS", "AUTH"],
 
     /**
+     * Maximum message size (bytes). The SMTP server advertises this via
+     * the `SIZE` ESMTP extension at the EHLO greeting and rejects
+     * `MAIL FROM` with `SIZE=` exceeding it. We also belt-and-suspenders
+     * the cap inside `onData` against streams that don't pre-declare size.
+     */
+    size: MAX_MESSAGE_BYTES,
+
+    /**
      * Called when a client connects.
      * Runs rate limiting (instant) and DNSBL check (async DNS)
      * to reject bad IPs before they can send any data.
@@ -160,11 +190,61 @@ export function start(): void {
     },
 
     /**
+     * Called for each MAIL FROM command. Performs cheap envelope-level
+     * validation only — sender authenticity is enforced via SPF/DKIM
+     * later (and via DNSBL in `onConnect`). The empty envelope sender
+     * `<>` is explicitly allowed because it's how DSN bounces address
+     * themselves per RFC 3464.
+     */
+    onMailFrom(address, _session, callback) {
+      const value = address.address;
+
+      /** Empty envelope sender = legitimate DSN bounce; let it through. */
+      if (value === "") {
+        return callback();
+      }
+
+      if (!BASIC_ADDRESS_RE.test(value)) {
+        logger.warn("SMTP MAIL FROM rejected — malformed address", {
+          address: value,
+        });
+        const err = new Error("Sender address is not a valid email address") as Error & {
+          responseCode: number;
+        };
+        err.responseCode = 553;
+        return callback(err);
+      }
+
+      callback();
+    },
+
+    /**
      * Called for each RCPT TO command.
-     * Validates that the recipient's domain is registered in BunMail.
+     * Validates that the recipient's domain is registered in BunMail
+     * and that the transaction hasn't blown past the per-transaction
+     * recipient cap (open-relay defence).
      * Rejects mail to unknown domains with SMTP 550.
      */
     onRcptTo(address, session, callback) {
+      /**
+       * Cap recipients per transaction. `session.envelope.rcptTo` is the
+       * already-accepted list; this hook fires before the new address is
+       * appended, so reject when the existing length is at or above the
+       * cap. SMTP 452 = "too many recipients" (RFC 5321 §3.5).
+       */
+      const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
+      if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
+        logger.warn("SMTP RCPT TO rejected — too many recipients", {
+          acceptedSoFar,
+          ip: session.remoteAddress,
+        });
+        const err = new Error(
+          `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
+        ) as Error & { responseCode: number };
+        err.responseCode = 452;
+        return callback(err);
+      }
+
       if (!spamProtection.recipientValidationEnabled) {
         return callback();
       }
@@ -215,12 +295,48 @@ export function start(): void {
      */
     onData(stream, session, callback) {
       const chunks: Buffer[] = [];
+      let totalBytes = 0;
+      /**
+       * Tracks whether we've already aborted this stream because of the
+       * size cap; needed because `data` events keep arriving briefly
+       * after we call `stream.unpipe()` / `destroy()`.
+       */
+      let aborted = false;
 
       stream.on("data", (chunk: Buffer) => {
+        if (aborted) return;
+        totalBytes += chunk.length;
+
+        /**
+         * Belt-and-suspenders: even though `SMTPServer({ size })` already
+         * advertises and enforces the cap at the protocol level, an
+         * over-cooperative client can ignore the SIZE extension and just
+         * push bytes anyway. Drain the rest, log, and reject with 552.
+         */
+        if (totalBytes > MAX_MESSAGE_BYTES) {
+          aborted = true;
+          logger.warn("SMTP DATA rejected — message exceeds size cap", {
+            ip: session.remoteAddress,
+            totalBytes,
+            cap: MAX_MESSAGE_BYTES,
+          });
+          /** Drop accumulated chunks to free memory before the error. */
+          chunks.length = 0;
+          stream.unpipe();
+          stream.resume();
+          const err = new Error("Message size exceeds limit") as Error & {
+            responseCode: number;
+          };
+          err.responseCode = 552;
+          callback(err);
+          return;
+        }
+
         chunks.push(chunk);
       });
 
       stream.on("end", async () => {
+        if (aborted) return;
         try {
           const rawMessage = Buffer.concat(chunks).toString("utf-8");
           const parsed = await simpleParser(rawMessage);
