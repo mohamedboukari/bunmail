@@ -6,16 +6,26 @@ import { hashApiKey } from "../utils/crypto.ts";
 import { logger } from "../utils/logger.ts";
 
 /**
+ * Per-request stash for the looked-up API key, keyed on the Request
+ * object. `onBeforeHandle` populates it after a single hash + query;
+ * `resolve` reads from it instead of re-hashing and re-querying. The
+ * `WeakMap` auto-evicts when the request is garbage-collected so there
+ * is no leak risk.
+ */
+interface AuthenticatedKey {
+  id: string;
+  name: string;
+}
+const authCache = new WeakMap<Request, AuthenticatedKey>();
+
+/**
  * Auth middleware — validates Bearer tokens on every request.
  *
  * Flow:
- * 1. `onBeforeHandle` — validates the token, rejects invalid requests
- * 2. `resolve` — injects `apiKeyId` and `apiKeyName` into the context
- *
- * Split into two hooks because `derive()` runs BEFORE `onBeforeHandle`
- * in Elysia's lifecycle. Using `resolve()` instead ensures the context
- * injection runs AFTER validation — so invalid requests are rejected
- * before we try to look up the key for context injection.
+ * 1. `onBeforeHandle` — validates the token, rejects invalid requests,
+ *    caches the matched API key on the Request.
+ * 2. `resolve` — reads the cached key and injects `apiKeyId` /
+ *    `apiKeyName` into the context. Performs no DB or crypto work.
  *
  * Usage: `.use(authMiddleware)` on any Elysia plugin that needs protection.
  * Routes without this middleware (e.g. /health) remain public.
@@ -23,7 +33,7 @@ import { logger } from "../utils/logger.ts";
 export const authMiddleware = new Elysia({ name: "auth-middleware" })
   /**
    * Guard — rejects requests with missing, invalid, or revoked API keys.
-   * Runs before the route handler. Returning a value short-circuits the request.
+   * Returning a value short-circuits the request.
    */
   .onBeforeHandle(async ({ request, set }) => {
     /** Extract the Authorization header */
@@ -82,56 +92,53 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
       set.status = 401;
       return { success: false, error: "API key has been revoked" };
     }
+
+    /** Stash for `resolve` so it doesn't re-hash + re-query */
+    authCache.set(request, { id: apiKey.id, name: apiKey.name });
   })
   /**
    * Resolve — injects API key identity into the request context.
-   * Runs after `onBeforeHandle` passes (valid token guaranteed).
-   * Re-hashes the token to look up the key — lightweight since SHA-256 is fast.
+   * Reads from the per-request cache populated by `onBeforeHandle`.
+   * Never reaches here unless the guard already passed.
    */
-  .resolve(async ({ request }) => {
-    /** Token is guaranteed valid by onBeforeHandle above */
-    const authHeader = request.headers.get("authorization")!;
-    const rawToken = authHeader.slice(7);
-    const tokenHash = hashApiKey(rawToken);
-
-    /** Look up the key (guaranteed to exist — onBeforeHandle already validated) */
-    const [apiKey] = await db
-      .select({
-        id: apiKeys.id,
-        name: apiKeys.name,
-      })
-      .from(apiKeys)
-      .where(eq(apiKeys.keyHash, tokenHash));
+  .resolve(({ request }) => {
+    const cached = authCache.get(request);
+    if (!cached) {
+      /**
+       * Defensive: this should be unreachable. `onBeforeHandle` either
+       * populates the cache or short-circuits with a 401 response, so
+       * `resolve` only runs when the cache is set.
+       */
+      throw new Error("auth: cached API key missing in resolve");
+    }
 
     /**
      * Update last_used_at timestamp — fire-and-forget.
-     * We don't await this because it's non-critical and shouldn't
-     * slow down the request. Errors are logged but swallowed.
+     * Non-critical and shouldn't slow down the request. Errors logged.
      */
     db.update(apiKeys)
       .set({ lastUsedAt: new Date() })
-      .where(eq(apiKeys.id, apiKey!.id))
+      .where(eq(apiKeys.id, cached.id))
       .then(() => {
-        logger.debug("Updated last_used_at", { apiKeyId: apiKey!.id });
+        logger.debug("Updated last_used_at", { apiKeyId: cached.id });
       })
       .catch((error: unknown) => {
         logger.error("Failed to update last_used_at", {
-          apiKeyId: apiKey!.id,
+          apiKeyId: cached.id,
           error: error instanceof Error ? error.message : String(error),
         });
       });
 
-    logger.debug("Auth successful", { apiKeyId: apiKey!.id, apiKeyName: apiKey!.name });
+    logger.debug("Auth successful", { apiKeyId: cached.id, apiKeyName: cached.name });
 
-    /** Derive API key identity into the request context */
     return {
-      apiKeyId: apiKey!.id,
-      apiKeyName: apiKey!.name,
+      apiKeyId: cached.id,
+      apiKeyName: cached.name,
     };
   })
   /**
    * Lift hooks to the parent plugin scope — without this, onBeforeHandle
-   * and derive() stay encapsulated inside this plugin and don't apply
+   * and resolve() stay encapsulated inside this plugin and don't apply
    * to routes defined in the parent (e.g. emailsPlugin).
    */
   .as("scoped");
