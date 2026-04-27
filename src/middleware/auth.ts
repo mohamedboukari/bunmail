@@ -19,6 +19,18 @@ interface AuthenticatedKey {
 const authCache = new WeakMap<Request, AuthenticatedKey>();
 
 /**
+ * Minimum interval between `last_used_at` writes for the same API key.
+ * Without this throttle a hot key under sustained load would fire one
+ * `UPDATE` per request — pure write amplification with no observable
+ * benefit (the timestamp is only used for "stale key" UX, not security).
+ *
+ * Trade-off: `last_used_at` can lag by up to this window. 60 seconds
+ * is well below any human-relevant precision.
+ */
+const LAST_USED_THROTTLE_MS = 60_000;
+const lastUsedWriteAt = new Map<string, number>();
+
+/**
  * Auth middleware — validates Bearer tokens on every request.
  *
  * Flow:
@@ -113,21 +125,28 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     }
 
     /**
-     * Update last_used_at timestamp — fire-and-forget.
-     * Non-critical and shouldn't slow down the request. Errors logged.
+     * Update `last_used_at` — throttled per key so a hot caller doesn't
+     * fire one `UPDATE` per request. The previous-write timestamp lives
+     * in `lastUsedWriteAt`; we only enqueue a new write when the
+     * throttle window has elapsed. Fire-and-forget; errors logged.
      */
-    db.update(apiKeys)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(apiKeys.id, cached.id))
-      .then(() => {
-        logger.debug("Updated last_used_at", { apiKeyId: cached.id });
-      })
-      .catch((error: unknown) => {
-        logger.error("Failed to update last_used_at", {
-          apiKeyId: cached.id,
-          error: error instanceof Error ? error.message : String(error),
+    const now = Date.now();
+    const lastWrite = lastUsedWriteAt.get(cached.id) ?? 0;
+    if (now - lastWrite >= LAST_USED_THROTTLE_MS) {
+      lastUsedWriteAt.set(cached.id, now);
+      db.update(apiKeys)
+        .set({ lastUsedAt: new Date(now) })
+        .where(eq(apiKeys.id, cached.id))
+        .then(() => {
+          logger.debug("Updated last_used_at", { apiKeyId: cached.id });
+        })
+        .catch((error: unknown) => {
+          logger.error("Failed to update last_used_at", {
+            apiKeyId: cached.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+    }
 
     logger.debug("Auth successful", { apiKeyId: cached.id, apiKeyName: cached.name });
 
