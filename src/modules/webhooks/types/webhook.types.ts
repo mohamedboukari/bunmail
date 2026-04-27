@@ -10,9 +10,16 @@ export interface CreateWebhookInput {
   events: string[];
 }
 
-/** All webhook event types BunMail can fire */
+/**
+ * All webhook event types BunMail can fire. When adding a new value here,
+ * also extend the literal union in `dtos/create-webhook.dto.ts` — the DTO
+ * uses hardcoded literals (TypeBox can't introspect a TypeScript union),
+ * so the two locations have to be kept in sync manually.
+ */
 export type WebhookEventType =
   | "email.queued"
   | "email.sent"
   | "email.failed"
-  | "email.bounced";
+  | "email.bounced"
+  | "email.complained"
+  | "email.received";
