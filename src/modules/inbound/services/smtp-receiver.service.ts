@@ -257,7 +257,7 @@ export function start(): void {
           });
 
           /** Fire webhook event asynchronously (fire-and-forget) */
-          dispatchEvent("email.received" as "email.queued", {
+          dispatchEvent("email.received", {
             inboundEmailId: id,
             from,
             to,

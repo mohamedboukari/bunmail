@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cap on outbound email body size — `html` and `text` fields are now limited to 5 MB each via DTO validation; oversize payloads return `422`. (#26)
 - Periodic cleanup for the in-memory HTTP rate-limit map; expired entries are pruned every 5 minutes so the map can't grow unbounded under high cardinality. (#22)
 - Opportunistic STARTTLS on outbound delivery — every recipient MX that advertises STARTTLS is now upgraded to TLS. Documented in `SECURITY.md`. (#21)
+- Webhook event union now includes `email.received` (fired by the inbound SMTP path) and `email.complained` (reserved for FBL processing). (#31)
+
+### Fixed
+
+- The inbound SMTP receiver no longer casts `"email.received"` to `"email.queued"` to silence the type checker — the event name is properly typed and accepted by the webhook DTO. (#31)
 
 ### Changed
 

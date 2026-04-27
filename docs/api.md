@@ -285,7 +285,7 @@ Register a new webhook endpoint.
 | `url`    | string   | Yes      | HTTPS endpoint URL                                 |
 | `events` | string[] | Yes      | Events to subscribe to (min 1)                     |
 
-Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`
+Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`
 
 **Response includes `secret`** — shown once, used for HMAC signature verification.
 
