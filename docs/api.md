@@ -61,12 +61,14 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `from`       | string | Yes      | Sender email address                         |
 | `to`         | string | Yes      | Recipient email address                      |
 | `subject`    | string | *        | Subject line (required when not using template) |
-| `html`       | string | No       | HTML body                                    |
-| `text`       | string | No       | Plain text body                              |
+| `html`       | string | No       | HTML body (max 5 MB)                         |
+| `text`       | string | No       | Plain text body (max 5 MB)                   |
 | `cc`         | string | No       | Comma-separated CC recipients                |
 | `bcc`        | string | No       | Comma-separated BCC recipients               |
 | `templateId` | string | No       | Template ID (overrides subject/html/text)    |
 | `variables`  | object | No       | Key-value pairs for template rendering       |
+
+Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
 **Response:**
 

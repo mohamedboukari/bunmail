@@ -147,6 +147,7 @@ When adding a data model:
 - Keep docs concise: update only what changed.
 - Every module should have its own `docs/<module-name>.md` documenting schema, types, service methods, and module layout.
 - Every module's endpoints must be listed in `docs/api.md`.
+- **Every PR must update the relevant `.md` docs in the same commit** — `CHANGELOG.md` (always, under `[Unreleased]`), and any of `README.md` / `ARCHITECTURE.md` / `docs/api.md` / `docs/<module>.md` whose content the PR makes outdated. Mention the doc updates in the PR description's "Changes" section. Don't merge a PR that adds/removes/changes a public API surface or env var without the matching doc edit.
 - **Update `CHANGELOG.md` on every release.** When `bumpp` cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
 
 ## Collaboration
