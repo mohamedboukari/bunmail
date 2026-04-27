@@ -202,6 +202,29 @@ describe("Emails API E2E", () => {
 
       expect(response.status).toBe(422);
     });
+
+    test("returns 422 when html body exceeds the 5MB cap", async () => {
+      /** 6 MB of "a" — comfortably over the 5 MB DTO limit */
+      const oversizeHtml = "a".repeat(6 * 1024 * 1024);
+
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/send", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({
+            from: "hello@example.com",
+            to: "user@test.com",
+            subject: "Big",
+            html: oversizeHtml,
+          }),
+        }),
+      );
+
+      expect(response.status).toBe(422);
+    });
   });
 
   describe("GET /api/v1/emails", () => {
