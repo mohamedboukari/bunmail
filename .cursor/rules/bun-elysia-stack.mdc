@@ -1,0 +1,138 @@
+---
+description: Bun + Elysia + Drizzle + Postgres conventions — module-per-feature architecture, no any types, plan before coding
+globs:
+  - "**/*.ts"
+  - "**/*.tsx"
+alwaysApply: true
+---
+
+# Bun + Elysia + Drizzle + Postgres rules
+
+## Stack assumptions
+
+- Runtime: **Bun** (do not propose Node-only APIs without checking Bun support)
+- HTTP: **Elysia** plugins, one per feature module
+- DB: **PostgreSQL** via **Drizzle ORM** (`drizzle-orm/bun-sql`)
+- Dashboard (if any): server-rendered Elysia JSX (`@elysiajs/html` + `@kitajs/html`)
+- Migrations: `drizzle-kit` (`db:generate` / `db:push` / `db:migrate`)
+
+## Project layout (do not deviate)
+
+```
+src/
+  index.ts                 ← Elysia app + plugin registration + lifecycle
+  config.ts                ← Env reads + runtime validation; throws at import
+  db/
+    index.ts               ← Drizzle DB connection
+    schema.ts              ← Re-exports all model schemas
+  middleware/              ← Auth, rate-limit, CORS
+  utils/                   ← Tiny pure helpers shared by 3+ modules
+  modules/<feature>/
+    <feature>.plugin.ts    ← Elysia plugin (route group)
+    services/              ← Business logic — sole DB access point
+    dtos/                  ← Elysia t.Object validation
+    models/                ← Drizzle pgTable schemas
+    serializations/        ← Response mappers
+    types/                 ← Module-local types
+  pages/                   ← Server-rendered dashboard (if applicable)
+test/
+  unit/                    ← Pure logic; no DB
+  e2e/                     ← Plugin-level integration tests with mocked services
+docs/
+  api.md, <module>.md      ← Per-module + global API docs
+ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
+```
+
+**Never introduce new top-level folders under `src/` except** `modules/`, `db/`, `utils/`, `middleware/`, `pages/`. Do not create new top-level dirs at the repo root without justification (`scripts/`, `docs/` are fine; ad-hoc dumps are not).
+
+## TypeScript rules
+
+- **No `any`.** Use generics, type narrowing, or `unknown` + a guard.
+- **No unsafe casts** like `value as SomeType`. Refactor to make the type flow naturally.
+- Prefer `as const` arrays + `(typeof X)[number]` for env-validated unions (e.g. `LogLevel`).
+- Public service / route function signatures must have explicit return types.
+
+## Elysia rules
+
+- One `Elysia` plugin per feature, exported from `<feature>.plugin.ts`. Compose them in `src/index.ts` via `.use()`.
+- Set `normalize: true` on every plugin so `/api/v1/foo` and `/api/v1/foo/` both work.
+- Validate request body / params / query with `t.Object({...})` from Elysia's `t`.
+- **Do not write business logic or DB calls inside route handlers.** Handlers parse → call a service → serialize → return. If the handler is more than ~10 lines, the service is missing logic.
+- Use `onBeforeHandle` for auth / rate-limit guards; use `resolve` to add per-request context (e.g. `apiKeyId`). Cache cross-hook lookups via a `WeakMap<Request, T>` rather than re-querying.
+- Use `set.status` + a returned object to short-circuit, not `throw new Response(...)`.
+
+## DTO rules
+
+- File name: `<action>-<entity>.dto.ts` (e.g. `send-email.dto.ts`).
+- Cap every string field with `maxLength`. Unbounded strings are a memory + abuse vector.
+- Don't import DTOs across modules.
+
+## Service rules
+
+- Services are the **only** layer that talks to the DB.
+- Write functions, not classes, unless you genuinely need state.
+- Each service function has an explicit return type. Errors are thrown; the global `onError` formats them.
+- Read methods filter `deleted_at IS NULL` by default when soft-delete exists. Trash methods explicitly target `deleted_at IS NOT NULL`.
+
+## Database rules
+
+- Schemas in `models/<entity>.schema.ts`, named `<entityPlural>` (e.g. `emails`, `inboundEmails`).
+- Always declare indexes for the queries your service runs (filter, sort, paginate).
+- Foreign keys must specify `onDelete` explicitly: `"set null"`, `"cascade"`, or document why default is acceptable.
+- For mutable user data, prefer **soft delete** (`deleted_at TIMESTAMP NULL` + index) plus a periodic purge service.
+- `db:push` is for local dev only. Production uses generated migration SQL.
+
+## Logging rules
+
+- Use the structured logger in `src/utils/logger.ts`. **Never `console.log` in committed code.**
+- `LOG_LEVEL` must be validated against the union (`"debug" | "info" | "warn" | "error"`) at config load — fail loud on bad input.
+- Logs are JSON. Don't log full request/response bodies — log identifiers only. Be careful with PII in `to`/`from` fields (consider an `LOG_REDACT_PII` env flag in production).
+
+## Test rules
+
+- `test/unit/` — pure functions. No DB, no framework. Bun test runner: `import { describe, test, expect } from "bun:test"`.
+- `test/e2e/` — Elysia plugin-level. Mock services at the module boundary with `mock.module(...)`.
+- **Mock leakage is real.** When you `mock.module()` a service file, that mock can persist into the next test file when run as a single process. Two defenses:
+  1. CI runs unit and e2e as **separate** Bun processes: `bun test test/unit && bun test test/e2e`.
+  2. When mocking a shared service module, include **all** of its exports as `mock(() => ...)` even if your test doesn't use them — otherwise downstream tests in the suite lose those exports.
+- Don't pin Bun to `latest` in CI — pin a specific version (e.g. `1.3.10`) so test ordering stays deterministic.
+
+## Error handling
+
+- Services throw; routes don't catch.
+- A global `onError` handler in `src/index.ts` catches `NOT_FOUND`, formats unhandled errors as `{ success: false, error }`, and hides stack traces in production.
+
+## Documentation
+
+- **Every PR updates `.md` docs.** Required: `CHANGELOG.md` under `[Unreleased]`. Conditional: `README.md`, `ARCHITECTURE.md`, `docs/api.md`, `docs/<module>.md` if their content is now stale.
+- Each feature module has its own `docs/<module>.md` covering schema, indexes, service methods, and the API surface.
+- API surface changes (new endpoint, env var, response shape) **must** include the doc update in the same commit.
+
+## Git workflow
+
+- Branch: `fix/<issue#>-<slug>`, `feat/<issue#>-<slug>`, `chore/<slug>`, `docs/<slug>`.
+- One PR per issue. Squash-merge. Commit subject = PR title.
+- Link the issue: `Closes #N`.
+- Never push to `main` directly when branch protection is on. Use `--admin` only for documented exceptions (release tagging, urgent revert).
+- Don't `git commit` without explicit user instruction.
+
+## Plan before coding
+
+For any non-trivial change (schema, new module, refactor across multiple files), draft a plan first:
+
+1. **Context** — why this change.
+2. **Approach** — what files change, what stays.
+3. **Verification** — typecheck, tests, manual smoke.
+4. **Out of scope** — what this PR explicitly defers.
+
+Get the user's approval on the plan before writing code.
+
+## What NOT to do
+
+- Don't create global helpers unless the logic is repeated in **3+ modules**.
+- Don't bring in new frameworks (Hono, Express, Fastify) — Elysia is the choice.
+- Don't add ORMs alongside Drizzle (Prisma, Kysely, raw SQL).
+- Don't introduce new top-level folders without justification.
+- Don't mix dashboard JSX into API plugins or vice versa — dashboard lives in `src/pages/`.
+- Don't bypass the service layer to query the DB from a route handler.
+- Don't skip the `docs/`/`CHANGELOG.md` update on a PR that touches public surface area.
