@@ -215,6 +215,8 @@ See [docs/](docs/) for module-level documentation:
 - [docs/emails.md](docs/emails.md) — Outbound module
 - [docs/inbound.md](docs/inbound.md) — Inbound module
 - [docs/self-hosting.md](docs/self-hosting.md) — Production deployment with DNS records
+- [THREAT_MODEL.md](THREAT_MODEL.md) — Assets, attackers, controls, and operator responsibilities
+- [SECURITY.md](SECURITY.md) — Reporting a vulnerability
 
 ## Deliverability Setup
 
