@@ -37,6 +37,10 @@ The following are in scope:
 - Information disclosure (API keys, secrets, stack traces)
 - Denial of service via API abuse
 
+## Threat Model
+
+For the full picture — assets we protect, attackers we model against, controls already in code, and the controls that **stay with the operator** (firewall, disk encryption, reverse-proxy TLS, IP-reputation monitoring) — see [THREAT_MODEL.md](THREAT_MODEL.md).
+
 ## Security Best Practices for Self-Hosters
 
 - Always set a strong `DASHBOARD_PASSWORD` — BunMail refuses to boot in production with an empty value (`BUNMAIL_ENV=production` + empty `DASHBOARD_PASSWORD` throws at startup) because the dashboard reads/writes across all API keys.
