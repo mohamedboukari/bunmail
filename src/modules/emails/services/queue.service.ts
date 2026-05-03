@@ -7,6 +7,8 @@ import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
+import { config } from "../../../config.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -54,6 +56,45 @@ export async function resolveDomainForEmail(
   return queries.byName(senderDomain);
 }
 
+/**
+ * Decrypts a stored DKIM private key for use with nodemailer's signer.
+ *
+ * Three input shapes are tolerated:
+ *   - `null` — no key on file; returned unchanged so the caller falls
+ *     back to unsigned mail.
+ *   - encrypted (`v1:...`) — the normal post-migration path; AES-256-GCM
+ *     decrypted with `config.dkimEncryptionKey`.
+ *   - plaintext PEM — possible during the upgrade window before the
+ *     boot-time encrypter runs, or if an operator inserted a row by
+ *     hand. Logged as a warning so it shows up in incident review,
+ *     then returned as-is so the email still signs.
+ *
+ * On decrypt failure (wrong key, tampered ciphertext) we log and return
+ * `null` — the mail is sent unsigned rather than failed outright. This
+ * is **fail-open** by design: a key-rotation accident shouldn't take
+ * down outbound delivery.
+ */
+function decryptDkimPrivateKey(stored: string | null, domainName: string): string | null {
+  if (stored === null) return null;
+
+  if (!isEncryptedSecret(stored)) {
+    logger.warn("DKIM private key stored as plaintext — boot encrypter has not run", {
+      domain: domainName,
+    });
+    return stored;
+  }
+
+  try {
+    return decryptSecret(stored, config.dkimEncryptionKey);
+  } catch (err) {
+    logger.error("Failed to decrypt DKIM private key — sending unsigned", {
+      domain: domainName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 /** Concrete `byId` query against the live Drizzle DB. */
 async function queryDomainById(id: string): Promise<DomainLookupRow | undefined> {
   const [row] = await db
@@ -66,7 +107,8 @@ async function queryDomainById(id: string): Promise<DomainLookupRow | undefined>
     })
     .from(domains)
     .where(eq(domains.id, id));
-  return row;
+  if (!row) return undefined;
+  return { ...row, dkimPrivateKey: decryptDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
 
 /** Concrete `byName` query against the live Drizzle DB. */
@@ -81,7 +123,8 @@ async function queryDomainByName(name: string): Promise<DomainLookupRow | undefi
     })
     .from(domains)
     .where(eq(domains.name, name));
-  return row;
+  if (!row) return undefined;
+  return { ...row, dkimPrivateKey: decryptDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
 
 /** How often the queue checks for new emails to send (in ms) */

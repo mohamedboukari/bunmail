@@ -4,6 +4,8 @@ import { db } from "../../../db/index.ts";
 import { domains } from "../models/domain.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { encryptSecret } from "../../../utils/crypto.ts";
+import { config } from "../../../config.ts";
 import type { Domain, CreateDomainInput } from "../types/domain.types.ts";
 
 /**
@@ -55,12 +57,20 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
 
   const { privateKey, publicKey } = await generateDkimKeyPair();
 
+  /**
+   * Encrypt the PEM-encoded private key with AES-256-GCM before it ever
+   * touches the database. The plaintext PEM only lives in memory inside
+   * this function and is never logged. Public key stays plaintext — it's
+   * literally published in DNS, no threat in storing it raw.
+   */
+  const encryptedPrivateKey = encryptSecret(privateKey, config.dkimEncryptionKey);
+
   const [domain] = await db
     .insert(domains)
     .values({
       id,
       name: input.name,
-      dkimPrivateKey: privateKey,
+      dkimPrivateKey: encryptedPrivateKey,
       dkimPublicKey: publicKey,
       dkimSelector: "bunmail",
       unsubscribeEmail: input.unsubscribeEmail ?? null,
