@@ -33,8 +33,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# Drizzle generated migrations
-drizzle/
+# Drizzle generated migrations are tracked — the runtime migrator at
+# `src/db/migrate.ts` reads them at container start so we don't need
+# `drizzle-kit` in the production image. Run `bun run db:generate`
+# locally and commit the new files alongside the schema change.
 
 # Legacy binary Bun lockfile — modern Bun (1.2+) writes the text-format
 # `bun.lock` instead, which we DO commit for reproducibility and so the
