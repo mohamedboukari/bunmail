@@ -44,14 +44,7 @@ export const emailsPlugin = new Elysia({
    */
   .post(
     "/send",
-    async (context) => {
-      /**
-       * apiKeyId is injected by authMiddleware via derive().
-       * Elysia's type inference doesn't propagate derive types across
-       * .use() boundaries, so we access it from the context object.
-       */
-      const { body, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ body, apiKeyId }) => {
       logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
 
       /** Create the email record — it starts in "queued" status */
@@ -76,9 +69,7 @@ export const emailsPlugin = new Elysia({
 
   .get(
     "/",
-    async (context) => {
-      const { query, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ query, apiKeyId }) => {
       logger.info("GET /api/v1/emails", { apiKeyId, ...query });
 
       const { data, total } = await emailService.listEmails(apiKeyId, {
@@ -118,9 +109,7 @@ export const emailsPlugin = new Elysia({
    */
   .get(
     "/trash",
-    async (context) => {
-      const { query, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ query, apiKeyId }) => {
       logger.info("GET /api/v1/emails/trash", { apiKeyId, ...query });
 
       const { data, total } = await emailService.listTrashedEmails(apiKeyId, {
@@ -155,9 +144,7 @@ export const emailsPlugin = new Elysia({
 
   .get(
     "/:id",
-    async (context) => {
-      const { params, apiKeyId, set } = context as typeof context & { apiKeyId: string };
-
+    async ({ params, apiKeyId, set }) => {
       logger.info("GET /api/v1/emails/:id", { emailId: params.id, apiKeyId });
 
       const email = await emailService.getEmailById(params.id, apiKeyId);
@@ -196,11 +183,7 @@ export const emailsPlugin = new Elysia({
    */
   .delete(
     "/:id",
-    async (context) => {
-      const { params, apiKeyId, set } = context as typeof context & {
-        apiKeyId: string;
-      };
-
+    async ({ params, apiKeyId, set }) => {
       logger.info("DELETE /api/v1/emails/:id", { emailId: params.id, apiKeyId });
 
       const email = await emailService.trashEmail(params.id, apiKeyId);
@@ -232,9 +215,7 @@ export const emailsPlugin = new Elysia({
    */
   .post(
     "/bulk-delete",
-    async (context) => {
-      const { body, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ body, apiKeyId }) => {
       logger.info("POST /api/v1/emails/bulk-delete", {
         count: body.ids.length,
         apiKeyId,
@@ -264,11 +245,7 @@ export const emailsPlugin = new Elysia({
    */
   .post(
     "/:id/restore",
-    async (context) => {
-      const { params, apiKeyId, set } = context as typeof context & {
-        apiKeyId: string;
-      };
-
+    async ({ params, apiKeyId, set }) => {
       logger.info("POST /api/v1/emails/:id/restore", {
         emailId: params.id,
         apiKeyId,
@@ -302,11 +279,7 @@ export const emailsPlugin = new Elysia({
    */
   .delete(
     "/:id/permanent",
-    async (context) => {
-      const { params, apiKeyId, set } = context as typeof context & {
-        apiKeyId: string;
-      };
-
+    async ({ params, apiKeyId, set }) => {
       logger.info("DELETE /api/v1/emails/:id/permanent", {
         emailId: params.id,
         apiKeyId,
@@ -341,9 +314,7 @@ export const emailsPlugin = new Elysia({
    */
   .post(
     "/trash/empty",
-    async (context) => {
-      const { apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ apiKeyId }) => {
       logger.info("POST /api/v1/emails/trash/empty", { apiKeyId });
 
       const deleted = await emailService.emptyEmailsTrash(apiKeyId);
