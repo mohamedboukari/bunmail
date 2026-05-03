@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Runtime image no longer ships `drizzle-kit`.** Replaced `drizzle-kit migrate` at container start with a 60-line Bun-native runner (`src/db/migrate.ts`) that reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in a new `__bunmail_migrations` table. Eliminates esbuild's bundled Go binary from the production image, closing ~36 Go-stdlib false-positive findings on Trivy's image scan. Existing `db:push`-provisioned databases are auto-baselined on first run (every known migration is recorded as applied without re-running its DDL). The Dockerfile is now multi-stage (install → prod-deps → run) so dev deps never reach the final layer; the run stage also applies the latest Debian security patches at build time. Migrations are now committed to `drizzle/` and removed from `.gitignore`. (#56)
+
+### Security
+
+- Bumped transitive deps via `package.json` `overrides` to close real medium-severity npm CVEs surfaced by the new image scan: `yaml@^2.8.4`, `file-type@^22.0.1`, `brace-expansion@^5.0.5`, `picomatch@^4.0.4`. `file-type` was promoted from a peer to a direct dep so the override applies. (#56)
+
 ## [0.4.0] - 2026-05-03
 
 > **Theme: security & deliverability hardening.** Webhook signatures now bind to a per-attempt timestamp (breaking — see migration note below). Outbound mail carries `List-Unsubscribe` headers. Production refuses to boot with an empty dashboard password. PII in logs is redacted by default. CI gains Trivy fs+image scans, gitleaks, and SHA-pinned actions. A documented threat model. Plus a long backlog of internal hygiene improvements.
