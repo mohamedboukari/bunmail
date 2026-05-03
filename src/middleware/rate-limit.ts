@@ -84,12 +84,19 @@ export const rateLimitMiddleware = new Elysia({
   name: "rate-limit-middleware",
 }).onBeforeHandle((context) => {
   /**
-   * Read apiKeyId from the derived auth context.
-   * The auth middleware uses `derive()` which adds apiKeyId directly
-   * to the request context. Cast needed because Elysia can't infer
-   * cross-plugin derive types in a standalone middleware.
+   * Read `apiKeyId` from the derived auth context.
+   *
+   * The auth middleware adds `apiKeyId` via `.resolve()`, but this
+   * plugin is its own `Elysia` instance — it doesn't statically know
+   * about the auth middleware's context, so TypeScript can't see the
+   * field. The read is order-dependent: every plugin that uses the
+   * rate-limiter calls `.use(authMiddleware).use(rateLimitMiddleware)`
+   * so by the time this hook fires, `apiKeyId` is already in the
+   * context if auth ran. The narrow `{ apiKeyId?: string }` cast is
+   * preferred over `Record<string, unknown>` because it expresses
+   * exactly the shape we read — anything else would be a real bug.
    */
-  const apiKeyId = (context as Record<string, unknown>)["apiKeyId"] as string | undefined;
+  const { apiKeyId } = context as { apiKeyId?: string };
 
   /**
    * If no apiKeyId is present, auth middleware hasn't run or the route

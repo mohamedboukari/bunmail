@@ -23,9 +23,7 @@ export const webhooksPlugin = new Elysia({
 
   .post(
     "/",
-    async (context) => {
-      const { body, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ body, apiKeyId }) => {
       logger.info("POST /api/v1/webhooks", { url: body.url, events: body.events });
 
       const { webhook, secret } = await webhookService.createWebhook(
@@ -55,9 +53,7 @@ export const webhooksPlugin = new Elysia({
 
   .get(
     "/",
-    async (context) => {
-      const { apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ apiKeyId }) => {
       const hooks = await webhookService.listWebhooks(apiKeyId);
 
       return {
@@ -77,9 +73,7 @@ export const webhooksPlugin = new Elysia({
 
   .delete(
     "/:id",
-    async (context) => {
-      const { params, set, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ params, set, apiKeyId }) => {
       const webhook = await webhookService.deleteWebhook(params.id, apiKeyId);
 
       if (!webhook) {
