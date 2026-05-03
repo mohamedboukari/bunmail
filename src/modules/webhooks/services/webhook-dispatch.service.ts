@@ -12,12 +12,20 @@ interface WebhookPayload {
 const MAX_DISPATCH_ATTEMPTS = 3;
 
 /**
- * Signs a JSON payload with HMAC-SHA256 using the webhook's secret.
- * The signature is sent in the `X-BunMail-Signature` header so
- * consumers can verify the payload wasn't tampered with.
+ * Signs the dispatch envelope with HMAC-SHA256 using the webhook's secret.
+ *
+ * The signature input is `<unix-seconds-timestamp>.<json-body>`, sent
+ * alongside the timestamp in `X-BunMail-Timestamp`. This binds the
+ * signature to a specific dispatch time so a captured payload cannot
+ * be replayed indefinitely against the receiver — consumers should
+ * reject any request whose timestamp drifts beyond a tolerance window
+ * (5 minutes is the recommended default; see `docs/webhooks.md`).
+ *
+ * Stripe / Slack use the same construction. The string form is stable
+ * and easy to reproduce in any language without parsing the JSON.
  */
-function signPayload(payload: string, secret: string): string {
-  return createHmac("sha256", secret).update(payload).digest("hex");
+export function signPayload(timestamp: string, body: string, secret: string): string {
+  return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
 }
 
 /**
@@ -30,15 +38,24 @@ async function deliverToWebhook(
   payload: WebhookPayload,
 ): Promise<void> {
   const body = JSON.stringify(payload);
-  const signature = signPayload(body, secret);
 
   for (let attempt = 1; attempt <= MAX_DISPATCH_ATTEMPTS; attempt++) {
+    /**
+     * Freshly compute the signature timestamp per attempt so a long
+     * retry chain doesn't ship a 12-minute-old signature that the
+     * consumer's freshness check would then reject. Each retry has
+     * its own valid signing window.
+     */
+    const sigTimestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = signPayload(sigTimestamp, body, secret);
+
     try {
       const response = await fetch(url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-BunMail-Signature": signature,
+          "X-BunMail-Timestamp": sigTimestamp,
           "X-BunMail-Event": payload.event,
         },
         body,
