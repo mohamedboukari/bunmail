@@ -6,6 +6,7 @@ import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactEmail } from "../../../utils/redact.ts";
 
 /** How often the queue checks for new emails to send (in ms) */
 const POLL_INTERVAL_MS = 2000;
@@ -120,7 +121,11 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   const emailId = email.id;
   const attempt = email.attempts + 1;
 
-  logger.info("Processing email", { emailId, attempt, to: email.toAddress });
+  logger.info("Processing email", {
+    emailId,
+    attempt,
+    to: redactEmail(email.toAddress),
+  });
 
   /** Step 1: Mark as "sending" and increment the attempt counter */
   await db

@@ -129,6 +129,18 @@ export const config = {
   /** Log level: debug | info | warn | error — validated at startup */
   logLevel: readLogLevel(),
 
+  /**
+   * When true, email addresses in log records are redacted to a
+   * privacy-preserving form (`u***@example.com`). Defaults to true in
+   * production and false in development so dev logs stay debuggable.
+   * Override explicitly with `LOG_REDACT_PII=true|false`.
+   */
+  logRedactPii:
+    optionalEnv(
+      "LOG_REDACT_PII",
+      optionalEnv("BUNMAIL_ENV", "development") === "production" ? "true" : "false",
+    ) === "true",
+
   /** Trash / soft-delete retention */
   trash: {
     /**

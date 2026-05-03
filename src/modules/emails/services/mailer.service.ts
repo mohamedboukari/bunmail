@@ -3,6 +3,7 @@ import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactEmail } from "../../../utils/redact.ts";
 
 export interface SendMailResult {
   messageId: string;
@@ -74,15 +75,15 @@ export async function sendMail(options: {
   unsubscribe?: UnsubscribeOptions;
 }): Promise<SendMailResult> {
   logger.info("Sending email via SMTP", {
-    from: options.from,
-    to: options.to,
+    from: redactEmail(options.from),
+    to: redactEmail(options.to),
     subject: options.subject,
     dkim: options.dkim ? options.dkim.domainName : "none",
   });
 
   /** Resolve the recipient's MX server */
   const mxHost = await getMxHost(options.to);
-  logger.debug("Resolved MX host", { to: options.to, mxHost });
+  logger.debug("Resolved MX host", { to: redactEmail(options.to), mxHost });
 
   /**
    * Create a transport that connects directly to the recipient's MX
@@ -149,7 +150,7 @@ export async function sendMail(options: {
 
   logger.info("Email sent successfully", {
     messageId: info.messageId,
-    to: options.to,
+    to: redactEmail(options.to),
     mxHost,
   });
 
