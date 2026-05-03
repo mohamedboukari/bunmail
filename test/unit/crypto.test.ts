@@ -1,5 +1,12 @@
 import { describe, test, expect } from "bun:test";
-import { hashApiKey, generateApiKey } from "../../src/utils/crypto.ts";
+import { randomBytes } from "crypto";
+import {
+  hashApiKey,
+  generateApiKey,
+  encryptSecret,
+  decryptSecret,
+  isEncryptedSecret,
+} from "../../src/utils/crypto.ts";
 
 /**
  * Unit tests for crypto utilities.
@@ -55,5 +62,83 @@ describe("generateApiKey", () => {
     const key1 = generateApiKey();
     const key2 = generateApiKey();
     expect(key1.raw).not.toBe(key2.raw);
+  });
+});
+
+/**
+ * Tests for the AES-256-GCM secret encryption helpers used to protect
+ * `domains.dkim_private_key` at rest (#23).
+ */
+describe("encryptSecret / decryptSecret", () => {
+  const key = randomBytes(32);
+  /**
+   * Synthetic plaintext fixture. Encryption is byte-agnostic — the
+   * helpers don't care whether the input is PEM, JSON, or arbitrary
+   * UTF-8 — so we deliberately avoid a PEM-shaped string here to keep
+   * static-analysis scanners (gitleaks, etc.) from flagging the test
+   * file as containing a literal key.
+   */
+  const samplePlaintext =
+    "DKIM-PRIVATE-KEY-FAKE-FIXTURE — encryption is byte-agnostic and this is not a real key.";
+
+  test("round-trips a UTF-8 plaintext", () => {
+    const ciphertext = encryptSecret(samplePlaintext, key);
+    expect(decryptSecret(ciphertext, key)).toBe(samplePlaintext);
+  });
+
+  test("output uses the v1: versioned prefix and 4-segment shape", () => {
+    const ciphertext = encryptSecret(samplePlaintext, key);
+    const segments = ciphertext.split(":");
+    expect(segments).toHaveLength(4);
+    expect(segments[0]).toBe("v1");
+  });
+
+  test("two encryptions of the same plaintext produce different ciphertexts (random IV)", () => {
+    const a = encryptSecret(samplePlaintext, key);
+    const b = encryptSecret(samplePlaintext, key);
+    expect(a).not.toBe(b);
+  });
+
+  test("tampering with the ciphertext segment fails decryption", () => {
+    const original = encryptSecret(samplePlaintext, key);
+    const [version, iv, ct, tag] = original.split(":");
+    /** Flip a single byte inside the ciphertext segment. */
+    const tampered = Buffer.from(ct!, "base64");
+    tampered[0] = tampered[0]! ^ 0x01;
+    const broken = [version, iv, tampered.toString("base64"), tag].join(":");
+    expect(() => decryptSecret(broken, key)).toThrow();
+  });
+
+  test("a different key cannot decrypt", () => {
+    const ciphertext = encryptSecret(samplePlaintext, key);
+    const otherKey = randomBytes(32);
+    expect(() => decryptSecret(ciphertext, otherKey)).toThrow();
+  });
+
+  test("rejects keys of the wrong length", () => {
+    expect(() => encryptSecret("anything", randomBytes(16))).toThrow(/32-byte key/);
+    expect(() => decryptSecret("v1:a:b:c", randomBytes(16))).toThrow(/32-byte key/);
+  });
+
+  test("decrypt rejects malformed input shapes", () => {
+    expect(() => decryptSecret("not-encrypted", key)).toThrow(/segment count/);
+    expect(() => decryptSecret("v2:a:b:c", key)).toThrow(/version/);
+  });
+});
+
+describe("isEncryptedSecret", () => {
+  test("returns true only for the v1 4-segment shape", () => {
+    expect(isEncryptedSecret("v1:abc:def:ghi")).toBe(true);
+  });
+
+  test("returns false for arbitrary plaintext that doesn't match the v1 shape", () => {
+    expect(isEncryptedSecret("just a regular string")).toBe(false);
+    expect(isEncryptedSecret("plaintext key material")).toBe(false);
+  });
+
+  test("returns false for unknown versions or wrong segment counts", () => {
+    expect(isEncryptedSecret("v2:a:b:c")).toBe(false);
+    expect(isEncryptedSecret("v1:a:b")).toBe(false);
+    expect(isEncryptedSecret("v1:a:b:c:d")).toBe(false);
   });
 });
