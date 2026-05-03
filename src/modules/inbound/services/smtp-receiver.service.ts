@@ -8,6 +8,7 @@ import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactEmail } from "../../../utils/redact.ts";
 
 /**
  * Maximum size (bytes) of any single inbound message — RFC 5321 SIZE
@@ -206,7 +207,7 @@ export function start(): void {
 
       if (!BASIC_ADDRESS_RE.test(value)) {
         logger.warn("SMTP MAIL FROM rejected — malformed address", {
-          address: value,
+          address: redactEmail(value),
         });
         const err = new Error("Sender address is not a valid email address") as Error & {
           responseCode: number;
@@ -254,7 +255,7 @@ export function start(): void {
 
       if (!domain) {
         logger.warn("SMTP RCPT TO rejected — invalid address", {
-          address: recipientAddress,
+          address: redactEmail(recipientAddress),
         });
         const err = new Error("Invalid recipient address") as Error & {
           responseCode: number;
@@ -267,7 +268,7 @@ export function start(): void {
         .then((exists) => {
           if (!exists) {
             logger.warn("SMTP RCPT TO rejected — unknown domain", {
-              address: recipientAddress,
+              address: redactEmail(recipientAddress),
               domain,
               ip: session.remoteAddress,
             });
@@ -367,8 +368,8 @@ export function start(): void {
 
           logger.info("Inbound email received and stored", {
             id,
-            from,
-            to,
+            from: redactEmail(from),
+            to: redactEmail(to),
             subject: parsed.subject,
           });
 

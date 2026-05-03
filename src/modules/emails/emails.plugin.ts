@@ -6,6 +6,7 @@ import * as emailService from "./services/email.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
+import { redactEmail } from "../../utils/redact.ts";
 
 /**
  * Emails plugin — registers all email-related routes under /api/v1/emails.
@@ -51,7 +52,7 @@ export const emailsPlugin = new Elysia({
        */
       const { body, apiKeyId } = context as typeof context & { apiKeyId: string };
 
-      logger.info("POST /api/v1/emails/send", { apiKeyId, to: body.to });
+      logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
 
       /** Create the email record — it starts in "queued" status */
       const email = await emailService.createEmail(body, apiKeyId);

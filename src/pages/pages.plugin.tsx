@@ -3,6 +3,7 @@ import { html } from "@elysiajs/html";
 import { createHmac, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
+import { redactEmail } from "../utils/redact.ts";
 
 /* ─── Page Components ─── */
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
@@ -317,7 +318,7 @@ export const pagesPlugin = new Elysia({
           activeKey.id,
         );
 
-        logger.info("Email sent via dashboard", { to: body.to });
+        logger.info("Email sent via dashboard", { to: redactEmail(body.to) });
         set.status = 302;
         set.headers["location"] =
           `/dashboard/send?flash=${encodeURIComponent("Email queued for delivery")}`;
