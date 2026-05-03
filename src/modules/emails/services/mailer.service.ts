@@ -16,6 +16,25 @@ export interface DkimOptions {
 }
 
 /**
+ * Inputs for the `List-Unsubscribe` header. Both fields optional —
+ * the mailer always emits at least the mailto form (defaulting to
+ * `unsubscribe@<from-domain>` when `mailto` is omitted), and adds
+ * the HTTPS / `List-Unsubscribe-Post: One-Click` form whenever a
+ * URL is provided.
+ *
+ * Per Gmail's Feb-2024 sender requirements every transactional /
+ * promotional message benefits from a List-Unsubscribe header even
+ * when the recipient doesn't realistically need to unsubscribe —
+ * its presence is a positive ranking signal.
+ */
+export interface UnsubscribeOptions {
+  /** Defaults to `unsubscribe@<from-domain>` if not set. */
+  mailto?: string;
+  /** RFC 8058 one-click endpoint. When set, also emits the One-Click POST header. */
+  url?: string;
+}
+
+/**
  * Resolves the MX server for a recipient's domain and returns
  * the lowest-priority (highest preference) mail exchange host.
  */
@@ -52,6 +71,7 @@ export async function sendMail(options: {
   html?: string | null;
   text?: string | null;
   dkim?: DkimOptions;
+  unsubscribe?: UnsubscribeOptions;
 }): Promise<SendMailResult> {
   logger.info("Sending email via SMTP", {
     from: options.from,
@@ -97,6 +117,25 @@ export async function sendMail(options: {
     html: options.html ?? undefined,
     text: options.text ?? undefined,
   };
+
+  /**
+   * Build `List-Unsubscribe` (and optionally `List-Unsubscribe-Post`)
+   * per RFC 2369 + RFC 8058. Always emit the mailto form — Gmail and
+   * Yahoo's Feb-2024 sender requirements expect it on every legitimate
+   * transactional message. When the operator has configured a one-click
+   * HTTPS endpoint, append the URL form and the POST header so receivers
+   * can offer the in-client one-click unsubscribe button.
+   */
+  const senderDomain = options.from.split("@")[1];
+  if (senderDomain) {
+    const mailto = options.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`;
+    const url = options.unsubscribe?.url;
+    const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
+    mailOptions.headers = {
+      "List-Unsubscribe": headerValue,
+      ...(url && { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }),
+    };
+  }
 
   if (options.dkim) {
     mailOptions.dkim = {

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `List-Unsubscribe` (and optionally `List-Unsubscribe-Post: List-Unsubscribe=One-Click`) on every outbound message, addressing Gmail and Yahoo's Feb-2024 sender requirements. Per-domain overrides (`unsubscribeEmail`, `unsubscribeUrl`) accepted at `POST /api/v1/domains` and surfaced in the response. Defaults to `unsubscribe@<from-domain>` when no override is set. See [docs/emails.md](docs/emails.md#list-unsubscribe) for the resolution rules. (#40)
 - Cap on outbound email body size — `html` and `text` fields are now limited to 5 MB each via DTO validation; oversize payloads return `422`. (#26)
 - Periodic cleanup for the in-memory HTTP rate-limit map; expired entries are pruned every 5 minutes so the map can't grow unbounded under high cardinality. (#22)
 - Opportunistic STARTTLS on outbound delivery — every recipient MX that advertises STARTTLS is now upgraded to TLS. Documented in `SECURITY.md`. (#21)

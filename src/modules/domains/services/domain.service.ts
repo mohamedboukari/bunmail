@@ -63,6 +63,8 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
       dkimPrivateKey: privateKey,
       dkimPublicKey: publicKey,
       dkimSelector: "bunmail",
+      unsubscribeEmail: input.unsubscribeEmail ?? null,
+      unsubscribeUrl: input.unsubscribeUrl ?? null,
     })
     .returning();
 

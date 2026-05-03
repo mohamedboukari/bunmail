@@ -20,6 +20,8 @@ describe("serializeDomain", () => {
     dkimVerified: false,
     dmarcVerified: false,
     verifiedAt: new Date("2024-06-01"),
+    unsubscribeEmail: null as string | null,
+    unsubscribeUrl: null as string | null,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
   };
@@ -49,5 +51,24 @@ describe("serializeDomain", () => {
   test("strips updatedAt from output", () => {
     const result = serializeDomain(domain);
     expect("updatedAt" in result).toBe(false);
+  });
+
+  test("exposes unsubscribe overrides as nullable fields", () => {
+    /**
+     * The mailer falls back to `unsubscribe@<domain>` when these are
+     * null, so the API needs to surface "unset" distinctly from a real
+     * value the caller previously set.
+     */
+    const noOverrides = serializeDomain(domain);
+    expect(noOverrides.unsubscribeEmail).toBeNull();
+    expect(noOverrides.unsubscribeUrl).toBeNull();
+
+    const withOverrides = serializeDomain({
+      ...domain,
+      unsubscribeEmail: "optout@example.com",
+      unsubscribeUrl: "https://example.com/unsubscribe?id=abc",
+    });
+    expect(withOverrides.unsubscribeEmail).toBe("optout@example.com");
+    expect(withOverrides.unsubscribeUrl).toBe("https://example.com/unsubscribe?id=abc");
   });
 });
