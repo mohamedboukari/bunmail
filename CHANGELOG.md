@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-03
+
+> **Theme: security & deliverability hardening.** Webhook signatures now bind to a per-attempt timestamp (breaking — see migration note below). Outbound mail carries `List-Unsubscribe` headers. Production refuses to boot with an empty dashboard password. PII in logs is redacted by default. CI gains Trivy fs+image scans, gitleaks, and SHA-pinned actions. A documented threat model. Plus a long backlog of internal hygiene improvements.
+>
+> **Breaking change — webhook signature format.** If you have a webhook consumer, update verification before pulling 0.4.0. The signature now covers `<unix-timestamp>.<raw-body>`, the timestamp ships in `X-BunMail-Timestamp`, and consumers should also reject deliveries whose timestamp drifts > 5 minutes. Full Node.js + Python examples in [docs/webhooks.md](docs/webhooks.md#signature-verification).
+
 ### Added
 
 - `List-Unsubscribe` (and optionally `List-Unsubscribe-Post: List-Unsubscribe=One-Click`) on every outbound message, addressing Gmail and Yahoo's Feb-2024 sender requirements. Per-domain overrides (`unsubscribeEmail`, `unsubscribeUrl`) accepted at `POST /api/v1/domains` and surfaced in the response. Defaults to `unsubscribe@<from-domain>` when no override is set. See [docs/emails.md](docs/emails.md#list-unsubscribe) for the resolution rules. (#40)
