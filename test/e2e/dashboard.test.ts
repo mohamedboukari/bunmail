@@ -121,6 +121,8 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
       dkimVerified: false,
       dmarcVerified: false,
       verifiedAt: null,
+      unsubscribeEmail: null,
+      unsubscribeUrl: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }),

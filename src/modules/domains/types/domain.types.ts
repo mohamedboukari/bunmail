@@ -9,9 +9,16 @@ export type Domain = InferSelectModel<typeof domains>;
 
 /**
  * Input required to create a new domain.
- * Only the domain name is needed — DKIM key generation comes in a later phase.
+ *
+ * `name` is the only required field — DKIM keys are generated server-side.
+ * The unsubscribe fields override the defaults BunMail emits on outbound
+ * `List-Unsubscribe` headers; both are optional.
  */
 export interface CreateDomainInput {
   /** The domain name (e.g. "example.com") */
   name: string;
+  /** Mailbox for `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>`. */
+  unsubscribeEmail?: string;
+  /** RFC 8058 one-click HTTPS unsubscribe endpoint. Optional. */
+  unsubscribeUrl?: string;
 }

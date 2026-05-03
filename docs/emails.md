@@ -94,6 +94,21 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - In **production** mode (`BUNMAIL_ENV=production`), the domain must be registered or the request is rejected
 - In **development** mode, unregistered domains are allowed (`domain_id` stays null)
 
+## List-Unsubscribe
+
+Every outbound message carries an RFC 2369 `List-Unsubscribe` header. Resolution rules:
+
+| Domain config (in `domains` table) | Header(s) emitted |
+|---|---|
+| `unsubscribe_email = NULL`, `unsubscribe_url = NULL` | `List-Unsubscribe: <mailto:unsubscribe@{from-domain}>` |
+| `unsubscribe_email = "optout@x.com"` | `List-Unsubscribe: <mailto:optout@x.com>` |
+| `unsubscribe_url = "https://x.com/u/abc"` | `List-Unsubscribe: <mailto:unsubscribe@{from-domain}>, <https://x.com/u/abc>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
+| Both set | Both forms in the same `List-Unsubscribe`, plus the `One-Click` POST header |
+
+**Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders need the URL form too — Gmail's "high volume" thresholds (>5k/day to gmail) require RFC 8058 one-click via the URL + POST headers.
+
+**Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
+
 ## Service Methods
 
 ### email.service.ts
