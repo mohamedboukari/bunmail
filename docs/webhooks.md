@@ -64,31 +64,142 @@ Table: `webhooks`
 
 ## Signature Verification
 
-Each webhook delivery includes an `X-BunMail-Signature` header containing an HMAC-SHA256 signature of the JSON payload, signed with the webhook's secret.
+Every webhook delivery carries three headers:
 
-**Verification example (Node.js):**
+| Header | Value |
+|---|---|
+| `X-BunMail-Signature` | HMAC-SHA256 of `<timestamp>.<raw-body>` using the webhook's signing secret, hex-encoded |
+| `X-BunMail-Timestamp` | Unix-seconds timestamp the signature was computed at (one signed block per delivery attempt — see [Replay protection](#replay-protection)) |
+| `X-BunMail-Event` | The event type (e.g. `email.sent`) — for routing only, not authenticated |
+
+To verify a delivery, recompute the HMAC over `<header-timestamp>.<raw-body>` and compare against the `X-BunMail-Signature` header in constant time. **Use the raw request body** — JSON re-serialization changes whitespace and breaks the signature.
+
+After verifying the signature, **also check the timestamp is fresh** (within ±5 minutes by default). Without that check, an attacker who captures one valid delivery can replay it indefinitely.
+
+### Verification example (Node.js)
 
 ```javascript
 const crypto = require("crypto");
 
-function verifySignature(body, secret, signature) {
+const TOLERANCE_SECONDS = 5 * 60; // 5 minutes — same as Stripe's default
+
+function verifyWebhook(rawBody, headers, secret) {
+  const signature = headers["x-bunmail-signature"];
+  const timestamp = headers["x-bunmail-timestamp"];
+
+  if (!signature || !timestamp) {
+    throw new Error("missing X-BunMail-Signature / X-BunMail-Timestamp");
+  }
+
+  // Freshness — protects against replay
+  const now = Math.floor(Date.now() / 1000);
+  if (Math.abs(now - Number(timestamp)) > TOLERANCE_SECONDS) {
+    throw new Error("webhook timestamp outside tolerance window");
+  }
+
+  // Signature — protects against tampering and forgery
   const expected = crypto
     .createHmac("sha256", secret)
-    .update(body)
+    .update(`${timestamp}.${rawBody}`)
     .digest("hex");
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expected),
-  );
+
+  const a = Buffer.from(signature, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    throw new Error("webhook signature mismatch");
+  }
 }
 ```
+
+In Express:
+
+```javascript
+// `express.raw()` is required so `req.body` is a Buffer, not parsed JSON
+app.post(
+  "/webhooks/bunmail",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    try {
+      verifyWebhook(req.body.toString(), req.headers, process.env.WEBHOOK_SECRET);
+    } catch (err) {
+      return res.status(401).send(err.message);
+    }
+    const event = JSON.parse(req.body.toString());
+    // ... handle the event ...
+    res.status(200).end();
+  }
+);
+```
+
+### Verification example (Python)
+
+```python
+import hmac
+import hashlib
+import time
+
+TOLERANCE_SECONDS = 5 * 60  # 5 minutes
+
+def verify_webhook(raw_body: bytes, headers: dict, secret: str) -> None:
+    signature = headers.get("x-bunmail-signature")
+    timestamp = headers.get("x-bunmail-timestamp")
+    if not signature or not timestamp:
+        raise ValueError("missing X-BunMail-Signature / X-BunMail-Timestamp")
+
+    # Freshness — protects against replay
+    if abs(int(time.time()) - int(timestamp)) > TOLERANCE_SECONDS:
+        raise ValueError("webhook timestamp outside tolerance window")
+
+    # Signature — protects against tampering and forgery
+    signed = f"{timestamp}.".encode() + raw_body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(signature, expected):
+        raise ValueError("webhook signature mismatch")
+```
+
+In Flask:
+
+```python
+from flask import Flask, request, abort
+import os, json
+
+app = Flask(__name__)
+
+@app.post("/webhooks/bunmail")
+def bunmail_webhook():
+    try:
+        verify_webhook(
+            request.get_data(),         # raw bytes — do not use request.json
+            {k.lower(): v for k, v in request.headers.items()},
+            os.environ["WEBHOOK_SECRET"],
+        )
+    except ValueError as err:
+        abort(401, str(err))
+
+    event = json.loads(request.get_data())
+    # ... handle the event ...
+    return "", 200
+```
+
+### Replay protection
+
+Each retry attempt is signed with a **fresh timestamp**, so a long retry chain doesn't ship a stale signature. This means:
+
+- A captured delivery can only be replayed for ~5 minutes (within the tolerance window).
+- If your endpoint is briefly unreachable and BunMail retries, each retry has its own valid timestamp window.
+- Idempotency on your side should still match on the event ID inside `data` (e.g. `data.emailId`) — the timestamp is *not* a stable identifier.
+
+### Migration note (signing format change in 0.4.0)
+
+Before this version, the signature was computed over the body alone (`HMAC(secret, body)`). It is now computed over `<timestamp>.<body>`. Existing consumers will see signature mismatches until they pick up the verification snippet above. There is no compatibility window — rotate together.
 
 ## Delivery Behavior
 
 - **Retries:** 3 attempts with exponential backoff (1s, 2s, 4s)
 - **Timeout:** 10 seconds per request
 - **Fire-and-forget:** Delivery failures are logged but don't block email processing
-- **Headers:** `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Event`
+- **Headers:** `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`
 
 ## Service Methods
 
