@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Email queue now resolves DKIM keys + `List-Unsubscribe` overrides via the email's `domainId` FK rather than parsing the sender domain out of `fromAddress`. The string-parse path was a correctness hazard for renamed domains and inconsistent with the schema's stamped FK. Falls back to a name-based lookup only when `domainId` is null (legacy rows from before the FK existed). Adds a unit test covering both paths. (#32)
+
 ### Changed
 
 - **Runtime image no longer ships `drizzle-kit`.** Replaced `drizzle-kit migrate` at container start with a 60-line Bun-native runner (`src/db/migrate.ts`) that reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in a new `__bunmail_migrations` table. Eliminates esbuild's bundled Go binary from the production image, closing ~36 Go-stdlib false-positive findings on Trivy's image scan. Existing `db:push`-provisioned databases are auto-baselined on first run (every known migration is recorded as applied without re-running its DDL). The Dockerfile is now multi-stage (install → prod-deps → run) so dev deps never reach the final layer; the run stage also applies the latest Debian security patches at build time. Migrations are now committed to `drizzle/` and removed from `.gitignore`. (#56)

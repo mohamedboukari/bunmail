@@ -8,6 +8,82 @@ import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 
+/**
+ * Subset of the `domains` row used by the queue's DKIM + unsubscribe
+ * resolution. Kept narrow so unit tests can build fixtures without
+ * faking the full Drizzle row type.
+ */
+export interface DomainLookupRow {
+  name: string;
+  dkimSelector: string;
+  dkimPrivateKey: string | null;
+  unsubscribeEmail: string | null;
+  unsubscribeUrl: string | null;
+}
+
+/**
+ * Resolves the `domains` row that should drive DKIM signing and
+ * `List-Unsubscribe` overrides for an outbound email.
+ *
+ * Lookup order:
+ *   1. **By `domainId` (canonical)** — the FK stamped on the email row
+ *      at create-time. Survives sender renames and is the right answer
+ *      even if a future schema allows non-unique names per API key.
+ *   2. **By sender domain name (legacy fallback)** — only used when
+ *      `domainId` is null, which only happens for rows created before
+ *      the FK existed (schema 0001). New rows always carry `domainId`
+ *      when the domain is registered.
+ *
+ * Exported for unit testing — see test/unit/resolve-domain-for-email.test.ts.
+ */
+export async function resolveDomainForEmail(
+  email: { domainId: string | null; fromAddress: string },
+  queries: {
+    byId: (id: string) => Promise<DomainLookupRow | undefined>;
+    byName: (name: string) => Promise<DomainLookupRow | undefined>;
+  },
+): Promise<DomainLookupRow | undefined> {
+  /** Primary path — FK is the canonical pointer. */
+  if (email.domainId !== null) {
+    return queries.byId(email.domainId);
+  }
+
+  /** Legacy fallback — pre-FK rows. Skip if `fromAddress` is malformed. */
+  const senderDomain = email.fromAddress.split("@")[1];
+  if (!senderDomain) return undefined;
+  return queries.byName(senderDomain);
+}
+
+/** Concrete `byId` query against the live Drizzle DB. */
+async function queryDomainById(id: string): Promise<DomainLookupRow | undefined> {
+  const [row] = await db
+    .select({
+      name: domains.name,
+      dkimSelector: domains.dkimSelector,
+      dkimPrivateKey: domains.dkimPrivateKey,
+      unsubscribeEmail: domains.unsubscribeEmail,
+      unsubscribeUrl: domains.unsubscribeUrl,
+    })
+    .from(domains)
+    .where(eq(domains.id, id));
+  return row;
+}
+
+/** Concrete `byName` query against the live Drizzle DB. */
+async function queryDomainByName(name: string): Promise<DomainLookupRow | undefined> {
+  const [row] = await db
+    .select({
+      name: domains.name,
+      dkimSelector: domains.dkimSelector,
+      dkimPrivateKey: domains.dkimPrivateKey,
+      unsubscribeEmail: domains.unsubscribeEmail,
+      unsubscribeUrl: domains.unsubscribeUrl,
+    })
+    .from(domains)
+    .where(eq(domains.name, name));
+  return row;
+}
+
 /** How often the queue checks for new emails to send (in ms) */
 const POLL_INTERVAL_MS = 2000;
 
@@ -139,51 +215,42 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
 
   try {
     /**
-     * Look up DKIM keys + unsubscribe overrides for the sender's domain
-     * in a single query. Both fall back gracefully — DKIM stays unsigned
-     * if the domain isn't registered, and `List-Unsubscribe` defaults to
+     * Look up DKIM keys + unsubscribe overrides for the sender's domain.
+     * Both fall back gracefully — DKIM stays unsigned if the domain row
+     * is missing, and `List-Unsubscribe` defaults to
      * `unsubscribe@<sender-domain>` inside the mailer when overrides are
      * absent.
      */
-    const senderDomain = email.fromAddress.split("@")[1];
+    const domain = await resolveDomainForEmail(email, {
+      byId: queryDomainById,
+      byName: queryDomainByName,
+    });
+
     let dkim: DkimOptions | undefined;
     let unsubscribe: UnsubscribeOptions | undefined;
 
-    if (senderDomain) {
-      const [domain] = await db
-        .select({
-          name: domains.name,
-          dkimSelector: domains.dkimSelector,
-          dkimPrivateKey: domains.dkimPrivateKey,
-          unsubscribeEmail: domains.unsubscribeEmail,
-          unsubscribeUrl: domains.unsubscribeUrl,
-        })
-        .from(domains)
-        .where(eq(domains.name, senderDomain));
+    if (domain?.dkimPrivateKey) {
+      dkim = {
+        domainName: domain.name,
+        keySelector: domain.dkimSelector,
+        privateKey: domain.dkimPrivateKey,
+      };
+      logger.debug("DKIM signing enabled", {
+        domain: domain.name,
+        selector: domain.dkimSelector,
+      });
+    }
 
-      if (domain?.dkimPrivateKey) {
-        dkim = {
-          domainName: domain.name,
-          keySelector: domain.dkimSelector,
-          privateKey: domain.dkimPrivateKey,
-        };
-        logger.debug("DKIM signing enabled", {
-          domain: domain.name,
-          selector: domain.dkimSelector,
-        });
-      }
-
-      /**
-       * Pass overrides only when at least one is set. Otherwise leave
-       * `unsubscribe` undefined and let the mailer apply its default
-       * (`unsubscribe@<sender-domain>` mailto, no URL).
-       */
-      if (domain?.unsubscribeEmail || domain?.unsubscribeUrl) {
-        unsubscribe = {
-          mailto: domain.unsubscribeEmail ?? undefined,
-          url: domain.unsubscribeUrl ?? undefined,
-        };
-      }
+    /**
+     * Pass overrides only when at least one is set. Otherwise leave
+     * `unsubscribe` undefined and let the mailer apply its default
+     * (`unsubscribe@<sender-domain>` mailto, no URL).
+     */
+    if (domain?.unsubscribeEmail || domain?.unsubscribeUrl) {
+      unsubscribe = {
+        mailto: domain.unsubscribeEmail ?? undefined,
+        url: domain.unsubscribeUrl ?? undefined,
+      };
     }
 
     /** Step 2: Attempt SMTP delivery */
