@@ -6,6 +6,7 @@ import { templates } from "../../templates/models/template.schema.ts";
 import { renderTemplate } from "../../templates/services/template.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactEmail } from "../../../utils/redact.ts";
 import { config } from "../../../config.ts";
 import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.types.ts";
 
@@ -25,7 +26,12 @@ export async function createEmail(
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
 
-  logger.info("Creating email", { id, from: input.from, to: input.to, apiKeyId });
+  logger.info("Creating email", {
+    id,
+    from: redactEmail(input.from),
+    to: redactEmail(input.to),
+    apiKeyId,
+  });
 
   let subject = input.subject ?? "";
   let htmlContent = input.html ?? null;
