@@ -35,6 +35,24 @@ export const domains = pgTable("domains", {
   /** When DNS verification last succeeded (null if never verified) */
   verifiedAt: timestamp("verified_at"),
 
+  /**
+   * Mailbox that receives `List-Unsubscribe` mailto requests for messages
+   * sent from this domain. When null the mailer defaults to
+   * `unsubscribe@<domain>` so a `List-Unsubscribe` header is always
+   * emitted (Gmail/Yahoo Feb-2024 sender requirements). Operators
+   * override this when they don't operate the default mailbox.
+   */
+  unsubscribeEmail: varchar("unsubscribe_email", { length: 255 }),
+
+  /**
+   * One-click HTTPS unsubscribe endpoint per RFC 8058. When set, the
+   * mailer emits `List-Unsubscribe: <mailto:...>, <https://...>` plus
+   * `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, which Gmail
+   * requires for high-volume bulk senders. Leave null for transactional
+   * mail — the mailto-only form is enough.
+   */
+  unsubscribeUrl: text("unsubscribe_url"),
+
   /** When this domain was added */
   createdAt: timestamp("created_at").notNull().defaultNow(),
 

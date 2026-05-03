@@ -163,9 +163,11 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 
 **Request Body:**
 
-| Field  | Type   | Required | Description                          |
-|--------|--------|----------|--------------------------------------|
-| `name` | string | Yes      | Domain name (e.g. "example.com")     |
+| Field               | Type   | Required | Description                                                                                      |
+|---------------------|--------|----------|--------------------------------------------------------------------------------------------------|
+| `name`              | string | Yes      | Domain name (e.g. "example.com")                                                                 |
+| `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
+| `unsubscribeUrl`    | string | No       | RFC 8058 one-click HTTPS endpoint. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. |
 
 **Response:**
 
@@ -181,10 +183,14 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "dkimVerified": false,
     "dmarcVerified": false,
     "verifiedAt": null,
+    "unsubscribeEmail": null,
+    "unsubscribeUrl": null,
     "createdAt": "2026-03-15T12:00:00.000Z"
   }
 }
 ```
+
+The `unsubscribeEmail` / `unsubscribeUrl` fields shape the `List-Unsubscribe` header BunMail adds to every outbound message sent from this domain. See [docs/emails.md](emails.md#list-unsubscribe) for the resolution rules.
 
 ---
 

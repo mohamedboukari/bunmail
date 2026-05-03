@@ -3,7 +3,7 @@ import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { sendMail } from "./mailer.service.ts";
-import type { DkimOptions } from "./mailer.service.ts";
+import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 
@@ -133,9 +133,16 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     .where(eq(emails.id, emailId));
 
   try {
-    /** Look up DKIM keys for the sender's domain */
+    /**
+     * Look up DKIM keys + unsubscribe overrides for the sender's domain
+     * in a single query. Both fall back gracefully — DKIM stays unsigned
+     * if the domain isn't registered, and `List-Unsubscribe` defaults to
+     * `unsubscribe@<sender-domain>` inside the mailer when overrides are
+     * absent.
+     */
     const senderDomain = email.fromAddress.split("@")[1];
     let dkim: DkimOptions | undefined;
+    let unsubscribe: UnsubscribeOptions | undefined;
 
     if (senderDomain) {
       const [domain] = await db
@@ -143,6 +150,8 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
           name: domains.name,
           dkimSelector: domains.dkimSelector,
           dkimPrivateKey: domains.dkimPrivateKey,
+          unsubscribeEmail: domains.unsubscribeEmail,
+          unsubscribeUrl: domains.unsubscribeUrl,
         })
         .from(domains)
         .where(eq(domains.name, senderDomain));
@@ -158,6 +167,18 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
           selector: domain.dkimSelector,
         });
       }
+
+      /**
+       * Pass overrides only when at least one is set. Otherwise leave
+       * `unsubscribe` undefined and let the mailer apply its default
+       * (`unsubscribe@<sender-domain>` mailto, no URL).
+       */
+      if (domain?.unsubscribeEmail || domain?.unsubscribeUrl) {
+        unsubscribe = {
+          mailto: domain.unsubscribeEmail ?? undefined,
+          url: domain.unsubscribeUrl ?? undefined,
+        };
+      }
     }
 
     /** Step 2: Attempt SMTP delivery */
@@ -170,6 +191,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       html: email.html,
       text: email.textContent,
       dkim,
+      unsubscribe,
     });
 
     /** Step 3a: Success — mark as "sent" and record the SMTP Message-ID */

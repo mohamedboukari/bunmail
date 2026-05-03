@@ -15,6 +15,10 @@ export interface SerializedDomain {
   dkimVerified: boolean;
   dmarcVerified: boolean;
   verifiedAt: Date | null;
+  /** Mailbox used for `List-Unsubscribe`; null means the mailer falls back to `unsubscribe@<name>`. */
+  unsubscribeEmail: string | null;
+  /** One-click HTTPS unsubscribe endpoint; null disables `List-Unsubscribe-Post`. */
+  unsubscribeUrl: string | null;
   createdAt: Date;
 }
 
@@ -33,6 +37,8 @@ export function serializeDomain(domain: Domain): SerializedDomain {
     dkimVerified: domain.dkimVerified,
     dmarcVerified: domain.dmarcVerified,
     verifiedAt: domain.verifiedAt,
+    unsubscribeEmail: domain.unsubscribeEmail,
+    unsubscribeUrl: domain.unsubscribeUrl,
     createdAt: domain.createdAt,
   };
 }

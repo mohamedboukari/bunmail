@@ -66,6 +66,8 @@ function makeDomain(overrides: Record<string, unknown> = {}) {
     dkimVerified: false,
     dmarcVerified: false,
     verifiedAt: null,
+    unsubscribeEmail: null,
+    unsubscribeUrl: null,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
     ...overrides,
