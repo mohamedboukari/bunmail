@@ -42,6 +42,35 @@ function readLogLevel(): LogLevel {
 }
 
 /**
+ * Reads `DKIM_ENCRYPTION_KEY` (32 bytes, base64-encoded) and returns it as
+ * a `Buffer`. The key encrypts `domains.dkim_private_key` at rest using
+ * AES-256-GCM via `src/utils/crypto.ts`.
+ *
+ * Required in **both** dev and prod — silently allowing dev to store
+ * plaintext is the kind of thing that ships to production by accident.
+ * The error message points at `openssl rand -base64 32` so a fresh
+ * checkout has a single one-line setup step.
+ */
+function readDkimEncryptionKey(): Buffer {
+  const raw = process.env["DKIM_ENCRYPTION_KEY"];
+  if (!raw) {
+    throw new Error(
+      "[config] Missing required environment variable: DKIM_ENCRYPTION_KEY\n" +
+        "  → Generate one with: openssl rand -base64 32\n" +
+        "  → Then add it to your .env. The key encrypts DKIM private keys at rest.",
+    );
+  }
+  const decoded = Buffer.from(raw, "base64");
+  if (decoded.length !== 32) {
+    throw new Error(
+      `[config] DKIM_ENCRYPTION_KEY must decode to exactly 32 bytes (got ${decoded.length}).\n` +
+        `  → Generate a fresh one with: openssl rand -base64 32`,
+    );
+  }
+  return decoded;
+}
+
+/**
  * Reads `DASHBOARD_PASSWORD` and refuses to boot in production with an empty
  * value. The dashboard exposes unscoped read/write across all API keys, so a
  * production instance with no password is a tenant-isolation incident waiting
@@ -140,6 +169,13 @@ export const config = {
       "LOG_REDACT_PII",
       optionalEnv("BUNMAIL_ENV", "development") === "production" ? "true" : "false",
     ) === "true",
+
+  /**
+   * 32-byte AES-256 key used to encrypt `domains.dkim_private_key` at
+   * rest (AES-256-GCM, see `src/utils/crypto.ts`). Read once at startup
+   * and reused — never logged. Rotation is documented in `SECURITY.md`.
+   */
+  dkimEncryptionKey: readDkimEncryptionKey(),
 
   /** Trash / soft-delete retention */
   trash: {

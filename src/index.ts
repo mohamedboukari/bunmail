@@ -16,6 +16,15 @@ import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
+import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
+
+/**
+ * Encrypt any DKIM private keys still stored as plaintext PEM (legacy
+ * rows from before #23). Idempotent — already-encrypted rows are
+ * skipped. Runs before the queue starts so the first send after a
+ * restart can never read a plaintext row.
+ */
+await encryptDomainKeys();
 
 /**
  * Main Elysia application.

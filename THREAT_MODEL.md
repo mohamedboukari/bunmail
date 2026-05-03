@@ -24,7 +24,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **Spam operator on the public internet** | Use BunMail as an open relay (inbound SMTP) or to send mail through stolen API keys. | Constant — assume always present. |
 | **Internet scanner** | Find exposed dashboards, leaked `.env` files, vulnerable endpoints. | Constant. |
 | **Compromised API consumer** | A leaked key sends mail from real domains. | Likely over time. |
-| **Insider with DB read** (read-only replica access, leaked dump) | Recover DKIM keys, harvest recipient lists, read inbound mail. | Likely on careless backups. |
+| **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23) — useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
 | **Privileged insider with DB write** | Forge mail history, grant their own API keys, exfiltrate. | Lower likelihood; full DB write effectively bypasses the app. |
 | **Network adversary on egress path** | Strip TLS on outbound to recipients (downgrade attack). | Realistic on hostile networks; mostly irrelevant on cloud egress. |
 | **Web XSS in dashboard** | Steal session cookie, send mail. | Mitigated by JSX auto-escaping + `safe` discipline. |
@@ -84,7 +84,7 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 
 ### Outbound delivery
 
-- **DKIM signing** uses per-domain RSA-2048 keys generated at registration time and stored in `domains.dkim_private_key`.
+- **DKIM signing** uses per-domain RSA-2048 keys generated at registration time. The private half is **encrypted at rest with AES-256-GCM** using `DKIM_ENCRYPTION_KEY` (#23) — see `SECURITY.md` for format, generation, and rotation. The public half stays plaintext (it's published in DNS).
 - **Opportunistic STARTTLS** (#21): every recipient MX that advertises STARTTLS is upgraded to TLS. Only legacy receivers without STARTTLS support stay in plaintext.
 - **Body size cap** (#26): `html` and `text` are validated at the DTO layer at 5 MB each — oversize bodies return `422` instead of pushing into the queue and crashing the transport on retry.
 - **Queue isolation:** trashed and soft-deleted rows are excluded from the queue selector (`src/modules/emails/services/queue.service.ts`) so a deletion mid-flight cancels the send.
@@ -115,7 +115,7 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 
 | Control | What you must do |
 |---|---|
-| **Disk encryption / DB volume** | DKIM private keys are stored in PEM (#23 will encrypt them at rest with `DKIM_ENCRYPTION_KEY`). Until that ships, treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage. |
+| **Disk encryption / DB volume** | DKIM private keys are encrypted at rest (#23) so a DB dump alone leaks no signing material. The dashboard password, session secret, recipient lists, and inbound mail bodies are **not** encrypted — treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage; keep `.env` (which holds the DKIM key) on a different rotation/storage tier than the DB dump. |
 | **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. |
 | **Firewall / port hygiene** | Inbound SMTP listens on port 25 (or 2525 if `SMTP_PORT=2525`). Block every other port from the public internet. Specifically block `:5432` so the database isn't reachable from anywhere except the app process. |
 | **`.env` secrecy** | `DATABASE_URL`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, and `POSTGRES_PASSWORD` live in `.env`. Don't commit it. Don't paste it into chat tools. Rotate if it leaks. |
@@ -133,7 +133,6 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 These are real but accepted (or pending) trade-offs.
 
 - **Outbound certificate validation is relaxed** (`rejectUnauthorized: false` in `mailer.service.ts`). MTA-to-MTA delivery routinely hits self-signed and expired certs; refusing them would mean dropping legitimate mail to a substantial fraction of receivers. Per-domain `requireValidCert` is tracked in #42 and per-send TLS metrics in #37.
-- **DKIM private keys are PEM at rest.** Tracked in #23. Mitigate today via disk encryption + backup secrecy.
 - **Webhook signature lacks replay protection.** Tracked in #43.
 - **Recipient PII in logs.** Tracked in #33.
 - **No bounce parsing / suppression list.** Repeated sends to bouncing addresses tank IP reputation. Tracked in #24 and #25.

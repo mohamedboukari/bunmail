@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Breaking — DKIM private keys are now encrypted at rest.** Every `domains.dkim_private_key` is encrypted with AES-256-GCM using a new required `DKIM_ENCRYPTION_KEY` env var (32 bytes, base64). Stored as `v1:<iv>:<ciphertext>:<auth-tag>`. A DB dump without the env key leaks no signing material. Operators must add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env` **before** pulling this version — boot fails loudly if it's missing or not 32 bytes. Existing rows are auto-encrypted on first boot via [src/db/encrypt-domain-keys.ts](src/db/encrypt-domain-keys.ts) (idempotent — already-encrypted rows are skipped on subsequent restarts). Rotation is documented in `SECURITY.md`. Decrypt failure at send time is fail-open (logs an error and sends unsigned) so a key-rotation accident can't take down outbound delivery. (#23)
+
 ### Fixed
 
 - Email queue now resolves DKIM keys + `List-Unsubscribe` overrides via the email's `domainId` FK rather than parsing the sender domain out of `fromAddress`. The string-parse path was a correctness hazard for renamed domains and inconsistent with the schema's stamped FK. Falls back to a name-based lookup only when `domainId` is null (legacy rows from before the FK existed). Adds a unit test covering both paths. (#32)
