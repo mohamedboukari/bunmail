@@ -25,9 +25,7 @@ export const templatesPlugin = new Elysia({
 
   .post(
     "/",
-    async (context) => {
-      const { body, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ body, apiKeyId }) => {
       logger.info("POST /api/v1/templates", { name: body.name });
 
       const template = await templateService.createTemplate(
@@ -57,9 +55,7 @@ export const templatesPlugin = new Elysia({
 
   .get(
     "/",
-    async (context) => {
-      const { apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ apiKeyId }) => {
       const list = await templateService.listTemplates(apiKeyId);
 
       return { success: true, data: list.map(serializeTemplate) };
@@ -76,9 +72,7 @@ export const templatesPlugin = new Elysia({
 
   .get(
     "/:id",
-    async (context) => {
-      const { params, set, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ params, set, apiKeyId }) => {
       const template = await templateService.getTemplateById(params.id, apiKeyId);
 
       if (!template) {
@@ -101,11 +95,7 @@ export const templatesPlugin = new Elysia({
 
   .put(
     "/:id",
-    async (context) => {
-      const { params, body, set, apiKeyId } = context as typeof context & {
-        apiKeyId: string;
-      };
-
+    async ({ params, body, set, apiKeyId }) => {
       const template = await templateService.updateTemplate(params.id, apiKeyId, {
         name: body.name,
         subject: body.subject,
@@ -135,9 +125,7 @@ export const templatesPlugin = new Elysia({
 
   .delete(
     "/:id",
-    async (context) => {
-      const { params, set, apiKeyId } = context as typeof context & { apiKeyId: string };
-
+    async ({ params, set, apiKeyId }) => {
       const template = await templateService.deleteTemplate(params.id, apiKeyId);
 
       if (!template) {

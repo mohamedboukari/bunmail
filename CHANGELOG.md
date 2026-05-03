@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `LOG_LEVEL` is now validated at config load — invalid values fail loudly with a clear error instead of silently behaving like the default. (#39)
+- Removed every `as typeof context & { apiKeyId: string }` cast across the email, template, webhook, and inbound plugins. Elysia's type inference flows `apiKeyId` correctly through `.use(authMiddleware).resolve(...).as("scoped")`; the casts were defensive cargo from earlier Elysia versions. The `rate-limit` middleware's standalone-plugin cast is tightened to `{ apiKeyId?: string }` (was `Record<string, unknown>`) — express the exact shape we read. (#36)
 - Auth middleware no longer hashes the bearer token or queries `api_keys` twice per request. The lookup result is cached on the `Request` (via a `WeakMap`) and reused by `resolve`, halving DB load on the auth path. (#27)
 - `api_keys.last_used_at` writes are now throttled to once every 60 s per key. A hot caller no longer fires one `UPDATE` per request; the timestamp can lag by up to the throttle window. (#28)
 
