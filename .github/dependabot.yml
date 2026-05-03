@@ -1,5 +1,14 @@
 # Dependabot — automated dependency updates
 # Checks npm packages and GitHub Actions for security patches and updates.
+#
+# All third-party GitHub Actions in `.github/workflows/` are pinned to a
+# commit SHA (with a trailing `# vX` comment for human reference) to
+# defend against supply-chain attacks where a tag is force-moved to a
+# malicious commit. Dependabot's `github-actions` ecosystem updates
+# both the SHA *and* the trailing version comment automatically, so
+# pinning costs nothing in maintenance burden.
+#
+# Reference: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#using-third-party-actions
 
 version: 2
 
@@ -16,7 +25,7 @@ updates:
     commit-message:
       prefix: "chore(deps):"
 
-  # GitHub Actions versions
+  # GitHub Actions versions (SHA-pinned — see header above)
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -25,5 +34,12 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - ci
+      - security
     commit-message:
       prefix: "ci(deps):"
+    groups:
+      # Group all action bumps into one PR per week so we don't flood
+      # the queue with five tiny PRs every Monday.
+      github-actions:
+        patterns:
+          - "*"

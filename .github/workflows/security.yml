@@ -1,0 +1,146 @@
+# Security — out-of-band scans that aren't part of the standard CI gate.
+#
+# Trivy fs scan: walks the source tree (lockfile, Dockerfile, package.json)
+# and reports any HIGH/CRITICAL CVEs in our dependencies or base image
+# pinning. This catches issues that Bun's missing `bun audit` and
+# Dependabot's nightly cadence don't surface fast enough.
+#
+# Failures fail the workflow so blocking branch protection can require it.
+# False positives can be suppressed via `.trivyignore` at the repo root —
+# add a one-line justification comment for each entry.
+#
+# Results upload to GitHub's Security tab as SARIF for triage in the UI.
+#
+# Third-party actions are SHA-pinned so a compromised maintainer can't
+# replace the published tag with malicious code. Dependabot's
+# `github-actions` ecosystem updates these PRs automatically.
+
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly catch-up — picks up CVEs published since the last push.
+    - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # master @ 2026-05-03
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          # `.trivyignore` carries CVE suppressions with justifications + revisit dates.
+          trivyignores: .trivyignore
+          format: sarif
+          output: trivy-fs.sarif
+          # Skip directories that aren't part of the supply chain we ship.
+          skip-dirs: "node_modules,test,docs,public"
+
+      - name: Upload Trivy SARIF to Security tab
+        if: always() # also run on failure so we see the findings in the UI
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          # gitleaks scans diff history; full clone needed for non-PR runs
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          # gitleaks-action posts a comment to PR on findings; the default
+          # GITHUB_TOKEN is sufficient for the basic free-tier features.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public repo / OSS — no license key required.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
+
+  trivy-image:
+    name: Trivy image scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Build image (no push)
+        # Build locally so we can scan the exact same artifact users would
+        # pull from GHCR on a release. Loaded into Docker so Trivy's
+        # image scanner can reach it as `bunmail:scan`.
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          push: false
+          load: true
+          tags: bunmail:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Two-step pattern: first run produces SARIF for the Security tab,
+      # second run prints a human-readable table on failure so the CI log
+      # shows which CVEs broke the build (SARIF alone is unreadable in
+      # log output). Same scan parameters in both — they match the local
+      # `trivy image` invocation a developer would run.
+
+      - name: Run Trivy image scan (SARIF)
+        id: trivy-image-sarif
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # master @ 2026-05-03
+        with:
+          scan-type: image
+          image-ref: bunmail:scan
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Run Trivy image scan (human-readable table on failure)
+        if: steps.trivy-image-sarif.outcome == 'failure'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # master @ 2026-05-03
+        with:
+          scan-type: image
+          image-ref: bunmail:scan
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          format: table
+
+      - name: Upload Trivy image SARIF to Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
