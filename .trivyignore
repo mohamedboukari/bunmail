@@ -1,0 +1,57 @@
+# .trivyignore — suppressions for the Trivy fs and image scans.
+#
+# Format: one CVE ID per line. Include a comment block above each
+# group with the *why*, the *what's-the-real-mitigation*, and a
+# *revisit date* so future-us can re-evaluate.
+#
+# DO NOT add a CRITICAL CVE here without explicit security review.
+
+# ─────────────────────────────────────────────────────────────────
+# esbuild bundled Go stdlib CVEs — known false positives for our use
+# ─────────────────────────────────────────────────────────────────
+#
+# These are vulnerabilities in the Go stdlib (crypto/tls, net/url,
+# archive/tar, archive/zip, crypto/x509) that get baked into the
+# precompiled `esbuild` Go binaries shipped under
+# `@esbuild/<platform>/bin/esbuild` in node_modules.
+#
+# Why these aren't reachable in BunMail:
+#
+#   * esbuild is a *build-time* tool — it reads `.ts`/`.js` files
+#     from disk and writes `.js` files to disk. It does not parse
+#     URLs from untrusted input, doesn't terminate TLS, doesn't
+#     read tar/zip archives from the network.
+#
+#   * In our deployment, esbuild is pulled in transitively by
+#     drizzle-kit. drizzle-kit only runs at container start time
+#     during `bun run db:push`, against our own schema files, and
+#     exits before the API listener accepts any traffic.
+#
+#   * Real fix tracked in #56 — move drizzle-kit out of the runtime
+#     image into a build/migrate stage so esbuild never ships in
+#     the published artifact. Once #56 lands these entries can be
+#     removed and the scan stays green without suppression.
+#
+# Revisit: 2026-08-01 (or when #56 lands, whichever is sooner).
+#
+# From the newer esbuild@0.25.12 binary's bundled Go stdlib:
+CVE-2025-68121
+CVE-2025-58183
+CVE-2025-61726
+CVE-2025-61728
+CVE-2025-61729
+CVE-2026-25679
+CVE-2026-32280
+CVE-2026-32281
+CVE-2026-32283
+#
+# From the older esbuild@0.18.20 nested under @esbuild-kit/core-utils
+# (drizzle-kit dependency tree); same justification as above — esbuild
+# is build-time only, the embedded Go stdlib vectors aren't reachable.
+# Also goes away once #56 removes drizzle-kit from the runtime image.
+CVE-2024-24790
+CVE-2023-39325
+CVE-2023-45283
+CVE-2023-45288
+CVE-2024-34156
+CVE-2025-47907
