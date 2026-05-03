@@ -34,8 +34,8 @@
     ]
   },
   "devDependencies": {
-    "@commitlint/cli": "^20.5.2",
-    "@commitlint/config-conventional": "^20.5.0",
+    "@commitlint/cli": "^20.5.3",
+    "@commitlint/config-conventional": "^20.5.3",
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
@@ -43,19 +43,19 @@
     "@types/smtp-server": "^3.5.13",
     "bumpp": "^11.0.1",
     "drizzle-kit": "^0.31.10",
-    "eslint": "^10.2.1",
+    "eslint": "^10.3.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.5",
-    "globals": "^17.5.0",
+    "globals": "^17.6.0",
     "husky": "^9.1.7",
-    "knip": "^6.7.0",
+    "knip": "^6.11.0",
     "lint-staged": "^16.4.0",
     "postgres": "^3.4.9",
     "prettier": "^3.8.3",
-    "typescript-eslint": "^8.59.0"
+    "typescript-eslint": "^8.59.1"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@elysiajs/html": "^1.4.2",
@@ -64,7 +64,12 @@
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.28",
     "mailparser": "^3.9.8",
-    "nodemailer": "^8.0.6",
+    "nodemailer": "^8.0.7",
     "smtp-server": "^3.18.4"
+  },
+  "overrides": {
+    "defu": "^6.1.7",
+    "flatted": "^3.4.2",
+    "picomatch": "^4.0.4"
   }
 }

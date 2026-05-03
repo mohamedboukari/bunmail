@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BunMail refuses to start in production with an empty `DASHBOARD_PASSWORD`. The dashboard mounts unscoped read/write routes across all API keys, so a deployment with `BUNMAIL_ENV=production` and no password is rejected with a clear error at config load. Development behaviour is unchanged (empty password disables the dashboard). (#19)
 - Inbound SMTP open-relay hardening: messages capped at 10 MB (advertised via the SIZE ESMTP extension and enforced inside the data stream), recipients capped at 50 per transaction (SMTP 452), and `MAIL FROM` validated for envelope shape (SMTP 553) — empty sender preserved for DSN bounces. (#18)
 - Added `THREAT_MODEL.md` documenting assets, attackers, in-code controls, residual risks, and operator responsibilities (firewall, disk encryption, reverse-proxy TLS, IP-reputation monitoring). Linked from `README.md` and `SECURITY.md`. (#38)
+- New `Security` workflow on every push / PR / weekly schedule with three jobs: Trivy filesystem scan (deps + Dockerfile), Trivy image scan (built image with base-OS CVEs), and gitleaks secret detection. All fail on findings; results upload to the Security tab as SARIF. (#54)
+- `bun pm untrusted` in CI is now a hard failure (was non-blocking via `|| true`) so a new untrusted lifecycle script surfaces at PR time. (#54)
+- All third-party GitHub Actions across `ci.yml`, `codeql.yml`, `docker.yml`, `release.yml`, and the new `security.yml` are now pinned to a commit SHA (with a trailing `# vX` comment) to defend against tag-hijack supply-chain attacks. Dependabot's `github-actions` ecosystem keeps the SHAs current; bumps are grouped into one PR per week. (#54)
+- `bun.lock` is committed (was gitignored) so the Trivy filesystem scan can resolve transitive deps; the legacy `bun.lockb` binary format remains ignored. (#54)
+- New `docs/security-ci.md` walks the five CI security layers, how to triage each kind of failure, and how to add jobs to branch-protection required checks. (#54)
 
 ### Changed
 

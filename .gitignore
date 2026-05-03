@@ -35,6 +35,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Drizzle generated migrations
 drizzle/
+
+# Legacy binary Bun lockfile — modern Bun (1.2+) writes the text-format
+# `bun.lock` instead, which we DO commit for reproducibility and so the
+# Trivy filesystem scan in `.github/workflows/security.yml` can resolve
+# transitive dependencies for CVE matching.
 bun.lockb
-bun.lock
 package-lock.json
