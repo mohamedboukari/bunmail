@@ -1,0 +1,51 @@
+# gitleaks configuration for BunMail.
+#
+# Inherits the upstream default ruleset (extend.useDefault = true), then
+# layers on stopwords + path allowlists for documentation placeholders
+# and test fixtures.
+#
+# Why this exists:
+#   PR-time gitleaks runs scan only the latest commit's diff, so doc /
+#   fixture content that's been stable for a while never gets re-flagged.
+#   The weekly scheduled scan walks the whole tree and surfaced 15 false
+#   positives — every one a placeholder Bearer token or a fake PEM block
+#   with the literal word SECRET. None are real secrets.
+#
+# stopWords match case-insensitively against the captured secret. Real
+# `bm_live_<32 hex chars>` keys wouldn't contain any of these substrings,
+# so the filter is precise: a placeholder slips through, a leaked real
+# key still fails the build.
+#
+# `paths` allowlists are kept narrow — only test files and explicitly-
+# example documentation files. Application code under `src/` (excluding
+# the homepage code-snippet block) stays subject to every default rule.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Doc placeholders + fixture key material — see header comment for rationale"
+
+stopWords = [
+  # curl-auth-header: README and docs use these placeholder Bearer tokens
+  "YOUR_KEY",
+  "YOUR_API_KEY",
+  "YOUR_SEED_KEY",
+  "your-api-key",
+  # generic-api-key: dashboard tests carry a fake bm_live_test... fixture,
+  # and docs/api.md ships an example response with a placeholder
+  # `bm_live_a1b2c3d4...` key (the `a1b2` repeating pattern marks it as
+  # documentation, not a real entropy-rich key).
+  "bm_live_test",
+  "bm_live_a1b2",
+  # private-key: test fixtures use a literal `SECRET` between PEM markers
+  "SECRET",
+]
+
+paths = [
+  # Test fixtures sometimes carry fake PEM blocks (`SECRET` between
+  # BEGIN/END markers). The dashboard test seeds a fake bm_live_test... key.
+  '''^test/''',
+  # Internal planning doc retained for posterity; not user-facing.
+  '''^BunMail-Plan\.md$''',
+]
