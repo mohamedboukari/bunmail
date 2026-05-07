@@ -76,6 +76,7 @@ DATABASE_URL=postgres://bunmail:bunmail@db:5432/bunmail
 MAIL_HOSTNAME=mail.yourdomain.com
 DASHBOARD_PASSWORD=your-secure-password
 SESSION_SECRET=run-openssl-rand-hex-32-to-generate
+DKIM_ENCRYPTION_KEY=run-openssl-rand-base64-32-to-generate
 SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
@@ -83,6 +84,8 @@ TRASH_RETENTION_DAYS=7
 ```
 
 > Generate a session secret: `openssl rand -hex 32`
+>
+> Generate a DKIM encryption key: `openssl rand -base64 32`. **Required** — boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS` — how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
@@ -428,4 +431,8 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 
 **Migration errors:**
 - Check logs: `docker compose logs app`
+- Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56) — drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table.
 - Ensure `DATABASE_URL` is correct and PostgreSQL is healthy: `docker compose ps`
+
+**Boot fails with `[config] Missing required environment variable: DKIM_ENCRYPTION_KEY`:**
+- Add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env`. Required since v0.4.x — the key encrypts DKIM private keys at rest. Boot fails loudly rather than silently storing plaintext.

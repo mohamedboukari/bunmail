@@ -42,11 +42,13 @@ Table: `webhooks`
 | `email.queued`     | An email is inserted into the queue                            |
 | `email.sent`       | An email is successfully delivered                             |
 | `email.failed`     | An email permanently fails (3 attempts)                        |
-| `email.bounced`    | A bounce notification is received (DSN parsing — see [#24](https://github.com/mohamedboukari/bunmail/issues/24)) |
-| `email.complained` | A recipient marked the message as spam (FBL — see [#24](https://github.com/mohamedboukari/bunmail/issues/24)) |
+| `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification — DSN parsed by the bounce module, original `emails` row marked `bounced`, recipient auto-suppressed (#24). See [docs/bounces.md](bounces.md). |
+| `email.complained` | A recipient marked the message as spam. Reserved for future Feedback Loop (FBL) processing — wiring TBD. |
 | `email.received`   | An inbound email is accepted by the SMTP receiver              |
 
 ## Webhook Payload
+
+`email.sent`:
 
 ```json
 {
@@ -61,6 +63,25 @@ Table: `webhooks`
   }
 }
 ```
+
+`email.bounced`:
+
+```json
+{
+  "event": "email.bounced",
+  "timestamp": "2026-05-07T22:14:00.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "to": "user@example.com",
+    "bounceType": "hard",
+    "status": "5.1.1",
+    "diagnostic": "550 5.1.1 The email account that you tried to reach does not exist",
+    "suppressionId": "sup_d4e5f6..."
+  }
+}
+```
+
+The `suppressionId` lets receivers cross-reference the auto-created suppression row. `bounceType` is `"hard"` (5.x.x) or `"soft"` (4.x.x). A second soft bounce for the same recipient within 24h escalates to `"hard"` — the webhook will fire with `bounceType: "hard"` even though the inbound DSN's status code was a 4.x.x.
 
 ## Signature Verification
 

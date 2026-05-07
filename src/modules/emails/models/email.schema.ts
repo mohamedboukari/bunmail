@@ -55,10 +55,13 @@ export const emails = pgTable(
 
     /**
      * Current delivery status:
-     * - queued: waiting to be picked up by the queue processor
-     * - sending: currently being sent via SMTP
-     * - sent: successfully delivered to recipient's MX server
-     * - failed: all retry attempts exhausted
+     * - queued:   waiting to be picked up by the queue processor
+     * - sending:  currently being sent via SMTP
+     * - sent:     SMTP transaction succeeded — handed off to recipient's MX
+     * - failed:   all retry attempts exhausted (we never reached an MX)
+     * - bounced:  the recipient's MX accepted the message but later
+     *             returned a DSN; set by `bounce-handler.service` (#24)
+     *             when the bounce is parsed and the suppression is filed
      */
     status: varchar("status", { length: 20 }).notNull().default("queued"),
 

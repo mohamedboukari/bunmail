@@ -20,6 +20,7 @@ export const listEmailsDto = t.Object({
       t.Literal("sending"),
       t.Literal("sent"),
       t.Literal("failed"),
+      t.Literal("bounced"),
     ]),
   ),
 });

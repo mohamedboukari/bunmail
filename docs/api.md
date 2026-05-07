@@ -99,7 +99,7 @@ List emails for the authenticated API key with pagination.
 |----------|--------|---------|----------------------------------------------|
 | `page`   | number | 1       | Page number (1-based)                        |
 | `limit`  | number | 20      | Items per page (1-100)                       |
-| `status` | string | —       | Filter: `queued`, `sending`, `sent`, `failed`|
+| `status` | string | —       | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
 
 ---
 

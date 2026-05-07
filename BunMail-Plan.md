@@ -4,6 +4,15 @@
 
 ---
 
+> ⚠️ **Historical planning document.** This is the original scope/plan from before the project was built. Kept for reference. For the **current** state of the project, read these instead:
+>
+> - [README.md](README.md) — current features, endpoints, getting started
+> - [ARCHITECTURE.md](ARCHITECTURE.md) — current architecture, schema, request flow
+> - [CHANGELOG.md](CHANGELOG.md) — what shipped in each release
+> - [docs/](docs/) — per-module reference docs
+
+---
+
 ## The Problem
 
 Every developer needs to send emails — auth codes, notifications, alerts, invoices. The options today:

@@ -2,7 +2,7 @@ import type { emails } from "../models/email.schema.ts";
 import type { InferSelectModel } from "drizzle-orm";
 
 /** All possible statuses an email can be in during its lifecycle */
-export type EmailStatus = "queued" | "sending" | "sent" | "failed";
+export type EmailStatus = "queued" | "sending" | "sent" | "failed" | "bounced";
 
 /**
  * The shape of an email row returned from the database.

@@ -6,6 +6,8 @@ import { inboundEmails } from "../models/inbound-email.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
+import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
+import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -341,6 +343,30 @@ export function start(): void {
         try {
           const rawMessage = Buffer.concat(chunks).toString("utf-8");
           const parsed = await simpleParser(rawMessage);
+
+          /**
+           * Bounce branch (#24). If the message is a DSN, route it to
+           * the bounce handler — suppress the recipient, mark the
+           * original email as `bounced`, fire `email.bounced` webhook —
+           * and skip the regular `inbound_emails` insert. Bounces
+           * shouldn't pollute the inbound list (operators get noise
+           * about delivery failures from mailer-daemon@gmail every
+           * time someone mistypes an address).
+           */
+          const bounce = parseBounce(rawMessage);
+          if (bounce) {
+            const result = await handleParsedBounce(bounce);
+            /**
+             * `dropped-no-original` means we couldn't link the bounce
+             * back to one of our `emails` rows. We still acknowledge
+             * the SMTP transaction (returning ok keeps the upstream MTA
+             * from retrying); the warning was already logged by the
+             * handler.
+             */
+            logger.debug("Bounce branch handled inbound message", { result });
+            callback();
+            return;
+          }
 
           const mailFrom = session.envelope.mailFrom;
           const from =

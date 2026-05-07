@@ -93,7 +93,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **SPF / DKIM / DMARC verification** — DNS checks built into the dashboard
 - **Email queue** — Postgres-backed with 3 retries, crash recovery, and exactly-once delivery semantics
 - **Templates** — Mustache-style `{{variable}}` substitution
-- **Webhooks** — HMAC-signed events: `email.sent`, `email.failed`, `email.received`
+- **Webhooks** — HMAC-signed events with timestamp-bound replay protection: `email.sent`, `email.failed`, `email.bounced`, `email.received`, `email.complained`
 - **Inbound SMTP** — receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
 - **API key auth** — SHA-256 hashed Bearer tokens with sliding-window rate limiting
 - **Trash + auto-purge** — Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
@@ -132,6 +132,17 @@ All endpoints (except `/health`) require `Authorization: Bearer <api-key>`. Full
 | POST | `/api/v1/inbound/:id/restore` | Restore from trash |
 | DELETE | `/api/v1/inbound/:id/permanent` | Permanently delete a trashed inbound |
 | POST | `/api/v1/inbound/trash/empty` | Empty inbound trash |
+
+### Suppressions
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/suppressions` | Add an address to the suppression list (idempotent) |
+| GET | `/api/v1/suppressions` | List suppressions (paginated, optional `?email=` filter) |
+| GET | `/api/v1/suppressions/:id` | Get a suppression by ID |
+| DELETE | `/api/v1/suppressions/:id` | Remove (recipient becomes eligible immediately) |
+
+Sends to suppressed recipients return 422 with `code: "RECIPIENT_SUPPRESSED"` and `suppressionId`. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md) for the auto-suppression flow on hard bounces.
 
 ### Domains, Templates, API Keys, Webhooks
 
@@ -237,12 +248,11 @@ Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/moh
 
 Near-term highlights:
 
-- Bounce parsing + suppression list (deliverability hardening)
+- DMARC aggregate report (`rua`) ingestion
+- Webhook delivery persistence + replay (in-memory retries today)
+- Trash purge tombstones for audit trail
 - Optional SMTP relay mode (use Resend / SES / Postmark as the underlying sender)
-- DSN handling and `email.bounced` webhook event
-- DMARC aggregate report ingestion
-- Webhook delivery persistence + replay
-- DKIM private key encryption at rest
+- Bun-native SMTP client (subsumes per-domain TLS observability and `requireValidCert`)
 
 ## Contributing
 

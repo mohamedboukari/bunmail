@@ -107,6 +107,15 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 - **Every PR updates `.md` docs.** Required: `CHANGELOG.md` under `[Unreleased]`. Conditional: `README.md`, `ARCHITECTURE.md`, `docs/api.md`, `docs/<module>.md` if their content is now stale.
 - Each feature module has its own `docs/<module>.md` covering schema, indexes, service methods, and the API surface.
 - API surface changes (new endpoint, env var, response shape) **must** include the doc update in the same commit.
+- **Before every commit, audit every `.md` file the change touches.** Run a sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and every file under `docs/` — don't assume "I only changed code, the docs are fine." Doc drift compounds: a stale claim in `THREAT_MODEL.md` or `README.md` is worse than a missing one. Specific things to re-check on every PR:
+  - **Schema tables** in `ARCHITECTURE.md` and per-module docs — new columns, dropped columns, new indexes, FK-on-delete behaviour.
+  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md` — added/removed routes, changed status codes, new error body fields.
+  - **Env var lists** in `.env.example`, `docs/self-hosting.md`, `ARCHITECTURE.md` (Deployment section), `SECURITY.md`.
+  - **Webhook events** — `docs/webhooks.md` event list and `README.md` features bullet.
+  - **Status enums** (`EmailStatus`, suppression `reason`, etc.) referenced in any doc.
+  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md` — once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
+  - **"Future / roadmap" / "v2+" sections** — drop items as they ship.
+  - **`BunMail-Plan.md` and other historical docs** — should carry a "historical, see X for current state" header so readers don't mistake them for current.
 
 ## Git workflow
 
