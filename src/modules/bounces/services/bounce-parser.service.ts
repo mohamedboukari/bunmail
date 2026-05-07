@@ -144,8 +144,16 @@ function parseFallback(raw: string): ParsedBounce | null {
    */
   const recipient = recipientCandidates.find((addr) => {
     if (/^(?:mailer-daemon|postmaster)@/i.test(addr)) return false;
+    /**
+     * Escape every regex metacharacter — local-part of an email address
+     * can technically contain backslash and other special characters
+     * (RFC 5321 quoted-local-part), so escaping only `.+-` would leave
+     * a regex-injection hole. CodeQL flagged this as "incomplete string
+     * escaping or encoding" — applying the full escape set fixes it.
+     */
+    const escaped = addr.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
     const headerLineRe = new RegExp(
-      `^(?:Message-ID|In-Reply-To|References):.*<${addr.replace(/[.+-]/g, "\\$&")}>`,
+      `^(?:Message-ID|In-Reply-To|References):.*<${escaped}>`,
       "im",
     );
     return !headerLineRe.test(body);
