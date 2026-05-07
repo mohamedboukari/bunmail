@@ -4,6 +4,8 @@ import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { templates } from "../../templates/models/template.schema.ts";
 import { renderTemplate } from "../../templates/services/template.service.ts";
+import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
+import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -32,6 +34,29 @@ export async function createEmail(
     to: redactEmail(input.to),
     apiKeyId,
   });
+
+  /**
+   * Suppression gate (#25). Reject sends to addresses on the per-API-key
+   * suppression list before any other work — no template lookup, no
+   * domain check, no INSERT into `emails`. The error class is mapped to
+   * HTTP 422 by the global `onError` handler in `src/index.ts`, with the
+   * `suppressionId` surfaced in the body so callers can pivot directly
+   * to `DELETE /api/v1/suppressions/:id` when they want to undo.
+   */
+  const suppressed = await isSuppressed(apiKeyId, input.to);
+  if (suppressed) {
+    logger.warn("Send blocked by suppression list", {
+      id,
+      apiKeyId,
+      to: redactEmail(input.to),
+      suppressionId: suppressed.id,
+      reason: suppressed.reason,
+    });
+    throw new SuppressedRecipientError({
+      suppressionId: suppressed.id,
+      recipient: input.to,
+    });
+  }
 
   let subject = input.subject ?? "";
   let htmlContent = input.html ?? null;

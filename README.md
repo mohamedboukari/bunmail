@@ -97,6 +97,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Inbound SMTP** — receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
 - **API key auth** — SHA-256 hashed Bearer tokens with sliding-window rate limiting
 - **Trash + auto-purge** — Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
+- **Suppression list** — per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation
 - **Web dashboard** — server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth)
 - **OpenAPI 3.0** — interactive docs at `/api/docs`
 - **Type-safe** — strict TypeScript, Drizzle ORM, no `any`

@@ -12,3 +12,4 @@ export { emails } from "../modules/emails/models/email.schema.ts";
 export { webhooks } from "../modules/webhooks/models/webhook.schema.ts";
 export { templates } from "../modules/templates/models/template.schema.ts";
 export { inboundEmails } from "../modules/inbound/models/inbound-email.schema.ts";
+export { suppressions } from "../modules/suppressions/models/suppression.schema.ts";
