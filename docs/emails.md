@@ -18,7 +18,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `subject`       | varchar(500)   | NOT NULL                | Email subject line                          |
 | `html`          | text           | nullable                | HTML body                                   |
 | `text_content`  | text           | nullable                | Plain text body                             |
-| `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`  |
+| `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`. `sent` rows can later transition to `bounced` when a DSN comes back (#24). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `last_error`    | text           | nullable                | Error message from last failed attempt      |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |
@@ -173,12 +173,20 @@ Stops the queue processor gracefully.
 ## Status Flow
 
 ```
-queued ──→ sending ──→ sent ✓  → webhook: email.sent
-  ↑           │
-  └───────────┘ (retry, attempts < 3)
-              │
-              └──→ failed ✗ (attempts >= 3) → webhook: email.failed
+queued ──→ sending ──→ sent ✓        → webhook: email.sent
+  ↑           │            │
+  └───────────┘            ↓ (DSN arrives later)
+   retry, attempts < 3   bounced ✗   → webhook: email.bounced
+                           ↑
+                       set by the bounce handler (#24)
+                       when a Delivery Status Notification
+                       comes back from the recipient's MX
+
+queued ──→ sending ──→ failed ✗ (attempts >= 3) → webhook: email.failed
+                       (never reached an MX)
 ```
+
+`sent` = recipient's MX accepted the SMTP transaction. `bounced` = it accepted, then later returned a DSN. `failed` = we never reached an MX. See [docs/bounces.md](bounces.md) for the bounce flow.
 
 ## Queue Architecture
 

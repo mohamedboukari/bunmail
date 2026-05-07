@@ -88,6 +88,8 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 - **Opportunistic STARTTLS** (#21): every recipient MX that advertises STARTTLS is upgraded to TLS. Only legacy receivers without STARTTLS support stay in plaintext.
 - **Body size cap** (#26): `html` and `text` are validated at the DTO layer at 5 MB each — oversize bodies return `422` instead of pushing into the queue and crashing the transport on retry.
 - **Queue isolation:** trashed and soft-deleted rows are excluded from the queue selector (`src/modules/emails/services/queue.service.ts`) so a deletion mid-flight cancels the send.
+- **Suppression list** (#25): a per-API-key gate runs at `createEmail` before any insert / queue / SMTP work. Suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` and never reach the wire. Address normalisation (case-fold, trim) prevents trivial bypasses.
+- **Bounce → suppression chain** (#24): when the inbound SMTP receives a Delivery Status Notification, the bounce module parses it (RFC 3464 + heuristic-gated regex fallback), links it back to the original outbound `emails` row by `Original-Message-ID`, and persists a per-API-key suppression. Hard bounces (5.x.x) become permanent suppressions; soft bounces (4.x.x) become 24-hour windowed suppressions and escalate to permanent on a second soft bounce within the window. DSNs without a verifiable Original-Message-ID are dropped — never suppress under an unknown tenant.
 
 ### HTTP API hygiene
 
@@ -97,8 +99,7 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 
 ### Webhooks
 
-- Outgoing webhook payloads are HMAC-SHA256 signed using the per-webhook secret and sent in the `X-BunMail-Signature` header (`src/modules/webhooks/services/webhook-dispatch.service.ts`).
-- **Replay protection** is tracked separately in **#43** — the current signature covers the body only; a captured payload can be replayed against the receiver. Add the `X-BunMail-Timestamp` header + a `|now - timestamp| < 5 min` check on the consumer side once #43 lands.
+- Outgoing webhook payloads are HMAC-SHA256 signed using the per-webhook secret. The signature covers `<unix-timestamp>.<raw-body>`; the timestamp is shipped in the `X-BunMail-Timestamp` header and the signature in `X-BunMail-Signature` (#43). Each retry attempt is signed with a fresh timestamp, so a replayed delivery from yesterday fails the freshness check on the receiver. Recommended consumer check: `|now - timestamp| < 5 min`.
 
 ### Dashboard XSS
 
@@ -107,7 +108,7 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 ### Logging
 
 - The structured logger doesn't emit secrets — `key_hash`, `dkim_private_key`, and `SESSION_SECRET` are never logged.
-- Recipient PII (`from`, `to`) **does** currently appear in info logs. Tracked in #33 — a per-env redaction helper is the planned mitigation.
+- Recipient PII in log records is redacted (`a***@example.com`) when `LOG_REDACT_PII=true` (#33). Default is `true` in production and `false` in development so dev logs stay debuggable. Webhook payloads still carry full addresses — consumers depend on them; only logs are masked.
 
 ## 5. What's NOT mitigated in code (operator responsibilities)
 
@@ -132,10 +133,7 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 
 These are real but accepted (or pending) trade-offs.
 
-- **Outbound certificate validation is relaxed** (`rejectUnauthorized: false` in `mailer.service.ts`). MTA-to-MTA delivery routinely hits self-signed and expired certs; refusing them would mean dropping legitimate mail to a substantial fraction of receivers. Per-domain `requireValidCert` is tracked in #42 and per-send TLS metrics in #37.
-- **Webhook signature lacks replay protection.** Tracked in #43.
-- **Recipient PII in logs.** Tracked in #33.
-- **No bounce parsing / suppression list.** Repeated sends to bouncing addresses tank IP reputation. Tracked in #24 and #25.
+- **Outbound certificate validation is relaxed** (`rejectUnauthorized: false` in `mailer.service.ts`). MTA-to-MTA delivery routinely hits self-signed and expired certs; refusing them would mean dropping legitimate mail to a substantial fraction of receivers. Per-domain `requireValidCert` is folded into the Bun-native SMTP client roadmap in #60 (subsumes #37, #42).
 - **Single-replica queue.** A second instance would double-send queued rows. Tracked in #20.
 
 ## 7. Reporting a vulnerability

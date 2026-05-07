@@ -24,26 +24,28 @@ src/modules/domains/
 
 Table: `domains`
 
-| Column           | Type           | Constraints                  |
-|------------------|----------------|------------------------------|
-| id               | varchar(36)    | PK, prefixed `dom_`          |
-| name             | varchar(255)   | NOT NULL, UNIQUE             |
-| dkim_private_key | text           | nullable (auto-generated)    |
-| dkim_public_key  | text           | nullable (auto-generated)    |
-| dkim_selector    | varchar(63)    | NOT NULL, default `'bunmail'`|
-| spf_verified     | boolean        | NOT NULL, default `false`    |
-| dkim_verified    | boolean        | NOT NULL, default `false`    |
-| dmarc_verified   | boolean        | NOT NULL, default `false`    |
-| verified_at      | timestamp      | nullable                     |
-| created_at       | timestamp      | NOT NULL, default `now()`    |
-| updated_at       | timestamp      | NOT NULL, default `now()`    |
+| Column            | Type           | Constraints                  |
+|-------------------|----------------|------------------------------|
+| id                | varchar(36)    | PK, prefixed `dom_`          |
+| name              | varchar(255)   | NOT NULL, UNIQUE             |
+| dkim_private_key  | text           | nullable (auto-generated, **AES-256-GCM encrypted at rest** — `v1:<iv>:<ct>:<tag>` format, see #23) |
+| dkim_public_key   | text           | nullable (auto-generated, plaintext — published in DNS) |
+| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
+| unsubscribe_email | varchar(255)   | nullable — overrides the default `unsubscribe@<from-domain>` mailto in the `List-Unsubscribe` header (#40) |
+| unsubscribe_url   | text           | nullable — adds an `https` URL form to `List-Unsubscribe` and enables `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (#40) |
+| spf_verified      | boolean        | NOT NULL, default `false`    |
+| dkim_verified     | boolean        | NOT NULL, default `false`    |
+| dmarc_verified    | boolean        | NOT NULL, default `false`    |
+| verified_at       | timestamp      | nullable                     |
+| created_at        | timestamp      | NOT NULL, default `now()`    |
+| updated_at        | timestamp      | NOT NULL, default `now()`    |
 
 ## DKIM Key Generation
 
 When a domain is created, BunMail automatically generates a 2048-bit RSA keypair:
 
-- **Private key** — stored in `dkim_private_key` (PEM format), used by Nodemailer to sign outgoing emails
-- **Public key** — stored in `dkim_public_key` (PEM format), provided as a DNS TXT record value
+- **Private key** — generated as PEM, then encrypted with AES-256-GCM using `DKIM_ENCRYPTION_KEY` from `.env` before insert (#23). The plaintext PEM only lives in memory inside `createDomain()` and is never logged. Decrypted on read by the queue's domain lookup; decrypt failure logs and falls through to unsigned mail (fail-open).
+- **Public key** — stored plaintext in `dkim_public_key`, provided as a DNS TXT record value
 
 The DKIM DNS record the user needs to add is returned in the API response as `dkimDnsRecord`.
 

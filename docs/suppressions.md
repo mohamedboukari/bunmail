@@ -24,7 +24,7 @@ Expired rows stay in the table — they're not auto-purged today. If you need cl
 
 | Value | When |
 |---|---|
-| `bounce` | Auto-set by future bounce processing (#24). The DSN parser will call `addFromBounce()` and persist `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. |
+| `bounce` | Auto-set by the bounce module (#24) when a Delivery Status Notification arrives at the inbound SMTP. The DSN parser calls `addFromBounce()` and persists `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. See [docs/bounces.md](bounces.md). |
 | `complaint` | Reserved for FBL (Feedback Loop) processing — when a recipient marks your message as spam. Not implemented yet. |
 | `manual` | Operator/customer added the address themselves (e.g. "I know this address bounces, just block it"). |
 | `unsubscribe` | Reserved for future one-click unsubscribe handling per Gmail's Feb-2024 sender requirements. The DB column accepts it today; no endpoint sets it yet. |
@@ -80,25 +80,13 @@ The `suppressionId` lets clients pivot directly to `DELETE /api/v1/suppressions/
 
 The email is **not** inserted into the `emails` table. There's no row to retry, no queue entry, no SMTP attempt — the gate is hard-fail before any side effect.
 
-## Upgrade path: auto-suppression on bounces (#24)
+## Auto-suppression on bounces (#24)
 
-This module ships the storage and the manual-add API. The full acceptance-criteria item from #25 — "auto-suppress on hard bounce / repeated soft bounce" — depends on bounce parsing, which is tracked in #24.
+The bounce module (#24) closes the loop: when the inbound SMTP receives a Delivery Status Notification, the parser pulls out the recipient and SMTP enhanced status code, the handler links the bounce back to the original `emails` row by `Original-Message-ID`, and `addFromBounce()` persists the suppression under that email's `api_key_id`. See [docs/bounces.md](bounces.md) for the full chain.
 
-When #24 lands it'll call:
+Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 
-```ts
-import { addFromBounce } from "src/modules/suppressions/services/suppression.service.ts";
-
-await addFromBounce(apiKeyId, {
-  email: parsedDsn.recipient,
-  bounceType: parsedDsn.classify(),  // "hard" | "soft"
-  diagnosticCode: parsedDsn.statusCode,
-  sourceEmailId: msgId,
-  expiresAt: bounceType === "soft" ? addDays(new Date(), 7) : null,
-});
-```
-
-The current `processEmail` retry path **does not** auto-suppress on `MAX_ATTEMPTS` exhaustion, even though that's tempting — without DSN parsing we can't tell hard bounces from network blips, and crude auto-suppression would block legitimate sends.
+The `processEmail` retry path deliberately **does not** auto-suppress on `MAX_ATTEMPTS` exhaustion — that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
 
 ## Out of scope (separate tickets)
 

@@ -2,6 +2,12 @@
 
 Receives emails via a built-in SMTP server and stores them in the database.
 
+## Bounce branching
+
+Before any inbound message hits `inbound_emails`, the receiver runs it through the bounce parser. If the message is a Delivery Status Notification (DSN) — i.e. a bounce for one of our outbound sends — we route it to the bounce handler instead of generic inbound storage. See [docs/bounces.md](bounces.md) for the bounce flow.
+
+Why this matters: bounces shouldn't pollute the inbound list (operators get noise about delivery failures from `mailer-daemon@gmail` every time someone mistypes an address), and the suppression-list auto-update only happens when bounces are processed as bounces.
+
 ## Module Layout
 
 ```
