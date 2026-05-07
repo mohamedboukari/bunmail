@@ -148,6 +148,15 @@ When adding a data model:
 - Every module should have its own `docs/<module-name>.md` documenting schema, types, service methods, and module layout.
 - Every module's endpoints must be listed in `docs/api.md`.
 - **Every PR must update the relevant `.md` docs in the same commit** — `CHANGELOG.md` (always, under `[Unreleased]`), and any of `README.md` / `ARCHITECTURE.md` / `docs/api.md` / `docs/<module>.md` whose content the PR makes outdated. Mention the doc updates in the PR description's "Changes" section. Don't merge a PR that adds/removes/changes a public API surface or env var without the matching doc edit.
+- **Before every commit, audit every `.md` file the change touches.** Don't assume "I only changed code, the docs are fine" — sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and everything under `docs/`. Specific things to re-check on every PR:
+  - **Schema tables** in `ARCHITECTURE.md` and per-module docs — new columns, dropped columns, new indexes, FK-on-delete behaviour.
+  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md` — added/removed routes, changed status codes, new error body fields.
+  - **Env var lists** in `.env.example`, `docs/self-hosting.md`, `ARCHITECTURE.md` (Deployment), `SECURITY.md`.
+  - **Webhook events** — `docs/webhooks.md` event list and the `README.md` features bullet.
+  - **Status enums** (`EmailStatus`, suppression `reason`, etc.) referenced in any doc.
+  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md` — once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
+  - **"Future / roadmap" / "v2+" sections** — drop items as they ship.
+  - **Historical / planning docs** (e.g. `BunMail-Plan.md`) — should carry a "historical, see X for current state" header so readers don't mistake them for current.
 - **Update `CHANGELOG.md` on every release.** When `bumpp` cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
 
 ## Collaboration

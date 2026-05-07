@@ -53,7 +53,7 @@
 | Runtime          | Bun                                 |
 | Backend          | Elysia                              |
 | SMTP Sending     | Nodemailer (direct mode, no relay)  |
-| Email Auth       | DKIM signing, SPF/DMARC DNS checks  |
+| Email Auth       | DKIM signing (AES-256-GCM at rest), SPF/DMARC DNS checks |
 | Database         | PostgreSQL                          |
 | ORM              | Drizzle ORM (`drizzle-orm/bun-sql`) |
 | Dashboard        | Elysia JSX (`@elysiajs/html`)       |
@@ -83,14 +83,17 @@ bunmail/
 │   ├── config.ts                         ← Env config with validation
 │   ├── db/
 │   │   ├── index.ts                      ← Drizzle DB connection
-│   │   └── schema.ts                     ← Re-exports all model schemas
+│   │   ├── schema.ts                     ← Re-exports all model schemas
+│   │   ├── migrate.ts                    ← Bun-native migration runner (#56)
+│   │   └── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
 │   ├── middleware/
 │   │   ├── auth.ts                       ← API key bearer auth
 │   │   └── rate-limit.ts                 ← Sliding window rate limiter
 │   ├── utils/
 │   │   ├── id.ts                         ← Prefixed ID generator
 │   │   ├── logger.ts                     ← Structured JSON logger
-│   │   └── crypto.ts                     ← API key hashing
+│   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
+│   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
 │   │   ├── emails/
 │   │   │   ├── emails.plugin.ts          ← POST /send, GET /emails
@@ -169,9 +172,27 @@ bunmail/
 │   │   │   │   └── inbound.serialization.ts
 │   │   │   └── types/
 │   │   │       └── inbound.types.ts
-│   │   └── trash/
-│   │       └── services/
-│   │           └── purge.service.ts      ← Periodic auto-purge of trashed rows
+│   │   ├── trash/
+│   │   │   └── services/
+│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows
+│   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
+│   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
+│   │   │   ├── services/
+│   │   │   │   └── suppression.service.ts ← isSuppressed gate + create/list/delete + addFromBounce hook
+│   │   │   ├── dtos/                     ← create-suppression.dto, list-suppressions.dto
+│   │   │   ├── models/
+│   │   │   │   └── suppression.schema.ts ← suppressions pgTable
+│   │   │   ├── serializations/
+│   │   │   │   └── suppression.serialization.ts
+│   │   │   ├── errors.ts                 ← SuppressedRecipientError → mapped to 422 in onError
+│   │   │   └── types/
+│   │   │       └── suppression.types.ts
+│   │   └── bounces/                      ← DSN parsing + bounce → suppression chain (#24)
+│   │       ├── services/
+│   │       │   ├── bounce-parser.service.ts  ← Pure RFC 3464 + regex fallback parser
+│   │       │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
+│   │       └── types/
+│   │           └── bounce.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
 │       ├── landing.plugin.tsx            ← Public landing page at /
@@ -318,10 +339,12 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 **Email Status Flow:**
 
 ```
-queued → sending → sent
-                 → failed (after 3 attempts)
+queued → sending → sent → bounced (set by bounce handler when DSN arrives, #24)
+                 → failed (after 3 attempts, never reached an MX)
          ↘ queued (retry on transient failure)
 ```
+
+`sent` = recipient's MX accepted the SMTP transaction. `bounced` = it accepted, then later returned a Delivery Status Notification — the bounce module ([src/modules/bounces/](src/modules/bounces/)) auto-suppresses the recipient and fires `email.bounced`. `failed` = we never reached an MX (3 retries exhausted).
 
 The queue selector also filters `deleted_at IS NULL` so rows trashed while still queued are skipped instead of being sent.
 
@@ -392,19 +415,21 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 
 ### `domains`
 
-| Column           | Type           | Constraints                  |
-|------------------|----------------|------------------------------|
-| id               | varchar(36)    | PK, prefixed `dom_`          |
-| name             | varchar(255)   | NOT NULL, UNIQUE             |
-| dkim_private_key | text           | nullable                     |
-| dkim_public_key  | text           | nullable                     |
-| dkim_selector    | varchar(63)    | NOT NULL, default `'bunmail'`|
-| spf_verified     | boolean        | NOT NULL, default `false`    |
-| dkim_verified    | boolean        | NOT NULL, default `false`    |
-| dmarc_verified   | boolean        | NOT NULL, default `false`    |
-| verified_at      | timestamp      | nullable                     |
-| created_at       | timestamp      | NOT NULL, default `now()`    |
-| updated_at       | timestamp      | NOT NULL, default `now()`    |
+| Column            | Type           | Constraints                  |
+|-------------------|----------------|------------------------------|
+| id                | varchar(36)    | PK, prefixed `dom_`          |
+| name              | varchar(255)   | NOT NULL, UNIQUE             |
+| dkim_private_key  | text           | nullable; AES-256-GCM encrypted at rest (#23) |
+| dkim_public_key   | text           | nullable                     |
+| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
+| unsubscribe_email | varchar(255)   | nullable; per-domain mailto override for `List-Unsubscribe` (#40) |
+| unsubscribe_url   | text           | nullable; per-domain URL form for `List-Unsubscribe` + One-Click POST (#40) |
+| spf_verified      | boolean        | NOT NULL, default `false`    |
+| dkim_verified     | boolean        | NOT NULL, default `false`    |
+| dmarc_verified    | boolean        | NOT NULL, default `false`    |
+| verified_at       | timestamp      | nullable                     |
+| created_at        | timestamp      | NOT NULL, default `now()`    |
+| updated_at        | timestamp      | NOT NULL, default `now()`    |
 
 ### `webhooks`
 
@@ -447,13 +472,37 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | received_at  | timestamp      | NOT NULL, default `now()`       |
 | deleted_at   | timestamp      | nullable (soft-delete marker)   |
 
+### `suppressions`
+
+Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `createEmail` rejects with HTTP 422 before any insert / queue / SMTP work. Auto-populated by the bounce handler (#24) when DSNs come back.
+
+| Column            | Type           | Constraints                  |
+|-------------------|----------------|------------------------------|
+| id                | varchar(36)    | PK, prefixed `sup_`          |
+| api_key_id        | varchar(36)    | FK → api_keys.id, NOT NULL, `ON DELETE CASCADE` |
+| email             | varchar(255)   | NOT NULL; stored lower-cased + trimmed |
+| reason            | text           | NOT NULL; one of `bounce | complaint | manual | unsubscribe` (validated at API boundary; column stays text for forward compat) |
+| bounce_type       | varchar(20)    | nullable; `hard | soft | null` |
+| diagnostic_code   | text           | nullable; SMTP enhanced status (e.g. `5.1.1`) |
+| source_email_id   | varchar(36)    | FK → emails.id, `ON DELETE SET NULL` |
+| expires_at        | timestamptz    | nullable; null = permanent   |
+| created_at        | timestamptz    | NOT NULL, default `now()`    |
+
+Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` upsert).
+
+### `__bunmail_migrations`
+
+System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table.
+
 ### Relationships
 
 ```
 api_keys  ──1:N──▶ emails
 api_keys  ──1:N──▶ webhooks
 api_keys  ──1:N──▶ templates
+api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
+emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
 ```
 
 ---
@@ -509,6 +558,17 @@ domains   ──1:N──▶ emails
 | GET    | /api/v1/templates/:id         | Get template          | Yes  |
 | PUT    | /api/v1/templates/:id         | Update template       | Yes  |
 | DELETE | /api/v1/templates/:id         | Delete template       | Yes  |
+
+### Suppressions
+
+| Method | Path                                | Description                                | Auth |
+|--------|-------------------------------------|--------------------------------------------|------|
+| POST   | /api/v1/suppressions                | Add an address (idempotent upsert)         | Yes  |
+| GET    | /api/v1/suppressions                | List, paginated, optional `?email=` filter | Yes  |
+| GET    | /api/v1/suppressions/:id            | Get a suppression by ID                    | Yes  |
+| DELETE | /api/v1/suppressions/:id            | Remove (recipient eligible immediately)    | Yes  |
+
+`POST /api/v1/emails/send` returns HTTP 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` when the recipient is on the calling key's list. No row inserted, no queue entry, no SMTP attempt. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md).
 
 ### Inbound
 
@@ -611,8 +671,14 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 
 **DKIM Signing:**
 - RSA 2048-bit key pair generated per domain
-- Private key stored in DB, public key provided as DNS TXT record value
-- Nodemailer signs outgoing emails automatically when DKIM keys exist
+- Private key encrypted at rest with AES-256-GCM via `DKIM_ENCRYPTION_KEY` (#23); public key provided as DNS TXT record value
+- Decrypted in memory on each send and handed to nodemailer's signer; decrypt failure logs and falls through to unsigned mail (fail-open)
+
+**Bounce → Suppression chain:**
+- DSNs received at the inbound SMTP are routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24)
+- Hard bounces (5.x.x) → permanent per-API-key suppression
+- Soft bounces (4.x.x) → 24h windowed suppression, escalates to permanent on second soft bounce within the window
+- Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`
 
 ---
 
@@ -626,6 +692,8 @@ services:
     ports: ["3000:3000"]
     environment:
       DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
+      DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23) — `openssl rand -base64 32`
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}      # Required in production (#19)
     depends_on:
       db: { condition: service_healthy }
 
@@ -651,10 +719,12 @@ volumes:
 
 ## Error Handling
 
-- Services throw typed errors (`NotFoundError`, `UnauthorizedError`, `RateLimitError`, `ValidationError`)
-- Elysia's global error handler catches and formats them into consistent JSON responses
-- No raw errors or stack traces in API responses
-- Email queue failures are logged and stored in `last_error` column
+- Services throw; routes don't catch
+- Elysia's global `onError` handler in [src/index.ts](src/index.ts) maps known error classes to structured JSON responses:
+  - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
+  - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
+  - Unhandled errors → 500 with the error message (stack traces hidden in production)
+- Email queue failures are logged and stored in the `last_error` column
 
 ---
 
@@ -667,5 +737,8 @@ volumes:
 - SDK packages (`npm i bunmail`)
 - CLI tool (`bunx bunmail init`)
 - Scheduled emails
-- Suppression list (unsubscribes, bounces)
-- Redis-backed rate limiting for multi-instance deploys
+- One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
+- DMARC `rua` aggregate report ingest (#41)
+- Webhook delivery persistence + replay (#30)
+- Bun-native SMTP client (subsumes #37, #42 — see #60)
+- Redis-backed rate limiting + queue for multi-instance deploys (#20)
