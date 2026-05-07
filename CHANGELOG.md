@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Suppression list.** New `suppressions` table + `/api/v1/suppressions` CRUD endpoints (`POST`, `GET`, `GET /:id`, `DELETE /:id`). The list is **per-API-key** (different keys often represent different customer environments — one's bounces shouldn't gate another's sends). `POST /api/v1/emails/send` now runs a gate against the calling key's suppression list before any other work; suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` and `suppressionId` so clients can pivot directly to `DELETE /api/v1/suppressions/:id`. The gate normalises addresses (case-fold, trim) so `Alice@Example.com` and `alice@example.com` resolve to the same row. Auto-suppression on hard bounces is scaffolded via an internal `addFromBounce()` service method and will be wired up by #24 (DSN parsing). See [docs/suppressions.md](docs/suppressions.md). (#25)
+
 ### Security
 
 - **Breaking — DKIM private keys are now encrypted at rest.** Every `domains.dkim_private_key` is encrypted with AES-256-GCM using a new required `DKIM_ENCRYPTION_KEY` env var (32 bytes, base64). Stored as `v1:<iv>:<ciphertext>:<auth-tag>`. A DB dump without the env key leaks no signing material. Operators must add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env` **before** pulling this version — boot fails loudly if it's missing or not 32 bytes. Existing rows are auto-encrypted on first boot via [src/db/encrypt-domain-keys.ts](src/db/encrypt-domain-keys.ts) (idempotent — already-encrypted rows are skipped on subsequent restarts). Rotation is documented in `SECURITY.md`. Decrypt failure at send time is fail-open (logs an error and sends unsigned) so a key-rotation accident can't take down outbound delivery. (#23)

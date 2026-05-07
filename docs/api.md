@@ -396,6 +396,65 @@ Revoke an API key (soft delete).
 
 ---
 
+### Suppressions
+
+Per-API-key suppression list — addresses we refuse to send to. See [`docs/suppressions.md`](suppressions.md) for scoping rules, the bounce-handling roadmap, and the schema.
+
+All endpoints are prefixed with `/api/v1/suppressions`.
+
+#### `POST /api/v1/suppressions`
+
+Manually add an address. Idempotent — re-suppressing an existing `(api_key, email)` upserts the row.
+
+**Body:**
+
+```json
+{
+  "email": "user@example.com",
+  "reason": "manual",
+  "expiresAt": null
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `email` | string | Required. Validated against the `email` format. |
+| `reason` | `"bounce" \| "complaint" \| "manual" \| "unsubscribe"` | Defaults to `"manual"`. |
+| `expiresAt` | ISO-8601 datetime or `null` | Optional. `null` (default) = permanent. |
+
+**Response:** the serialized suppression row.
+
+#### `GET /api/v1/suppressions`
+
+Paginated list, scoped to the calling API key.
+
+**Query params:** `page` (default `1`), `limit` (default `20`, max `100`), `email` (optional exact-match filter).
+
+#### `GET /api/v1/suppressions/:id`
+
+Returns a single suppression. 404 if it doesn't exist or belongs to a different key.
+
+#### `DELETE /api/v1/suppressions/:id`
+
+Hard-deletes the suppression. The recipient becomes eligible for sends from this API key immediately.
+
+#### Send-time rejection
+
+When `POST /api/v1/emails/send` is called with a recipient on the suppression list, the response is:
+
+```http
+HTTP/1.1 422 Unprocessable Entity
+
+{
+  "success": false,
+  "error": "Recipient is on the suppression list. Remove the suppression first if this is intentional.",
+  "code": "RECIPIENT_SUPPRESSED",
+  "suppressionId": "sup_a1b2c3..."
+}
+```
+
+No row is inserted into `emails`, no queue entry is created.
+
 ## Error Response Format
 
 All error responses follow this shape:
@@ -406,6 +465,8 @@ All error responses follow this shape:
   "error": "Human-readable error message"
 }
 ```
+
+Some 422 responses carry additional structured fields — e.g. suppression-list rejection carries `code: "RECIPIENT_SUPPRESSED"` and `suppressionId` so clients can pivot to `DELETE /api/v1/suppressions/:id`.
 
 | Status | Meaning                  |
 |--------|--------------------------|

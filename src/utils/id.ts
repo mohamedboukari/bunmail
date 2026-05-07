@@ -1,6 +1,6 @@
 import { randomBytes } from "crypto";
 
-type IdPrefix = "msg" | "key" | "dom" | "whk" | "tpl" | "inb";
+type IdPrefix = "msg" | "key" | "dom" | "whk" | "tpl" | "inb" | "sup";
 
 /**
  * Generates a prefixed unique ID.

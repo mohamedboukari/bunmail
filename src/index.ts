@@ -8,6 +8,8 @@ import { domainsPlugin } from "./modules/domains/domains.plugin.ts";
 import { webhooksPlugin } from "./modules/webhooks/webhooks.plugin.ts";
 import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
 import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
+import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
+import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
@@ -69,6 +71,11 @@ const app = new Elysia()
             description: "Create reusable email templates with variable substitution",
           },
           { name: "Inbound", description: "View received inbound emails" },
+          {
+            name: "Suppressions",
+            description:
+              "Manage the per-API-key suppression list — addresses that should never receive mail",
+          },
           { name: "Health", description: "Server health checks" },
         ],
         components: {
@@ -102,6 +109,22 @@ const app = new Elysia()
       }
 
       return { success: false, error: "Not found" };
+    }
+
+    /**
+     * Suppression-list rejection (#25). The service throws
+     * `SuppressedRecipientError`; map to 422 with structured body so
+     * clients can pivot to `DELETE /api/v1/suppressions/:id` via the
+     * `suppressionId` field.
+     */
+    if (error instanceof SuppressedRecipientError) {
+      set.status = 422;
+      return {
+        success: false,
+        error: error.message,
+        code: "RECIPIENT_SUPPRESSED",
+        suppressionId: error.suppressionId,
+      };
     }
 
     const message = error instanceof Error ? error.message : "Internal server error";
@@ -147,6 +170,8 @@ const app = new Elysia()
   .use(templatesPlugin)
   /** Inbound module — GET / (list), GET /:id */
   .use(inboundPlugin)
+  /** Suppressions module — POST /, GET /, GET /:id, DELETE /:id */
+  .use(suppressionsPlugin)
   /** Dashboard — server-rendered UI under /dashboard */
   .use(pagesPlugin)
   .listen({
