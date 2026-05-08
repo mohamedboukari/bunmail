@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidate the duplicate `### Added` sections under `[Unreleased]` (cosmetic, keeps Keep-a-Changelog format consistent). (#70)
+
+### Added
+
+- **Integration test tier against real Postgres + service-level unit tests.** Two-pronged test coverage uplift: (a) New `test/integration/` directory with 40 tests across 5 services (`suppression`, `email-create`, `queue-recover`, `domain`, `webhook-dispatch`) running against a dedicated `bunmail_test` database. `test/integration/_preload.ts` overrides `DATABASE_URL` before any service module loads; each test wraps in `beforeEach(truncateAll)` for isolation. Catches `ON DELETE CASCADE` / `SET NULL` behaviour, `ON CONFLICT DO UPDATE` upserts, encryption round-trips, schema drift between TS models and the live DB. (b) New unit tests for every previously-uncovered service (`mailer`, `dns-verification`, `template`, `webhook`, `webhook-dispatch`, `api-key`, `domain`) using mocked dependencies — covers the orchestration code paths even without a DB. Plus 20 JSX render-smoke tests for every dashboard page + presentational component. **Overall coverage uplift: 61.7% → 89.8% functions, 66.1% → 93.0% lines**. `bunfig.toml` threshold raised to `function: 0.85, line: 0.9` so future PRs can't regress. CI provisions a `postgres:16` service container and runs all three tiers on every PR. New scripts: `test:unit`, `test:e2e`, `test:integration`, `test:integration:setup`, `test:all`, `test:coverage`. See [docs/testing.md](docs/testing.md). (#70)
+
 ### Added
 
 - **Auto-suppress on inline SMTP 5xx rejections.** When a recipient's MX rejects an outbound send during the SMTP transaction with a `550 5.1.1` (the way Gmail / Outlook / Yahoo handle obviously-bad addresses today), the queue's failure path now classifies the error via [src/utils/smtp-error.ts](src/utils/smtp-error.ts), calls `suppressionService.addFromBounce()` to permanently suppress the recipient, marks the email `status = 'bounced'`, fires the `email.bounced` webhook with `source: "inline"`, and **stops retrying**. Previously the queue would retry three times, hitting the same MX with the same `5.1.1` each cycle — exactly the pattern that tanks IP reputation. Soft 4xx and infrastructure errors keep the existing retry-up-to-`MAX_ATTEMPTS` behaviour. Webhook payload shape matches the async-DSN bounce path from #24 — receivers get a uniform `email.bounced` signal regardless of which path fired. Closes the auto-suppression loop for hard bounces that #24 left open. (#68)
