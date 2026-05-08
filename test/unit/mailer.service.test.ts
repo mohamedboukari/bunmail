@@ -43,11 +43,18 @@ interface CapturedSend {
 const captured: CapturedSend[] = [];
 let mxResult: Array<{ exchange: string; priority: number }> | Error = [];
 
+/**
+ * `mock.module` registrations live for the entire test process. Multiple
+ * test files mock `dns/promises` (mailer needs `resolveMx`,
+ * `dns-verification` needs `resolveTxt`); to avoid one file's mock
+ * shadowing the other's missing export, both export the full surface.
+ */
 mock.module("dns/promises", () => ({
   resolveMx: mock(async () => {
     if (mxResult instanceof Error) throw mxResult;
     return mxResult;
   }),
+  resolveTxt: mock(async () => []),
 }));
 
 mock.module("nodemailer", () => ({

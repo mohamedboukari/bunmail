@@ -15,14 +15,26 @@ Run all three together: `bun run test:all`.
 ## Running
 
 ```bash
-bun run test                          # unit + e2e (fast — pre-commit hook)
+bun run test                          # unit + e2e (fast)
 bun run test:unit                     # unit only
 bun run test:e2e                      # e2e only
 bun run test:integration              # integration only (needs Postgres)
 bun run test:integration:setup        # one-shot: create bunmail_test + migrate
-bun run test:all                      # all three tiers in sequence
+bun run test:all                      # all three tiers (this is what pre-commit + CI run)
 bun run test:coverage                 # unit + e2e with coverage table
 ```
+
+## Pre-commit runs `test:all`
+
+The `.husky/pre-commit` hook runs `bun run test:all` — same suite CI runs. **First-time on a fresh checkout you need:**
+
+```bash
+bun run test:integration:setup
+```
+
+That creates `bunmail_test` on your local Postgres and applies all migrations. After that, every commit re-runs unit + e2e + integration in ~3 seconds. If integration fails because Postgres isn't running, the hook errors clearly and points you at the setup script.
+
+The pre-commit + CI parity is deliberate: cross-platform / cross-tier regressions should fail at commit time, not after a CI cycle.
 
 ## How the integration tier works
 

@@ -12,6 +12,11 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
 let txtRecords: Record<string, string[][]> = {};
 const dbUpdates: Array<Record<string, unknown>> = [];
 
+/**
+ * Both `resolveTxt` (used here) and `resolveMx` (used by mailer.service
+ * tests in the same process) need to be exported so cross-file
+ * `mock.module` calls don't shadow each other's missing exports.
+ */
 mock.module("dns/promises", () => ({
   resolveTxt: mock(async (hostname: string) => {
     if (hostname in txtRecords) return txtRecords[hostname];
@@ -19,6 +24,7 @@ mock.module("dns/promises", () => ({
     err.code = "ENOTFOUND";
     throw err;
   }),
+  resolveMx: mock(async () => []),
 }));
 
 mock.module("../../src/db/index.ts", () => ({
