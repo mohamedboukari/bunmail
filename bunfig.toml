@@ -1,3 +1,22 @@
 [test]
 root = "."
 preload = ["./test/setup.ts"]
+
+# Coverage threshold — gates `bun test --coverage` invocations. If the
+# actual numbers drop below either, `bun test` exits non-zero.
+#
+# The threshold reflects the **unit + e2e** baseline (what the
+# `test:coverage` script measures). The integration tier (#70) runs
+# separately because Bun's `mock.module` from unit/e2e tests shadows
+# real modules in a combined run; integration coverage is exercised
+# via `bun test --preload ./test/integration/_preload.ts --coverage
+# test/integration` (typically 80-100% on the targeted services).
+# See docs/testing.md.
+#
+# Floor set to current value minus a small slack (89.77/93.02 is the
+# baseline as of the #70 PR). Future PRs can't regress below this.
+coverageThreshold = { line = 0.9, function = 0.85 }
+# Note: 88.74/92.33 is the local baseline as of #70's merge (after
+# removing the brittle webhook-dispatch unit test that had cross-file
+# mock-ordering issues on Linux CI). The integration tier covers the
+# same dispatch code path end-to-end via real DB + mocked fetch.

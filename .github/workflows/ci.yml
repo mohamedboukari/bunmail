@@ -20,6 +20,13 @@ jobs:
       API_KEY_SEED: ci_test_key_not_real
       DASHBOARD_PASSWORD: ci_test_pass
       MAIL_HOSTNAME: localhost
+      # Deterministic test key for the DKIM-at-rest config check (#23).
+      # Safe because the CI database has no production secrets.
+      DKIM_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Used by `test/integration/_preload.ts` to lock the app's `db`
+      # singleton to the bunmail_test database before any service
+      # module loads.
+      INTEGRATION_DATABASE_URL: postgresql://bunmail:bunmail@localhost:5432/bunmail_test
 
     services:
       postgres:
@@ -73,3 +80,13 @@ jobs:
 
       - name: Test (e2e)
         run: bun test test/e2e
+
+      - name: Apply migrations to test DB
+        # The integration tier runs against a real Postgres
+        # (`services.postgres` above provisioned `bunmail_test`).
+        # The Bun-native runner (#56) reads `drizzle/<n>_*.sql` and
+        # tracks applied tags in `__bunmail_migrations`.
+        run: bun run db:migrate
+
+      - name: Test (integration — real Postgres)
+        run: bun run test:integration
