@@ -174,19 +174,30 @@ Stops the queue processor gracefully.
 
 ```
 queued ──→ sending ──→ sent ✓        → webhook: email.sent
-  ↑           │            │
-  └───────────┘            ↓ (DSN arrives later)
-   retry, attempts < 3   bounced ✗   → webhook: email.bounced
-                           ↑
-                       set by the bounce handler (#24)
-                       when a Delivery Status Notification
-                       comes back from the recipient's MX
+  ↑           │  │         │
+  │           │  │         ↓ (async DSN arrives later)
+  │           │  │       bounced ✗  → webhook: email.bounced (source: rfc3464/fallback)
+  │           │  │                     set by bounce handler (#24)
+  │           │  │
+  │           │  └───→ bounced ✗     → webhook: email.bounced (source: inline)
+  │           │       (inline 5xx)     set by handleSendFailure (#68)
+  │           │                        on attempt 1 — stops retrying
+  │           │
+  └───────────┴───→ queued (retry, attempts < 3, soft 4xx or infra error)
 
-queued ──→ sending ──→ failed ✗ (attempts >= 3) → webhook: email.failed
-                       (never reached an MX)
+queued ──→ sending ──→ failed ✗ (attempts >= 3, soft 4xx or infra error)
+                       → webhook: email.failed (never confirmed unreachable)
 ```
 
-`sent` = recipient's MX accepted the SMTP transaction. `bounced` = it accepted, then later returned a DSN. `failed` = we never reached an MX. See [docs/bounces.md](bounces.md) for the bounce flow.
+| Status | Meaning |
+|---|---|
+| `queued` | Waiting for the queue processor |
+| `sending` | Mid-SMTP-transaction |
+| `sent` | SMTP transaction succeeded; recipient's MX accepted |
+| `bounced` | The recipient is permanently unreachable. Set either when an inline 5xx came back during the SMTP transaction (#68) **or** when a DSN arrived later (#24). Auto-suppression fires in both cases. |
+| `failed` | All retries exhausted on a transient (4xx) or infrastructure error. We never confirmed whether the recipient is reachable. |
+
+See [docs/bounces.md](bounces.md) for both bounce paths.
 
 ## Queue Architecture
 

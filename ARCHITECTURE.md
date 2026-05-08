@@ -339,12 +339,14 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 **Email Status Flow:**
 
 ```
-queued → sending → sent → bounced (set by bounce handler when DSN arrives, #24)
-                 → failed (after 3 attempts, never reached an MX)
-         ↘ queued (retry on transient failure)
+queued → sending → sent → bounced  ← async DSN arrives later (#24)
+                 → bounced          ← inline 5xx during SMTP transaction (#68)
+                                     auto-suppress + stop retrying on attempt 1
+                 → failed (after 3 attempts on soft 4xx or infra error)
+         ↘ queued (retry on soft 4xx or infrastructure error, attempts < 3)
 ```
 
-`sent` = recipient's MX accepted the SMTP transaction. `bounced` = it accepted, then later returned a Delivery Status Notification — the bounce module ([src/modules/bounces/](src/modules/bounces/)) auto-suppresses the recipient and fires `email.bounced`. `failed` = we never reached an MX (3 retries exhausted).
+`sent` = recipient's MX accepted the SMTP transaction. `bounced` = recipient confirmed permanently unreachable, either inline (`550 5.1.1 ...` during the send, #68) or via a DSN that came back later (#24). Both paths auto-suppress and fire `email.bounced` with `source: "inline"` vs `"rfc3464"` / `"fallback"`. `failed` = soft 4xx or infrastructure error exhausted retries — we never confirmed reachability either way.
 
 The queue selector also filters `deleted_at IS NULL` so rows trashed while still queued are skipped instead of being sent.
 
@@ -674,11 +676,12 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 - Private key encrypted at rest with AES-256-GCM via `DKIM_ENCRYPTION_KEY` (#23); public key provided as DNS TXT record value
 - Decrypted in memory on each send and handed to nodemailer's signer; decrypt failure logs and falls through to unsigned mail (fail-open)
 
-**Bounce → Suppression chain:**
-- DSNs received at the inbound SMTP are routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24)
-- Hard bounces (5.x.x) → permanent per-API-key suppression
-- Soft bounces (4.x.x) → 24h windowed suppression, escalates to permanent on second soft bounce within the window
-- Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`
+**Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
+- **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
+- **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
+- Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
+- Soft bounces (4.x.x) — async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path preserves the existing retry-up-to-MAX_ATTEMPTS behaviour (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
+- Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 
 ---
 

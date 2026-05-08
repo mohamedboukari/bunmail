@@ -10,7 +10,20 @@ When BunMail's outbound SMTP delivers a message, the recipient's MX server **acc
 
 The DSN arrives at our **inbound** SMTP server, which is why this module lives next to `smtp-receiver`.
 
-## Parser strategies
+## Two bounce flavours
+
+Receivers handle "address doesn't exist" / "address rejects mail" in **two distinct ways**, and both need to feed the suppression list:
+
+| Flavour | When the receiver does this | Caught by |
+|---|---|---|
+| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent — the sending MTA already knows. | The queue's send-failure path: [queue.service.ts → `handleSendFailure`](../src/modules/emails/services/queue.service.ts) (#68) |
+| **Async DSN** | The MX accepts at 250, tries to deliver later, fails, sends a Delivery Status Notification back to the envelope sender. | The bounce module: [bounce-parser](../src/modules/bounces/services/bounce-parser.service.ts) + [bounce-handler](../src/modules/bounces/services/bounce-handler.service.ts) (#24) |
+
+Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook. From the consumer's perspective the signal is uniform — the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
+
+Modern Gmail / Outlook / Yahoo prefer **inline 5xx** for obvious-nonexistence cases. Async DSNs are more common for "address used to exist" / "mailbox full" / "domain temporarily unreachable" cases.
+
+## Async DSN parser strategies
 
 Two paths, tried in order. Both are pure functions in [src/modules/bounces/services/bounce-parser.service.ts](../src/modules/bounces/services/bounce-parser.service.ts).
 
@@ -43,9 +56,21 @@ We **require** an `originalMessageId` from the parser. Without it, we can't safe
 
 The lookup uses the `messageId` column on `emails`, set by nodemailer at send time. Both the wrapped (`<id@host>`) and unwrapped form are tried — different SMTP flavours include or strip the angle brackets.
 
-## Bounce → suppression flow
+## Inline 5xx flow (#68)
 
-When a bounce parses cleanly and links to an `emails` row, the handler does five things:
+When `processEmail`'s SMTP send throws an error, the catch block parses the error message via [src/utils/smtp-error.ts](../src/utils/smtp-error.ts) and dispatches via `handleSendFailure`:
+
+| Classification | What happens |
+|---|---|
+| **Hard (5xx)** — `550 5.1.1`, `5.7.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits — exactly what tanks IP reputation. |
+| **Soft (4xx)** — `452 4.2.2 mailbox full`, `421 greylist`, etc. | Existing retry behaviour. Repeated soft bounces are still handled by the async-DSN path's escalation rule — the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
+| **Non-SMTP error** — DNS resolution failure, socket timeout, TLS handshake error | Existing retry behaviour. Infrastructure problems don't tell us anything about the recipient. |
+
+Auto-suppression on inline 5xx fires on **attempt 1** — no point waiting for `MAX_ATTEMPTS` to confirm what the receiver already told us authoritatively.
+
+## Async DSN → suppression flow
+
+When a DSN parses cleanly and links to an `emails` row, the bounce handler does five things:
 
 1. **Look up existing suppression** for `(api_key_id, recipient)`.
 2. **Decide hard vs soft** with escalation:
@@ -58,10 +83,30 @@ When a bounce parses cleanly and links to an `emails` row, the handler does five
 
 ## Webhook payload
 
+`email.bounced` from the **inline 5xx** path:
+
 ```json
 {
   "event": "email.bounced",
-  "timestamp": "2026-05-07T22:14:00.000Z",
+  "timestamp": "2026-05-08T...",
+  "data": {
+    "emailId": "msg_a1b2c3...",
+    "to": "user@example.com",
+    "bounceType": "hard",
+    "status": "5.1.1",
+    "diagnostic": "Can't send mail - all recipients were rejected: 550-5.1.1 ...",
+    "suppressionId": "sup_d4e5f6...",
+    "source": "inline"
+  }
+}
+```
+
+`email.bounced` from the **async DSN** path:
+
+```json
+{
+  "event": "email.bounced",
+  "timestamp": "2026-05-08T...",
   "data": {
     "emailId": "msg_a1b2c3...",
     "to": "user@example.com",
@@ -72,6 +117,8 @@ When a bounce parses cleanly and links to an `emails` row, the handler does five
   }
 }
 ```
+
+The async-DSN path doesn't emit a `source` field today (consumers can treat its absence as `"rfc3464"` or `"fallback"`). Both payload shapes carry `suppressionId` so receivers can cross-reference the auto-created suppression row regardless of which path fired.
 
 ## What we do **not** do
 
