@@ -223,17 +223,17 @@ bunmail/
 │           ├── flash-message.tsx         ← Success/error banner
 │           └── empty-state.tsx           ← "No data yet" placeholder
 ├── test/
-│   ├── unit/                             ← Pure unit tests
-│   │   ├── crypto.test.ts
-│   │   ├── id.test.ts
-│   │   ├── session.test.ts
-│   │   ├── domain.serialization.test.ts
-│   │   ├── email.serialization.test.ts
-│   │   └── api-key.serialization.test.ts
-│   └── e2e/                              ← E2E integration tests
-│       ├── dashboard.test.ts
-│       └── domains-api.test.ts
+│   ├── setup.ts                          ← Global preload (env vars, mocks)
+│   ├── unit/                             ← Pure unit tests, no DB / network
+│   ├── e2e/                              ← Plugin-level tests with mocked services
+│   └── integration/                      ← Real Postgres tests (#70)
+│       ├── _preload.ts                   ← Locks DATABASE_URL to bunmail_test
+│       ├── _helpers.ts                   ← truncateAll, seed factories
+│       ├── setup-db.ts                   ← One-shot: create bunmail_test + migrate
+│       └── *.integration.test.ts         ← One file per service (5 currently)
 ```
+
+See [docs/testing.md](docs/testing.md) for the three-tier strategy + how to run each.
 
 ---
 
