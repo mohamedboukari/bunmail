@@ -5,9 +5,11 @@ import { domains } from "../../domains/models/domain.schema.ts";
 import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
+import { parseSmtpError } from "../../../utils/smtp-error.ts";
 import { config } from "../../../config.ts";
 
 /**
@@ -135,6 +137,165 @@ const BATCH_SIZE = 5;
 
 /** Max send attempts before marking an email as permanently failed */
 const MAX_ATTEMPTS = 3;
+
+/* ─── Send-failure handling (#68) ─── */
+
+/**
+ * Side-effect callbacks the failure handler relies on. Injected so tests
+ * can run the classification logic without a DB / webhook dispatcher.
+ * Same pattern as `bounce-handler.service.ts` from #24.
+ */
+export interface SendFailureDeps {
+  /** `sending → bounced` transition. Set when an inline 5xx tells us the recipient is permanently unreachable. */
+  markEmailBounced: (emailId: string, lastError: string) => Promise<void>;
+  /** `sending → failed` transition. Used after `MAX_ATTEMPTS` retries on transient/non-SMTP errors. */
+  markEmailFailed: (emailId: string, lastError: string) => Promise<void>;
+  /** `sending → queued` transition for retry on the next poll cycle. */
+  markEmailRequeued: (emailId: string, lastError: string) => Promise<void>;
+  /** Persist the suppression for an inline-5xx hard rejection. */
+  addFromBounce: (
+    apiKeyId: string,
+    input: {
+      email: string;
+      bounceType: "hard";
+      diagnosticCode: string;
+      sourceEmailId: string;
+      expiresAt: null;
+    },
+  ) => Promise<{ id: string }>;
+  /** Fire-and-forget webhook dispatch. Must accept the same event vocabulary the production dispatcher uses. */
+  dispatchEvent: (
+    event: "email.bounced" | "email.failed",
+    data: Record<string, unknown>,
+  ) => void;
+}
+
+export interface SendFailureContext {
+  email: {
+    id: string;
+    apiKeyId: string;
+    fromAddress: string;
+    toAddress: string;
+    subject: string;
+  };
+  /** 1-based attempt number that just failed. */
+  attempt: number;
+  errorMessage: string;
+}
+
+export interface HandleSendFailureResult {
+  outcome: "auto-suppressed" | "permanently-failed" | "requeued";
+  /** Set when we auto-suppressed this recipient on an inline 5xx. */
+  suppressionId?: string;
+}
+
+/**
+ * Decides what to do when a send attempt fails. Three outcomes:
+ *
+ *   1. **Inline 5xx → auto-suppress** (#68). Modern receivers reject
+ *      obviously-bad recipients during the SMTP transaction with a
+ *      `550 5.1.1` rather than accepting and later returning a DSN.
+ *      Three retries to the same address would just be three more
+ *      `550` hits on the receiver's MX — exactly what tanks IP
+ *      reputation. So when we recognise a 5xx, we suppress immediately,
+ *      mark the email `bounced`, fire `email.bounced`, and stop. The
+ *      payload shape matches the async-DSN path from #24 so receivers
+ *      get a uniform signal.
+ *
+ *   2. **Soft 4xx or non-SMTP error, attempt < MAX_ATTEMPTS → requeue.**
+ *      Existing transient-failure behaviour. Soft inline 4xx rejections
+ *      (greylisting, temporary unavailability) and infrastructure
+ *      errors (DNS resolution, socket timeout, TLS handshake) all use
+ *      this path.
+ *
+ *   3. **Soft 4xx or non-SMTP error, attempt >= MAX_ATTEMPTS → fail.**
+ *      Existing retry-exhausted behaviour. Marks `failed` and fires
+ *      `email.failed`. (Repeated 4xx escalation to a permanent
+ *      suppression is left to the async-DSN path's escalation rule
+ *      from #24, which has more signal to work with than this single
+ *      catch block does.)
+ *
+ * Exported for unit testing via injected `deps` — see
+ * `test/unit/handle-send-failure.test.ts`.
+ */
+export async function handleSendFailure(
+  ctx: SendFailureContext,
+  deps: SendFailureDeps,
+): Promise<HandleSendFailureResult> {
+  const parsed = parseSmtpError(ctx.errorMessage);
+
+  if (parsed?.kind === "hard") {
+    /**
+     * Inline 5xx: stop retrying, suppress the recipient, mark bounced.
+     * Reuses `addFromBounce` so the suppression row is indistinguishable
+     * from one created by the DSN path — same `bounceType: "hard"`,
+     * same diagnostic code shape, same `email.bounced` webhook payload.
+     */
+    const suppression = await deps.addFromBounce(ctx.email.apiKeyId, {
+      email: ctx.email.toAddress,
+      bounceType: "hard",
+      diagnosticCode: parsed.code,
+      sourceEmailId: ctx.email.id,
+      expiresAt: null,
+    });
+
+    await deps.markEmailBounced(ctx.email.id, ctx.errorMessage);
+
+    deps.dispatchEvent("email.bounced", {
+      emailId: ctx.email.id,
+      to: ctx.email.toAddress,
+      bounceType: "hard",
+      status: parsed.code,
+      diagnostic: ctx.errorMessage,
+      suppressionId: suppression.id,
+      /** Distinguish the inline path from the async-DSN path in webhook
+       *  consumers that care to slice their analytics that way. */
+      source: "inline",
+    });
+
+    logger.warn("Inline SMTP 5xx — auto-suppressed and stopped retrying", {
+      emailId: ctx.email.id,
+      apiKeyId: ctx.email.apiKeyId,
+      to: redactEmail(ctx.email.toAddress),
+      status: parsed.code,
+      attempt: ctx.attempt,
+      suppressionId: suppression.id,
+    });
+
+    return { outcome: "auto-suppressed", suppressionId: suppression.id };
+  }
+
+  if (ctx.attempt >= MAX_ATTEMPTS) {
+    await deps.markEmailFailed(ctx.email.id, ctx.errorMessage);
+
+    deps.dispatchEvent("email.failed", {
+      emailId: ctx.email.id,
+      from: ctx.email.fromAddress,
+      to: ctx.email.toAddress,
+      subject: ctx.email.subject,
+      error: ctx.errorMessage,
+    });
+
+    logger.error("Email permanently failed after max attempts", {
+      emailId: ctx.email.id,
+      attempt: ctx.attempt,
+      error: ctx.errorMessage,
+    });
+
+    return { outcome: "permanently-failed" };
+  }
+
+  await deps.markEmailRequeued(ctx.email.id, ctx.errorMessage);
+
+  logger.warn("Email send failed, will retry", {
+    emailId: ctx.email.id,
+    attempt: ctx.attempt,
+    remainingAttempts: MAX_ATTEMPTS - ctx.attempt,
+    error: ctx.errorMessage,
+  });
+
+  return { outcome: "requeued" };
+}
 
 /** Reference to the setInterval timer — used to stop the queue */
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -336,48 +497,51 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
-    /** Step 3b: Failure — decide whether to retry or permanently fail */
-    if (attempt >= MAX_ATTEMPTS) {
-      /** All retries exhausted — mark as permanently failed */
-      await db
-        .update(emails)
-        .set({
-          status: "failed",
-          lastError: errorMessage,
-          updatedAt: new Date(),
-        })
-        .where(eq(emails.id, emailId));
-
-      logger.error("Email permanently failed after max attempts", {
-        emailId,
+    /**
+     * Step 3b: Failure — classify and dispatch.
+     *
+     * Inline 5xx (#68) → auto-suppress + stop retrying. Soft 4xx /
+     * infrastructure errors → retry until MAX_ATTEMPTS, then mark
+     * `failed`. See `handleSendFailure` above for the full decision
+     * tree.
+     */
+    await handleSendFailure(
+      {
+        email: {
+          id: emailId,
+          apiKeyId: email.apiKeyId,
+          fromAddress: email.fromAddress,
+          toAddress: email.toAddress,
+          subject: email.subject,
+        },
         attempt,
-        error: errorMessage,
-      });
-
-      dispatchEvent("email.failed", {
-        emailId,
-        from: email.fromAddress,
-        to: email.toAddress,
-        subject: email.subject,
-        error: errorMessage,
-      });
-    } else {
-      /** Transient failure — put back in queue for retry on next cycle */
-      await db
-        .update(emails)
-        .set({
-          status: "queued",
-          lastError: errorMessage,
-          updatedAt: new Date(),
-        })
-        .where(eq(emails.id, emailId));
-
-      logger.warn("Email send failed, will retry", {
-        emailId,
-        attempt,
-        remainingAttempts: MAX_ATTEMPTS - attempt,
-        error: errorMessage,
-      });
-    }
+        errorMessage,
+      },
+      {
+        markEmailBounced: async (id, lastError) => {
+          await db
+            .update(emails)
+            .set({ status: "bounced", lastError, updatedAt: new Date() })
+            .where(eq(emails.id, id));
+        },
+        markEmailFailed: async (id, lastError) => {
+          await db
+            .update(emails)
+            .set({ status: "failed", lastError, updatedAt: new Date() })
+            .where(eq(emails.id, id));
+        },
+        markEmailRequeued: async (id, lastError) => {
+          await db
+            .update(emails)
+            .set({ status: "queued", lastError, updatedAt: new Date() })
+            .where(eq(emails.id, id));
+        },
+        addFromBounce: async (apiKeyId, input) => {
+          const row = await addFromBounce(apiKeyId, input);
+          return { id: row.id };
+        },
+        dispatchEvent,
+      },
+    );
   }
 }
