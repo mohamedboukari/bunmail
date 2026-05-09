@@ -205,7 +205,7 @@ describe("worker poll cycle — exhausting retries flips status=failed", () => {
       await runPollCycle();
       await db
         .update(webhookDeliveries)
-        .set({ nextAttemptAt: new Date() })
+        .set({ nextAttemptAt: new Date(Date.now() - 1000) })
         .where(eq(webhookDeliveries.id, deliveryId));
     }
 
@@ -341,7 +341,7 @@ describe("replayDelivery — resets a failed row to pending", () => {
       await runPollCycle();
       await db
         .update(webhookDeliveries)
-        .set({ nextAttemptAt: new Date() })
+        .set({ nextAttemptAt: new Date(Date.now() - 1000) })
         .where(eq(webhookDeliveries.id, deliveryId));
     }
     let row = await getDeliveryById({ deliveryId, apiKeyId });
@@ -504,7 +504,7 @@ describe("purgeOldDeliveries — retention cleanup", () => {
       await runPollCycle();
       await db
         .update(webhookDeliveries)
-        .set({ nextAttemptAt: new Date() })
+        .set({ nextAttemptAt: new Date(Date.now() - 1000) })
         .where(eq(webhookDeliveries.id, oldFailed));
     }
     await db

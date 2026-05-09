@@ -26,7 +26,7 @@
  * reject. Body bytes are stored verbatim once at enqueue time.
  */
 
-import { and, desc, eq, lte, sql, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, sql, inArray, lt } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { webhookDeliveries } from "../models/webhook-delivery.schema.ts";
 import { webhooks } from "../models/webhook.schema.ts";
@@ -148,14 +148,27 @@ export async function claimDueDeliveries(
     secret: string;
   }>
 > {
-  /** Inner: pick + lock the next `n` due rows. */
+  /**
+   * Inner: pick + lock the next `n` due rows.
+   *
+   * The "is this row due?" comparison uses Postgres `NOW()` rather
+   * than the JS `now` we got from the caller. Why: rows set
+   * `next_attempt_at` via Drizzle's `defaultNow()` (= Postgres NOW())
+   * at insert time. On a CI runner with a containerised Postgres, the
+   * DB clock can drift a few ms ahead of the worker process's clock —
+   * which means a freshly-enqueued row's `next_attempt_at` is in the
+   * Node-perceived future for a brief window, and the claim's `<=`
+   * filter excludes it. Comparing both sides in DB time sidesteps the
+   * skew entirely. The OUTER UPDATE below still uses the Node `now`
+   * for its set values; minor skew on those is harmless.
+   */
   const pickIds = db
     .select({ id: webhookDeliveries.id })
     .from(webhookDeliveries)
     .where(
       and(
         eq(webhookDeliveries.status, "pending"),
-        lte(webhookDeliveries.nextAttemptAt, now),
+        sql`${webhookDeliveries.nextAttemptAt} <= NOW()`,
       ),
     )
     .orderBy(webhookDeliveries.nextAttemptAt)
@@ -476,7 +489,14 @@ export async function replayDelivery(opts: {
       lastResponseStatus: null,
       lastResponseBody: null,
       deliveredAt: null,
-      nextAttemptAt: now,
+      /**
+       * Use Postgres NOW() rather than the JS `now` so the row is
+       * immediately due by the worker's DB-clock comparison even when
+       * Node's clock is slightly ahead of PG's. Otherwise replay can
+       * queue a row that's briefly invisible to the worker until the
+       * next poll cycle catches up.
+       */
+      nextAttemptAt: sql`NOW()`,
       updatedAt: now,
     })
     .where(eq(webhookDeliveries.id, opts.deliveryId))
