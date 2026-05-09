@@ -1,4 +1,4 @@
-import { eq, asc, and, isNull } from "drizzle-orm";
+import { eq, asc, and, isNull, inArray, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
@@ -363,24 +363,69 @@ async function recoverInterrupted(): Promise<void> {
 }
 
 /**
- * Single poll cycle — fetches queued emails and processes them.
+ * Atomically claims up to `n` queued emails for processing.
  *
- * Steps:
- * 1. SELECT up to BATCH_SIZE emails with status "queued" (oldest first)
- * 2. For each email (concurrently):
- *    a. Mark as "sending" and increment attempts
- *    b. Try SMTP delivery via mailer service
- *    c. On success: mark "sent" with timestamp
- *    d. On failure: if attempts >= MAX_ATTEMPTS mark "failed", else back to "queued"
+ * The query is a single statement that flips `queued → sending` with
+ * `attempts` incremented, gated by `FOR UPDATE SKIP LOCKED` on the
+ * inner SELECT. That gives us two guarantees no separate select+update
+ * pair could:
+ *
+ *   1. **Atomicity** — by the time the row appears in `RETURNING *`, it
+ *      is already in `sending` state. There is no window where a row
+ *      is "selected but not yet marked", which is the window the old
+ *      code raced through (#20).
+ *   2. **Concurrency-safety** — `SKIP LOCKED` makes a concurrent caller
+ *      *skip past* any row another transaction has locked rather than
+ *      blocking on it or grabbing the same id. So two workers running
+ *      this query at the same time get **disjoint** result sets, never
+ *      overlapping ones. Each returned row was claimed by exactly one
+ *      caller.
+ *
+ * Exported so the integration test can hit it directly without going
+ * through the poll loop.
  */
-async function processQueue(): Promise<void> {
-  /** Fetch the next batch of queued emails, oldest first */
-  const batch = await db
-    .select()
+export async function claimNextEmails(
+  n: number,
+): Promise<Array<typeof emails.$inferSelect>> {
+  /** Inner subquery that picks the next `n` queued ids and locks them. */
+  const pickIds = db
+    .select({ id: emails.id })
     .from(emails)
     .where(and(eq(emails.status, "queued"), isNull(emails.deletedAt)))
     .orderBy(asc(emails.createdAt))
-    .limit(BATCH_SIZE);
+    .limit(n)
+    .for("update", { skipLocked: true });
+
+  /** Outer UPDATE flips state + bumps attempts in the same statement. */
+  const claimed = await db
+    .update(emails)
+    .set({
+      status: "sending",
+      attempts: sql`${emails.attempts} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(inArray(emails.id, pickIds))
+    .returning();
+
+  return claimed;
+}
+
+/**
+ * Single poll cycle — claims a batch of queued emails and processes them.
+ *
+ * Steps:
+ * 1. Atomically claim up to BATCH_SIZE rows (queued → sending in one
+ *    statement, with `FOR UPDATE SKIP LOCKED` so concurrent workers
+ *    can't claim the same row — see {@link claimNextEmails}).
+ * 2. For each claimed row (concurrently):
+ *    a. Try SMTP delivery via the mailer service.
+ *    b. On success: mark "sent" with timestamp.
+ *    c. On failure: hand off to `handleSendFailure` which classifies
+ *       inline 5xx (auto-suppress, #68) vs transient (retry up to
+ *       MAX_ATTEMPTS, then "failed").
+ */
+async function processQueue(): Promise<void> {
+  const batch = await claimNextEmails(BATCH_SIZE);
 
   /** Nothing to process — skip silently */
   if (batch.length === 0) return;
@@ -399,23 +444,18 @@ async function processQueue(): Promise<void> {
  */
 async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   const emailId = email.id;
-  const attempt = email.attempts + 1;
+  /**
+   * The row arrives already in `sending` state with `attempts` incremented
+   * — `claimNextEmails` did both atomically (#20). So `email.attempts` is
+   * the count for *this* attempt, not the previous one.
+   */
+  const attempt = email.attempts;
 
   logger.info("Processing email", {
     emailId,
     attempt,
     to: redactEmail(email.toAddress),
   });
-
-  /** Step 1: Mark as "sending" and increment the attempt counter */
-  await db
-    .update(emails)
-    .set({
-      status: "sending",
-      attempts: attempt,
-      updatedAt: new Date(),
-    })
-    .where(eq(emails.id, emailId));
 
   try {
     /**

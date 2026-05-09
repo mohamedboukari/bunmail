@@ -127,14 +127,13 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 | **API key rotation** | Treat `bm_live_…` keys like any other secret. Revoke (set `is_active = false`) and rotate periodically. |
 | **Backup integrity** | Test restores. A backup you can't restore is not a backup. |
 | **Dashboard access scope** | The dashboard is admin-only — anyone who logs in sees every email across every API key. Don't share the password. |
-| **Scaling caveats** | Rate limit + queue state are in-memory. Multiple replicas would each have their own counters and could double-send the same queued row. The queue race is tracked in #20 — until it's fixed, run a single replica. |
+| **Scaling caveats** | Rate limit state is in-memory — multiple replicas would each have their own counters. The queue's `queued → sending` transition is now atomic via `FOR UPDATE SKIP LOCKED` (#20), so multiple replicas no longer double-send the same row, but the in-memory rate limit is still per-replica. Use a sticky load-balancer (or consolidate to a single rate-limit Redis) if you scale out. |
 
 ## 6. Known residual risks
 
 These are real but accepted (or pending) trade-offs.
 
 - **Outbound certificate validation is relaxed** (`rejectUnauthorized: false` in `mailer.service.ts`). MTA-to-MTA delivery routinely hits self-signed and expired certs; refusing them would mean dropping legitimate mail to a substantial fraction of receivers. Per-domain `requireValidCert` is folded into the Bun-native SMTP client roadmap in #60 (subsumes #37, #42).
-- **Single-replica queue.** A second instance would double-send queued rows. Tracked in #20.
 
 ## 7. Reporting a vulnerability
 

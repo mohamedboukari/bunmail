@@ -204,6 +204,7 @@ See [docs/bounces.md](bounces.md) for both bounce paths.
 - **Polling interval:** 2 seconds
 - **Batch size:** 5 emails per cycle
 - **Max attempts:** 3
+- **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims — running multiple BunMail instances against the same DB will not double-send.
 - **Crash recovery:** On startup, `sending` → `queued`
 - **DKIM:** Automatically signs with domain's RSA key when available
 - **Webhooks:** Dispatches `email.sent` and `email.failed` events
