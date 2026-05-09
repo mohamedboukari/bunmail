@@ -20,6 +20,7 @@ import {
   dispatchEvent,
   signPayload,
 } from "../../src/modules/webhooks/services/webhook-dispatch.service.ts";
+import { runPollCycle } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
 import {
   createWebhook,
   findWebhooksForEvent,
@@ -67,9 +68,21 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** Wait for `dispatchEvent`'s fire-and-forget chain to drain. */
+/**
+ * Wait for `dispatchEvent`'s enqueue chain to drain, then trigger the
+ * worker poll once so any due rows actually POST out. dispatchEvent
+ * is fire-and-forget, so we wait briefly for the enqueue inserts to
+ * commit before we ask the worker to claim them.
+ *
+ * Pre-#30 this was just a setTimeout — the old implementation POSTed
+ * directly from `dispatchEvent`'s fire-and-forget chain. Now the POST
+ * happens via the worker poll, so we drive one tick manually. The
+ * tests' assertions (signed payload shape, fetch call count) are
+ * unchanged — we just have an extra async hop to walk through.
+ */
 async function waitForDispatch(ms = 100): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
+  await runPollCycle();
 }
 
 describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
