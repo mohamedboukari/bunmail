@@ -35,6 +35,28 @@ Table: `webhooks`
 | created_at  | timestamp      | NOT NULL, default `now()`    |
 | updated_at  | timestamp      | NOT NULL, default `now()`    |
 
+Table: `webhook_deliveries` (#30) — persisted retry queue.
+
+| Column                | Type           | Constraints                                       |
+|-----------------------|----------------|---------------------------------------------------|
+| id                    | varchar(36)    | PK, prefixed `wdl_`                               |
+| webhook_id            | varchar(36)    | FK → webhooks, NOT NULL, `ON DELETE CASCADE`      |
+| event                 | varchar(50)    | NOT NULL — the event vocabulary value            |
+| payload               | text           | NOT NULL — the JSON body bytes that get signed   |
+| status                | varchar(20)    | NOT NULL, default `pending` (pending\|delivered\|failed) |
+| attempts              | integer        | NOT NULL, default 0                               |
+| last_error            | text           | nullable — last attempt's error / response status text |
+| last_response_status  | integer        | nullable — HTTP status of most recent attempt    |
+| next_attempt_at       | timestamptz    | NOT NULL, default `now()` — worker claim hot path |
+| delivered_at          | timestamptz    | nullable — set when status flips to `delivered`  |
+| last_response_body    | jsonb          | nullable — `{ bodyPreview }` from the last attempt |
+| created_at            | timestamptz    | NOT NULL, default `now()`                         |
+| updated_at            | timestamptz    | NOT NULL, default `now()`                         |
+
+Indexes:
+- `webhook_deliveries_due_pending_idx` — partial index on `next_attempt_at` filtered to `status='pending'` (worker hot path stays small even with millions of `delivered` rows accumulated).
+- `webhook_deliveries_per_webhook_idx` on `(webhook_id, created_at)` — dashboard inspection page.
+
 ## Event Types
 
 | Event              | Fired when                                                     |
@@ -217,10 +239,41 @@ Before this version, the signature was computed over the body alone (`HMAC(secre
 
 ## Delivery Behavior
 
-- **Retries:** 3 attempts with exponential backoff (1s, 2s, 4s)
-- **Timeout:** 10 seconds per request
-- **Fire-and-forget:** Delivery failures are logged but don't block email processing
-- **Headers:** `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`
+As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writes a row to the `webhook_deliveries` table; a worker poll loop (5s tick) drains the queue, retries on a multi-hour schedule, and surfaces inspection + replay via the dashboard and REST API.
+
+| | |
+|---|---|
+| **Retry schedule** | 1m → 5m → 15m → 1h → 6h (5 attempts total over ~7h) |
+| **Timeout** | 10 seconds per request |
+| **Fire-and-forget enqueue** | `dispatchEvent` returns synchronously after INSERTing rows; the actual POST happens on the worker tick |
+| **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
+| **Crash recovery** | None needed — claim advances `next_attempt_at` by 30s during the in-flight attempt; if the worker crashes, the row becomes claimable again automatically |
+| **Headers** | `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event` |
+| **Signing** | Re-computed per attempt with a fresh timestamp so a 6-hour-old retry still passes the consumer's freshness window |
+
+### Delivery row lifecycle
+
+```
+pending  ── worker claim ──→  POST attempted
+                              ├── 2xx response  →  delivered (terminal)
+                              ├── non-2xx / network / timeout
+                              │   ├── attempts < 5  →  pending (rescheduled)
+                              │   └── attempts == 5 →  failed (terminal)
+
+failed   ── operator replay ─→ pending (attempts reset to 0)
+```
+
+Operators replay a `failed` row via `POST /api/v1/webhooks/deliveries/:deliveryId/replay` or the **Replay** button on the dashboard's delivery detail page. Replay flips `status` back to `pending`, resets `attempts` to 0, and sets `next_attempt_at = now()` so the worker picks it up on the next tick.
+
+### Retention
+
+`delivered` rows are deleted by an hourly cleanup task once they're older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default 30). `failed` rows are kept **indefinitely** — operators want them for forensic "did event X ever land?" queries months after the fact. Override the retention window in `.env`:
+
+```bash
+WEBHOOK_DELIVERY_RETENTION_DAYS=90
+```
+
+CASCADE on the parent `webhooks` row means deleting a webhook also reaps every one of its deliveries — so a deleted webhook leaves no orphan history.
 
 ## Service Methods
 
@@ -233,7 +286,10 @@ Creates a webhook with a random 32-byte hex signing secret. The secret is return
 Lists webhooks scoped to the requesting API key.
 
 #### `deleteWebhook(id, apiKeyId): Promise<Webhook | undefined>`
-Deletes a webhook, scoped to the requesting API key.
+Deletes a webhook, scoped to the requesting API key. CASCADE removes its deliveries.
+
+#### `findWebhookById(id, apiKeyId): Promise<Webhook | undefined>`
+Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to disambiguate "no deliveries yet" from "wrong id" before returning a 404.
 
 #### `findWebhooksForEvent(event): Promise<Webhook[]>`
 Returns all active webhooks subscribed to a given event type.
@@ -241,14 +297,45 @@ Returns all active webhooks subscribed to a given event type.
 ### webhook-dispatch.service.ts
 
 #### `dispatchEvent(event, data): void`
-Finds all subscribed webhooks and delivers the event payload asynchronously.
+Finds all subscribed webhooks and **enqueues** one `webhook_deliveries` row per webhook. Synchronous from the caller's perspective; actual HTTP delivery happens on the worker tick.
+
+#### `signPayload(timestamp, body, secret): string`
+HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once per attempt.
+
+### webhook-delivery.service.ts (#30)
+
+#### `enqueueDelivery({ webhookId, envelope }): Promise<{ id }>`
+INSERTs one `pending` row at `next_attempt_at = now()`.
+
+#### `claimDueDeliveries(n, now?): Promise<Array<...>>`
+Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED`. Inactive webhooks' rows are flipped to `failed` rather than delivered.
+
+#### `recordAttempt({ deliveryId, outcome, priorAttempts, now? }): Promise<void>`
+Persists the result of one HTTP attempt — `delivered` on 2xx, reschedule per the backoff table on failure, `failed` once the cap is hit.
+
+#### `replayDelivery({ deliveryId, apiKeyId, now? }): Promise<WebhookDelivery | undefined>`
+Operator-driven retry: flips a row back to `pending`, resets `attempts` to 0, sets `next_attempt_at` to now.
+
+#### `purgeOldDeliveries({ olderThan }): Promise<{ deleted }>`
+Deletes `delivered` rows older than the cutoff. Called hourly by the worker.
+
+### webhook-delivery-worker.service.ts (#30)
+
+#### `start() / stop()`
+Idempotent worker control. Wired into the app's main `start()` / SIGINT path.
+
+#### `runPollCycle(): Promise<{ claimed }>`
+Single tick — exposed for tests so they can drive the worker deterministically without arming `setInterval`.
 
 ## API Endpoints
 
 All routes require Bearer token auth and are rate-limited.
 
-| Method | Path                    | Description       |
-|--------|-------------------------|-------------------|
-| POST   | /api/v1/webhooks        | Register webhook  |
-| GET    | /api/v1/webhooks        | List webhooks     |
-| DELETE | /api/v1/webhooks/:id    | Delete webhook    |
+| Method | Path                                                | Description                            |
+|--------|-----------------------------------------------------|----------------------------------------|
+| POST   | /api/v1/webhooks                                    | Register webhook                       |
+| GET    | /api/v1/webhooks                                    | List webhooks                          |
+| DELETE | /api/v1/webhooks/:id                                | Delete webhook (cascades to deliveries)|
+| GET    | /api/v1/webhooks/:id/deliveries                     | List deliveries for a webhook (`?status=pending\|delivered\|failed`) |
+| GET    | /api/v1/webhooks/deliveries/:deliveryId             | Single delivery + payload + last response |
+| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay      | Replay a delivery — resets to `pending` |

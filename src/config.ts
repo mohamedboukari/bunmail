@@ -186,4 +186,21 @@ export const config = {
      */
     retentionDays: parseInt(optionalEnv("TRASH_RETENTION_DAYS", "7"), 10),
   },
+
+  /**
+   * Webhook delivery queue (#30). Persisted retry loop config —
+   * tuned for the realistic consumer-outage profile rather than burst
+   * latency. The retry schedule itself (1m / 5m / 15m / 1h / 6h) lives
+   * in `webhook-delivery.service.ts` because it's a behavioural
+   * contract, not an operator knob.
+   */
+  webhookDelivery: {
+    /**
+     * How many days `delivered` rows are retained before the cleanup
+     * task deletes them. `failed` rows are kept indefinitely for
+     * forensics — operators want to answer "did this event ever land?"
+     * months after the fact.
+     */
+    retentionDays: parseInt(optionalEnv("WEBHOOK_DELIVERY_RETENTION_DAYS", "30"), 10),
+  },
 } as const;

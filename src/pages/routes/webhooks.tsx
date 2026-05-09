@@ -135,18 +135,26 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
                     {webhook.createdAt.toLocaleDateString()}
                   </td>
                   <td class="px-4 py-3">
-                    <form
-                      method="POST"
-                      action={`/dashboard/webhooks/${webhook.id}/delete`}
-                    >
-                      <button
-                        type="submit"
-                        class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                        onclick="return confirm('Are you sure you want to delete this webhook?')"
+                    <div class="flex items-center gap-3">
+                      <a
+                        href={`/dashboard/webhooks/${webhook.id}/deliveries`}
+                        class="text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium"
                       >
-                        Delete
-                      </button>
-                    </form>
+                        Deliveries
+                      </a>
+                      <form
+                        method="POST"
+                        action={`/dashboard/webhooks/${webhook.id}/delete`}
+                      >
+                        <button
+                          type="submit"
+                          class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
+                          onclick="return confirm('Are you sure you want to delete this webhook?')"
+                        >
+                          Delete
+                        </button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               ))}

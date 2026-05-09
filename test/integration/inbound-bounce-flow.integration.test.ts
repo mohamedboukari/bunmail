@@ -33,6 +33,7 @@ import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { eq } from "drizzle-orm";
 import { parseBounce } from "../../src/modules/bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import { runPollCycle } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
 
 interface CapturedRequest {
@@ -73,9 +74,15 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-/** Wait for `dispatchEvent`'s fire-and-forget chain to drain. */
+/**
+ * Wait for `dispatchEvent`'s enqueue chain to drain, then drive one
+ * worker poll so the captured-fetch mock actually fires. As of #30,
+ * `dispatchEvent` is an INSERT into `webhook_deliveries`, not a direct
+ * POST — the worker is what hits the consumer.
+ */
 async function waitForDispatch(ms = 100): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
+  await runPollCycle();
 }
 
 /**

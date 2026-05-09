@@ -137,16 +137,21 @@ bunmail/
 │   │   │   └── types/
 │   │   │       └── domain.types.ts
 │   │   ├── webhooks/
-│   │   │   ├── webhooks.plugin.ts        ← CRUD routes
+│   │   │   ├── webhooks.plugin.ts                 ← CRUD + deliveries inspection + replay
 │   │   │   ├── services/
-│   │   │   │   ├── webhook.service.ts    ← CRUD operations
-│   │   │   │   └── webhook-dispatch.service.ts ← Event delivery + retries
+│   │   │   │   ├── webhook.service.ts             ← CRUD
+│   │   │   │   ├── webhook-dispatch.service.ts    ← Enqueues into webhook_deliveries (#30)
+│   │   │   │   ├── webhook-delivery.service.ts    ← Claim / send / reschedule / replay (#30)
+│   │   │   │   └── webhook-delivery-worker.service.ts ← Poll loop + retention cleanup (#30)
 │   │   │   ├── dtos/
-│   │   │   │   └── create-webhook.dto.ts
+│   │   │   │   ├── create-webhook.dto.ts
+│   │   │   │   └── list-deliveries.dto.ts         (#30)
 │   │   │   ├── models/
-│   │   │   │   └── webhook.schema.ts     ← webhooks pgTable
+│   │   │   │   ├── webhook.schema.ts              ← webhooks pgTable
+│   │   │   │   └── webhook-delivery.schema.ts     ← webhook_deliveries pgTable (#30)
 │   │   │   ├── serializations/
-│   │   │   │   └── webhook.serialization.ts
+│   │   │   │   ├── webhook.serialization.ts
+│   │   │   │   └── webhook-delivery.serialization.ts (#30)
 │   │   │   └── types/
 │   │   │       └── webhook.types.ts
 │   │   ├── templates/
@@ -467,6 +472,28 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 | updated_at   | timestamp      | NOT NULL, default `now()`       |
 
+### `webhook_deliveries` (#30)
+
+Persisted retry queue. Every dispatch enqueues one row per subscribed webhook; the worker drains it on a 5s poll. See [docs/webhooks.md](docs/webhooks.md) for the full lifecycle.
+
+| Column                | Type           | Constraints                                   |
+|-----------------------|----------------|-----------------------------------------------|
+| id                    | varchar(36)    | PK, prefixed `wdl_`                           |
+| webhook_id            | varchar(36)    | FK → webhooks.id, NOT NULL, `ON DELETE CASCADE` |
+| event                 | varchar(50)    | NOT NULL                                      |
+| payload               | text           | NOT NULL — JSON body bytes (re-signed per attempt) |
+| status                | varchar(20)    | NOT NULL, default `pending` (pending\|delivered\|failed) |
+| attempts              | integer        | NOT NULL, default 0                           |
+| last_error            | text           | nullable                                      |
+| last_response_status  | integer        | nullable                                      |
+| next_attempt_at       | timestamptz    | NOT NULL, default `now()`                     |
+| delivered_at          | timestamptz    | nullable                                      |
+| last_response_body    | jsonb          | nullable                                      |
+| created_at            | timestamptz    | NOT NULL, default `now()`                     |
+| updated_at            | timestamptz    | NOT NULL, default `now()`                     |
+
+Indexes: `(next_attempt_at)` partial WHERE `status='pending'` (worker hot path), `(webhook_id, created_at)` (dashboard inspection).
+
 ### `templates`
 
 | Column       | Type           | Constraints                     |
@@ -562,6 +589,7 @@ System table managed by the Bun-native migration runner ([src/db/migrate.ts](src
 ```
 api_keys  ──1:N──▶ emails
 api_keys  ──1:N──▶ webhooks
+webhooks  ──1:N──▶ webhook_deliveries  (CASCADE on parent delete)
 api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
@@ -611,7 +639,10 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 |--------|-------------------------------|-----------------------|------|
 | POST   | /api/v1/webhooks              | Register webhook      | Yes  |
 | GET    | /api/v1/webhooks              | List webhooks         | Yes  |
-| DELETE | /api/v1/webhooks/:id          | Delete webhook        | Yes  |
+| DELETE | /api/v1/webhooks/:id          | Delete webhook (cascades to deliveries) | Yes  |
+| GET    | /api/v1/webhooks/:id/deliveries | List delivery attempts (filter by `?status=`) | Yes |
+| GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
+| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery — flips to `pending` | Yes |
 
 ### Templates
 

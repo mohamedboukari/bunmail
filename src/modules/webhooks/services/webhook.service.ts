@@ -72,6 +72,23 @@ export async function deleteWebhook(
 }
 
 /**
+ * Looks up a single webhook by id, scoped to an API key.
+ * Used by the deliveries endpoint to disambiguate "no deliveries yet"
+ * from "wrong id / wrong key" before returning a 404.
+ */
+export async function findWebhookById(
+  id: string,
+  apiKeyId: string,
+): Promise<Webhook | undefined> {
+  const [row] = await db
+    .select()
+    .from(webhooks)
+    .where(and(eq(webhooks.id, id), eq(webhooks.apiKeyId, apiKeyId)))
+    .limit(1);
+  return row;
+}
+
+/**
  * Finds all active webhooks subscribed to a given event type.
  * Used by the dispatch service to know where to send events.
  */
