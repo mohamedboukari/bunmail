@@ -21,6 +21,8 @@ import { WebhooksPage } from "./routes/webhooks.tsx";
 import { InboundPage } from "./routes/inbound.tsx";
 import { InboundTrashPage } from "./routes/inbound-trash.tsx";
 import { InboundDetailPage } from "./routes/inbound-detail.tsx";
+import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
+import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -30,6 +32,7 @@ import * as domainService from "../modules/domains/services/domain.service.ts";
 import * as templateService from "../modules/templates/services/template.service.ts";
 import * as webhookService from "../modules/webhooks/services/webhook.service.ts";
 import * as inboundService from "../modules/inbound/services/inbound.service.ts";
+import * as dmarcReportsService from "../modules/dmarc-reports/services/dmarc-reports.service.ts";
 import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
 
 /**
@@ -1362,6 +1365,62 @@ export const pagesPlugin = new Elysia({
 
       set.status = 404;
       return "Inbound email not found";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  )
+
+  /**
+   * GET /dashboard/dmarc-reports — list page with optional `?domain=`
+   * filter. The filter dropdown is driven by the distinct set of
+   * domains we have reports for.
+   */
+  .get(
+    "/dmarc-reports",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const domain = query.domain || undefined;
+
+      const { data, total } = await dmarcReportsService.listDmarcReports({
+        page,
+        limit,
+        domain,
+      });
+
+      const domains = await dmarcReportsService.listReportDomains();
+
+      return (
+        <DmarcReportsPage
+          reports={data}
+          total={total}
+          page={page}
+          limit={limit}
+          domainFilter={domain}
+          domains={domains}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        domain: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /** GET /dashboard/dmarc-reports/:id — detail with per-source-IP records. */
+  .get(
+    "/dmarc-reports/:id",
+    async ({ params, set }) => {
+      const result = await dmarcReportsService.getDmarcReportById(params.id);
+      if (!result) {
+        set.status = 404;
+        return "DMARC report not found";
+      }
+      return <DmarcReportDetailPage report={result.report} records={result.records} />;
     },
     {
       params: t.Object({ id: t.String() }),

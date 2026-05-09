@@ -29,7 +29,8 @@ interface BaseLayoutProps {
     | "domains"
     | "templates"
     | "webhooks"
-    | "inbound";
+    | "inbound"
+    | "dmarc-reports";
 }
 
 /**
@@ -117,6 +118,12 @@ function Nav({ activeNav }: { activeNav?: string }) {
     { id: "domains", label: "Domains", href: "/dashboard/domains", icon: GlobeIcon },
     { id: "webhooks", label: "Webhooks", href: "/dashboard/webhooks", icon: WebhookIcon },
     { id: "inbound", label: "Inbound", href: "/dashboard/inbound", icon: InboundIcon },
+    {
+      id: "dmarc-reports",
+      label: "DMARC",
+      href: "/dashboard/dmarc-reports",
+      icon: GlobeIcon,
+    },
   ];
 
   return (

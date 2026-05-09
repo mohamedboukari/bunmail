@@ -8,6 +8,7 @@ import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
+import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -364,6 +365,34 @@ export function start(): void {
              * handler.
              */
             logger.debug("Bounce branch handled inbound message", { result });
+            callback();
+            return;
+          }
+
+          /**
+           * DMARC aggregate (rua) report branch (#41). If the message
+           * looks like a DMARC report from a remote receiver, parse the
+           * compressed XML attachment and store as `dmarc_reports` +
+           * `dmarc_records` rows. Skip the regular `inbound_emails`
+           * insert — daily DMARC reports would otherwise pile up in
+           * the inbox view and obscure real customer mail.
+           */
+          const attachments = (parsed.attachments ?? []).map((att) => ({
+            filename: att.filename,
+            contentType: att.contentType,
+            content: new Uint8Array(att.content),
+          }));
+          const dmarcResult = await persistDmarcReportFromInbound(
+            rawMessage,
+            attachments,
+            typeof parsed.text === "string" ? parsed.text : null,
+          );
+          if (dmarcResult.outcome === "stored" || dmarcResult.outcome === "duplicate") {
+            logger.debug("DMARC branch handled inbound message", {
+              outcome: dmarcResult.outcome,
+              reportId: dmarcResult.reportId,
+              recordCount: dmarcResult.recordCount,
+            });
             callback();
             return;
           }

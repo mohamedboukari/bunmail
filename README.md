@@ -98,6 +98,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **API key auth** — SHA-256 hashed Bearer tokens with sliding-window rate limiting
 - **Trash + auto-purge** — Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
 - **Suppression list** — per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation
+- **DMARC aggregate report ingest** — daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
 - **Web dashboard** — server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth)
 - **OpenAPI 3.0** — interactive docs at `/api/docs`
 - **Type-safe** — strict TypeScript, Drizzle ORM, no `any`
@@ -143,6 +144,15 @@ All endpoints (except `/health`) require `Authorization: Bearer <api-key>`. Full
 | DELETE | `/api/v1/suppressions/:id` | Remove (recipient becomes eligible immediately) |
 
 Sends to suppressed recipients return 422 with `code: "RECIPIENT_SUPPRESSED"` and `suppressionId`. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md) for the auto-suppression flow on hard bounces.
+
+### DMARC Reports
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/dmarc-reports` | List DMARC aggregate reports (paginated, optional `?domain=`) |
+| GET | `/api/v1/dmarc-reports/:id` | Get a single report with its per-source-IP records |
+
+DMARC `rua` aggregate reports that arrive at BunMail's inbound SMTP are auto-detected, decompressed (gzip / zip / raw XML), parsed, and stored. The dashboard at `/dashboard/dmarc-reports` highlights misaligned source IPs in amber. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
 
 ### Domains, Templates, API Keys, Webhooks
 
@@ -226,6 +236,7 @@ See [docs/](docs/) for module-level documentation:
 - [docs/dashboard.md](docs/dashboard.md) — Dashboard routes and structure
 - [docs/emails.md](docs/emails.md) — Outbound module
 - [docs/inbound.md](docs/inbound.md) — Inbound module
+- [docs/dmarc-reports.md](docs/dmarc-reports.md) — DMARC `rua` aggregate report ingest
 - [docs/self-hosting.md](docs/self-hosting.md) — Production deployment with DNS records
 - [THREAT_MODEL.md](THREAT_MODEL.md) — Assets, attackers, controls, and operator responsibilities
 - [SECURITY.md](SECURITY.md) — Reporting a vulnerability
@@ -248,7 +259,6 @@ Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/moh
 
 Near-term highlights:
 
-- DMARC aggregate report (`rua`) ingestion
 - Webhook delivery persistence + replay (in-memory retries today)
 - Trash purge tombstones for audit trail
 - Optional SMTP relay mode (use Resend / SES / Postmark as the underlying sender)

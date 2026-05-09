@@ -71,7 +71,7 @@ function makeDeps(opts: {
 const HARD_BOUNCE: ParsedBounce = {
   kind: "hard",
   recipient: "user@example.com",
-  originalMessageId: "abc-123@bunmail.xyz",
+  originalMessageId: "abc-123@yourdns.example",
   status: "5.1.1",
   diagnostic: "User unknown",
   source: "rfc3464",
@@ -80,7 +80,7 @@ const HARD_BOUNCE: ParsedBounce = {
 const SOFT_BOUNCE: ParsedBounce = {
   kind: "soft",
   recipient: "user@example.com",
-  originalMessageId: "abc-123@bunmail.xyz",
+  originalMessageId: "abc-123@yourdns.example",
   status: "4.2.2",
   diagnostic: "Mailbox over quota",
   source: "rfc3464",
@@ -102,7 +102,7 @@ describe("handleBounce — happy paths", () => {
     expect(result.emailId).toBe("msg_orig123");
     expect(result.bounceType).toBe("hard");
 
-    expect(calls.findEmailByMessageId).toEqual(["abc-123@bunmail.xyz"]);
+    expect(calls.findEmailByMessageId).toEqual(["abc-123@yourdns.example"]);
     expect(calls.isSuppressed).toEqual([
       { apiKeyId: "key_abc", email: "user@example.com" },
     ]);
