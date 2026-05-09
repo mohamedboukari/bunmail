@@ -10,6 +10,7 @@ import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
 import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
+import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
@@ -75,6 +76,11 @@ const app = new Elysia()
             name: "Suppressions",
             description:
               "Manage the per-API-key suppression list — addresses that should never receive mail",
+          },
+          {
+            name: "DMARC Reports",
+            description:
+              "Inspect parsed DMARC aggregate (rua) reports received from remote receivers",
           },
           { name: "Health", description: "Server health checks" },
         ],
@@ -172,6 +178,8 @@ const app = new Elysia()
   .use(inboundPlugin)
   /** Suppressions module — POST /, GET /, GET /:id, DELETE /:id */
   .use(suppressionsPlugin)
+  /** DMARC reports module — GET /, GET /:id */
+  .use(dmarcReportsPlugin)
   /** Dashboard — server-rendered UI under /dashboard */
   .use(pagesPlugin)
   .listen({

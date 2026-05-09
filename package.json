@@ -69,6 +69,8 @@
     "@kitajs/html": "^4.2.13",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.28",
+    "fast-xml-parser": "^5.7.3",
+    "fflate": "^0.8.2",
     "file-type": "^22.0.1",
     "mailparser": "^3.9.8",
     "nodemailer": "^8.0.7",

@@ -15,7 +15,7 @@ import { parseBounce } from "../../src/modules/bounces/services/bounce-parser.se
  */
 
 const RFC_HARD_BOUNCE = `From: MAILER-DAEMON@gmail.com
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: Delivery Status Notification (Failure)
 Content-Type: multipart/report; report-type=delivery-status; boundary="--boundary"
 
@@ -33,7 +33,7 @@ The email account that you tried to reach does not exist.
 Content-Type: message/delivery-status
 
 Reporting-MTA: dns; gmail.com
-Original-Message-ID: <abc-123-def@bunmail.xyz>
+Original-Message-ID: <abc-123-def@yourdns.example>
 
 Final-Recipient: rfc822; nonexistent@example.com
 Action: failed
@@ -44,7 +44,7 @@ Diagnostic-Code: smtp; 550-5.1.1 The email account that you tried to reach does 
 `;
 
 const RFC_SOFT_BOUNCE = `From: postmaster@yahoo.com
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: Delivery Status Notification
 Content-Type: multipart/report; report-type=delivery-status; boundary="--b"
 
@@ -57,7 +57,7 @@ Mailbox is full.
 Content-Type: message/delivery-status
 
 Reporting-MTA: dns; yahoo.com
-Original-Message-ID: <soft-456@bunmail.xyz>
+Original-Message-ID: <soft-456@yourdns.example>
 
 Final-Recipient: rfc822; <full@example.com>
 Action: delayed
@@ -68,7 +68,7 @@ Diagnostic-Code: smtp; 452 4.2.2 Mailbox over quota
 `;
 
 const RFC_DELIVERED_REPORT = `From: MAILER-DAEMON@example.org
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: Delivery Status Notification (Success)
 Content-Type: multipart/report; report-type=delivery-status; boundary="--b"
 
@@ -76,7 +76,7 @@ Content-Type: multipart/report; report-type=delivery-status; boundary="--b"
 Content-Type: message/delivery-status
 
 Reporting-MTA: dns; example.org
-Original-Message-ID: <good-789@bunmail.xyz>
+Original-Message-ID: <good-789@yourdns.example>
 
 Final-Recipient: rfc822; user@example.org
 Action: delivered
@@ -86,7 +86,7 @@ Status: 2.0.0
 `;
 
 const RFC_BOUNCE_WITHOUT_ORIGINAL_ID = `From: MAILER-DAEMON@gmail.com
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: Delivery Status Notification (Failure)
 Content-Type: multipart/report; report-type=delivery-status; boundary="--b"
 
@@ -103,9 +103,9 @@ Diagnostic-Code: smtp; 550 user unknown
 `;
 
 const QMAIL_FALLBACK_BOUNCE = `From: MAILER-DAEMON@old-mta.example.net
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: failure notice
-In-Reply-To: <orig-fallback-001@bunmail.xyz>
+In-Reply-To: <orig-fallback-001@yourdns.example>
 Content-Type: text/plain
 
 Hi. This is the qmail-send program.
@@ -116,14 +116,14 @@ Sorry, no mailbox here by that name. (#5.1.1)
 
 --- Below this line is a copy of the message.
 
-Message-ID: <orig-fallback-001@bunmail.xyz>
-From: hello@bunmail.xyz
+Message-ID: <orig-fallback-001@yourdns.example>
+From: hello@yourdns.example
 To: broken@example.com
 Subject: hi
 `;
 
 const NORMAL_INBOUND_MAIL = `From: alice@gmail.com
-To: hello@bunmail.xyz
+To: hello@yourdns.example
 Subject: hello there
 Content-Type: text/plain
 
@@ -137,7 +137,7 @@ describe("parseBounce — RFC 3464 path", () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.kind).toBe("hard");
     expect(parsed!.recipient).toBe("nonexistent@example.com");
-    expect(parsed!.originalMessageId).toBe("abc-123-def@bunmail.xyz");
+    expect(parsed!.originalMessageId).toBe("abc-123-def@yourdns.example");
     expect(parsed!.status).toBe("5.1.1");
     expect(parsed!.diagnostic).toContain("does not exist");
     expect(parsed!.source).toBe("rfc3464");
@@ -148,7 +148,7 @@ describe("parseBounce — RFC 3464 path", () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.kind).toBe("soft");
     expect(parsed!.recipient).toBe("full@example.com");
-    expect(parsed!.originalMessageId).toBe("soft-456@bunmail.xyz");
+    expect(parsed!.originalMessageId).toBe("soft-456@yourdns.example");
     expect(parsed!.status).toBe("4.2.2");
     expect(parsed!.source).toBe("rfc3464");
   });
@@ -168,7 +168,7 @@ describe("parseBounce — fallback path", () => {
     expect(parsed).not.toBeNull();
     expect(parsed!.kind).toBe("hard");
     expect(parsed!.recipient).toBe("broken@example.com");
-    expect(parsed!.originalMessageId).toBe("orig-fallback-001@bunmail.xyz");
+    expect(parsed!.originalMessageId).toBe("orig-fallback-001@yourdns.example");
     /** Fallback path emits "5.1.1" (the enhanced code we found in the body). */
     expect(parsed!.status).toBe("5.1.1");
     expect(parsed!.source).toBe("fallback");

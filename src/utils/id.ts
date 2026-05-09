@@ -1,6 +1,15 @@
 import { randomBytes } from "crypto";
 
-type IdPrefix = "msg" | "key" | "dom" | "whk" | "tpl" | "inb" | "sup";
+type IdPrefix =
+  | "msg"
+  | "key"
+  | "dom"
+  | "whk"
+  | "tpl"
+  | "inb"
+  | "sup"
+  | "dmr" // DMARC report (#41)
+  | "dmrec"; // DMARC report record (per source IP, #41)
 
 /**
  * Generates a prefixed unique ID.

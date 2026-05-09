@@ -187,12 +187,27 @@ bunmail/
 │   │   │   ├── errors.ts                 ← SuppressedRecipientError → mapped to 422 in onError
 │   │   │   └── types/
 │   │   │       └── suppression.types.ts
-│   │   └── bounces/                      ← DSN parsing + bounce → suppression chain (#24)
+│   │   ├── bounces/                      ← DSN parsing + bounce → suppression chain (#24)
+│   │   │   ├── services/
+│   │   │   │   ├── bounce-parser.service.ts  ← Pure RFC 3464 + regex fallback parser
+│   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
+│   │   │   └── types/
+│   │   │       └── bounce.types.ts
+│   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
+│   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
 │   │       ├── services/
-│   │       │   ├── bounce-parser.service.ts  ← Pure RFC 3464 + regex fallback parser
-│   │       │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
+│   │       │   ├── dmarc-parser.service.ts   ← Pure XML/gzip/zip parser + heuristic
+│   │       │   ├── dmarc-handler.service.ts  ← Persist with ON CONFLICT dedup
+│   │       │   └── dmarc-reports.service.ts  ← Read queries (list / get / domains)
+│   │       ├── dtos/
+│   │       │   └── list-dmarc-reports.dto.ts
+│   │       ├── models/
+│   │       │   ├── dmarc-report.schema.ts    ← dmarc_reports pgTable
+│   │       │   └── dmarc-record.schema.ts    ← dmarc_records pgTable (FK CASCADE)
+│   │       ├── serializations/
+│   │       │   └── dmarc-report.serialization.ts
 │   │       └── types/
-│   │           └── bounce.types.ts
+│   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
 │       ├── landing.plugin.tsx            ← Public landing page at /
@@ -492,6 +507,46 @@ Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `cre
 
 Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` upsert).
 
+### `dmarc_reports` / `dmarc_records`
+
+DMARC aggregate (`rua`) reports parsed from inbound XML attachments (#41). Operator-level data — not tenant-scoped, no FK to `domains` or `api_keys`. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
+
+`dmarc_reports` (one row per received report):
+
+| Column        | Type            | Constraints                                       |
+|---------------|-----------------|---------------------------------------------------|
+| id            | varchar(36)     | PK, prefixed `dmr_`                               |
+| org_name      | varchar(255)    | NOT NULL                                          |
+| org_email     | varchar(255)    | NOT NULL                                          |
+| report_id     | varchar(255)    | NOT NULL                                          |
+| domain        | varchar(255)    | NOT NULL                                          |
+| date_begin    | timestamptz     | NOT NULL                                          |
+| date_end      | timestamptz     | NOT NULL                                          |
+| policy_p      | varchar(20)     | NOT NULL                                          |
+| policy_pct    | integer         | NOT NULL                                          |
+| raw_xml       | text            | NOT NULL (kept verbatim for forensics)            |
+| received_at   | timestamptz     | NOT NULL, default `now()`                         |
+
+Indexes: `UNIQUE (org_email, report_id)` (dedup hot-path), `(domain, date_end DESC)` (dashboard list hot-path).
+
+`dmarc_records` (one row per source IP, child of the report):
+
+| Column            | Type            | Constraints                                    |
+|-------------------|-----------------|------------------------------------------------|
+| id                | varchar(36)     | PK, prefixed `dmrec_`                          |
+| report_id         | varchar(36)     | FK → dmarc_reports.id, NOT NULL, `ON DELETE CASCADE` |
+| source_ip         | varchar(45)     | NOT NULL                                       |
+| count             | integer         | NOT NULL                                       |
+| disposition       | varchar(20)     | NOT NULL                                       |
+| dkim_aligned      | boolean         | NOT NULL                                       |
+| spf_aligned       | boolean         | NOT NULL                                       |
+| header_from       | varchar(255)    | nullable                                       |
+| dkim_auth_domain  | varchar(255)    | nullable                                       |
+| dkim_selector     | varchar(255)    | nullable                                       |
+| dkim_result       | varchar(20)     | nullable                                       |
+| spf_auth_domain   | varchar(255)    | nullable                                       |
+| spf_result        | varchar(20)     | nullable                                       |
+
 ### `__bunmail_migrations`
 
 System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table.
@@ -505,6 +560,7 @@ api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
+dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 ```
 
 ---
@@ -584,6 +640,8 @@ emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppres
 | POST   | /api/v1/inbound/:id/restore         | Restore from trash                         | Yes  |
 | DELETE | /api/v1/inbound/:id/permanent       | Permanently delete a trashed inbound       | Yes  |
 | POST   | /api/v1/inbound/trash/empty         | Permanently delete all trashed inbound     | Yes  |
+| GET    | /api/v1/dmarc-reports               | List DMARC aggregate reports (filter by `?domain=`) | Yes |
+| GET    | /api/v1/dmarc-reports/:id           | Single report + per-source-IP records      | Yes  |
 
 ### Dashboard (HTML)
 
@@ -631,6 +689,8 @@ emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppres
 | POST   | /dashboard/inbound/:id/restore     | Restore single          | Session  |
 | POST   | /dashboard/inbound/:id/permanent   | Hard-delete single      | Session  |
 | GET    | /dashboard/inbound/:id             | Inbound email detail    | Session  |
+| GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
+| GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
 
 Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry).
 

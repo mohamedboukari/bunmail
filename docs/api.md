@@ -368,6 +368,32 @@ Permanently delete every trashed inbound email. Returns `{ "success": true, "del
 
 ---
 
+### DMARC Reports
+
+DMARC aggregate (`rua`) reports parsed from inbound XML attachments. See [docs/dmarc-reports.md](dmarc-reports.md) for the ingest pipeline.
+
+#### `GET /api/v1/dmarc-reports`
+
+List parsed reports (paginated, newest report-end-date first).
+
+**Query Parameters:**
+
+| Param    | Type   | Default | Description                       |
+|----------|--------|---------|-----------------------------------|
+| `page`   | number | 1       | Page number                       |
+| `limit`  | number | 20      | Items per page (1-100)            |
+| `domain` | string | —       | Filter by reporting policy domain |
+
+Each row carries the report-level metadata (`orgName`, `orgEmail`, `domain`, `dateBegin`, `dateEnd`, `policyP`, `policyPct`, `receivedAt`). Per-source-IP records are returned only by the detail endpoint.
+
+---
+
+#### `GET /api/v1/dmarc-reports/:id`
+
+Get a single report with its per-source-IP records and computed alignment totals (`messages`, `dkimAligned`, `spfAligned`, `bothAligned`).
+
+---
+
 ### API Keys
 
 All API key endpoints are prefixed with `/api/v1/api-keys`.
