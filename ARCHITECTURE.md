@@ -325,21 +325,25 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 ┌─────────────────────────────────────────────────────────────────┐
 │  Queue Processor (setInterval, every 2 seconds)                 │
 │                                                                 │
-│  1. SELECT FROM emails WHERE status = 'queued'                  │
-│     ORDER BY created_at ASC LIMIT 5                             │
+│  1. ATOMIC CLAIM (#20):                                         │
+│     UPDATE emails SET status = 'sending',                       │
+│                       attempts = attempts + 1                   │
+│     WHERE id IN (                                               │
+│       SELECT id FROM emails                                     │
+│       WHERE status = 'queued' AND deleted_at IS NULL            │
+│       ORDER BY created_at ASC LIMIT 5                           │
+│       FOR UPDATE SKIP LOCKED   ← concurrent-safe                │
+│     ) RETURNING *;                                              │
 │                                                                 │
-│  2. For each email (up to 5 concurrent):                        │
+│  2. For each claimed row (up to 5 concurrent):                  │
 │     ┌───────────────────────────────────────┐                   │
-│     │ a. UPDATE status = 'sending'          │                   │
-│     │    INCREMENT attempts                 │                   │
-│     │                                       │                   │
-│     │ b. Call mailerService.sendMail()      │                   │
+│     │ a. Call mailerService.sendMail()      │                   │
 │     │    (Nodemailer direct + DKIM)         │                   │
 │     │                                       │                   │
-│     │ c. On SUCCESS:                        │                   │
+│     │ b. On SUCCESS:                        │                   │
 │     │    status = 'sent', sentAt = now()    │                   │
 │     │                                       │                   │
-│     │ d. On FAILURE:                        │                   │
+│     │ c. On FAILURE:                        │                   │
 │     │    if attempts >= 3:                  │                   │
 │     │      status = 'failed'                │                   │
 │     │      lastError = error.message        │                   │
@@ -350,6 +354,8 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │  On Boot: Reset any 'sending' → 'queued' (interrupted emails)   │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+`FOR UPDATE SKIP LOCKED` makes the claim safe under concurrency: two workers running the same statement at the same time get **disjoint** result sets — never the same row twice. Single-instance today, but the queue is no longer the blocker for horizontal scaling. (#20)
 
 **Email Status Flow:**
 
