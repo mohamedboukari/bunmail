@@ -6,9 +6,9 @@ BunMail's test suite has three tiers, each catching a different class of bug. Pr
 
 | Tier | Location | What it catches | Speed | Mocked? |
 |---|---|---|---|---|
-| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness — parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~300ms for 130+ tests | DB, network, time |
+| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness — parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~400ms for 240+ tests | DB, network, time |
 | **E2E plugin** | [test/e2e/](../test/e2e/) | Elysia plugin routing, auth flow, request/response shapes, error handling. Services and DB are mocked at the import boundary. | ~150ms for 70 tests | DB, services |
-| **Integration** | [test/integration/](../test/integration/) | Real Drizzle SQL execution, FK / `ON DELETE` behaviour, `ON CONFLICT DO UPDATE` upserts, transaction semantics, schema drift between TS models and the live DB. | ~1.5s for 40 tests | Outbound HTTP only |
+| **Integration** | [test/integration/](../test/integration/) | Real Drizzle SQL execution, FK / `ON DELETE` behaviour, `ON CONFLICT DO UPDATE` upserts, transaction semantics, schema drift between TS models and the live DB. End-to-end DSN flow (DSN bytes → suppression + `email.bounced` webhook), atomic queue claim under concurrency, etc. | ~2s for 55+ tests | Outbound HTTP only |
 
 Run all three together: `bun run test:all`.
 
