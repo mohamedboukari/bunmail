@@ -36,7 +36,7 @@ const SAMPLE_REPORT_XML = `<?xml version="1.0" encoding="UTF-8" ?>
     </date_range>
   </report_metadata>
   <policy_published>
-    <domain>bunmail.xyz</domain>
+    <domain>yourdns.example</domain>
     <adkim>r</adkim>
     <aspf>r</aspf>
     <p>quarantine</p>
@@ -54,16 +54,16 @@ const SAMPLE_REPORT_XML = `<?xml version="1.0" encoding="UTF-8" ?>
       </policy_evaluated>
     </row>
     <identifiers>
-      <header_from>bunmail.xyz</header_from>
+      <header_from>yourdns.example</header_from>
     </identifiers>
     <auth_results>
       <dkim>
-        <domain>bunmail.xyz</domain>
+        <domain>yourdns.example</domain>
         <selector>bunmail</selector>
         <result>pass</result>
       </dkim>
       <spf>
-        <domain>bunmail.xyz</domain>
+        <domain>yourdns.example</domain>
         <result>pass</result>
       </spf>
     </auth_results>
@@ -79,7 +79,7 @@ const SAMPLE_REPORT_XML = `<?xml version="1.0" encoding="UTF-8" ?>
       </policy_evaluated>
     </row>
     <identifiers>
-      <header_from>bunmail.xyz</header_from>
+      <header_from>yourdns.example</header_from>
     </identifiers>
     <auth_results>
       <spf>
@@ -140,7 +140,7 @@ describe("parseAggregateReport — RFC 7489 happy path", () => {
     expect(parsed!.orgName).toBe("Microsoft Corporation");
     expect(parsed!.orgEmail).toBe("noreply@dmarcreport.microsoft.com");
     expect(parsed!.reportId).toBe("26f8b015df374531ad45438fd367340a");
-    expect(parsed!.domain).toBe("bunmail.xyz");
+    expect(parsed!.domain).toBe("yourdns.example");
     expect(parsed!.policyP).toBe("quarantine");
     expect(parsed!.policyPct).toBe(100);
     expect(parsed!.records).toHaveLength(2);
@@ -161,11 +161,11 @@ describe("parseAggregateReport — RFC 7489 happy path", () => {
     expect(first.disposition).toBe("none");
     expect(first.dkimAligned).toBe(true);
     expect(first.spfAligned).toBe(true);
-    expect(first.headerFrom).toBe("bunmail.xyz");
-    expect(first.dkimAuthDomain).toBe("bunmail.xyz");
+    expect(first.headerFrom).toBe("yourdns.example");
+    expect(first.dkimAuthDomain).toBe("yourdns.example");
     expect(first.dkimSelector).toBe("bunmail");
     expect(first.dkimResult).toBe("pass");
-    expect(first.spfAuthDomain).toBe("bunmail.xyz");
+    expect(first.spfAuthDomain).toBe("yourdns.example");
     expect(first.spfResult).toBe("pass");
   });
 
@@ -265,7 +265,7 @@ describe("parseAggregateReport — drop paths", () => {
 
 describe("looksLikeDmarcReport heuristic", () => {
   test("matches Microsoft enterprise.protection.outlook.com sender", () => {
-    const raw = `From: noreply@enterprise.protection.outlook.com\nSubject: Report Domain: bunmail.xyz\n\nbody`;
+    const raw = `From: noreply@enterprise.protection.outlook.com\nSubject: Report Domain: yourdns.example\n\nbody`;
     expect(looksLikeDmarcReport(raw)).toBe(true);
   });
 
@@ -280,7 +280,7 @@ describe("looksLikeDmarcReport heuristic", () => {
   });
 
   test("matches subject mentioning 'Report Domain'", () => {
-    const raw = `From: someone@example.com\nSubject: Report Domain: bunmail.xyz Submitter: x.com Report-ID: abc\n\nbody`;
+    const raw = `From: someone@example.com\nSubject: Report Domain: yourdns.example Submitter: x.com Report-ID: abc\n\nbody`;
     expect(looksLikeDmarcReport(raw)).toBe(true);
   });
 

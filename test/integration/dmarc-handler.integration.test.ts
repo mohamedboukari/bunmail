@@ -32,7 +32,7 @@ const SAMPLE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
     </date_range>
   </report_metadata>
   <policy_published>
-    <domain>bunmail.xyz</domain>
+    <domain>yourdns.example</domain>
     <p>quarantine</p>
     <pct>100</pct>
   </policy_published>
@@ -47,16 +47,16 @@ const SAMPLE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
       </policy_evaluated>
     </row>
     <identifiers>
-      <header_from>bunmail.xyz</header_from>
+      <header_from>yourdns.example</header_from>
     </identifiers>
     <auth_results>
       <dkim>
-        <domain>bunmail.xyz</domain>
+        <domain>yourdns.example</domain>
         <selector>bunmail</selector>
         <result>pass</result>
       </dkim>
       <spf>
-        <domain>bunmail.xyz</domain>
+        <domain>yourdns.example</domain>
         <result>pass</result>
       </spf>
     </auth_results>
@@ -72,7 +72,7 @@ const SAMPLE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
       </policy_evaluated>
     </row>
     <identifiers>
-      <header_from>bunmail.xyz</header_from>
+      <header_from>yourdns.example</header_from>
     </identifiers>
     <auth_results>
       <spf>
@@ -85,7 +85,7 @@ const SAMPLE_XML = `<?xml version="1.0" encoding="UTF-8" ?>
 
 const RAW_REPORT_MAIL =
   "From: noreply@enterprise.protection.outlook.com\n" +
-  "Subject: Report Domain: bunmail.xyz Submitter: x Report-ID: integration-test-1\n" +
+  "Subject: Report Domain: yourdns.example Submitter: x Report-ID: integration-test-1\n" +
   "\n" +
   "DMARC aggregate report attached.";
 
@@ -120,7 +120,7 @@ describe("persistDmarcReportFromInbound — happy path", () => {
     expect(reports).toHaveLength(1);
     const report = reports[0]!;
     expect(report.orgName).toBe("Microsoft Corporation");
-    expect(report.domain).toBe("bunmail.xyz");
+    expect(report.domain).toBe("yourdns.example");
     expect(report.policyP).toBe("quarantine");
     expect(report.rawXml).toContain("<feedback>");
 
@@ -211,10 +211,7 @@ describe("listDmarcReports + getDmarcReportById", () => {
   test("listDmarcReports paginates and filters by domain", async () => {
     /** Seed a few reports for two domains. */
     for (let i = 0; i < 3; i++) {
-      const xml = SAMPLE_XML.replace("integration-test-1", `bm-${i}`).replace(
-        "bunmail.xyz",
-        "bunmail.xyz",
-      );
+      const xml = SAMPLE_XML.replace("integration-test-1", `bm-${i}`);
       await persistDmarcReportFromInbound(
         RAW_REPORT_MAIL.replace("integration-test-1", `bm-${i}`),
         [{ filename: "r.xml", content: strToU8(xml) }],
@@ -223,12 +220,12 @@ describe("listDmarcReports + getDmarcReportById", () => {
     }
     for (let i = 0; i < 2; i++) {
       const xml = SAMPLE_XML.replace("integration-test-1", `oth-${i}`).replace(
-        /bunmail\.xyz/g,
+        /yourdns\.example/g,
         "other.com",
       );
       await persistDmarcReportFromInbound(
         RAW_REPORT_MAIL.replace("integration-test-1", `oth-${i}`).replace(
-          "bunmail.xyz",
+          "yourdns.example",
           "other.com",
         ),
         [{ filename: "r.xml", content: strToU8(xml) }],
@@ -242,10 +239,10 @@ describe("listDmarcReports + getDmarcReportById", () => {
     const filtered = await listDmarcReports({
       page: 1,
       limit: 20,
-      domain: "bunmail.xyz",
+      domain: "yourdns.example",
     });
     expect(filtered.total).toBe(3);
-    expect(filtered.data.every((r) => r.domain === "bunmail.xyz")).toBe(true);
+    expect(filtered.data.every((r) => r.domain === "yourdns.example")).toBe(true);
   });
 
   test("getDmarcReportById returns the report with its records", async () => {

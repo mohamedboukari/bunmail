@@ -67,7 +67,7 @@ describe("createEmail — suppression gate (#25)", () => {
     try {
       await createEmail(
         {
-          from: "hello@bunmail.xyz",
+          from: "hello@yourdns.example",
           to: "blocked@example.com",
           subject: "should not reach queue",
           html: "<p>x</p>",
@@ -97,7 +97,7 @@ describe("createEmail — suppression gate (#25)", () => {
     try {
       await createEmail(
         {
-          from: "hello@bunmail.xyz",
+          from: "hello@yourdns.example",
           to: "  Blocked@Example.COM  ",
           subject: "x",
           html: "<p>x</p>",
@@ -122,7 +122,7 @@ describe("createEmail — suppression gate (#25)", () => {
     /** No throw — suppression is past its expiry. */
     const email = await createEmail(
       {
-        from: "hello@bunmail.xyz",
+        from: "hello@yourdns.example",
         to: "soft@example.com",
         subject: "x",
         html: "<p>x</p>",
@@ -144,7 +144,7 @@ describe("createEmail — suppression gate (#25)", () => {
     /** B's send goes through normally. */
     const email = await createEmail(
       {
-        from: "hello@bunmail.xyz",
+        from: "hello@yourdns.example",
         to: "user@example.com",
         subject: "x",
         html: "<p>x</p>",
@@ -168,7 +168,7 @@ describe("createEmail — template-based send", () => {
 
     const email = await createEmail(
       {
-        from: "hello@bunmail.xyz",
+        from: "hello@yourdns.example",
         to: "alice@example.com",
         templateId: tplId,
         variables: { name: "Alice" },
@@ -190,7 +190,7 @@ describe("createEmail — template-based send", () => {
     try {
       await createEmail(
         {
-          from: "hello@bunmail.xyz",
+          from: "hello@yourdns.example",
           to: "user@example.com",
           templateId: tplId,
           variables: {},

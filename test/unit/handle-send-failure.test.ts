@@ -78,7 +78,7 @@ function makeDeps(): { deps: SendFailureDeps; calls: CallLog } {
 const EMAIL = {
   id: "msg_abc",
   apiKeyId: "key_xyz",
-  fromAddress: "hello@bunmail.xyz",
+  fromAddress: "hello@yourdns.example",
   toAddress: "bad@example.com",
   subject: "test",
 };
