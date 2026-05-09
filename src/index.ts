@@ -18,6 +18,7 @@ import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
+import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
 import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
 
@@ -213,6 +214,13 @@ if (config.smtp.enabled) {
 trashPurge.start();
 
 /**
+ * Start the webhook delivery worker — drains the persisted
+ * `webhook_deliveries` queue, retries on a schedule of 1m / 5m / 15m /
+ * 1h / 6h, and prunes delivered rows older than the retention cutoff.
+ */
+webhookDeliveryWorker.start();
+
+/**
  * Start the periodic sweep that drops expired entries from the HTTP
  * rate-limit map (prevents unbounded growth under many distinct keys).
  */
@@ -228,6 +236,7 @@ function shutdown() {
   queueService.stop();
   smtpReceiver.stop();
   trashPurge.stop();
+  webhookDeliveryWorker.stop();
   stopRateLimitCleanup();
   app.stop();
   process.exit(0);

@@ -1,5 +1,6 @@
 import { createHmac } from "crypto";
 import { findWebhooksForEvent } from "./webhook.service.ts";
+import { enqueueDelivery } from "./webhook-delivery.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
 
@@ -8,8 +9,6 @@ interface WebhookPayload {
   timestamp: string;
   data: Record<string, unknown>;
 }
-
-const MAX_DISPATCH_ATTEMPTS = 3;
 
 /**
  * Signs the dispatch envelope with HMAC-SHA256 using the webhook's secret.
@@ -23,103 +22,67 @@ const MAX_DISPATCH_ATTEMPTS = 3;
  *
  * Stripe / Slack use the same construction. The string form is stable
  * and easy to reproduce in any language without parsing the JSON.
+ *
+ * Re-exported by `webhook-delivery.service.ts` so the worker can sign
+ * each retry attempt with a fresh timestamp.
  */
 export function signPayload(timestamp: string, body: string, secret: string): string {
   return createHmac("sha256", secret).update(`${timestamp}.${body}`).digest("hex");
 }
 
 /**
- * Dispatches a single event to one webhook URL with retries.
- * Exponential backoff: 1s, 2s, 4s.
- */
-async function deliverToWebhook(
-  url: string,
-  secret: string,
-  payload: WebhookPayload,
-): Promise<void> {
-  const body = JSON.stringify(payload);
-
-  for (let attempt = 1; attempt <= MAX_DISPATCH_ATTEMPTS; attempt++) {
-    /**
-     * Freshly compute the signature timestamp per attempt so a long
-     * retry chain doesn't ship a 12-minute-old signature that the
-     * consumer's freshness check would then reject. Each retry has
-     * its own valid signing window.
-     */
-    const sigTimestamp = Math.floor(Date.now() / 1000).toString();
-    const signature = signPayload(sigTimestamp, body, secret);
-
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-BunMail-Signature": signature,
-          "X-BunMail-Timestamp": sigTimestamp,
-          "X-BunMail-Event": payload.event,
-        },
-        body,
-        signal: AbortSignal.timeout(10_000),
-      });
-
-      if (response.ok) {
-        logger.debug("Webhook delivered", { url, event: payload.event, attempt });
-        return;
-      }
-
-      logger.warn("Webhook delivery failed (non-2xx)", {
-        url,
-        status: response.status,
-        attempt,
-      });
-    } catch (error) {
-      logger.warn("Webhook delivery error", {
-        url,
-        attempt,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    if (attempt < MAX_DISPATCH_ATTEMPTS) {
-      const backoff = Math.pow(2, attempt - 1) * 1000;
-      await new Promise((r) => setTimeout(r, backoff));
-    }
-  }
-
-  logger.error("Webhook delivery permanently failed", {
-    url,
-    event: payload.event,
-  });
-}
-
-/**
  * Dispatches an event to all subscribed webhooks.
- * Fire-and-forget — errors are logged but don't block the caller.
+ *
+ * As of #30, this is a synchronous **enqueue** — for each subscribed
+ * webhook, one row is INSERTed into `webhook_deliveries` at
+ * `status='pending'`. The actual HTTP POST is performed by the
+ * delivery worker poll loop in `webhook-delivery-worker.service.ts`.
+ *
+ * Why durably enqueue instead of in-memory retry:
+ *   - A server restart no longer loses pending events; rows survive
+ *     reboot and the next poll picks them up.
+ *   - Consumer outages longer than ~7s no longer burn through retries
+ *     before the consumer recovers; the worker retries over hours.
+ *   - Operators get inspection + replay via the dashboard / REST API.
+ *
+ * Still **fire-and-forget** from the caller's perspective: callers
+ * (queue.service.ts on `email.sent`, bounce-handler on `email.bounced`,
+ * etc.) don't await this — errors are logged, never thrown.
  */
 export function dispatchEvent(
   event: WebhookEventType,
   data: Record<string, unknown>,
 ): void {
-  const payload: WebhookPayload = {
+  const envelope: WebhookPayload = {
     event,
     timestamp: new Date().toISOString(),
     data,
   };
 
   findWebhooksForEvent(event)
-    .then((hooks) => {
+    .then(async (hooks) => {
       if (hooks.length === 0) return;
 
-      logger.debug("Dispatching webhook event", {
+      logger.debug("Enqueuing webhook event", {
         event,
         webhookCount: hooks.length,
       });
 
-      for (const hook of hooks) {
-        deliverToWebhook(hook.url, hook.secret, payload).catch(() => {
-          /* errors already logged inside deliverToWebhook */
-        });
-      }
+      /** Enqueue one row per subscribed webhook. Errors at the row
+       *  level shouldn't abort the others — log and continue. */
+      await Promise.allSettled(
+        hooks.map(async (hook) => {
+          try {
+            await enqueueDelivery({ webhookId: hook.id, envelope });
+          } catch (err) {
+            logger.error("Failed to enqueue webhook delivery", {
+              event,
+              webhookId: hook.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }),
+      );
     })
     .catch((error) => {
       logger.error("Failed to find webhooks for event", {
