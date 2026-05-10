@@ -9,6 +9,7 @@ import { redactEmail } from "../utils/redact.ts";
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
+import { EmailTombstonesPage } from "./routes/email-tombstones.tsx";
 import { EmailsTrashPage } from "./routes/emails-trash.tsx";
 import { EmailDetailPage } from "./routes/email-detail.tsx";
 import { ApiKeysPage } from "./routes/api-keys.tsx";
@@ -29,6 +30,7 @@ import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
 import * as emailService from "../modules/emails/services/email.service.ts";
+import * as tombstoneService from "../modules/emails/services/tombstone.service.ts";
 import * as apiKeyService from "../modules/api-keys/services/api-key.service.ts";
 import * as domainService from "../modules/domains/services/domain.service.ts";
 import * as templateService from "../modules/templates/services/template.service.ts";
@@ -394,6 +396,46 @@ export const pagesPlugin = new Elysia({
         status: t.Optional(t.String()),
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /**
+   * GET /dashboard/emails/tombstones (#34) — post-purge audit trail.
+   * Defined before `/:id` so the literal segment doesn't get eaten by
+   * the param route. Optional `?messageId=` for the bounce-trace flow.
+   */
+  .get(
+    "/emails/tombstones",
+    async ({ query }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const messageId =
+        typeof query.messageId === "string" && query.messageId.length > 0
+          ? query.messageId
+          : undefined;
+
+      const { data, total } = await tombstoneService.listAllTombstones({
+        messageId,
+        page,
+        limit,
+      });
+
+      return (
+        <EmailTombstonesPage
+          tombstones={data}
+          total={total}
+          page={page}
+          limit={limit}
+          messageIdFilter={messageId}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        messageId: t.Optional(t.String()),
       }),
     },
   )

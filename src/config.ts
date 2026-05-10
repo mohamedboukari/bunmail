@@ -185,6 +185,16 @@ export const config = {
      * emails. Default 7 days.
      */
     retentionDays: parseInt(optionalEnv("TRASH_RETENTION_DAYS", "7"), 10),
+
+    /**
+     * How many days an email tombstone (the post-purge audit-trail row,
+     * #34) is kept after the original email was hard-deleted. The
+     * tombstone preserves identifiers (id, message_id, to, subject,
+     * status) so operators can trace late complaints / bounces back to
+     * a sent message even after the body has been purged. Default 90
+     * days — long enough to cover most receiver feedback windows.
+     */
+    tombstoneRetentionDays: parseInt(optionalEnv("TOMBSTONE_RETENTION_DAYS", "90"), 10),
   },
 
   /**

@@ -208,3 +208,59 @@ See [docs/bounces.md](bounces.md) for both bounce paths.
 - **Crash recovery:** On startup, `sending` → `queued`
 - **DKIM:** Automatically signs with domain's RSA key when available
 - **Webhooks:** Dispatches `email.sent` and `email.failed` events
+
+## Tombstones (#34)
+
+Hard-deleting an email — whether by the periodic trash purge sweep, the per-row `DELETE /:id/permanent` API, or the bulk `POST /trash/empty` — writes a snapshot to the `email_tombstones` table **before** it actually deletes the row. Tombstones preserve only **identifiers**: `id`, `apiKeyId`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`. Body / html / text are deliberately dropped — purging the body is the whole point of trash retention; the tombstone is forensic-only.
+
+### Why
+
+When a complaint, late bounce, or compliance audit arrives weeks later referring to a `Message-ID`, an operator needs to be able to answer "did we send this?". Without tombstones, the row was gone after the trash purge ran and that question was unanswerable. With them, the read API at `GET /api/v1/emails/tombstones?messageId=…` returns the snapshot in milliseconds.
+
+### Lifecycle
+
+```
+emails row (sent/bounced/failed)
+       │
+       ▼  user soft-deletes (deleted_at = now())
+emails row (in trash)
+       │
+       ▼  TRASH_RETENTION_DAYS later — purge sweep, or operator hits "permanent"
+       │  ╳── all five hard-delete paths route through `deleteEmailsWithTombstones`
+       │     which wraps INSERT INTO email_tombstones + DELETE FROM emails in one tx
+       ▼
+email_tombstones row (snapshot)  ←─ readable via API + dashboard for TOMBSTONE_RETENTION_DAYS
+       │
+       ▼  TOMBSTONE_RETENTION_DAYS later — `runTombstoneRetention` sweeps it
+(gone forever)
+```
+
+### Snapshot semantics — no foreign keys
+
+Tombstones must outlive the `api_keys` row that owned the original email — exactly the audit-trail use case is "you revoked the key, but a complaint about a message it sent six weeks ago just arrived". So `apiKeyId` on the tombstone is a **denormalised text snapshot**, not a FK. CASCADE on api_keys deletion does not touch tombstones.
+
+### Read API
+
+```bash
+# Trace a Message-ID (the bounce/complaint hot path).
+# Accepts both wrapped and unwrapped forms — operators paste from logs / DSNs.
+curl https://your-host/api/v1/emails/tombstones?messageId=abc-123@your-domain \
+  -H "Authorization: Bearer $BM_KEY"
+
+# Or by original email id:
+curl https://your-host/api/v1/emails/tombstones/msg_abc123... \
+  -H "Authorization: Bearer $BM_KEY"
+```
+
+Dashboard equivalent: `/dashboard/emails/tombstones` with a Message-ID search box.
+
+### Configuration
+
+```bash
+TOMBSTONE_RETENTION_DAYS=90   # default; how long tombstones survive their parent's hard-delete
+```
+
+### Out of scope
+
+- **Inbound tombstones.** Inbound emails have a different shape (`fromAddress` / `receivedAt` instead of `toAddress` / `sentAt`); the audit-trail value is real but a separate ticket. Today the inbound trash purge still hard-deletes without a snapshot.
+- **Restore from tombstone.** Tombstones don't keep the body — there's nothing to restore. They're read-only forensic data.

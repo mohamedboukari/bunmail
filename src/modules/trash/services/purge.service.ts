@@ -2,6 +2,10 @@ import { and, isNotNull, lt, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import { inboundEmails } from "../../inbound/models/inbound-email.schema.ts";
+import {
+  deleteEmailsWithTombstones,
+  purgeOldTombstones,
+} from "../../emails/services/tombstone.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 
@@ -19,6 +23,11 @@ let purgeTimer: ReturnType<typeof setInterval> | null = null;
  * Permanently removes trashed emails / inbound emails older than
  * `TRASH_RETENTION_DAYS`. Returns the counts purged from each table.
  *
+ * Outbound emails route through `deleteEmailsWithTombstones` (#34) so
+ * a forensic snapshot is preserved past the hard-delete. Tombstones
+ * themselves are aged out separately by `runTombstoneRetention` on the
+ * same poll cadence (different — much longer — retention window).
+ *
  * Exported so tests / one-off scripts can run a single pass without
  * starting the interval.
  */
@@ -34,10 +43,9 @@ export async function runTrashPurge(): Promise<{
   });
 
   const [emailRows, inboundRows] = await Promise.all([
-    db
-      .delete(emails)
-      .where(and(isNotNull(emails.deletedAt), lt(emails.deletedAt, cutoff)))
-      .returning({ id: emails.id }),
+    deleteEmailsWithTombstones(
+      and(isNotNull(emails.deletedAt), lt(emails.deletedAt, cutoff)),
+    ),
     db
       .delete(inboundEmails)
       .where(and(isNotNull(inboundEmails.deletedAt), lt(inboundEmails.deletedAt, cutoff)))
@@ -55,6 +63,26 @@ export async function runTrashPurge(): Promise<{
 }
 
 /**
+ * Sweeps tombstones older than `TOMBSTONE_RETENTION_DAYS` (#34).
+ * Runs alongside `runTrashPurge` on the same 6h cadence — the cutoff
+ * is much longer (90 days default) so most calls find nothing to do.
+ */
+export async function runTombstoneRetention(): Promise<{ deleted: number }> {
+  const cutoff = new Date(
+    Date.now() - config.trash.tombstoneRetentionDays * 24 * 60 * 60 * 1000,
+  );
+  logger.debug("Running tombstone retention sweep", {
+    retentionDays: config.trash.tombstoneRetentionDays,
+    cutoff: cutoff.toISOString(),
+  });
+  const result = await purgeOldTombstones({ olderThan: cutoff });
+  if (result.deleted > 0) {
+    logger.info("Tombstone retention sweep completed", { deleted: result.deleted });
+  }
+  return result;
+}
+
+/**
  * Starts the trash purge loop — runs once immediately, then every 6 hours.
  * Safe to call multiple times: subsequent calls are no-ops if already running.
  */
@@ -69,18 +97,28 @@ export function start(): void {
     intervalHours: PURGE_INTERVAL_MS / (60 * 60 * 1000),
   });
 
-  /** Initial run on boot — catches anything that aged out while server was down */
-  runTrashPurge().catch((error) => {
-    logger.error("Initial trash purge failed", {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  /** Initial run on boot — catches anything that aged out while server
+   *  was down. Runs both sweeps; tombstone retention is cheap when the
+   *  cutoff is 90 days out and the table is small. */
+  Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
+    for (const r of results) {
+      if (r.status === "rejected") {
+        logger.error("Initial trash purge cycle failed", {
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    }
   });
 
   purgeTimer = setInterval(() => {
-    runTrashPurge().catch((error) => {
-      logger.error("Scheduled trash purge failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
+      for (const r of results) {
+        if (r.status === "rejected") {
+          logger.error("Scheduled trash purge cycle failed", {
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
+        }
+      }
     });
   }, PURGE_INTERVAL_MS);
 }

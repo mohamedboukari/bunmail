@@ -2,7 +2,9 @@ import { Elysia, t } from "elysia";
 import { sendEmailDto } from "./dtos/send-email.dto.ts";
 import { listEmailsDto } from "./dtos/list-emails.dto.ts";
 import { serializeEmail } from "./serializations/email.serialization.ts";
+import { serializeEmailTombstone } from "./serializations/email-tombstone.serialization.ts";
 import * as emailService from "./services/email.service.ts";
+import * as tombstoneService from "./services/tombstone.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -137,6 +139,79 @@ export const emailsPlugin = new Elysia({
         summary: "List trashed emails",
         description:
           "Returns emails currently in trash. Trashed emails are auto-purged after TRASH_RETENTION_DAYS days.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * GET /api/v1/emails/tombstones — paginated list of post-purge audit
+   * snapshots (#34). Operators use this to trace late complaints and
+   * bounces back to a sent message after the original email row has
+   * been hard-deleted by the trash purge sweep.
+   *
+   * Optional `?messageId=` filter is the hot path: paste the
+   * `Message-ID` from a DSN / FBL report to find out whether (and
+   * when) we sent it.
+   */
+  .get(
+    "/tombstones",
+    async ({ query, apiKeyId }) => {
+      const page = query.page ? parseInt(query.page, 10) : 1;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const messageId =
+        typeof query.messageId === "string" && query.messageId.length > 0
+          ? query.messageId
+          : undefined;
+
+      const { data, total } = await tombstoneService.listTombstones({
+        apiKeyId,
+        messageId,
+        page,
+        limit,
+      });
+
+      return {
+        success: true,
+        data: data.map(serializeEmailTombstone),
+        pagination: { page, limit, total },
+      };
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        messageId: t.Optional(t.String()),
+      }),
+      detail: {
+        tags: ["Emails"],
+        summary: "List email tombstones",
+        description:
+          "Paginated audit-trail snapshots of emails that have been hard-deleted. Filter by `?messageId=<id>` to trace a complaint or bounce.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  .get(
+    "/tombstones/:id",
+    async ({ params, apiKeyId, set }) => {
+      const row = await tombstoneService.getTombstoneById({
+        id: params.id,
+        apiKeyId,
+      });
+      if (!row) {
+        set.status = 404;
+        return { success: false, error: "Tombstone not found" };
+      }
+      return { success: true, data: serializeEmailTombstone(row) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Emails"],
+        summary: "Get an email tombstone",
+        description: "Returns the post-purge audit snapshot for a single email id.",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -285,14 +360,16 @@ export const emailsPlugin = new Elysia({
         apiKeyId,
       });
 
-      const email = await emailService.permanentDeleteEmail(params.id, apiKeyId);
+      const result = await emailService.permanentDeleteEmail(params.id, apiKeyId);
 
-      if (!email) {
+      if (!result) {
         set.status = 404;
         return { success: false, error: "Trashed email not found" };
       }
 
-      return { success: true, data: serializeEmail(email) };
+      /** As of #34, hard-delete returns just the id — the row is gone
+       *  but a tombstone is at `GET /api/v1/emails/tombstones/:id`. */
+      return { success: true, data: { id: result.id } };
     },
     {
       params: t.Object({ id: t.String() }),

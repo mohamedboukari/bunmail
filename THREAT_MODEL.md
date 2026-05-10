@@ -13,6 +13,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **API keys** (`api_keys.key_hash`) | Authenticate every API request. Compromise = full mail-send abuse. |
 | **DKIM private keys** (`domains.dkim_private_key`) | Sign outbound mail as a verified sender. Compromise = an attacker can forge mail from your domain that passes DKIM. |
 | **Email queue + history** (`emails`, `inbound_emails`) | Contains every recipient address, subject, and body that has flowed through the system. PII / commercial intelligence. |
+| **Email tombstones** (`email_tombstones`, #34) | Post-purge audit snapshots — recipient address, Message-ID, subject (NOT body) for `TOMBSTONE_RETENTION_DAYS` days after the original was hard-deleted. Lower sensitivity than `emails` (no body) but higher *retention* (90d default vs 7d for trash). Set `TOMBSTONE_RETENTION_DAYS=1` to keep the bounce/complaint trace flow only for the freshest day of late feedback while minimising PII retention; the tombstone sweep runs every 6h. |
 | **Sending IP reputation** | Earned over weeks. A few hours of abuse can take it months to recover. |
 | **Webhook secrets** (`webhooks.secret`) | HMAC keys shared with the consumer. Compromise = forged webhook deliveries. |
 | **Dashboard session secret** (`SESSION_SECRET`) | HMAC key for browser sessions. Compromise = arbitrary dashboard access without password. |

@@ -472,6 +472,27 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 | updated_at   | timestamp      | NOT NULL, default `now()`       |
 
+### `email_tombstones` (#34)
+
+Post-purge audit trail. Every hard-delete of an `emails` row first writes a snapshot here so operators can trace late complaints / bounces back to a sent message after the body has been purged. Body / html / text are deliberately NOT preserved. **No foreign keys** — snapshots survive their parent api_key / domain being deleted. See [docs/emails.md](docs/emails.md#tombstones).
+
+| Column         | Type           | Constraints                                   |
+|----------------|----------------|-----------------------------------------------|
+| id             | varchar(36)    | PK — matches the original email's id (`msg_…`)|
+| api_key_id     | varchar(36)    | NOT NULL — snapshot, NOT a FK                 |
+| message_id     | varchar(255)   | nullable — SMTP `Message-ID`, indexed         |
+| from_address   | varchar(255)   | NOT NULL                                      |
+| to_address     | varchar(255)   | NOT NULL                                      |
+| subject        | varchar(500)   | nullable                                      |
+| status         | varchar(20)    | NOT NULL — sent / bounced / failed at delete time |
+| sent_at        | timestamptz    | nullable                                      |
+| deleted_at     | timestamptz    | nullable — when the original was soft-deleted to trash |
+| purged_at      | timestamptz    | NOT NULL, default `now()` — retention starts here |
+
+Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list).
+
+Retention: `TOMBSTONE_RETENTION_DAYS` (default 90) — the existing 6h trash purge loop also runs `runTombstoneRetention` on the same cadence.
+
 ### `webhook_deliveries` (#30)
 
 Persisted retry queue. Every dispatch enqueues one row per subscribed webhook; the worker drains it on a 5s poll. See [docs/webhooks.md](docs/webhooks.md) for the full lifecycle.
@@ -612,8 +633,10 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | DELETE | /api/v1/emails/:id                  | Move email to trash                        | Yes  |
 | POST   | /api/v1/emails/bulk-delete          | Bulk move to trash (`{ ids: [] }`)         | Yes  |
 | POST   | /api/v1/emails/:id/restore          | Restore from trash                         | Yes  |
-| DELETE | /api/v1/emails/:id/permanent        | Permanently delete a trashed email         | Yes  |
-| POST   | /api/v1/emails/trash/empty          | Permanently delete all trashed emails      | Yes  |
+| DELETE | /api/v1/emails/:id/permanent        | Permanently delete a trashed email (writes a tombstone) | Yes  |
+| POST   | /api/v1/emails/trash/empty          | Permanently delete all trashed emails (writes tombstones) | Yes  |
+| GET    | /api/v1/emails/tombstones           | List post-purge audit snapshots (`?messageId=` filter) | Yes  |
+| GET    | /api/v1/emails/tombstones/:id       | Single tombstone by original email id       | Yes  |
 
 ### API Keys
 
@@ -698,7 +721,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/emails/trash/empty      | Empty email trash       | Session  |
 | POST   | /dashboard/emails/:id/trash        | Move single to trash    | Session  |
 | POST   | /dashboard/emails/:id/restore      | Restore single          | Session  |
-| POST   | /dashboard/emails/:id/permanent    | Hard-delete single      | Session  |
+| POST   | /dashboard/emails/:id/permanent    | Hard-delete single (writes tombstone) | Session  |
+| GET    | /dashboard/emails/tombstones       | Tombstone list + Message-ID search | Session  |
 | GET    | /dashboard/emails/:id              | Email detail            | Session  |
 | GET    | /dashboard/api-keys                | API keys management     | Session  |
 | POST   | /dashboard/api-keys                | Create API key          | Session  |

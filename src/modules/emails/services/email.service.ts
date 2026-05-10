@@ -6,6 +6,7 @@ import { templates } from "../../templates/models/template.schema.ts";
 import { renderTemplate } from "../../templates/services/template.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
+import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -379,34 +380,38 @@ export async function restoreEmail(
 /**
  * Permanently deletes a trashed email. Only works on rows that are already
  * in trash — protects against accidentally bypassing the trash workflow.
+ *
+ * Routes through {@link deleteEmailsWithTombstones} (#34) so a snapshot
+ * of identifiers + status is preserved past the hard-delete for late
+ * complaint / bounce trace-back. Returns the deleted email's `id` only;
+ * the rest of the row is gone, exactly as before — but `id` matches the
+ * tombstone's id so callers can immediately fetch the snapshot if they
+ * want to.
  */
 export async function permanentDeleteEmail(
   id: string,
   apiKeyId: string,
-): Promise<Email | undefined> {
+): Promise<{ id: string } | undefined> {
   logger.info("Permanently deleting email", { id, apiKeyId });
 
-  const [email] = await db
-    .delete(emails)
-    .where(
-      and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)),
-    )
-    .returning();
+  const rows = await deleteEmailsWithTombstones(
+    and(eq(emails.id, id), eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)),
+  );
 
-  return email;
+  return rows[0];
 }
 
 /**
  * Empties the trash for a given API key — permanently deletes all
- * trashed emails for that key. Returns the count purged.
+ * trashed emails for that key. Returns the count purged. Tombstones
+ * are written for every deleted row (#34).
  */
 export async function emptyEmailsTrash(apiKeyId: string): Promise<number> {
   logger.info("Emptying emails trash", { apiKeyId });
 
-  const rows = await db
-    .delete(emails)
-    .where(and(eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)))
-    .returning({ id: emails.id });
+  const rows = await deleteEmailsWithTombstones(
+    and(eq(emails.apiKeyId, apiKeyId), isNotNull(emails.deletedAt)),
+  );
 
   return rows.length;
 }
@@ -487,24 +492,23 @@ export async function restoreEmailUnscoped(id: string): Promise<Email | undefine
   return email;
 }
 
-/** Dashboard: permanently delete a trashed email (no apiKey scoping). */
+/** Dashboard: permanently delete a trashed email (no apiKey scoping).
+ *  Tombstone is recorded under the original email's apiKey via
+ *  {@link deleteEmailsWithTombstones} (#34). */
 export async function permanentDeleteEmailUnscoped(
   id: string,
-): Promise<Email | undefined> {
+): Promise<{ id: string } | undefined> {
   logger.info("Permanently deleting email (unscoped)", { id });
-  const [email] = await db
-    .delete(emails)
-    .where(and(eq(emails.id, id), isNotNull(emails.deletedAt)))
-    .returning();
-  return email;
+  const rows = await deleteEmailsWithTombstones(
+    and(eq(emails.id, id), isNotNull(emails.deletedAt)),
+  );
+  return rows[0];
 }
 
-/** Dashboard: empty trash across all API keys. */
+/** Dashboard: empty trash across all API keys. Tombstones recorded for
+ *  every deleted row (#34). */
 export async function emptyEmailsTrashUnscoped(): Promise<number> {
   logger.info("Emptying emails trash (unscoped)");
-  const rows = await db
-    .delete(emails)
-    .where(isNotNull(emails.deletedAt))
-    .returning({ id: emails.id });
+  const rows = await deleteEmailsWithTombstones(isNotNull(emails.deletedAt));
   return rows.length;
 }
