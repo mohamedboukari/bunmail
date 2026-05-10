@@ -9,6 +9,7 @@
 export { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
 export { domains } from "../modules/domains/models/domain.schema.ts";
 export { emails } from "../modules/emails/models/email.schema.ts";
+export { emailTombstones } from "../modules/emails/models/email-tombstone.schema.ts";
 export { webhooks } from "../modules/webhooks/models/webhook.schema.ts";
 export { webhookDeliveries } from "../modules/webhooks/models/webhook-delivery.schema.ts";
 export { templates } from "../modules/templates/models/template.schema.ts";

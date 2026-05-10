@@ -41,6 +41,7 @@ export async function truncateAll(): Promise<void> {
     drizzleSql`TRUNCATE TABLE
       suppressions,
       emails,
+      email_tombstones,
       webhooks,
       templates,
       domains,
