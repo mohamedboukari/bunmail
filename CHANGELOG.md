@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-10
+
+> **Theme: deliverability + reliability + observability.** Bounce handling becomes end-to-end — DSN parsing (#24), per-API-key suppression list (#25), and auto-suppress on inline SMTP 5xx (#68) close the "stop sending to dead recipients" loop that protects IP reputation. DMARC aggregate reports are parsed and surfaced in the dashboard (#41). Webhook delivery becomes durable with persistence + replay (#30) so consumer outages can't drop events. Email tombstones (#34) preserve audit trails past trash purge so late complaints / bounces can be traced. The queue's race condition under concurrent workers is fixed (#20) — multi-replica deploys are now safe. DKIM private keys are encrypted at rest (#23). A new integration test tier (#70) lifted overall coverage from 62% to 90%+.
+>
+> **Breaking change — DKIM encryption.** Operators upgrading from 0.4.0 must set `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` in `.env` *before* pulling this version. Boot fails loudly otherwise. Existing rows are auto-encrypted on first boot. See #23 / `SECURITY.md` for rotation.
+
 ### Changed
 
 - Consolidate the duplicate `### Added` sections under `[Unreleased]` (cosmetic, keeps Keep-a-Changelog format consistent). (#70)
