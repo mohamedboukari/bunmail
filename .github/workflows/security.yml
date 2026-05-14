@@ -56,7 +56,7 @@ jobs:
 
       - name: Upload Trivy SARIF to Security tab
         if: always() # also run on failure so we see the findings in the UI
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -140,7 +140,7 @@ jobs:
 
       - name: Upload Trivy image SARIF to Security tab
         if: always()
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
