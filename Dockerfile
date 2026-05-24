@@ -59,6 +59,10 @@ FROM oven/bun:1.3.10 AS run
 # Apply latest Debian security patches. The base image rebuilds on a
 # cadence, but new Debian CVE patches between rebuilds are exactly what
 # Trivy was flagging. Same pattern the official Node/Python images use.
+#
+# APT_CACHE_BUST is set to github.run_id in CI so Docker never serves a
+# stale cached layer — every workflow run fetches the current package list.
+ARG APT_CACHE_BUST
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
   && apt-get clean \

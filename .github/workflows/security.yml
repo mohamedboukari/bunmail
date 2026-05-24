@@ -103,6 +103,8 @@ jobs:
           push: false
           load: true
           tags: bunmail:scan
+          build-args: |
+            APT_CACHE_BUST=${{ github.run_id }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
