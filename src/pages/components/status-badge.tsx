@@ -9,6 +9,7 @@ export function StatusBadge({ status }: { status: string }) {
     queued: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
     sending: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
     failed: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300",
+    bounced: "bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
   };
 
   const colorClass =
