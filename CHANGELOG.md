@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bounced status filter in dashboard.** The emails list page now shows a "Bounced" filter tab alongside All / Queued / Sending / Sent / Failed. The `StatusBadge` component renders bounced emails with an orange pill. Closes #83.
+
 ### Fixed
 
 - **Trivy image scan failing on stale OS packages.** The `apt-get upgrade` layer in the Dockerfile was cached by GHA Docker layer caching, so Debian security patches (e.g. `libcap2`, `libsystemd0`) released after the last uncached build were never picked up. Added an `ARG APT_CACHE_BUST` set to `github.run_id` so every CI run builds a fresh apt layer. Install + prod-deps stages remain cached.
