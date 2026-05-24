@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Inbound SMTP receiver is now loudly opt-in.** Previously `SMTP_ENABLED=false` (the default) silently disabled the receiver while `docker-compose.yml` still bound host port 25 — operators following the README ended up with MX records pointing at a port nothing was listening on, with no log line to explain why. The inbound port line in `docker-compose.yml` is now commented out by default with the enable instructions inline, and the app logs `Inbound SMTP receiver disabled — set SMTP_ENABLED=true …` at startup whenever inbound is off. `.env.example` and `docs/inbound.md` carry a first-boot checklist that calls out the three knobs (env, compose, DNS) that have to agree. Closes #93.
 - **Docker port mappings now read from `.env`.** `PORT` and `SMTP_PORT` in `docker-compose.yml` are parameterised (`${PORT:-3000}`, `${SMTP_PORT:-25}`) so operators no longer need to edit two files when changing ports. Closes #92.
 
 - **Trivy image scan failing on stale OS packages.** The `apt-get upgrade` layer in the Dockerfile was cached by GHA Docker layer caching, so Debian security patches (e.g. `libcap2`, `libsystemd0`) released after the last uncached build were never picked up. Added an `ARG APT_CACHE_BUST` set to `github.run_id` so every CI run builds a fresh apt layer. Install + prod-deps stages remain cached.
