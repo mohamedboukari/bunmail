@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Trivy image scan failing on stale OS packages.** The `apt-get upgrade` layer in the Dockerfile was cached by GHA Docker layer caching, so Debian security patches (e.g. `libcap2`, `libsystemd0`) released after the last uncached build were never picked up. Added an `ARG APT_CACHE_BUST` set to `github.run_id` so every CI run builds a fresh apt layer. Install + prod-deps stages remain cached.
+
 ## [0.5.0] - 2026-05-10
 
 > **Theme: deliverability + reliability + observability.** Bounce handling becomes end-to-end — DSN parsing (#24), per-API-key suppression list (#25), and auto-suppress on inline SMTP 5xx (#68) close the "stop sending to dead recipients" loop that protects IP reputation. DMARC aggregate reports are parsed and surfaced in the dashboard (#41). Webhook delivery becomes durable with persistence + replay (#30) so consumer outages can't drop events. Email tombstones (#34) preserve audit trails past trash purge so late complaints / bounces can be traced. The queue's race condition under concurrent workers is fixed (#20) — multi-replica deploys are now safe. DKIM private keys are encrypted at rest (#23). A new integration test tier (#70) lifted overall coverage from 62% to 90%+.
