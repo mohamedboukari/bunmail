@@ -205,6 +205,7 @@ See [docs/bounces.md](bounces.md) for both bounce paths.
 - **Batch size:** 5 emails per cycle
 - **Max attempts:** 3
 - **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims — running multiple BunMail instances against the same DB will not double-send.
+- **Per-MX throttle (#91):** SMTP sessions are throttled per destination MX via a module-level semaphore (`src/utils/mx-throttle.ts`). Default is **one parallel session per MX** (configurable via `MAIL_MX_CONCURRENCY`). Sends to different MXs run in parallel; sends to the same MX serialize. The semaphore holds across poll cycles, so back-to-back batches that share a destination can't pile up either. This is what stops strict receivers (Outlook, Yahoo) from `421`ing parallel sessions from the same source IP. Operators with established IP reputation can raise the cap to 2-3; values above 3 are rarely worth it.
 - **Crash recovery:** On startup, `sending` → `queued`
 - **DKIM:** Automatically signs with domain's RSA key when available
 - **Webhooks:** Dispatches `email.sent` and `email.failed` events

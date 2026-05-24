@@ -26,7 +26,7 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
  */
 mock.module("../../src/config.ts", () => ({
   config: {
-    mail: { hostname: "test.localhost" },
+    mail: { hostname: "test.localhost", mxConcurrency: 1 },
     env: "test" as const,
     database: { url: "" },
     server: { port: 3000, host: "0.0.0.0" },
