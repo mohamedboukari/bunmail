@@ -115,6 +115,16 @@ export const config = {
   mail: {
     /** Hostname used in SMTP HELO command and Message-ID header */
     hostname: optionalEnv("MAIL_HOSTNAME", "localhost"),
+
+    /**
+     * Max parallel SMTP sessions per destination MX host. Direct-to-MX
+     * delivery means strict receivers (Outlook, Yahoo) reject parallel
+     * sessions from the same source IP with `421 Too many concurrent
+     * SMTP connections`. Default `1` is safe for new self-hosters with
+     * cold IP reputation; operators with established reputation can
+     * raise it to 2-3. Sends to different MXs are unaffected. (#91)
+     */
+    mxConcurrency: Math.max(1, parseInt(optionalEnv("MAIL_MX_CONCURRENCY", "1"), 10)),
   },
 
   /** Inbound SMTP server for receiving emails */

@@ -4,6 +4,7 @@ import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { withMxLock } from "../../../utils/mx-throttle.ts";
 
 export interface SendMailResult {
   messageId: string;
@@ -146,7 +147,18 @@ export async function sendMail(options: {
     };
   }
 
-  const info = await transport.sendMail(mailOptions);
+  /**
+   * Throttle concurrent SMTP sessions to the same MX. Strict receivers
+   * (Outlook, Yahoo) `421` parallel sessions from the same source IP,
+   * which would otherwise trash IP reputation under any meaningful
+   * batch size. The lock is keyed by MX hostname and held across the
+   * whole `sendMail` call (transport opens the TCP session lazily on
+   * the first send). Sends to different MXs use disjoint locks and
+   * run in parallel. See `src/utils/mx-throttle.ts` (#91).
+   */
+  const info = await withMxLock(mxHost, config.mail.mxConcurrency, () =>
+    transport.sendMail(mailOptions),
+  );
 
   logger.info("Email sent successfully", {
     messageId: info.messageId,
