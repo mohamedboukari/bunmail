@@ -135,9 +135,11 @@ docker compose up -d --build
 ```
 
 This starts:
-- **BunMail** on port 3000 (HTTP API + Dashboard)
+- **BunMail** on port `$PORT` (HTTP API + Dashboard, default 3000)
 - **PostgreSQL** on port 5432 (internal only)
-- **Inbound SMTP** on port 25 (if `SMTP_ENABLED=true`)
+- **Inbound SMTP** on port `$SMTP_PORT` (default 2525; use 25 in production — requires `SMTP_ENABLED=true`)
+
+Port mappings in `docker-compose.yml` read `PORT` and `SMTP_PORT` from `.env` automatically — if you change them in `.env`, you don't need to edit anything else.
 
 Migrations run automatically on boot. Verify with:
 
@@ -148,8 +150,8 @@ docker compose ps
 # Check logs
 docker compose logs app
 
-# Check health
-curl http://localhost:3000/health
+# Check health (use your PORT value)
+curl http://localhost:${PORT:-3000}/health
 ```
 
 ## 4. Initial Setup
