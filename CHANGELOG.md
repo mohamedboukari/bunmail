@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Full timestamp in emails list.** The "Created" column now shows `YYYY-MM-DD HH:MM:SS` instead of date-only, so operators can see exactly when each email was queued. Closes #84.
 ### Added
 
 - **Bounced status filter in dashboard.** The emails list page now shows a "Bounced" filter tab alongside All / Queued / Sending / Sent / Failed. The `StatusBadge` component renders bounced emails with an orange pill. Closes #83.
