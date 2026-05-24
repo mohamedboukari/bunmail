@@ -43,6 +43,7 @@ export function EmailsPage({
     { label: "Sending", value: "sending" },
     { label: "Sent", value: "sent" },
     { label: "Failed", value: "failed" },
+    { label: "Bounced", value: "bounced" },
   ];
 
   return (

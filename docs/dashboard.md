@@ -26,7 +26,7 @@ If `DASHBOARD_PASSWORD` is not set, all dashboard routes show a "Dashboard disab
 | GET /dashboard/login             | Login form (standalone, no nav)                                   |
 | GET /dashboard                   | Stats overview — outbound, inbound, configuration sections        |
 | GET /dashboard/send              | Compose & send emails from dashboard                              |
-| GET /dashboard/emails            | Email logs with status filters, bulk-select, per-row trash        |
+| GET /dashboard/emails            | Email logs with status filters (All / Queued / Sending / Sent / Failed / Bounced), bulk-select, per-row trash |
 | GET /dashboard/emails/trash      | Trashed emails — bulk Restore / Delete-forever / Empty trash      |
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
 | GET /dashboard/api-keys          | API keys list + create form                                       |
