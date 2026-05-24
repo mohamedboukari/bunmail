@@ -14,7 +14,9 @@ services:
     build: .
     ports:
       - "${PORT:-3000}:${PORT:-3000}" # HTTP API + Dashboard
-      - "${SMTP_PORT:-25}:${SMTP_PORT:-25}" # Inbound SMTP (enable with SMTP_ENABLED=true)
+      # Inbound SMTP is OFF by default. To enable: (1) uncomment the line below,
+      # (2) set SMTP_ENABLED=true and SMTP_PORT=25 in your .env. See docs/inbound.md.
+      # - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}

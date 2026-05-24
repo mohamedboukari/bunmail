@@ -201,10 +201,18 @@ queueService.start();
 
 /**
  * Start the inbound SMTP server (if enabled).
- * Listens for incoming emails and stores them in the database.
+ *
+ * Inbound is opt-in (`SMTP_ENABLED=true`). When it's off we log an
+ * explicit info line so the silent-fail mode — "I set up MX records
+ * but nothing arrives" — is one `grep` away from a diagnosis instead
+ * of a head-scratch. (#93)
  */
 if (config.smtp.enabled) {
   smtpReceiver.start();
+} else {
+  logger.info(
+    "Inbound SMTP receiver disabled — set SMTP_ENABLED=true (and uncomment the SMTP port line in docker-compose.yml) to enable",
+  );
 }
 
 /**
