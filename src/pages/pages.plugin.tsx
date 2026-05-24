@@ -4,6 +4,7 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { redactEmail } from "../utils/redact.ts";
+import type { EmailStatus } from "../modules/emails/types/email.types.ts";
 
 /* ─── Page Components ─── */
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
@@ -368,7 +369,7 @@ export const pagesPlugin = new Elysia({
       const { data, total } = await emailService.listAllEmails({
         page,
         limit,
-        status: status as "queued" | "sending" | "sent" | "failed" | undefined,
+        status: status as EmailStatus | undefined,
       });
 
       const flash = query.flash
