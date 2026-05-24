@@ -6,7 +6,7 @@ Five layers run on every push and pull request. Their job names below match the 
 |---|---|---|---|
 | **CodeQL** | `codeql.yml` | `Analyze (javascript-typescript)` | Semantic SAST — taint flow, injection, unsafe deserialization, common vuln patterns in TS/JS source. |
 | **Trivy fs** | `security.yml` | `Trivy filesystem scan` | CVEs in `bun.lock`, `package.json`, `Dockerfile` pins (transitive deps included). Fails on `HIGH`/`CRITICAL`. |
-| **Trivy image** | `security.yml` | `Trivy image scan` | CVEs in the built Docker image — base layers (`oven/bun:1`) + OS packages + everything you installed. Builds the image without pushing. |
+| **Trivy image** | `security.yml` | `Trivy image scan` | CVEs in the built Docker image — base layers (`oven/bun:1`) + OS packages + everything you installed. Builds the image without pushing. The build passes `APT_CACHE_BUST=${{ github.run_id }}` so the `apt-get upgrade` layer is never served from GHA cache. |
 | **gitleaks** | `security.yml` | `gitleaks (secret scan)` | High-confidence secret patterns (AWS keys, GH tokens, private RSA keys, etc.) in the diff and full git history. |
 | **bun pm untrusted** | `ci.yml` | `Audit untrusted lifecycle scripts` | npm/Bun packages with postinstall scripts that aren't on `trustedDependencies`. Stops a new compromised dep from running arbitrary code on every install. |
 
