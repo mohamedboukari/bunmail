@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Full timestamp in emails list.** The "Created" column now shows `YYYY-MM-DD HH:MM:SS` instead of date-only, so operators can see exactly when each email was queued. Closes #84.
+
 ### Fixed
 
 - **Trivy image scan failing on stale OS packages.** The `apt-get upgrade` layer in the Dockerfile was cached by GHA Docker layer caching, so Debian security patches (e.g. `libcap2`, `libsystemd0`) released after the last uncached build were never picked up. Added an `ARG APT_CACHE_BUST` set to `github.run_id` so every CI run builds a fresh apt layer. Install + prod-deps stages remain cached.
