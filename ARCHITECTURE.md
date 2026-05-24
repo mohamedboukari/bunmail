@@ -813,7 +813,7 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 services:
   app:
     build: .
-    ports: ["3000:3000"]
+    ports: ["${PORT:-3000}:${PORT:-3000}"]
     environment:
       DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
       DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23) — `openssl rand -base64 32`

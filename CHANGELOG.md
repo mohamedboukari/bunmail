@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Docker port mappings now read from `.env`.** `PORT` and `SMTP_PORT` in `docker-compose.yml` are parameterised (`${PORT:-3000}`, `${SMTP_PORT:-25}`) so operators no longer need to edit two files when changing ports. Closes #92.
+
 - **Trivy image scan failing on stale OS packages.** The `apt-get upgrade` layer in the Dockerfile was cached by GHA Docker layer caching, so Debian security patches (e.g. `libcap2`, `libsystemd0`) released after the last uncached build were never picked up. Added an `ARG APT_CACHE_BUST` set to `github.run_id` so every CI run builds a fresh apt layer. Install + prod-deps stages remain cached.
 
 ## [0.5.0] - 2026-05-10
