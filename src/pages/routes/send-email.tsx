@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { EmailChipInput, EmailChipInputScript } from "../components/email-chip-input.tsx";
 
 /**
  * Props for the send email page.
@@ -59,7 +60,7 @@ export function SendEmailPage({ flash }: SendEmailPageProps) {
             </div>
           </div>
 
-          {/* cc / bcc */}
+          {/* cc / bcc — chip input (#85): type and press comma/space/Enter to add */}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label
@@ -68,13 +69,10 @@ export function SendEmailPage({ flash }: SendEmailPageProps) {
               >
                 CC
               </label>
-              <input
-                type="email"
-                id="cc"
-                name="cc"
-                placeholder="cc@example.com"
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
-              />
+              <EmailChipInput name="cc" id="cc" placeholder="cc@example.com" />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Press comma, space, or Enter after each address.
+              </p>
             </div>
             <div>
               <label
@@ -83,13 +81,10 @@ export function SendEmailPage({ flash }: SendEmailPageProps) {
               >
                 BCC
               </label>
-              <input
-                type="email"
-                id="bcc"
-                name="bcc"
-                placeholder="bcc@example.com"
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
-              />
+              <EmailChipInput name="bcc" id="bcc" placeholder="bcc@example.com" />
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Press comma, space, or Enter after each address.
+              </p>
             </div>
           </div>
 
@@ -154,6 +149,9 @@ export function SendEmailPage({ flash }: SendEmailPageProps) {
           </button>
         </form>
       </div>
+
+      {/* Behaviour for the CC / BCC chip inputs — single block handles both. */}
+      <EmailChipInputScript />
     </BaseLayout>
   );
 }
