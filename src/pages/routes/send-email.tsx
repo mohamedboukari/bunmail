@@ -13,12 +13,30 @@ interface SendEmailPageProps {
   /** Key id pre-selected in the dropdown — default-first-active matches
    *  the pre-#89 silent behaviour but now it's visible and overridable. */
   defaultApiKeyId?: string;
+  /**
+   * Pre-fill values for the compose form (#86). Set by callers like
+   * the "Reply to inbound" route; the operator can still edit each
+   * field before sending. All optional — when omitted the form
+   * renders with placeholders only.
+   */
+  prefill?: {
+    from?: string;
+    to?: string;
+    subject?: string;
+    html?: string;
+    text?: string;
+  };
 }
 
 /**
  * Send Email page — compose and send emails via the dashboard.
  */
-export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPageProps) {
+export function SendEmailPage({
+  flash,
+  apiKeys,
+  defaultApiKeyId,
+  prefill,
+}: SendEmailPageProps) {
   return (
     <BaseLayout title="Send Email" activeNav="send">
       <h1 class="text-xl font-semibold mb-6">Send Email</h1>
@@ -78,6 +96,7 @@ export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPage
                 id="from"
                 name="from"
                 required
+                value={prefill?.from ?? ""}
                 placeholder="hello@yourdomain.com"
                 class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               />
@@ -94,6 +113,7 @@ export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPage
                 id="to"
                 name="to"
                 required
+                value={prefill?.to ?? ""}
                 placeholder="recipient@example.com"
                 class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               />
@@ -142,6 +162,7 @@ export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPage
               name="subject"
               required
               maxlength={500}
+              value={prefill?.subject ?? ""}
               placeholder="Email subject"
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
@@ -161,7 +182,10 @@ export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPage
               rows="8"
               placeholder="<p>Hello, world!</p>"
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
-            />
+              safe
+            >
+              {prefill?.html ?? ""}
+            </textarea>
           </div>
 
           {/* text */}
@@ -178,7 +202,10 @@ export function SendEmailPage({ flash, apiKeys, defaultApiKeyId }: SendEmailPage
               rows="4"
               placeholder="Plain text fallback"
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
-            />
+              safe
+            >
+              {prefill?.text ?? ""}
+            </textarea>
           </div>
 
           <button

@@ -247,6 +247,22 @@ describe("Dashboard page render smoke tests", () => {
     ).toBe("string");
     /** Empty-keys path renders the "create one first" notice (#89). */
     expect(typeof SendEmailPage({ apiKeys: [] })).toBe("string");
+    /** Pre-fill path used by the inbound-reply route (#86) — every
+     *  field populated, including HTML that needs escaping in the
+     *  textarea. */
+    expect(
+      typeof SendEmailPage({
+        apiKeys: [apiKey],
+        defaultApiKeyId: apiKey.id,
+        prefill: {
+          from: "hello@example.com",
+          to: "sender@other.com",
+          subject: "Re: hi there",
+          html: "<p>quoted</p>",
+          text: "> quoted",
+        },
+      }),
+    ).toBe("string");
   });
 
   test("SuppressionsPage", () => {
