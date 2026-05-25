@@ -1,6 +1,53 @@
-import { pgTable, varchar, text, integer, timestamp, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  varchar,
+  text,
+  integer,
+  timestamp,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
+
+/**
+ * Status of a single MX-group's delivery attempt within an email row.
+ *   - `sent`   — accepted by the receiving MX. Won't be retried.
+ *   - `retry`  — transient failure, eligible for the next queue pass
+ *                provided the row's overall `attempts` is under cap.
+ *   - `failed` — terminal failure. Either a hard 5xx (the per-recipient
+ *                auto-suppress fired) or the row hit its retry cap
+ *                while this group was still pending.
+ */
+export type DeliveryGroupStatus = "sent" | "retry" | "failed";
+
+/**
+ * Per-group delivery record persisted into `emails.delivery_state`. One
+ * entry per MX hostname; the entry summarises every attempt that's
+ * happened to that group across all queue passes for this row.
+ */
+export interface DeliveryGroup {
+  status: DeliveryGroupStatus;
+  /** Addresses the mailer RCPT'd in this group's envelope. */
+  recipients: string[];
+  /** Number of send attempts this group has consumed across all queue passes. */
+  attempts: number;
+  /** ISO timestamp set when the group lands in `sent`. */
+  deliveredAt?: string;
+  /** Last raw error message for this group — diagnostic only. */
+  lastError?: string;
+  /** Per-message-id is canonical across the row, but kept here for symmetry. */
+  messageId?: string;
+}
+
+/**
+ * Shape of `emails.delivery_state` — a map keyed by destination MX
+ * hostname. Nullable on the column because legacy rows (created
+ * before the Phase-2 migration shipped, or rows where `sendMail` has
+ * not yet been called) carry `null` and are treated as "no prior
+ * state" by the mailer.
+ */
+export type DeliveryState = Record<string, DeliveryGroup>;
 
 /**
  * Emails table — every email sent through BunMail gets a row here.
@@ -76,6 +123,23 @@ export const emails = pgTable(
 
     /** When the email was successfully sent (null if still queued/failed) */
     sentAt: timestamp("sent_at"),
+
+    /**
+     * Per-MX-group delivery state for multi-MX sends (#97). Keyed by
+     * destination MX hostname. Each group records its own outcome
+     * (`sent` / `retry` / `failed`), the recipient addresses on that
+     * group, the per-group attempt count, the last error, and the
+     * canonical `Message-ID` once accepted. Null on legacy rows that
+     * predate this column — the mailer treats null as "no prior
+     * state" and submits to every group from scratch.
+     *
+     * The whole point of this column is the retry path: when a mixed-
+     * outcome send goes back through the queue, the mailer reads this
+     * field and **skips groups already in `sent` state**, so a Gmail
+     * group that succeeded on attempt 1 never receives a duplicate on
+     * attempt 2 even if Outlook 4xx'd. See `docs/emails.md`.
+     */
+    deliveryState: jsonb("delivery_state").$type<DeliveryState | null>(),
 
     /** When this email was first queued */
     createdAt: timestamp("created_at").notNull().defaultNow(),
