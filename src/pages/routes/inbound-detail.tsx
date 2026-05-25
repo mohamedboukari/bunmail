@@ -72,19 +72,30 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
               </form>
             </>
           ) : (
-            <form
-              method="POST"
-              action={`/dashboard/inbound/${email.id}/trash`}
-              class="inline"
-              onsubmit="return confirm('Move this email to trash?')"
-            >
-              <button
-                type="submit"
-                class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+            <>
+              {/* Reply (#86) — links to the send form pre-populated by the
+                  /dashboard/inbound/:id/reply route. Plain anchor, not a form,
+                  because the route is GET — no side effects to confirm. */}
+              <a
+                href={`/dashboard/inbound/${email.id}/reply`}
+                class="px-3 py-1.5 rounded-md bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-200 dark:text-gray-900 text-sm font-medium inline-flex items-center"
               >
-                Move to trash
-              </button>
-            </form>
+                Reply
+              </a>
+              <form
+                method="POST"
+                action={`/dashboard/inbound/${email.id}/trash`}
+                class="inline"
+                onsubmit="return confirm('Move this email to trash?')"
+              >
+                <button
+                  type="submit"
+                  class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+                >
+                  Move to trash
+                </button>
+              </form>
+            </>
           )}
         </div>
       </div>

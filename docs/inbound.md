@@ -2,6 +2,20 @@
 
 Receives emails via a built-in SMTP server and stores them in the database.
 
+## Replying from the dashboard (#86)
+
+Inbound email detail pages have a **Reply** button that opens the compose form with a reply skeleton pre-populated:
+
+- **From** = the address that received the inbound (the user's own address), so SPF / DKIM / DMARC alignment is preserved.
+- **To** = the original sender.
+- **Subject** = original subject prefixed with `Re: ` (idempotent — already-`Re:`-prefixed subjects aren't double-prefixed).
+- **HTML body** = original HTML wrapped in a `<blockquote>` with an `On <date>, <sender> wrote:` attribution line.
+- **Text body** = original text quoted with `> ` line prefixes + the same attribution.
+
+The reply route is `GET /dashboard/inbound/:id/reply` — a normal navigation, no side effects until the operator clicks Send. The operator can edit any field before sending, including swapping the From domain or rewriting the quoted body.
+
+**Out of scope (Phase 2):** RFC 5322 threading headers (`In-Reply-To`, `References`). Phase 1 ships the compose UX; proper threading needs new columns on `emails` and is deferred.
+
 ## Bounce branching
 
 Before any inbound message hits `inbound_emails`, the receiver runs it through the bounce parser. If the message is a Delivery Status Notification (DSN) — i.e. a bounce for one of our outbound sends — we route it to the bounce handler instead of generic inbound storage. See [docs/bounces.md](bounces.md) for the bounce flow.
