@@ -29,6 +29,7 @@ import { InboundDetailPage } from "../../src/pages/routes/inbound-detail.tsx";
 import { InboundTrashPage } from "../../src/pages/routes/inbound-trash.tsx";
 import { InboundPage } from "../../src/pages/routes/inbound.tsx";
 import { SendEmailPage } from "../../src/pages/routes/send-email.tsx";
+import { SuppressionsPage } from "../../src/pages/routes/suppressions.tsx";
 import { TemplatesPage } from "../../src/pages/routes/templates.tsx";
 import { TemplateDetailPage } from "../../src/pages/routes/template-detail.tsx";
 import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
@@ -234,10 +235,57 @@ describe("Dashboard page render smoke tests", () => {
   });
 
   test("SendEmailPage", () => {
-    expect(typeof SendEmailPage({})).toBe("string");
-    expect(typeof SendEmailPage({ flash: { message: "queued", type: "success" } })).toBe(
+    expect(typeof SendEmailPage({ apiKeys: [apiKey], defaultApiKeyId: apiKey.id })).toBe(
       "string",
     );
+    expect(
+      typeof SendEmailPage({
+        apiKeys: [apiKey],
+        defaultApiKeyId: apiKey.id,
+        flash: { message: "queued", type: "success" },
+      }),
+    ).toBe("string");
+    /** Empty-keys path renders the "create one first" notice (#89). */
+    expect(typeof SendEmailPage({ apiKeys: [] })).toBe("string");
+  });
+
+  test("SuppressionsPage", () => {
+    const suppression = {
+      id: "sup_1",
+      apiKeyId: apiKey.id,
+      email: "blocked@example.com",
+      reason: "bounce" as const,
+      bounceType: "hard" as const,
+      diagnosticCode: "5.1.1",
+      sourceEmailId: "msg_abc",
+      expiresAt: null,
+      createdAt: now,
+    };
+    const apiKeyLabels = { [apiKey.id]: { name: apiKey.name } };
+    /** Populated list with one row. */
+    expect(
+      typeof SuppressionsPage({
+        suppressions: [suppression],
+        total: 1,
+        page: 1,
+        limit: 25,
+        filters: {},
+        apiKeys: [apiKey],
+        apiKeyLabels,
+      }),
+    ).toBe("string");
+    /** Empty-state path. */
+    expect(
+      typeof SuppressionsPage({
+        suppressions: [],
+        total: 0,
+        page: 1,
+        limit: 25,
+        filters: { email: "gmail" },
+        apiKeys: [apiKey],
+        apiKeyLabels,
+      }),
+    ).toBe("string");
   });
 
   test("TemplatesPage", () => {

@@ -256,3 +256,19 @@ export function MoonIcon() {
     </svg>
   );
 }
+
+/** "Do not enter" / block icon — used for the Suppressions nav entry (#89) */
+export function NoEntryIcon() {
+  return (
+    <svg
+      class="w-5 h-5"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      stroke-width="1.5"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path stroke-linecap="round" d="M5.64 5.64l12.73 12.73" />
+    </svg>
+  );
+}

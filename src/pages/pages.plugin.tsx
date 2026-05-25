@@ -27,6 +27,7 @@ import { InboundTrashPage } from "./routes/inbound-trash.tsx";
 import { InboundDetailPage } from "./routes/inbound-detail.tsx";
 import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
 import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
+import { SuppressionsPage } from "./routes/suppressions.tsx";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -39,6 +40,7 @@ import * as webhookService from "../modules/webhooks/services/webhook.service.ts
 import * as webhookDeliveryService from "../modules/webhooks/services/webhook-delivery.service.ts";
 import * as inboundService from "../modules/inbound/services/inbound.service.ts";
 import * as dmarcReportsService from "../modules/dmarc-reports/services/dmarc-reports.service.ts";
+import * as suppressionService from "../modules/suppressions/services/suppression.service.ts";
 import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
 
 /**
@@ -271,13 +273,19 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/send
-   * Send email page — compose form with flash message support.
+   * Send email page — compose form with flash message support. Includes
+   * an explicit "Sending as" api-key picker (#89) so the operator
+   * always knows which key is charged with the send and any resulting
+   * auto-suppressions.
    */
   .get(
     "/send",
     async ({ query }) => {
-      const domainList = await domainService.listDomains();
-      const domains = domainList.map((d) => d.name);
+      const keys = await apiKeyService.listApiKeys();
+      /** Only active keys are eligible — disabled keys are filtered out
+       *  so the dropdown reflects what's actually usable. */
+      const activeKeys = keys.filter((k) => k.isActive);
+      const defaultApiKeyId = activeKeys[0]?.id;
 
       const flash = query.flash
         ? {
@@ -286,7 +294,13 @@ export const pagesPlugin = new Elysia({
           }
         : undefined;
 
-      return <SendEmailPage flash={flash} domains={domains} />;
+      return (
+        <SendEmailPage
+          flash={flash}
+          apiKeys={activeKeys}
+          defaultApiKeyId={defaultApiKeyId}
+        />
+      );
     },
     {
       query: t.Object({
@@ -298,18 +312,22 @@ export const pagesPlugin = new Elysia({
 
   /**
    * POST /dashboard/send
-   * Sends an email via form submission. Uses the first active API key.
+   * Sends an email via form submission. The operator picks the api key
+   * explicitly via the form (#89). We re-validate that the key is
+   * still active before sending so a stale form fails loud instead of
+   * silently falling back to a different key.
    */
   .post(
     "/send",
     async ({ body, set }) => {
       const keys = await apiKeyService.listApiKeys();
-      const activeKey = keys.find((k) => k.isActive);
+      /** Match exactly what the form submitted — no implicit fallback. */
+      const chosenKey = keys.find((k) => k.id === body.apiKeyId);
 
-      if (!activeKey) {
+      if (!chosenKey || !chosenKey.isActive) {
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/send?flash=${encodeURIComponent("No active API key. Create one first.")}&flashType=error`;
+          `/dashboard/send?flash=${encodeURIComponent("Selected API key is not available. Pick an active one and try again.")}&flashType=error`;
         return "";
       }
 
@@ -324,10 +342,13 @@ export const pagesPlugin = new Elysia({
             html: body.html || undefined,
             text: body.text || undefined,
           },
-          activeKey.id,
+          chosenKey.id,
         );
 
-        logger.info("Email sent via dashboard", { to: redactEmail(body.to) });
+        logger.info("Email sent via dashboard", {
+          to: redactEmail(body.to),
+          apiKeyId: chosenKey.id,
+        });
         set.status = 302;
         set.headers["location"] =
           `/dashboard/send?flash=${encodeURIComponent("Email queued for delivery")}`;
@@ -343,6 +364,7 @@ export const pagesPlugin = new Elysia({
     },
     {
       body: t.Object({
+        apiKeyId: t.String(),
         from: t.String({ format: "email" }),
         to: t.String({ format: "email" }),
         cc: t.Optional(t.String()),
@@ -1615,6 +1637,101 @@ export const pagesPlugin = new Elysia({
         return "DMARC report not found";
       }
       return <DmarcReportDetailPage report={result.report} records={result.records} />;
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  )
+
+  /**
+   * GET /dashboard/suppressions (#89)
+   *
+   * Admin-scoped list across every API key. Auto-suppressions get
+   * filed under whichever key happened to be sending when a bounce
+   * arrived; before this page the only way to clear a stuck
+   * suppression was direct SQL because the suppression's owning key
+   * was rarely the same key as the operator's Bearer token. The list
+   * supports two filter params (`email` substring + `apiKeyId`) and
+   * per-row deletion via a POST sibling route.
+   */
+  .get(
+    "/suppressions",
+    async ({ query }) => {
+      const page = Math.max(1, parseInt(query.page ?? "1", 10));
+      const limit = Math.min(100, Math.max(1, parseInt(query.limit ?? "25", 10)));
+
+      const [{ data, total }, allKeys] = await Promise.all([
+        suppressionService.listAllSuppressions({
+          page,
+          limit,
+          email: query.email || undefined,
+          apiKeyId: query.apiKeyId || undefined,
+        }),
+        apiKeyService.listApiKeys(),
+      ]);
+
+      /** Pre-build the id→name lookup once so the page component
+       *  doesn't have to make N service calls or duplicate logic. */
+      const apiKeyLabels = Object.fromEntries(
+        allKeys.map((k) => [k.id, { name: k.name }]),
+      );
+
+      const flash = query.flash
+        ? {
+            message: query.flash,
+            type: (query.flashType ?? "success") as "success" | "error",
+          }
+        : undefined;
+
+      return (
+        <SuppressionsPage
+          suppressions={data}
+          total={total}
+          page={page}
+          limit={limit}
+          filters={{
+            email: query.email || undefined,
+            apiKeyId: query.apiKeyId || undefined,
+          }}
+          apiKeys={allKeys}
+          apiKeyLabels={apiKeyLabels}
+          flash={flash}
+        />
+      );
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.String()),
+        limit: t.Optional(t.String()),
+        email: t.Optional(t.String()),
+        apiKeyId: t.Optional(t.String()),
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/suppressions/:id/delete (#89)
+   *
+   * Unscoped delete — the dashboard session already authenticated; we
+   * trust the operator to clear any suppression they can see. Redirect
+   * back to the list (preserving the filter context that brought them
+   * here would be nicer; deferred to keep this PR tight).
+   */
+  .post(
+    "/suppressions/:id/delete",
+    async ({ params, set }) => {
+      const removed = await suppressionService.deleteSuppressionByIdUnscoped(params.id);
+      const flash = removed
+        ? `Suppression for ${removed.email} removed`
+        : "Suppression not found (already deleted?)";
+      const flashType = removed ? "success" : "error";
+
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/suppressions?flash=${encodeURIComponent(flash)}&flashType=${flashType}`;
+      return "";
     },
     {
       params: t.Object({ id: t.String() }),
