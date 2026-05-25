@@ -1,29 +1,24 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
 
 /**
- * Unit tests for the mailer service. Exercises the transport
- * configuration, header construction, DKIM passthrough, and MX
- * resolution. Network is fully mocked — `dns/promises.resolveMx` and
- * `nodemailer.createTransport` are intercepted at the module boundary.
+ * Unit tests for the mailer service. Network is fully mocked —
+ * `dns/promises.resolveMx` and `nodemailer.createTransport` are
+ * intercepted at the module boundary.
  *
- * What these tests catch:
- *   - Direct-MX delivery configuration (port 25, `opportunisticTLS`,
- *     `rejectUnauthorized: false`)
- *   - List-Unsubscribe header construction (default mailto, URL form,
- *     One-Click POST gating)
- *   - DKIM options passthrough into nodemailer's mail options
- *   - MX-resolution error path
+ * Coverage at this layer:
+ *   - Direct-MX delivery configuration (port 25, opportunisticTLS,
+ *     rejectUnauthorized: false)
+ *   - List-Unsubscribe header construction (mailto, URL form, One-Click)
+ *   - DKIM passthrough into nodemailer's mailOptions
+ *   - Multi-MX envelope splitting + BCC isolation (#87)
+ *   - Stateful retry: existingState honoured, sent groups skipped (#97)
+ *   - Group status semantics: sent / retry / failed (#97)
+ *   - DNS resolution failure → terminal failed group, not a thrown error (#97)
  *
  * What they don't catch: actual SMTP wire behaviour. Real send is
- * exercised in production; integration tests use the same mock pattern
- * since we don't run a fake SMTP server.
+ * exercised in production; integration tests use the same mock pattern.
  */
 
-/**
- * Self-contained config mock so this test isn't affected by mock-leak
- * from any other test file in the same process (Bun's `mock.module`
- * registrations are global to the test run).
- */
 mock.module("../../src/config.ts", () => ({
   config: {
     mail: { hostname: "test.localhost", mxConcurrency: 1 },
@@ -42,31 +37,11 @@ interface CapturedSend {
 
 const captured: CapturedSend[] = [];
 let mxResult: Array<{ exchange: string; priority: number }> | Error = [];
-
-/**
- * Per-domain MX resolver hook for multi-MX tests (#87). When set,
- * the mocked `resolveMx` delegates to this function so tests can model
- * topologies like "gmail.com → smtp.gmail.com, outlook.com →
- * smtp.outlook.com". When unset, the default flat `mxResult` is used.
- */
 let mxResolver:
   | ((domain: string) => Promise<Array<{ exchange: string; priority: number }>>)
   | null = null;
-
-/**
- * Per-host send behaviour hook. Lets a test cause specific MX hosts
- * to reject while others succeed — used to drive partial-failure
- * paths. Returning `undefined` (or not setting the hook) means
- * success across the board.
- */
 let sendBehaviour: ((transportHost: string) => Error | void | undefined) | null = null;
 
-/**
- * `mock.module` registrations live for the entire test process. Multiple
- * test files mock `dns/promises` (mailer needs `resolveMx`,
- * `dns-verification` needs `resolveTxt`); to avoid one file's mock
- * shadowing the other's missing export, both export the full surface.
- */
 mock.module("dns/promises", () => ({
   resolveMx: mock(async (domain: string) => {
     if (mxResolver) return mxResolver(domain);
@@ -93,6 +68,10 @@ mock.module("nodemailer", () => ({
 
 const { sendMail } = await import("../../src/modules/emails/services/mailer.service.ts");
 
+/** Canonical Message-ID used across tests. Mirrors the queue's
+ *  responsibility of generating + passing it on every call (#97). */
+const MID = "<test-mid@local>";
+
 beforeEach(() => {
   captured.length = 0;
   mxResult = [{ exchange: "mx.example.org", priority: 10 }];
@@ -112,9 +91,9 @@ describe("sendMail — transport configuration", () => {
       to: "user@example.org",
       subject: "test",
       html: "<p>hi</p>",
+      messageId: MID,
     });
     const cfg = captured[0]!.transportConfig;
-    /** Lowest priority wins — `mx1.example.org` (priority 10). */
     expect(cfg.host).toBe("mx1.example.org");
     expect(cfg.port).toBe(25);
     expect(cfg.secure).toBe(false);
@@ -129,10 +108,10 @@ describe("sendMail — List-Unsubscribe header", () => {
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
     });
     const headers = captured[0]!.mailOptions.headers as Record<string, string>;
     expect(headers["List-Unsubscribe"]).toBe("<mailto:unsubscribe@example.com>");
-    /** No URL → no List-Unsubscribe-Post header. */
     expect(headers["List-Unsubscribe-Post"]).toBeUndefined();
   });
 
@@ -141,6 +120,7 @@ describe("sendMail — List-Unsubscribe header", () => {
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
       unsubscribe: { mailto: "no-reply@example.com" },
     });
     const headers = captured[0]!.mailOptions.headers as Record<string, string>;
@@ -152,6 +132,7 @@ describe("sendMail — List-Unsubscribe header", () => {
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
       unsubscribe: { url: "https://example.com/unsub?u=abc" },
     });
     const headers = captured[0]!.mailOptions.headers as Record<string, string>;
@@ -166,10 +147,8 @@ describe("sendMail — List-Unsubscribe header", () => {
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
-      unsubscribe: {
-        mailto: "no-reply@example.com",
-        url: "https://example.com/unsub",
-      },
+      messageId: MID,
+      unsubscribe: { mailto: "no-reply@example.com", url: "https://example.com/unsub" },
     });
     const headers = captured[0]!.mailOptions.headers as Record<string, string>;
     expect(headers["List-Unsubscribe"]).toBe(
@@ -185,6 +164,7 @@ describe("sendMail — DKIM passthrough", () => {
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
       dkim: {
         domainName: "example.com",
         keySelector: "bunmail",
@@ -197,124 +177,117 @@ describe("sendMail — DKIM passthrough", () => {
     expect(dkim.privateKey).toContain("BEGIN PRIVATE KEY");
   });
 
-  test("omits DKIM when not provided (unsigned mail still attempted)", async () => {
+  test("omits DKIM when not provided", async () => {
     await sendMail({
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
     });
     expect(captured[0]!.mailOptions.dkim).toBeUndefined();
   });
 });
 
-describe("sendMail — error paths", () => {
-  test("throws when the recipient domain has no MX records", async () => {
-    mxResult = [];
+describe("sendMail — fundamental error paths", () => {
+  test("throws when no recipient parses as a valid email", async () => {
     let thrown: unknown;
     try {
       await sendMail({
         from: "hello@example.com",
-        to: "user@nomx.test",
+        to: "not-an-email",
         subject: "test",
+        messageId: MID,
       });
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toMatch(/No MX records found/);
-  });
-
-  test("throws when no recipient parses as a valid email", async () => {
-    /** Post-#87: the recipient parser drops malformed inputs silently;
-     *  if nothing survives, sendMail throws a dedicated error before
-     *  any MX work happens. */
-    let thrown: unknown;
-    try {
-      await sendMail({ from: "hello@example.com", to: "not-an-email", subject: "test" });
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toMatch(/No valid recipients/);
   });
+
+  test("DNS resolution failure becomes a terminal `failed` group instead of throwing", async () => {
+    /** Post-#97 a domain with no MX records doesn't crash the send —
+     *  it shows up as a synthetic `<dns:...>` entry in `failed` state
+     *  so the queue can render it in the row's delivery_state for the
+     *  operator. Retrying that group is pointless (no MX exists), so
+     *  it stays terminal. */
+    mxResult = [];
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@nomx.test",
+      subject: "test",
+      messageId: MID,
+    });
+    const entry = result.deliveryState["<dns:nomx.test>"];
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe("failed");
+    expect(entry!.recipients).toEqual(["user@nomx.test"]);
+    expect(entry!.lastError).toMatch(/No MX records/);
+  });
 });
 
 describe("sendMail — return value", () => {
-  test("returns a fresh Message-ID generated up-front (not nodemailer's response value)", async () => {
-    /** Post-#87 the canonical Message-ID is generated once in
-     *  `sendMail` and pinned to every MX group's mailOptions so all
-     *  recipients see the same id. Nodemailer's auto-generated
-     *  fallback (used pre-#87) is no longer surfaced. */
+  test("messageId in the result matches the canonical id the caller passed", async () => {
     const result = await sendMail({
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
     });
-    /** `<hex@hostname>` shape — hex chars only, locks in the hostname
-     *  from the mocked config (`test.localhost`). */
-    expect(result.messageId).toMatch(/^<[0-9a-f]+@test\.localhost>$/);
-    /** Same id appears in the message headers the transport saw. */
-    expect(captured[0]!.mailOptions.messageId).toBe(result.messageId);
+    expect(result.messageId).toBe(MID);
+    expect(captured[0]!.mailOptions.messageId).toBe(MID);
   });
 
-  test("returns no partialFailures on full success", async () => {
+  test("first-send state for a single group reaches `sent`", async () => {
     const result = await sendMail({
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      messageId: MID,
     });
-    expect(result.partialFailures).toBeUndefined();
+    const groups = Object.values(result.deliveryState);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.status).toBe("sent");
+    expect(groups[0]!.recipients).toEqual(["user@example.org"]);
+    expect(groups[0]!.attempts).toBe(1);
+    expect(typeof groups[0]!.deliveredAt).toBe("string");
   });
 });
 
 describe("sendMail — multi-MX (#87)", () => {
   test("groups recipients by destination MX and submits once per group", async () => {
-    /** Mock the MX resolver so gmail.com and outlook.com map to
-     *  distinct hosts — sendMail should open one transport per host. */
-    mxResolver = (domain) => {
-      if (domain === "gmail.com")
-        return Promise.resolve([{ exchange: "smtp.gmail.com", priority: 10 }]);
-      if (domain === "outlook.com")
-        return Promise.resolve([{ exchange: "smtp.outlook.com", priority: 10 }]);
-      return Promise.reject(new Error(`unexpected domain: ${domain}`));
-    };
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
 
     await sendMail({
       from: "hello@example.com",
       to: "alice@gmail.com",
       cc: "bob@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
-    /** Two captured sends — one per MX group. */
     expect(captured).toHaveLength(2);
     const hosts = captured.map((c) => c.transportConfig.host).sort();
     expect(hosts).toEqual(["smtp.gmail.com", "smtp.outlook.com"]);
   });
 
   test("each group's envelope.to contains only its own recipients", async () => {
-    mxResolver = (domain) => {
-      if (domain === "gmail.com")
-        return Promise.resolve([{ exchange: "smtp.gmail.com", priority: 10 }]);
-      if (domain === "outlook.com")
-        return Promise.resolve([{ exchange: "smtp.outlook.com", priority: 10 }]);
-      return Promise.reject(new Error(`unexpected: ${domain}`));
-    };
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
 
     await sendMail({
       from: "hello@example.com",
       to: "alice@gmail.com",
       cc: "bob@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
     const gmailSend = captured.find((c) => c.transportConfig.host === "smtp.gmail.com")!;
     const outlookSend = captured.find(
       (c) => c.transportConfig.host === "smtp.outlook.com",
     )!;
-
-    /** Each MX gets RCPT TO only for its own recipients — that's the
-     *  whole point of #87. */
     expect((gmailSend.mailOptions.envelope as { to: string[] }).to).toEqual([
       "alice@gmail.com",
     ]);
@@ -324,9 +297,6 @@ describe("sendMail — multi-MX (#87)", () => {
   });
 
   test("every group's message headers carry the original full recipient list", async () => {
-    /** Recipients see who else was on the message — that's why CC
-     *  exists. Even on Outlook's MX, the message To:/Cc: list shows
-     *  alice@gmail.com so Bob can see the original distribution. */
     mxResolver = (domain) =>
       Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
 
@@ -335,6 +305,7 @@ describe("sendMail — multi-MX (#87)", () => {
       to: "alice@gmail.com",
       cc: "bob@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
     for (const c of captured) {
@@ -352,16 +323,15 @@ describe("sendMail — multi-MX (#87)", () => {
       to: "alice@gmail.com",
       bcc: "hidden@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
     const outlookSend = captured.find(
       (c) => c.transportConfig.host === "smtp.outlook.com",
     )!;
-    /** Outlook gets RCPT TO for the BCC recipient … */
     expect((outlookSend.mailOptions.envelope as { to: string[] }).to).toEqual([
       "hidden@outlook.com",
     ]);
-    /** … but the rendered message must not list the BCC anywhere. */
     for (const c of captured) {
       expect(c.mailOptions.bcc).toBeUndefined();
       expect(c.mailOptions.cc).toBeUndefined();
@@ -377,86 +347,162 @@ describe("sendMail — multi-MX (#87)", () => {
       from: "hello@example.com",
       to: "alice@gmail.com, bob@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
     for (const c of captured) {
-      expect(c.mailOptions.messageId).toBe(result.messageId);
+      expect(c.mailOptions.messageId).toBe(MID);
     }
+    expect(result.messageId).toBe(MID);
+  });
+});
+
+describe("sendMail — per-group outcomes (#97)", () => {
+  test("hard 5xx marks the group `failed` (terminal), not `retry`", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    sendBehaviour = () => new Error("550 5.1.1 user unknown");
+
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    const group = result.deliveryState["smtp.gmail.com"];
+    expect(group).toBeDefined();
+    expect(group!.status).toBe("failed");
+    expect(group!.attempts).toBe(1);
+    expect(group!.lastError).toMatch(/550 5\.1\.1/);
   });
 
-  test("partial failure: surfaces failing group(s) but still resolves on any success", async () => {
-    /** Outlook MX rejects; Gmail accepts. sendMail must NOT throw —
-     *  return success with `partialFailures` populated so the queue
-     *  can fire per-recipient bounce handling. */
-    mxResolver = (domain) => {
-      if (domain === "gmail.com")
-        return Promise.resolve([{ exchange: "smtp.gmail.com", priority: 10 }]);
-      if (domain === "outlook.com")
-        return Promise.resolve([{ exchange: "smtp.outlook.com", priority: 10 }]);
-      return Promise.reject(new Error("unexpected"));
-    };
+  test("soft 4xx leaves the group in `retry` for the queue to schedule", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    sendBehaviour = () => new Error("421 4.4.5 too many connections");
 
-    /** Make Outlook's sendMail reject specifically. */
-    sendBehaviour = (transportHost) => {
-      if (transportHost === "smtp.outlook.com") throw new Error("550 5.1.1 user unknown");
-      return undefined; // success
-    };
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    const group = result.deliveryState["smtp.gmail.com"];
+    expect(group!.status).toBe("retry");
+    expect(group!.attempts).toBe(1);
+    expect(group!.lastError).toMatch(/421/);
+  });
+
+  test("mixed outcome: one group sent, the other retry — surfaces both", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    sendBehaviour = (host) =>
+      host === "smtp.outlook.com" ? new Error("421 too many") : undefined;
 
     const result = await sendMail({
       from: "hello@example.com",
       to: "alice@gmail.com",
       cc: "bob@outlook.com",
       subject: "test",
+      messageId: MID,
     });
 
-    expect(result.partialFailures).toBeDefined();
-    expect(result.partialFailures!).toHaveLength(1);
-    expect(result.partialFailures![0]!.mxHost).toBe("smtp.outlook.com");
-    expect(result.partialFailures![0]!.recipients).toEqual(["bob@outlook.com"]);
-    expect(result.partialFailures![0]!.error).toMatch(/550 5\.1\.1/);
+    expect(result.deliveryState["smtp.gmail.com"]!.status).toBe("sent");
+    expect(result.deliveryState["smtp.outlook.com"]!.status).toBe("retry");
   });
+});
 
-  test("full failure: rethrows the first error so the queue can classify it", async () => {
+describe("sendMail — stateful retry (#97)", () => {
+  test("when existingState contains a `sent` group, the mailer skips it", async () => {
     mxResolver = (domain) =>
       Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
-    sendBehaviour = () => {
-      throw new Error("550 5.1.1 boom");
-    };
+    /** First attempt: gmail succeeds, outlook 4xx. */
+    sendBehaviour = (host) =>
+      host === "smtp.outlook.com" ? new Error("421 too many") : undefined;
 
-    let thrown: unknown;
-    try {
-      await sendMail({
-        from: "hello@example.com",
-        to: "alice@gmail.com, bob@outlook.com",
-        subject: "test",
-      });
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toMatch(/550 5\.1\.1 boom/);
-  });
-
-  test("DNS resolution failure for one domain is reported as a partial failure", async () => {
-    mxResolver = (domain) => {
-      if (domain === "gmail.com")
-        return Promise.resolve([{ exchange: "smtp.gmail.com", priority: 10 }]);
-      if (domain === "nomx.example")
-        return Promise.reject(new Error("No MX records found for domain: nomx.example"));
-      return Promise.reject(new Error("unexpected"));
-    };
-
-    const result = await sendMail({
+    const first = await sendMail({
       from: "hello@example.com",
       to: "alice@gmail.com",
-      cc: "lost@nomx.example",
+      cc: "bob@outlook.com",
       subject: "test",
+      messageId: MID,
+    });
+    expect(captured).toHaveLength(2);
+    captured.length = 0;
+
+    /** Retry pass: outlook now accepts. We pass the prior state so
+     *  the mailer should skip gmail entirely (no duplicate). */
+    sendBehaviour = null;
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      cc: "bob@outlook.com",
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
     });
 
-    expect(result.partialFailures).toBeDefined();
-    const dnsFailure = result.partialFailures!.find((f) => f.mxHost.startsWith("<dns:"));
-    expect(dnsFailure).toBeDefined();
-    expect(dnsFailure!.recipients).toEqual(["lost@nomx.example"]);
-    expect(dnsFailure!.error).toMatch(/No MX records/);
+    /** Only ONE captured send this attempt — the outlook one. */
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.transportConfig.host).toBe("smtp.outlook.com");
+
+    /** Final state: both groups sent, gmail's attempt count unchanged
+     *  from attempt 1 because we never re-tried it. */
+    expect(second.deliveryState["smtp.gmail.com"]!.status).toBe("sent");
+    expect(second.deliveryState["smtp.gmail.com"]!.attempts).toBe(1);
+    expect(second.deliveryState["smtp.outlook.com"]!.status).toBe("sent");
+    expect(second.deliveryState["smtp.outlook.com"]!.attempts).toBe(2);
+  });
+
+  test("a retry pass with all groups already sent is a no-op", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    const first = await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      subject: "test",
+      messageId: MID,
+    });
+    captured.length = 0;
+
+    /** Pass back the all-sent state; mailer should send nothing. */
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
+    });
+
+    expect(captured).toHaveLength(0);
+    expect(second.deliveryState).toEqual(first.deliveryState);
+  });
+
+  test("synthetic `<dns:...>` entries from prior state are not retried", async () => {
+    /** First attempt: DNS fails for the only recipient. */
+    mxResult = [];
+    const first = await sendMail({
+      from: "hello@example.com",
+      to: "user@nomx.test",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(first.deliveryState["<dns:nomx.test>"]!.status).toBe("failed");
+    captured.length = 0;
+
+    /** Even if DNS magically starts working, the failed entry stays
+     *  failed — we don't re-resolve from a DNS-failed key. */
+    mxResult = [{ exchange: "now-resolves.test", priority: 10 }];
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: "user@nomx.test",
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
+    });
+    expect(captured).toHaveLength(0);
+    expect(second.deliveryState["<dns:nomx.test>"]!.status).toBe("failed");
   });
 });

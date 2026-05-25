@@ -1,6 +1,8 @@
+import { randomBytes } from "crypto";
 import { eq, asc, and, isNull, inArray, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
+import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
@@ -137,165 +139,6 @@ const BATCH_SIZE = 5;
 
 /** Max send attempts before marking an email as permanently failed */
 const MAX_ATTEMPTS = 3;
-
-/* ─── Send-failure handling (#68) ─── */
-
-/**
- * Side-effect callbacks the failure handler relies on. Injected so tests
- * can run the classification logic without a DB / webhook dispatcher.
- * Same pattern as `bounce-handler.service.ts` from #24.
- */
-export interface SendFailureDeps {
-  /** `sending → bounced` transition. Set when an inline 5xx tells us the recipient is permanently unreachable. */
-  markEmailBounced: (emailId: string, lastError: string) => Promise<void>;
-  /** `sending → failed` transition. Used after `MAX_ATTEMPTS` retries on transient/non-SMTP errors. */
-  markEmailFailed: (emailId: string, lastError: string) => Promise<void>;
-  /** `sending → queued` transition for retry on the next poll cycle. */
-  markEmailRequeued: (emailId: string, lastError: string) => Promise<void>;
-  /** Persist the suppression for an inline-5xx hard rejection. */
-  addFromBounce: (
-    apiKeyId: string,
-    input: {
-      email: string;
-      bounceType: "hard";
-      diagnosticCode: string;
-      sourceEmailId: string;
-      expiresAt: null;
-    },
-  ) => Promise<{ id: string }>;
-  /** Fire-and-forget webhook dispatch. Must accept the same event vocabulary the production dispatcher uses. */
-  dispatchEvent: (
-    event: "email.bounced" | "email.failed",
-    data: Record<string, unknown>,
-  ) => void;
-}
-
-export interface SendFailureContext {
-  email: {
-    id: string;
-    apiKeyId: string;
-    fromAddress: string;
-    toAddress: string;
-    subject: string;
-  };
-  /** 1-based attempt number that just failed. */
-  attempt: number;
-  errorMessage: string;
-}
-
-export interface HandleSendFailureResult {
-  outcome: "auto-suppressed" | "permanently-failed" | "requeued";
-  /** Set when we auto-suppressed this recipient on an inline 5xx. */
-  suppressionId?: string;
-}
-
-/**
- * Decides what to do when a send attempt fails. Three outcomes:
- *
- *   1. **Inline 5xx → auto-suppress** (#68). Modern receivers reject
- *      obviously-bad recipients during the SMTP transaction with a
- *      `550 5.1.1` rather than accepting and later returning a DSN.
- *      Three retries to the same address would just be three more
- *      `550` hits on the receiver's MX — exactly what tanks IP
- *      reputation. So when we recognise a 5xx, we suppress immediately,
- *      mark the email `bounced`, fire `email.bounced`, and stop. The
- *      payload shape matches the async-DSN path from #24 so receivers
- *      get a uniform signal.
- *
- *   2. **Soft 4xx or non-SMTP error, attempt < MAX_ATTEMPTS → requeue.**
- *      Existing transient-failure behaviour. Soft inline 4xx rejections
- *      (greylisting, temporary unavailability) and infrastructure
- *      errors (DNS resolution, socket timeout, TLS handshake) all use
- *      this path.
- *
- *   3. **Soft 4xx or non-SMTP error, attempt >= MAX_ATTEMPTS → fail.**
- *      Existing retry-exhausted behaviour. Marks `failed` and fires
- *      `email.failed`. (Repeated 4xx escalation to a permanent
- *      suppression is left to the async-DSN path's escalation rule
- *      from #24, which has more signal to work with than this single
- *      catch block does.)
- *
- * Exported for unit testing via injected `deps` — see
- * `test/unit/handle-send-failure.test.ts`.
- */
-export async function handleSendFailure(
-  ctx: SendFailureContext,
-  deps: SendFailureDeps,
-): Promise<HandleSendFailureResult> {
-  const parsed = parseSmtpError(ctx.errorMessage);
-
-  if (parsed?.kind === "hard") {
-    /**
-     * Inline 5xx: stop retrying, suppress the recipient, mark bounced.
-     * Reuses `addFromBounce` so the suppression row is indistinguishable
-     * from one created by the DSN path — same `bounceType: "hard"`,
-     * same diagnostic code shape, same `email.bounced` webhook payload.
-     */
-    const suppression = await deps.addFromBounce(ctx.email.apiKeyId, {
-      email: ctx.email.toAddress,
-      bounceType: "hard",
-      diagnosticCode: parsed.code,
-      sourceEmailId: ctx.email.id,
-      expiresAt: null,
-    });
-
-    await deps.markEmailBounced(ctx.email.id, ctx.errorMessage);
-
-    deps.dispatchEvent("email.bounced", {
-      emailId: ctx.email.id,
-      to: ctx.email.toAddress,
-      bounceType: "hard",
-      status: parsed.code,
-      diagnostic: ctx.errorMessage,
-      suppressionId: suppression.id,
-      /** Distinguish the inline path from the async-DSN path in webhook
-       *  consumers that care to slice their analytics that way. */
-      source: "inline",
-    });
-
-    logger.warn("Inline SMTP 5xx — auto-suppressed and stopped retrying", {
-      emailId: ctx.email.id,
-      apiKeyId: ctx.email.apiKeyId,
-      to: redactEmail(ctx.email.toAddress),
-      status: parsed.code,
-      attempt: ctx.attempt,
-      suppressionId: suppression.id,
-    });
-
-    return { outcome: "auto-suppressed", suppressionId: suppression.id };
-  }
-
-  if (ctx.attempt >= MAX_ATTEMPTS) {
-    await deps.markEmailFailed(ctx.email.id, ctx.errorMessage);
-
-    deps.dispatchEvent("email.failed", {
-      emailId: ctx.email.id,
-      from: ctx.email.fromAddress,
-      to: ctx.email.toAddress,
-      subject: ctx.email.subject,
-      error: ctx.errorMessage,
-    });
-
-    logger.error("Email permanently failed after max attempts", {
-      emailId: ctx.email.id,
-      attempt: ctx.attempt,
-      error: ctx.errorMessage,
-    });
-
-    return { outcome: "permanently-failed" };
-  }
-
-  await deps.markEmailRequeued(ctx.email.id, ctx.errorMessage);
-
-  logger.warn("Email send failed, will retry", {
-    emailId: ctx.email.id,
-    attempt: ctx.attempt,
-    remainingAttempts: MAX_ATTEMPTS - ctx.attempt,
-    error: ctx.errorMessage,
-  });
-
-  return { outcome: "requeued" };
-}
 
 /** Reference to the setInterval timer — used to stop the queue */
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -460,10 +303,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   try {
     /**
      * Look up DKIM keys + unsubscribe overrides for the sender's domain.
-     * Both fall back gracefully — DKIM stays unsigned if the domain row
-     * is missing, and `List-Unsubscribe` defaults to
-     * `unsubscribe@<sender-domain>` inside the mailer when overrides are
-     * absent.
+     * Both fall back gracefully.
      */
     const domain = await resolveDomainForEmail(email, {
       byId: queryDomainById,
@@ -485,11 +325,6 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       });
     }
 
-    /**
-     * Pass overrides only when at least one is set. Otherwise leave
-     * `unsubscribe` undefined and let the mailer apply its default
-     * (`unsubscribe@<sender-domain>` mailto, no URL).
-     */
     if (domain?.unsubscribeEmail || domain?.unsubscribeUrl) {
       unsubscribe = {
         mailto: domain.unsubscribeEmail ?? undefined,
@@ -497,7 +332,25 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       };
     }
 
-    /** Step 2: Attempt SMTP delivery */
+    /**
+     * Canonical Message-ID: locked in on first attempt, reused on
+     * retries. Stable identifier is what bounce / complaint feedback
+     * loops join on — minting a new one per attempt would break
+     * correlation entirely. (#97)
+     */
+    const messageId =
+      email.messageId ?? `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
+
+    const existingState = email.deliveryState as DeliveryState | null;
+    /** Capture pre-attempt status per group so we can detect
+     *  transitions (retry → failed via hard 5xx) for bounce webhooks. */
+    const priorStatuses = new Map<string, DeliveryGroup["status"]>();
+    if (existingState) {
+      for (const [mx, g] of Object.entries(existingState)) {
+        priorStatuses.set(mx, g.status);
+      }
+    }
+
     const result = await sendMail({
       from: email.fromAddress,
       to: email.toAddress,
@@ -506,148 +359,234 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       subject: email.subject,
       html: email.html,
       text: email.textContent,
+      messageId,
+      existingState,
       dkim,
       unsubscribe,
     });
 
     /**
-     * Step 3a: At least one MX group delivered → row is `sent`. If
-     * other groups failed (multi-domain CC + a mix of accept/reject —
-     * #87 phase 1), summarise the failed groups into `lastError` so
-     * operators can see what went wrong without spelunking the logs,
-     * and handle per-recipient outcomes below.
+     * Fire `email.bounced` + auto-suppress for groups that **newly
+     * transitioned to `failed`** this attempt via a hard 5xx. Skip
+     * groups that were already `failed` before this attempt (we'd
+     * already fired for them on the earlier pass) and skip groups
+     * still in `retry` (no terminal outcome yet).
      */
-    const lastError = result.partialFailures
-      ? `Partial delivery: ${result.partialFailures.length} group(s) failed — ${result.partialFailures
-          .map((f) => `${f.recipients.length} rcpt at ${f.mxHost}: ${f.error}`)
-          .join(" | ")}`
-      : null;
+    for (const [mxHost, group] of Object.entries(result.deliveryState)) {
+      if (group.status !== "failed") continue;
+      if (priorStatuses.get(mxHost) === "failed") continue; /** Already handled. */
+      const parsed = group.lastError ? parseSmtpError(group.lastError) : undefined;
+      if (parsed?.kind !== "hard")
+        continue; /** Synthetic DNS failures + transient exhaust handled separately. */
+
+      for (const rcpt of group.recipients) {
+        const suppression = await addFromBounce(email.apiKeyId, {
+          email: rcpt,
+          bounceType: "hard",
+          diagnosticCode: parsed.code,
+          sourceEmailId: emailId,
+          expiresAt: null,
+        });
+        dispatchEvent("email.bounced", {
+          emailId,
+          to: email.toAddress,
+          recipient: rcpt,
+          bounceType: "hard",
+          status: parsed.code,
+          diagnostic: group.lastError ?? "(no diagnostic)",
+          suppressionId: suppression.id,
+          source: "inline",
+        });
+        logger.warn("Multi-MX recipient hard-bounced — auto-suppressed", {
+          emailId,
+          apiKeyId: email.apiKeyId,
+          recipient: redactEmail(rcpt),
+          status: parsed.code,
+          suppressionId: suppression.id,
+        });
+      }
+    }
+
+    /**
+     * Decide row-level outcome from the aggregate group state.
+     *
+     * - any group still `retry` AND attempts < cap → schedule next pass
+     * - else (all terminal, or cap exhausted) → terminal row status:
+     *   - any group `sent` → row `sent`
+     *   - else any failed-due-to-hard-5xx → row `bounced`
+     *   - else → row `failed`
+     */
+    const groups = Object.entries(result.deliveryState);
+    const anyRetry = groups.some(([, g]) => g.status === "retry");
+    const anySent = groups.some(([, g]) => g.status === "sent");
+
+    if (anyRetry && attempt < MAX_ATTEMPTS) {
+      /** At least one group transient-failed; row goes back to
+       *  `queued` so the claim loop picks it up again. Persist the
+       *  state so the next pass can skip already-sent groups. */
+      await db
+        .update(emails)
+        .set({
+          status: "queued",
+          messageId,
+          deliveryState: result.deliveryState,
+          lastError: summariseRetries(result.deliveryState),
+          updatedAt: new Date(),
+        })
+        .where(eq(emails.id, emailId));
+      logger.warn("Email send had retry groups, requeued", {
+        emailId,
+        attempt,
+        remainingAttempts: MAX_ATTEMPTS - attempt,
+      });
+      /** If this attempt landed at least one group, fire `email.sent`
+       *  once — checked against priorStatuses so we don't double-fire
+       *  on a future attempt where the same group is already sent. */
+      if (anySent && !anySentBefore(priorStatuses)) {
+        dispatchEvent("email.sent", {
+          emailId,
+          from: email.fromAddress,
+          to: email.toAddress,
+          subject: email.subject,
+          messageId,
+        });
+      }
+      return;
+    }
+
+    /** Cap-exhaust or all-terminal path. Flip any straggling retry
+     *  groups to `failed` (transient-exhausted, not hard-bounced) so
+     *  the persisted state has no ambiguous statuses left. */
+    const finalState: DeliveryState = { ...result.deliveryState };
+    for (const [mx, g] of Object.entries(finalState)) {
+      if (g.status === "retry") finalState[mx] = { ...g, status: "failed" };
+    }
+
+    const finalGroups = Object.values(finalState);
+    const finalAnySent = finalGroups.some((g) => g.status === "sent");
+    const finalAnyHardBounce = Object.entries(finalState).some(([, g]) => {
+      if (g.status !== "failed") return false;
+      const p = g.lastError ? parseSmtpError(g.lastError) : undefined;
+      return p?.kind === "hard";
+    });
+
+    const finalStatus: "sent" | "bounced" | "failed" = finalAnySent
+      ? "sent"
+      : finalAnyHardBounce
+        ? "bounced"
+        : "failed";
 
     await db
       .update(emails)
       .set({
-        status: "sent",
-        messageId: result.messageId,
-        sentAt: new Date(),
-        lastError,
+        status: finalStatus,
+        messageId,
+        deliveryState: finalState,
+        sentAt: finalAnySent ? new Date() : null,
+        lastError:
+          finalStatus === "sent" && finalGroups.every((g) => g.status === "sent")
+            ? null
+            : summariseFailures(finalState),
         updatedAt: new Date(),
       })
       .where(eq(emails.id, emailId));
 
-    logger.info("Email sent successfully", {
+    logger.info("Email reached terminal state", {
       emailId,
-      messageId: result.messageId,
+      messageId,
       attempt,
-      partialFailureCount: result.partialFailures?.length ?? 0,
+      finalStatus,
+      sentGroups: finalGroups.filter((g) => g.status === "sent").length,
+      failedGroups: finalGroups.filter((g) => g.status === "failed").length,
     });
 
-    dispatchEvent("email.sent", {
+    if (finalAnySent && !anySentBefore(priorStatuses)) {
+      dispatchEvent("email.sent", {
+        emailId,
+        from: email.fromAddress,
+        to: email.toAddress,
+        subject: email.subject,
+        messageId,
+      });
+    }
+
+    if (!finalAnySent && finalStatus === "failed") {
+      /** Pure failure (no group ever delivered + no hard 5xx) — keep
+       *  the `email.failed` webhook fired by the legacy path so
+       *  consumers that watch this event still see it. */
+      dispatchEvent("email.failed", {
+        emailId,
+        from: email.fromAddress,
+        to: email.toAddress,
+        subject: email.subject,
+        error: summariseFailures(finalState),
+      });
+    }
+  } catch (error) {
+    /**
+     * `sendMail` only throws for fundamental input errors now (no
+     * valid recipients after parsing) — never for transport / SMTP
+     * failures, which return as `failed`/`retry` groups in state.
+     * So this catch is a one-shot terminal: mark `failed`, no retry.
+     */
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await db
+      .update(emails)
+      .set({
+        status: "failed",
+        lastError: errorMessage,
+        updatedAt: new Date(),
+      })
+      .where(eq(emails.id, emailId));
+    logger.error("Email permanently failed (input error)", {
+      emailId,
+      attempt,
+      error: errorMessage,
+    });
+    dispatchEvent("email.failed", {
       emailId,
       from: email.fromAddress,
       to: email.toAddress,
       subject: email.subject,
-      messageId: result.messageId,
+      error: errorMessage,
     });
-
-    /**
-     * Per-recipient handling of partial-failure groups (#87 phase 1).
-     * For each failed group, classify the error: an inline 5xx is a
-     * hard rejection and the recipients on that group are
-     * auto-suppressed individually (matches the single-MX path in
-     * `handleSendFailure`). Soft 4xx / transport errors are logged
-     * but not retried this phase — the `delivery_state` column for
-     * per-group retry is the Phase-2 follow-up.
-     */
-    if (result.partialFailures) {
-      for (const failure of result.partialFailures) {
-        const parsed = parseSmtpError(failure.error);
-        if (parsed?.kind !== "hard") {
-          logger.warn("Multi-MX group soft-failed — not auto-suppressed", {
-            emailId,
-            mxHost: failure.mxHost,
-            recipients: failure.recipients.map(redactEmail),
-            error: failure.error,
-          });
-          continue;
-        }
-        for (const rcpt of failure.recipients) {
-          const suppression = await addFromBounce(email.apiKeyId, {
-            email: rcpt,
-            bounceType: "hard",
-            diagnosticCode: parsed.code,
-            sourceEmailId: emailId,
-            expiresAt: null,
-          });
-          dispatchEvent("email.bounced", {
-            emailId,
-            to: email.toAddress,
-            /** The specific recipient who bounced — distinct from `to`
-             *  when CC/BCC bounced rather than the primary address. */
-            recipient: rcpt,
-            bounceType: "hard",
-            status: parsed.code,
-            diagnostic: failure.error,
-            suppressionId: suppression.id,
-            source: "inline",
-          });
-          logger.warn("Multi-MX recipient hard-bounced — auto-suppressed", {
-            emailId,
-            apiKeyId: email.apiKeyId,
-            recipient: redactEmail(rcpt),
-            status: parsed.code,
-            suppressionId: suppression.id,
-          });
-        }
-      }
-    }
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    /**
-     * Step 3b: Failure — classify and dispatch.
-     *
-     * Inline 5xx (#68) → auto-suppress + stop retrying. Soft 4xx /
-     * infrastructure errors → retry until MAX_ATTEMPTS, then mark
-     * `failed`. See `handleSendFailure` above for the full decision
-     * tree.
-     */
-    await handleSendFailure(
-      {
-        email: {
-          id: emailId,
-          apiKeyId: email.apiKeyId,
-          fromAddress: email.fromAddress,
-          toAddress: email.toAddress,
-          subject: email.subject,
-        },
-        attempt,
-        errorMessage,
-      },
-      {
-        markEmailBounced: async (id, lastError) => {
-          await db
-            .update(emails)
-            .set({ status: "bounced", lastError, updatedAt: new Date() })
-            .where(eq(emails.id, id));
-        },
-        markEmailFailed: async (id, lastError) => {
-          await db
-            .update(emails)
-            .set({ status: "failed", lastError, updatedAt: new Date() })
-            .where(eq(emails.id, id));
-        },
-        markEmailRequeued: async (id, lastError) => {
-          await db
-            .update(emails)
-            .set({ status: "queued", lastError, updatedAt: new Date() })
-            .where(eq(emails.id, id));
-        },
-        addFromBounce: async (apiKeyId, input) => {
-          const row = await addFromBounce(apiKeyId, input);
-          return { id: row.id };
-        },
-        dispatchEvent,
-      },
-    );
   }
+}
+
+/**
+ * Compact human-readable digest of which groups are still in retry
+ * and why. Stored in `emails.last_error` between retry passes so
+ * operators reading the DB can see "outlook retrying after 421" at a
+ * glance without dumping the full `delivery_state` JSON.
+ */
+function summariseRetries(state: DeliveryState): string {
+  const retrying = Object.entries(state).filter(([, g]) => g.status === "retry");
+  if (retrying.length === 0) return "";
+  return `Retrying ${retrying.length} group(s): ${retrying
+    .map(([mx, g]) => `${mx} (${g.recipients.length} rcpt): ${g.lastError ?? "?"}`)
+    .join(" | ")}`;
+}
+
+/**
+ * Compact human-readable digest of failed groups for the row's final
+ * `last_error` field after a terminal outcome. Mirrors the schema
+ * change from #87 phase 1 (single string), keeps the legacy column
+ * useful without making operators parse the JSON every time.
+ */
+function summariseFailures(state: DeliveryState): string {
+  const failed = Object.entries(state).filter(([, g]) => g.status === "failed");
+  if (failed.length === 0) return "";
+  return `Failed ${failed.length} group(s): ${failed
+    .map(([mx, g]) => `${mx} (${g.recipients.length} rcpt): ${g.lastError ?? "?"}`)
+    .join(" | ")}`;
+}
+
+/**
+ * Returns true when the row had at least one group already in `sent`
+ * state before this attempt — used to skip duplicate `email.sent`
+ * webhook dispatches across retry passes.
+ */
+function anySentBefore(priorStatuses: Map<string, DeliveryGroup["status"]>): boolean {
+  for (const s of priorStatuses.values()) if (s === "sent") return true;
+  return false;
 }

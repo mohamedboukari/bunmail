@@ -1,4 +1,3 @@
-import { randomBytes } from "crypto";
 import nodemailer from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
@@ -6,37 +5,24 @@ import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
-import { parseRecipients, groupByMx, type Recipient } from "../../../utils/recipients.ts";
+import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
+import { parseSmtpError } from "../../../utils/smtp-error.ts";
+import type { DeliveryGroup, DeliveryState } from "../models/email.schema.ts";
 
 /**
  * Result of a `sendMail` call. The `messageId` is the canonical
- * `Message-ID:` header we generated up-front and used for every MX
- * group's submission — so all recipients see the same identifier,
- * which is what bounce/complaint feedback loops join on.
+ * `Message-ID:` header — set by the caller (queue), pinned to every
+ * MX group's submission, and preserved across retries so feedback
+ * loops join on a single identifier.
  *
- * `partialFailures` is populated only when *some* groups succeeded
- * and *others* failed. Full-failure paths throw instead so the
- * queue's retry/suppress logic ({@link handleSendFailure}) can react;
- * full-success leaves `partialFailures` undefined.
+ * `deliveryState` is the per-group outcome map (#97). The mailer
+ * doesn't decide whether to schedule another retry — that's the
+ * queue's call. The mailer just reports what each group's status is
+ * **after this attempt** so the queue can apply its retry policy.
  */
 export interface SendMailResult {
   messageId: string;
-  partialFailures?: GroupFailure[];
-}
-
-/**
- * Per-MX-group delivery failure surfaced to the queue. Carries the
- * recipient addresses so the queue can decide per-recipient outcomes
- * (auto-suppress on inline 5xx, log on transient, etc.) instead of
- * having to reverse-lookup which recipient was on which MX.
- */
-export interface GroupFailure {
-  mxHost: string;
-  /** Addresses we attempted RCPT TO for in this group's envelope. */
-  recipients: string[];
-  /** Raw error message from nodemailer / DNS — same string format the
-   *  existing `parseSmtpError` already understands. */
-  error: string;
+  deliveryState: DeliveryState;
 }
 
 /** DKIM signing options passed from the queue processor. */
@@ -52,23 +38,15 @@ export interface DkimOptions {
  * `unsubscribe@<from-domain>` when `mailto` is omitted), and adds
  * the HTTPS / `List-Unsubscribe-Post: One-Click` form whenever a
  * URL is provided.
- *
- * Per Gmail's Feb-2024 sender requirements every transactional /
- * promotional message benefits from a List-Unsubscribe header even
- * when the recipient doesn't realistically need to unsubscribe —
- * its presence is a positive ranking signal.
  */
 export interface UnsubscribeOptions {
-  /** Defaults to `unsubscribe@<from-domain>` if not set. */
   mailto?: string;
-  /** RFC 8058 one-click endpoint. When set, also emits the One-Click POST header. */
   url?: string;
 }
 
 /**
  * Resolves the MX server for a single domain and returns the
- * lowest-priority (highest preference) mail exchange host. Used by
- * {@link groupByMx} to bucket recipients per destination.
+ * lowest-priority (highest preference) mail exchange host.
  */
 async function resolveMxForDomain(domain: string): Promise<string> {
   const records = await resolveMx(domain);
@@ -82,31 +60,32 @@ async function resolveMxForDomain(domain: string): Promise<string> {
 /**
  * Sends a single email row to its full recipient set.
  *
- * **Multi-MX flow (#87):** parses `to/cc/bcc` into recipients, groups
- * them by destination MX, opens one SMTP session per MX group, and
- * submits the *same* DKIM-signed message body to each — with
- * `envelope.to` overridden so each MX only sees RCPT TO for the
- * recipients it's actually responsible for. The `To:` / `Cc:` message
- * headers carry the original full lists so every recipient sees who
- * else is on the message; BCC recipients appear only in their MX's
- * envelope and never in headers.
+ * **Stateful retry (#97):** the mailer reads `existingState` when
+ * provided (set by the queue on retry passes) and **skips every group
+ * already in `sent` status** — so a Gmail group that succeeded on
+ * attempt 1 never gets a duplicate on attempt 2 when an Outlook group
+ * 4xx-retries. Returns a fresh `DeliveryState` reflecting every
+ * group's outcome **after this attempt**. The queue decides whether
+ * to schedule another pass based on the returned state vs its own
+ * retry policy.
  *
- * **Message-ID:** generated once up-front (`<hex@hostname>`) and
- * pinned to all groups so the canonical identifier matches across
- * deliveries — bounce/complaint correlation depends on this.
+ * **Status semantics:**
+ *   - `sent`   — accepted by the receiving MX this attempt. Won't be retried.
+ *   - `retry`  — transient failure (4xx, transport timeout, …). Queue may retry.
+ *   - `failed` — hard 5xx rejection. Terminal; auto-suppress fires in queue.
  *
- * **Partial failure (Phase 1 of #87):** when some groups deliver and
- * others fail, the email row is still marked `sent` and
- * `partialFailures` is returned so the queue can fire per-recipient
- * `email.bounced` events / auto-suppress on hard 5xx. Per-group retry
- * is **not** done in this phase — a retry of a partially-failed row
- * would re-send to the groups that already succeeded, causing
- * duplicates. Tracked separately by the Phase-2 follow-up.
+ * **First-send vs retry:** on first send (`existingState` undefined),
+ * the mailer parses `to/cc/bcc`, groups by destination MX, and starts
+ * every group in `retry` before attempting. DNS resolution failures
+ * become synthetic-key (`<dns:domain>`) entries in `failed` state —
+ * a missing MX is an unrecoverable address problem, not a transient
+ * one worth retrying.
  *
- * **Full failure:** if every group fails, we throw the first error
- * verbatim. The queue's `handleSendFailure` classifies it as inline
- * 5xx (auto-suppress) vs transient (retry), exactly as in the
- * pre-#87 single-MX flow.
+ * **Identity:** the caller passes `messageId` so the canonical
+ * `Message-ID:` header is pinned across retries. Previously the
+ * mailer minted it itself, which would have produced fresh ids per
+ * retry — bounce / complaint correlation breaks down without a
+ * stable identifier.
  */
 export async function sendMail(options: {
   from: string;
@@ -116,128 +95,158 @@ export async function sendMail(options: {
   subject: string;
   html?: string | null;
   text?: string | null;
+  /** Canonical Message-ID, set by the caller so retries reuse it. */
+  messageId: string;
+  /** Prior delivery state when this is a retry pass; undefined on first send. */
+  existingState?: DeliveryState | null;
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
 }): Promise<SendMailResult> {
-  const recipients = parseRecipients(options.to, options.cc, options.bcc);
-  if (recipients.length === 0) {
+  /** Build the starting state — either a fresh one from the inputs
+   *  or a deep clone of the row's prior state. We always clone so the
+   *  caller can compare `before` vs `after` for change detection. */
+  let state: DeliveryState;
+  if (options.existingState) {
+    state = structuredClone(options.existingState);
+  } else {
+    state = await buildInitialState(options.to, options.cc, options.bcc);
+  }
+
+  if (Object.keys(state).length === 0) {
+    /** No groups at all (no valid recipients after parsing). Treat as
+     *  programmer error — the caller shouldn't have reached this code
+     *  path. The queue's full-failure path catches the throw. */
     throw new Error("No valid recipients after parsing to/cc/bcc");
   }
 
-  const { groups, failures: dnsFailures } = await groupByMx(
-    recipients,
-    resolveMxForDomain,
-  );
-
-  /** Pre-generate the canonical Message-ID. Same string is pinned on
-   *  every MX group's submission so the message is identifiable as a
-   *  single logical email across all delivery paths. */
-  const messageId = `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
-
   logger.info("Sending email via SMTP", {
     from: redactEmail(options.from),
-    recipientCount: recipients.length,
-    groupCount: groups.size,
-    dnsFailures: dnsFailures.length,
+    groupCount: Object.keys(state).length,
+    pendingCount: Object.values(state).filter((g) => g.status === "retry").length,
     subject: options.subject,
     dkim: options.dkim ? options.dkim.domainName : "none",
-    messageId,
+    messageId: options.messageId,
+    retry: options.existingState ? "yes" : "no",
   });
 
-  /**
-   * Pre-populate the failures list with DNS-resolution failures —
-   * recipients on domains without an MX record are unreachable at
-   * the SMTP layer entirely, so they're reported alongside transport
-   * failures. The synthetic `mxHost` marks them as DNS-tier so
-   * downstream classification ({@link handleSendFailure}) can choose
-   * to treat them differently if needed.
-   */
-  const failures: GroupFailure[] = dnsFailures.map((d) => ({
-    mxHost: `<dns:${d.domain}>`,
-    recipients: d.recipients.map((r) => r.address),
-    error: d.error,
-  }));
-  let successCount = 0;
+  /** Attempt every group still in `retry` state. Order is insertion-
+   *  order, which keeps logs stable across runs even if Maps were
+   *  rebuilt from JSONB. */
+  for (const [mxHost, group] of Object.entries(state)) {
+    if (group.status !== "retry") continue;
+    if (mxHost.startsWith("<dns:"))
+      continue; /** DNS failures don't retry — marked failed at parse time. */
 
-  for (const [mxHost, groupRecipients] of groups) {
     try {
       await sendToMxGroup({
         mxHost,
-        groupRecipients,
+        recipients: group.recipients,
         from: options.from,
         headerTo: options.to,
         headerCc: options.cc ?? null,
         subject: options.subject,
         html: options.html ?? null,
         text: options.text ?? null,
-        messageId,
+        messageId: options.messageId,
         dkim: options.dkim,
         unsubscribe: options.unsubscribe,
       });
-      successCount++;
+      state[mxHost] = {
+        ...group,
+        status: "sent",
+        attempts: group.attempts + 1,
+        deliveredAt: new Date().toISOString(),
+        messageId: options.messageId,
+      };
       logger.info("MX group delivered", {
         mxHost,
-        recipientCount: groupRecipients.length,
-        messageId,
+        recipientCount: group.recipients.length,
+        messageId: options.messageId,
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      failures.push({
-        mxHost,
-        recipients: groupRecipients.map((r) => r.address),
-        error,
-      });
+      /** Hard 5xx → terminal `failed`. Soft errors (4xx, transport)
+       *  stay `retry`; the queue's row-level attempts cap decides
+       *  when to flip them to `failed`. */
+      const parsed = parseSmtpError(error);
+      const nextStatus: DeliveryGroup["status"] =
+        parsed?.kind === "hard" ? "failed" : "retry";
+      state[mxHost] = {
+        ...group,
+        status: nextStatus,
+        attempts: group.attempts + 1,
+        lastError: error,
+      };
       logger.warn("MX group send failed", {
         mxHost,
-        recipientCount: groupRecipients.length,
+        recipientCount: group.recipients.length,
+        nextStatus,
         error,
-        messageId,
+        messageId: options.messageId,
       });
     }
   }
 
-  if (successCount === 0) {
-    /** Full failure — throw the first concrete error so the existing
-     *  {@link handleSendFailure} path sees a normal `sendMail` rejection
-     *  and applies retry / auto-suppress as it always has. */
-    const first = failures[0];
-    throw first
-      ? new Error(first.error)
-      : new Error("All MX groups failed with no recorded error");
-  }
+  return { messageId: options.messageId, deliveryState: state };
+}
 
-  if (failures.length > 0) {
-    logger.warn("Multi-MX partial delivery", {
-      messageId,
-      successCount,
-      failureCount: failures.length,
-      failedRecipients: failures.flatMap((f) => f.recipients).map(redactEmail),
-    });
-  }
+/**
+ * Builds the initial per-MX state map for a fresh send. Parses
+ * `to/cc/bcc`, groups recipients by destination MX, and seeds every
+ * group at `status: "retry"` so the attempt loop above picks them up.
+ * DNS-resolution failures (no MX records, lookup error) become
+ * synthetic-key (`<dns:domain>`) entries already in `failed` state —
+ * those addresses can't be delivered to in principle, so there's
+ * nothing to retry.
+ */
+async function buildInitialState(
+  to: string,
+  cc: string | null | undefined,
+  bcc: string | null | undefined,
+): Promise<DeliveryState> {
+  const recipients = parseRecipients(to, cc, bcc);
+  if (recipients.length === 0) return {};
 
-  return {
-    messageId,
-    ...(failures.length > 0 ? { partialFailures: failures } : {}),
-  };
+  const { groups, failures: dnsFailures } = await groupByMx(
+    recipients,
+    resolveMxForDomain,
+  );
+
+  const state: DeliveryState = {};
+  for (const [mxHost, rcpts] of groups) {
+    state[mxHost] = {
+      status: "retry",
+      recipients: rcpts.map((r) => r.address),
+      attempts: 0,
+    };
+  }
+  for (const f of dnsFailures) {
+    /** Synthetic mxHost key so DNS-failed groups still show up in the
+     *  delivery state for operator visibility — but they're already
+     *  terminal so the retry loop above skips them. */
+    state[`<dns:${f.domain}>`] = {
+      status: "failed",
+      recipients: f.recipients.map((r) => r.address),
+      attempts: 0,
+      lastError: f.error,
+    };
+  }
+  return state;
 }
 
 /**
  * Submits the message to a single destination MX. The transport is
- * built per-call (we always want the right MX for the right group,
- * never a stale pooled connection to a different host) and the
- * `envelope.to` override pins RCPT TO to *only* the recipients on
- * this MX — even when `mailOptions.to` lists the full original set.
- * That's the trick that makes cross-domain CC visible to all
- * recipients without delivering to the wrong server.
+ * built per-call (we always want the right MX for the right group)
+ * and the `envelope.to` override pins RCPT TO to *only* the
+ * recipients on this MX — even when `mailOptions.to` lists the full
+ * original set. That's the trick that makes cross-domain CC visible
+ * to all recipients without delivering to the wrong server.
  */
 async function sendToMxGroup(args: {
   mxHost: string;
-  groupRecipients: Recipient[];
+  recipients: string[];
   from: string;
-  /** Original `to` field — used verbatim for the `To:` header so every
-   *  recipient sees the full visible recipient list. */
   headerTo: string;
-  /** Original `cc` field. Same visibility rule as `headerTo`. */
   headerCc: string | null;
   subject: string;
   html: string | null;
@@ -246,12 +255,6 @@ async function sendToMxGroup(args: {
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
 }): Promise<void> {
-  /**
-   * Transport configuration is identical to the pre-#87 single-MX
-   * flow — port 25, opportunistic TLS, relaxed cert validation. See
-   * the original commentary in this file's history for the rationale
-   * (MTA-to-MTA delivery routinely hits self-signed certs).
-   */
   const transport = nodemailer.createTransport({
     host: args.mxHost,
     port: 25,
@@ -274,24 +277,15 @@ async function sendToMxGroup(args: {
     html: args.html ?? undefined,
     text: args.text ?? undefined,
     messageId: args.messageId,
-    /**
-     * Envelope override — what actually goes on the wire. Includes
-     * every recipient on this MX regardless of original kind (to/cc/bcc),
-     * which means BCC addresses still get delivered but never appear
-     * in the rendered message headers (since they're not in `to`/`cc`
-     * above).
-     */
     envelope: {
       from: args.from,
-      to: args.groupRecipients.map((r) => r.address),
+      to: args.recipients,
     },
   };
 
-  /**
-   * Build `List-Unsubscribe` (and optionally `List-Unsubscribe-Post`)
-   * per RFC 2369 + RFC 8058. Identical content per group — the header
-   * is about the message, not the recipient set.
-   */
+  /** `List-Unsubscribe` (+ optional `One-Click` POST). Same content
+   *  across groups — the header is about the message, not the
+   *  recipient set. */
   const senderDomain = args.from.split("@")[1];
   if (senderDomain) {
     const mailto = args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`;
@@ -311,12 +305,7 @@ async function sendToMxGroup(args: {
     };
   }
 
-  /**
-   * Throttle per-MX (#91). Keeps strict receivers from `421`-ing
-   * parallel sessions from our source IP — and lets two different
-   * groups on different MXs proceed in parallel since their locks
-   * are disjoint.
-   */
+  /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
   await withMxLock(args.mxHost, config.mail.mxConcurrency, () =>
     transport.sendMail(mailOptions),
   );

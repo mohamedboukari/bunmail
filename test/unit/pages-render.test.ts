@@ -87,6 +87,7 @@ const email = {
   createdAt: now,
   updatedAt: now,
   deletedAt: null,
+  deliveryState: null,
 };
 
 const inboundEmail = {
@@ -99,6 +100,7 @@ const inboundEmail = {
   rawMessage: null,
   receivedAt: now,
   deletedAt: null,
+  deliveryState: null,
 };
 
 const template = {
