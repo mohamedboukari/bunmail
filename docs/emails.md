@@ -199,6 +199,31 @@ queued ──→ sending ──→ failed ✗ (attempts >= 3, soft 4xx or infra 
 
 See [docs/bounces.md](bounces.md) for both bounce paths.
 
+## Multi-MX Delivery (#87)
+
+Each `emails` row can address recipients across multiple domains (`to` + `cc` + `bcc`). On send, the mailer service:
+
+1. Parses all three fields into a flat recipient list (kind preserved; `to` > `cc` > `bcc` precedence on dedup).
+2. Resolves the MX for each unique domain — one DNS query per domain, issued in parallel.
+3. **Groups recipients by destination MX**. Two domains that share an MX (CNAME aliases, shared receiving infrastructure) merge into one group — fewer SMTP connections.
+4. Generates one canonical `Message-ID:` for the whole email so all recipients see the same identifier (bounce/complaint feedback loops join on this).
+5. For each MX group, opens one SMTP session and submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only.
+
+The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their MX group's envelope, never in the rendered headers.
+
+### Aggregate status semantics
+
+| Outcome | Email status | Auto-suppression | Retry |
+|---|---|---|---|
+| All groups deliver | `sent` | — | — |
+| All groups fail, inline 5xx | `bounced` | `to` only | — |
+| All groups fail, transient | `queued` | — | yes (3 attempts) |
+| Mixed success | `sent` (with `lastError`) | per-recipient on 5xx groups | **no** (Phase 2) |
+
+### Partial-failure caveat (Phase 2 follow-up)
+
+When some MX groups succeed and others fail, the email row is marked `sent` and the failed groups are surfaced through `lastError` + the per-recipient `email.bounced` webhook. The row is **not** retried — retrying would double-send to the groups that already delivered, since the queue currently tracks state per-row, not per-group. Tracked separately for follow-up (Phase 2, #97): add a `delivery_state` JSONB column on `emails` so a retry can skip groups already marked `sent`.
+
 ## Queue Architecture
 
 - **Polling interval:** 2 seconds

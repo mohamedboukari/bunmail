@@ -10,6 +10,7 @@ import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { parseRecipients } from "../../../utils/recipients.ts";
 import { config } from "../../../config.ts";
 import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.types.ts";
 
@@ -43,19 +44,29 @@ export async function createEmail(
    * HTTP 422 by the global `onError` handler in `src/index.ts`, with the
    * `suppressionId` surfaced in the body so callers can pivot directly
    * to `DELETE /api/v1/suppressions/:id` when they want to undo.
+   *
+   * **Covers `to`, `cc`, and `bcc`** (#87). Pre-multi-MX, suppressed
+   * CC/BCC addresses were silently dropped by the single-MX send anyway
+   * — the suppression list was effective by accident. Now that
+   * multi-MX delivery actually reaches CC/BCC, unchecked CC/BCC would
+   * let suppressed addresses receive mail. We iterate the parsed
+   * recipient list and reject on the first match.
    */
-  const suppressed = await isSuppressed(apiKeyId, input.to);
-  if (suppressed) {
+  const recipients = parseRecipients(input.to, input.cc, input.bcc);
+  for (const rcpt of recipients) {
+    const sup = await isSuppressed(apiKeyId, rcpt.address);
+    if (!sup) continue;
     logger.warn("Send blocked by suppression list", {
       id,
       apiKeyId,
-      to: redactEmail(input.to),
-      suppressionId: suppressed.id,
-      reason: suppressed.reason,
+      recipient: redactEmail(rcpt.address),
+      kind: rcpt.kind,
+      suppressionId: sup.id,
+      reason: sup.reason,
     });
     throw new SuppressedRecipientError({
-      suppressionId: suppressed.id,
-      recipient: input.to,
+      suppressionId: sup.id,
+      recipient: rcpt.address,
     });
   }
 

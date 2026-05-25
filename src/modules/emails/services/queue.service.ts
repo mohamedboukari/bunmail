@@ -510,13 +510,26 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       unsubscribe,
     });
 
-    /** Step 3a: Success — mark as "sent" and record the SMTP Message-ID */
+    /**
+     * Step 3a: At least one MX group delivered → row is `sent`. If
+     * other groups failed (multi-domain CC + a mix of accept/reject —
+     * #87 phase 1), summarise the failed groups into `lastError` so
+     * operators can see what went wrong without spelunking the logs,
+     * and handle per-recipient outcomes below.
+     */
+    const lastError = result.partialFailures
+      ? `Partial delivery: ${result.partialFailures.length} group(s) failed — ${result.partialFailures
+          .map((f) => `${f.recipients.length} rcpt at ${f.mxHost}: ${f.error}`)
+          .join(" | ")}`
+      : null;
+
     await db
       .update(emails)
       .set({
         status: "sent",
         messageId: result.messageId,
         sentAt: new Date(),
+        lastError,
         updatedAt: new Date(),
       })
       .where(eq(emails.id, emailId));
@@ -525,6 +538,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       emailId,
       messageId: result.messageId,
       attempt,
+      partialFailureCount: result.partialFailures?.length ?? 0,
     });
 
     dispatchEvent("email.sent", {
@@ -534,6 +548,58 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       subject: email.subject,
       messageId: result.messageId,
     });
+
+    /**
+     * Per-recipient handling of partial-failure groups (#87 phase 1).
+     * For each failed group, classify the error: an inline 5xx is a
+     * hard rejection and the recipients on that group are
+     * auto-suppressed individually (matches the single-MX path in
+     * `handleSendFailure`). Soft 4xx / transport errors are logged
+     * but not retried this phase — the `delivery_state` column for
+     * per-group retry is the Phase-2 follow-up.
+     */
+    if (result.partialFailures) {
+      for (const failure of result.partialFailures) {
+        const parsed = parseSmtpError(failure.error);
+        if (parsed?.kind !== "hard") {
+          logger.warn("Multi-MX group soft-failed — not auto-suppressed", {
+            emailId,
+            mxHost: failure.mxHost,
+            recipients: failure.recipients.map(redactEmail),
+            error: failure.error,
+          });
+          continue;
+        }
+        for (const rcpt of failure.recipients) {
+          const suppression = await addFromBounce(email.apiKeyId, {
+            email: rcpt,
+            bounceType: "hard",
+            diagnosticCode: parsed.code,
+            sourceEmailId: emailId,
+            expiresAt: null,
+          });
+          dispatchEvent("email.bounced", {
+            emailId,
+            to: email.toAddress,
+            /** The specific recipient who bounced — distinct from `to`
+             *  when CC/BCC bounced rather than the primary address. */
+            recipient: rcpt,
+            bounceType: "hard",
+            status: parsed.code,
+            diagnostic: failure.error,
+            suppressionId: suppression.id,
+            source: "inline",
+          });
+          logger.warn("Multi-MX recipient hard-bounced — auto-suppressed", {
+            emailId,
+            apiKeyId: email.apiKeyId,
+            recipient: redactEmail(rcpt),
+            status: parsed.code,
+            suppressionId: suppression.id,
+          });
+        }
+      }
+    }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
 
