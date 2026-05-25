@@ -7,9 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-25
+
+> **Theme: multi-MX delivery + dashboard polish.** Cross-domain CC/BCC actually works now. The mailer parses recipients, groups by destination MX, and opens one SMTP session per group (with envelope override) so each receiver sees RCPT TO for only its own addresses — same DKIM-signed body, same canonical `Message-ID:` across all groups. Mixed-outcome rows retry only the groups that need it via a new per-group `delivery_state` JSONB column on `emails`, with no duplicate sends to groups that already succeeded. The outbound queue gains a per-MX semaphore (#91) so strict receivers stop 421-ing parallel sessions. Inbound SMTP is now loudly opt-in (#93) instead of silently disabled. The dashboard ships three new pieces: Gmail-style chip input for CC/BCC (#85), reply on inbound emails (#86), and an admin-scoped suppressions list with an explicit "Sending as" key picker (#89). Docker-compose port mappings are now `.env`-driven (#92).
+>
+> **Schema migration:** adds `emails.delivery_state JSONB NULL` (#97). Legacy rows stay null and use the original single-shot path. Run `bun run db:migrate` (or rebuild via `docker compose up -d --build`, which runs migrations automatically) before deploying.
+
 ### Changed
 
 - **Full timestamp in emails list.** The "Created" column now shows `YYYY-MM-DD HH:MM:SS` instead of date-only, so operators can see exactly when each email was queued. Closes #84.
+
 ### Added
 
 - **Reply to inbound emails from the dashboard (#86).** Inbound email detail pages now have a Reply button that links to `GET /dashboard/inbound/:id/reply`, a new route that pre-fills the compose form: `from` = the inbound's `toAddress` (keeps SPF/DKIM/DMARC alignment), `to` = original sender, `subject` = `Re: ` + original (no double-prefix when already-`Re:`), HTML body = original wrapped in a `<blockquote>` with `On <date>, <sender> wrote:` attribution, plain text body = original quoted with `> ` line prefixes. `SendEmailPage` gains an optional `prefill` prop used by the new route; existing send POST handler is unchanged. Proper RFC 5322 threading headers (`In-Reply-To`, `References`) are deferred to a Phase 2 follow-up. Closes #86.
