@@ -60,6 +60,28 @@ All endpoints are scoped to the calling key's `apiKeyId` (read from the auth mid
 | `GET` | `/api/v1/suppressions/:id` | Read one |
 | `DELETE` | `/api/v1/suppressions/:id` | Remove (recipient becomes eligible immediately) |
 
+## Dashboard surface (admin-scoped, #89)
+
+The API surface is per-key, but auto-suppressions are filed under whichever key happened to be sending when the bounce arrived — which is almost never the same as the operator's Bearer-token key. Without an unscoped view, a stuck auto-suppression meant SSH-ing into Postgres and writing SQL. The dashboard fixes that:
+
+| Path | Purpose |
+|---|---|
+| `GET /dashboard/suppressions` | List across **all** API keys. Filters: `?email=<substring>` (case-insensitive ILIKE) and `?apiKeyId=<id>`. |
+| `POST /dashboard/suppressions/:id/delete` | Hard delete by id, no api-key check (the dashboard session already authenticated). |
+
+The page renders the owning key's name + truncated id beside each row so the operator can see which key trapped the recipient. The `/dashboard/send` page now has an explicit "Sending as" key picker so future auto-suppressions get filed under a key the operator chose, not whichever happened to be first in the list.
+
+Underneath these are two new service methods that mirror the unscoped pattern used elsewhere in the codebase:
+
+```ts
+import {
+  listAllSuppressions,
+  deleteSuppressionByIdUnscoped,
+} from "src/modules/suppressions/services/suppression.service.ts";
+```
+
+Both ignore `apiKeyId` and trust the dashboard session for authorisation, the same way the unscoped emails/domains/etc. variants do.
+
 ## Behaviour at `POST /api/v1/emails/send`
 
 When the recipient is on the list, the response is:
