@@ -1588,6 +1588,100 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
+   * GET /dashboard/inbound/:id/reply (#86)
+   *
+   * Pre-fills the compose form with a reply skeleton. The chosen
+   * direction:
+   *   - `from` = the address that *received* the inbound (the user's
+   *     own address) so reputation + SPF/DKIM stay aligned.
+   *   - `to` = the original sender.
+   *   - `subject` = the original subject prefixed with "Re: " when not
+   *     already prefixed (case-insensitive to avoid double "Re:" loops).
+   *   - body = the original message quoted — HTML wrapped in a
+   *     `<blockquote>` with an attribution line, plain text with the
+   *     classic `>` line prefix.
+   *
+   * This is a GET — operator may navigate to it, see what's pre-filled,
+   * back out without sending. No side effects until they hit Send.
+   *
+   * Trash status is not consulted: replying to a trashed message is
+   * fine; the trash bit only governs the destructive Delete forever path.
+   */
+  .get(
+    "/inbound/:id/reply",
+    async ({ params, set }) => {
+      const inbound =
+        (await inboundService.getInboundEmailById(params.id)) ??
+        (await inboundService.getTrashedInboundEmailById(params.id));
+      if (!inbound) {
+        set.status = 404;
+        return "Inbound email not found";
+      }
+
+      const originalSubject = inbound.subject ?? "";
+      const replySubject = /^re:/i.test(originalSubject)
+        ? originalSubject
+        : `Re: ${originalSubject || "(no subject)"}`;
+
+      /**
+       * Quote construction. Attribution line uses the original sender +
+       * received date. HTML and plain-text variants are constructed
+       * independently — we don't auto-derive one from the other so the
+       * quote matches whatever the original message actually had.
+       */
+      const receivedIso = inbound.receivedAt.toISOString();
+      const attribution = `On ${receivedIso}, ${inbound.fromAddress} wrote:`;
+
+      /** Defensive HTML escape — the attribution components (ISO date,
+       *  email address) shouldn't contain `<>&"'` in practice, but a
+       *  hostile sender shouldn't be able to inject anything either. */
+      const escapeHtml = (s: string): string =>
+        s.replace(/[&<>"']/g, (c) => {
+          const map: Record<string, string> = {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          };
+          return map[c]!;
+        });
+
+      const quotedHtml = inbound.html
+        ? `<p></p><p>${escapeHtml(attribution)}</p><blockquote style="margin:0 0 0 0.8em;padding-left:1em;border-left:2px solid #ccc;color:#555;">${inbound.html}</blockquote>`
+        : undefined;
+
+      const quotedText = inbound.textContent
+        ? `\n\n${attribution}\n${inbound.textContent
+            .split("\n")
+            .map((line) => `> ${line}`)
+            .join("\n")}`
+        : undefined;
+
+      const keys = await apiKeyService.listApiKeys();
+      const activeKeys = keys.filter((k) => k.isActive);
+
+      return (
+        <SendEmailPage
+          flash={undefined}
+          apiKeys={activeKeys}
+          defaultApiKeyId={activeKeys[0]?.id}
+          prefill={{
+            from: inbound.toAddress,
+            to: inbound.fromAddress,
+            subject: replySubject,
+            html: quotedHtml,
+            text: quotedText,
+          }}
+        />
+      );
+    },
+    {
+      params: t.Object({ id: t.String() }),
+    },
+  )
+
+  /**
    * GET /dashboard/dmarc-reports — list page with optional `?domain=`
    * filter. The filter dropdown is driven by the distinct set of
    * domains we have reports for.
