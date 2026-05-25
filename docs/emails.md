@@ -211,18 +211,46 @@ Each `emails` row can address recipients across multiple domains (`to` + `cc` + 
 
 The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their MX group's envelope, never in the rendered headers.
 
+### Per-group delivery state (`emails.delivery_state`, #97)
+
+Every multi-MX send writes a per-group outcome map into `emails.delivery_state` (JSONB, nullable). Each entry is keyed by destination MX hostname and records:
+
+```jsonc
+{
+  "smtp.gmail.com": {
+    "status": "sent",
+    "recipients": ["alice@gmail.com"],
+    "attempts": 1,
+    "deliveredAt": "2026-05-25T00:00:00.000Z",
+    "messageId": "<abc@mail.bunmail.xyz>"
+  },
+  "smtp-mail.outlook.com": {
+    "status": "retry",
+    "recipients": ["bob@outlook.com"],
+    "attempts": 1,
+    "lastError": "421 4.4.5 too many connections"
+  }
+}
+```
+
+**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal — either a hard 5xx that auto-suppressed the recipients, or the row hit its retry cap with this group still pending).
+
+**Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
+
+**Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately — no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
+
 ### Aggregate status semantics
 
-| Outcome | Email status | Auto-suppression | Retry |
+| Per-group outcomes | Email status | Auto-suppression | Retry |
 |---|---|---|---|
-| All groups deliver | `sent` | — | — |
-| All groups fail, inline 5xx | `bounced` | `to` only | — |
-| All groups fail, transient | `queued` | — | yes (3 attempts) |
-| Mixed success | `sent` (with `lastError`) | per-recipient on 5xx groups | **no** (Phase 2) |
+| All groups `sent` | `sent` | — | — |
+| Any group `retry` AND row attempts < cap | `queued` (retry pass) | per-recipient on `failed` groups only | yes — only `retry` groups re-submitted |
+| Cap exhausted with any `retry` left | `failed` (or `bounced` if any hard) | per-recipient on `failed` groups (hard 5xx) | — |
+| All groups `failed`, any hard 5xx | `bounced` | per-recipient on each failed group | — |
+| All groups `failed`, all transient | `failed` | — | — |
+| Mixed: some `sent`, some `failed` | `sent` (partial delivery) | per-recipient on the failed groups (hard 5xx) | — |
 
-### Partial-failure caveat (Phase 2 follow-up)
-
-When some MX groups succeed and others fail, the email row is marked `sent` and the failed groups are surfaced through `lastError` + the per-recipient `email.bounced` webhook. The row is **not** retried — retrying would double-send to the groups that already delivered, since the queue currently tracks state per-row, not per-group. Tracked separately for follow-up (Phase 2, #97): add a `delivery_state` JSONB column on `emails` so a retry can skip groups already marked `sent`.
+The `email.sent` webhook fires **once** when the row first transitions to having any group in `sent`. The `email.bounced` webhook fires per recipient that hits a hard 5xx — duplicate dispatches across retry passes are suppressed by comparing against the prior state.
 
 ## Queue Architecture
 
