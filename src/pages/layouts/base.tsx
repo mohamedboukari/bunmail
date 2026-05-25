@@ -8,6 +8,7 @@ import {
   GlobeIcon,
   WebhookIcon,
   InboundIcon,
+  NoEntryIcon,
   DocsIcon,
   ThemeIcon,
   LogoutIcon,
@@ -30,7 +31,8 @@ interface BaseLayoutProps {
     | "templates"
     | "webhooks"
     | "inbound"
-    | "dmarc-reports";
+    | "dmarc-reports"
+    | "suppressions";
 }
 
 /**
@@ -123,6 +125,12 @@ function Nav({ activeNav }: { activeNav?: string }) {
       label: "DMARC",
       href: "/dashboard/dmarc-reports",
       icon: GlobeIcon,
+    },
+    {
+      id: "suppressions",
+      label: "Suppressions",
+      href: "/dashboard/suppressions",
+      icon: NoEntryIcon,
     },
   ];
 
