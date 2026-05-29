@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
 
@@ -106,7 +107,14 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
           <DetailField label="From" value={email.fromAddress} />
           <DetailField label="To" value={email.toAddress} />
           <DetailField label="Subject" value={email.subject ?? "(No subject)"} />
-          <DetailField label="Received At" value={email.receivedAt.toISOString()} />
+          <div>
+            <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+              Received At
+            </p>
+            <p class="text-gray-900 dark:text-gray-100 break-all">
+              <TimeDisplay value={email.receivedAt} />
+            </p>
+          </div>
         </div>
       </div>
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Dashboard timestamps now render in the viewer's machine time** with relative phrasing (#104). Every server-rendered date was previously formatted in the server's timezone (UTC in Docker) and locale (`en-US`), and many places dropped the time entirely (`toLocaleDateString()`). A shared `<TimeDisplay>` component now emits a semantic `<time datetime>` tag; one hydration script in `BaseLayout` rewrites every such element on load to relative time (`5m ago`, `Yesterday 14:32`, `Jan 5, 14:32`) using `Intl.DateTimeFormat` in the browser's locale + timezone. The `title` tooltip carries the full absolute timestamp with timezone. The dashboard never shows a bare date anymore — every rendered value carries date and time together.
+
 ## [0.6.0] - 2026-05-25
 
 > **Theme: multi-MX delivery + dashboard polish.** Cross-domain CC/BCC actually works now. The mailer parses recipients, groups by destination MX, and opens one SMTP session per group (with envelope override) so each receiver sees RCPT TO for only its own addresses — same DKIM-signed body, same canonical `Message-ID:` across all groups. Mixed-outcome rows retry only the groups that need it via a new per-group `delivery_state` JSONB column on `emails`, with no duplicate sends to groups that already succeeded. The outbound queue gains a per-MX semaphore (#91) so strict receivers stop 421-ing parallel sessions. Inbound SMTP is now loudly opt-in (#93) instead of silently disabled. The dashboard ships three new pieces: Gmail-style chip input for CC/BCC (#85), reply on inbound emails (#86), and an admin-scoped suppressions list with an explicit "Sending as" key picker (#89). Docker-compose port mappings are now `.env`-driven (#92).

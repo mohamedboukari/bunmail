@@ -78,8 +78,34 @@ src/pages/
     ├── status-badge.tsx      ← Status + verification badges
     ├── pagination.tsx        ← Page navigation
     ├── flash-message.tsx     ← Success/error banners
-    └── empty-state.tsx       ← Empty table placeholder
+    ├── empty-state.tsx       ← Empty table placeholder
+    └── time-display.tsx      ← <TimeDisplay> + hydration script (#104)
 ```
+
+## Timestamps
+
+Every timestamp on the dashboard goes through `<TimeDisplay value={date} />`
+([src/pages/components/time-display.tsx](../src/pages/components/time-display.tsx)).
+The server renders a `<time datetime>` element with a static UTC fallback;
+a single hydration script in `BaseLayout` rewrites every such element on
+load with relative-time text (`5m ago`, `Yesterday 14:32`, `Jan 5, 14:32`,
+`Jan 5, 2024, 14:32`) in the **viewer's browser locale + timezone**.
+
+The full absolute timestamp is always available via the `title` tooltip.
+The component intentionally exposes no date-only format — the dashboard
+never shows a bare date; every rendered value carries date and time.
+
+When adding a new dashboard route that displays a timestamp:
+
+```tsx
+import { TimeDisplay } from "../components/time-display.tsx";
+
+<TimeDisplay value={row.createdAt} />               // most cases
+<TimeDisplay value={key.lastUsedAt} fallback="Never" />  // null-safe
+```
+
+Do not call `toLocaleString()` / `toLocaleDateString()` / `toISOString()`
+directly in JSX — those run on the server and bake in the server's tz/locale.
 
 ## Form Actions
 

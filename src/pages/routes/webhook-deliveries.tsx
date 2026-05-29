@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
 import type { WebhookDelivery } from "../../modules/webhooks/models/webhook-delivery.schema.ts";
 
@@ -130,7 +131,7 @@ export function WebhookDeliveriesPage({
                     )}
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {d.createdAt.toISOString().slice(0, 19).replace("T", " ")}
+                    <TimeDisplay value={d.createdAt} />
                   </td>
                 </tr>
               ))}

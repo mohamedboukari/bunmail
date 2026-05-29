@@ -13,6 +13,7 @@ import {
   ThemeIcon,
   LogoutIcon,
 } from "../assets/icons.tsx";
+import { TimeDisplayScript } from "../components/time-display.tsx";
 
 /**
  * Props for the base HTML layout shell.
@@ -95,6 +96,8 @@ export function BaseLayout({
             });
           `}
         </script>
+        {/* Hydrate every <time data-bm-time> into the viewer's locale + timezone (#104). */}
+        <TimeDisplayScript />
       </body>
     </html>
   );
