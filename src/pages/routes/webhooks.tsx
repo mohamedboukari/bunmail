@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
 
 /**
@@ -132,7 +133,7 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
                     </div>
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {webhook.createdAt.toLocaleDateString()}
+                    <TimeDisplay value={webhook.createdAt} />
                   </td>
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-3">

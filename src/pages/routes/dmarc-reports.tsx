@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { DmarcReport } from "../../modules/dmarc-reports/types/dmarc-report.types.ts";
 
 interface DmarcReportsPageProps {
@@ -107,8 +108,8 @@ export function DmarcReportsPage({
                   </td>
                   <td class="px-4 py-3 font-mono text-xs">{r.domain}</td>
                   <td class="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs">
-                    {r.dateBegin.toISOString().slice(0, 10)} →{" "}
-                    {r.dateEnd.toISOString().slice(0, 10)}
+                    <TimeDisplay value={r.dateBegin} /> →{" "}
+                    <TimeDisplay value={r.dateEnd} />
                   </td>
                   <td class="px-4 py-3">
                     <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800">
@@ -116,7 +117,7 @@ export function DmarcReportsPage({
                     </span>
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 text-xs">
-                    {r.receivedAt.toISOString().slice(0, 16).replace("T", " ")}
+                    <TimeDisplay value={r.receivedAt} />
                   </td>
                 </tr>
               ))}

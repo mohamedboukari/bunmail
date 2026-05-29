@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
 import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 
@@ -103,9 +104,23 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
           <DetailField label="Attempts" value={String(email.attempts)} />
           {email.lastError && <DetailField label="Last Error" value={email.lastError} />}
           {email.messageId && <DetailField label="Message ID" value={email.messageId} />}
-          <DetailField label="Created" value={email.createdAt.toISOString()} />
+          <div>
+            <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+              Created
+            </p>
+            <p class="text-gray-900 dark:text-gray-100 break-all">
+              <TimeDisplay value={email.createdAt} />
+            </p>
+          </div>
           {email.sentAt && (
-            <DetailField label="Sent At" value={email.sentAt.toISOString()} />
+            <div>
+              <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+                Sent At
+              </p>
+              <p class="text-gray-900 dark:text-gray-100 break-all">
+                <TimeDisplay value={email.sentAt} />
+              </p>
+            </div>
           )}
         </div>
       </div>

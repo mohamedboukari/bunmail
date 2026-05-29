@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { WebhookDelivery } from "../../modules/webhooks/models/webhook-delivery.schema.ts";
 import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
 
@@ -66,16 +67,20 @@ export function WebhookDeliveryDetailPage({
           }
           mono
         />
-        <SummaryCard
-          label={delivery.deliveredAt ? "Delivered at" : "Next attempt"}
-          value={
-            delivery.deliveredAt
-              ? delivery.deliveredAt.toISOString().slice(0, 19).replace("T", " ")
-              : delivery.status === "pending"
-                ? delivery.nextAttemptAt.toISOString().slice(0, 19).replace("T", " ")
-                : "—"
-          }
-        />
+        <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+          <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+            {delivery.deliveredAt ? "Delivered at" : "Next attempt"}
+          </div>
+          <div class="text-lg font-semibold mt-1">
+            {delivery.deliveredAt ? (
+              <TimeDisplay value={delivery.deliveredAt} />
+            ) : delivery.status === "pending" ? (
+              <TimeDisplay value={delivery.nextAttemptAt} />
+            ) : (
+              "—"
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Replay action — only meaningful for non-delivered rows */}

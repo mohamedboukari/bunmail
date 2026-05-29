@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
 
@@ -152,7 +153,7 @@ export function InboundTrashPage({
                         {email.subject}
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {email.deletedAt?.toLocaleDateString() ?? "—"}
+                        <TimeDisplay value={email.deletedAt} />
                       </td>
                     </tr>
                   ))}

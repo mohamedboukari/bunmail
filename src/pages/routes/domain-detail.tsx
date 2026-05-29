@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { VerificationBadge } from "../components/status-badge.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import { getDkimDnsRecord } from "../../modules/domains/services/domain.service.ts";
 import type { Domain } from "../../modules/domains/types/domain.types.ts";
@@ -92,9 +93,23 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
           <DetailField label="ID" value={domain.id} />
           <DetailField label="DKIM Selector" value={domain.dkimSelector} />
-          <DetailField label="Created" value={domain.createdAt.toISOString()} />
+          <div>
+            <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+              Created
+            </p>
+            <p class="text-gray-900 dark:text-gray-100 break-all">
+              <TimeDisplay value={domain.createdAt} />
+            </p>
+          </div>
           {domain.verifiedAt && (
-            <DetailField label="Last Verified" value={domain.verifiedAt.toISOString()} />
+            <div>
+              <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+                Last Verified
+              </p>
+              <p class="text-gray-900 dark:text-gray-100 break-all">
+                <TimeDisplay value={domain.verifiedAt} />
+              </p>
+            </div>
           )}
         </div>
       </div>

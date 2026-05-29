@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Template } from "../../modules/templates/types/template.types.ts";
 
 interface TemplatesPageProps {
@@ -155,7 +156,7 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                       : "—"}
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {template.createdAt.toLocaleDateString()}
+                    <TimeDisplay value={template.createdAt} />
                   </td>
                   <td class="px-4 py-3">
                     <form

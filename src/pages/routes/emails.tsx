@@ -3,6 +3,7 @@ import { StatusBadge } from "../components/status-badge.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 
 /**
@@ -169,17 +170,8 @@ export function EmailsPage({
                       >
                         {email.subject}
                       </td>
-                      <td
-                        class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap"
-                        title={email.createdAt.toISOString()}
-                      >
-                        {email.createdAt.toLocaleString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
+                      <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        <TimeDisplay value={email.createdAt} />
                       </td>
                       <td class="px-4 py-3 text-right">
                         {/* Per-row trash submits its own one-id form */}
