@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-29
+
+> **Theme: dashboard timestamps in viewer machine time.** Every server-rendered timestamp on the dashboard now formats in the viewer's browser locale + timezone instead of the server's (UTC in Docker), with relative phrasing for recent activity. No schema changes, no API changes — pull, restart, reload.
+
 ### Changed
 
 - **Dashboard timestamps now render in the viewer's machine time** with relative phrasing (#104). Every server-rendered date was previously formatted in the server's timezone (UTC in Docker) and locale (`en-US`), and many places dropped the time entirely (`toLocaleDateString()`). A shared `<TimeDisplay>` component now emits a semantic `<time datetime>` tag; one hydration script in `BaseLayout` rewrites every such element on load to relative time (`5m ago`, `Yesterday 14:32`, `Jan 5, 14:32`) using `Intl.DateTimeFormat` in the browser's locale + timezone. The `title` tooltip carries the full absolute timestamp with timezone. The dashboard never shows a bare date anymore — every rendered value carries date and time together.
