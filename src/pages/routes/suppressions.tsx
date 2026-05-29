@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Suppression } from "../../modules/suppressions/types/suppression.types.ts";
 import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
 
@@ -204,10 +205,10 @@ export function SuppressionsPage({
                         )}
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
-                        {sup.expiresAt ? sup.expiresAt.toLocaleString() : "Permanent"}
+                        <TimeDisplay value={sup.expiresAt} fallback="Permanent" />
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">
-                        {sup.createdAt.toLocaleString()}
+                        <TimeDisplay value={sup.createdAt} />
                       </td>
                       <td class="px-4 py-3 text-right">
                         <form

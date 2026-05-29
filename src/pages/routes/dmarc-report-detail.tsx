@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type {
   DmarcReport,
   DmarcRecord,
@@ -44,9 +45,9 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
       <h1 class="text-xl font-semibold mb-1">{report.orgName}</h1>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
         Report for <span class="font-mono">{report.domain}</span> ·{" "}
-        {report.dateBegin.toISOString().slice(0, 10)} →{" "}
-        {report.dateEnd.toISOString().slice(0, 10)} · policy{" "}
-        <span class="font-mono">p={report.policyP}</span> (pct={report.policyPct})
+        <TimeDisplay value={report.dateBegin} /> → <TimeDisplay value={report.dateEnd} />{" "}
+        · policy <span class="font-mono">p={report.policyP}</span> (pct={report.policyPct}
+        )
       </p>
 
       {/* Summary cards */}

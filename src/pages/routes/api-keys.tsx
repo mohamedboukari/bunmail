@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
 
 /**
@@ -107,10 +108,10 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                     )}
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {key.lastUsedAt ? key.lastUsedAt.toLocaleDateString() : "Never"}
+                    <TimeDisplay value={key.lastUsedAt} fallback="Never" />
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {key.createdAt.toLocaleDateString()}
+                    <TimeDisplay value={key.createdAt} />
                   </td>
                   <td class="px-4 py-3">
                     {key.isActive && (

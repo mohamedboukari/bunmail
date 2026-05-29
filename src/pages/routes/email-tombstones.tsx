@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { EmailTombstone } from "../../modules/emails/models/email-tombstone.schema.ts";
 
 interface EmailTombstonesPageProps {
@@ -126,14 +127,10 @@ export function EmailTombstonesPage({
                     <StatusBadge status={t.status} />
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {t.sentAt ? (
-                      t.sentAt.toISOString().slice(0, 10)
-                    ) : (
-                      <span class="text-gray-400">—</span>
-                    )}
+                    <TimeDisplay value={t.sentAt} />
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {t.purgedAt.toISOString().slice(0, 10)}
+                    <TimeDisplay value={t.purgedAt} />
                   </td>
                 </tr>
               ))}

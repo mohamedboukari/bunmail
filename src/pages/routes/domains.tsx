@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { VerificationBadge } from "../components/status-badge.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
+import { TimeDisplay } from "../components/time-display.tsx";
 import type { Domain } from "../../modules/domains/types/domain.types.ts";
 
 /**
@@ -95,7 +96,7 @@ export function DomainsPage({ domains, flash }: DomainsPageProps) {
                     <VerificationBadge verified={domain.dmarcVerified} label="DMARC" />
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                    {domain.createdAt.toLocaleDateString()}
+                    <TimeDisplay value={domain.createdAt} />
                   </td>
                   <td class="px-4 py-3">
                     <form method="POST" action={`/dashboard/domains/${domain.id}/delete`}>
