@@ -129,6 +129,40 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 3. DATA command → message parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, and raw message stored in `inbound_emails`
 5. `email.received` webhook event fired to all subscribed webhooks
+6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget) — see below
+
+Bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5–6.
+
+## Inbound Notifications (#106)
+
+A domain can opt in to email notifications by setting its `notify_email`
+(per domain — from the dashboard's domain detail page, or the `notifyEmail`
+field on `POST /api/v1/domains`). When mail is received for that domain,
+BunMail sends a short "you have new mail" summary (sender, subject, a ~200-char
+preview, and a dashboard link when `APP_BASE_URL` is set) to the notify address.
+
+- The notification is sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<recipient
+  domain>` (default `notifications@<domain>`) and DKIM-signed with that
+  domain's own key — same SPF/DKIM as outbound.
+- It is sent fire-and-forget after the inbound row is stored, so it never
+  delays the SMTP acknowledgement.
+- **Loop guard:** mail whose sender domain is itself a registered BunMail
+  domain is skipped (a notification that loops back in won't re-notify). Point
+  `notify_email` at an external mailbox.
+- **Kill switch:** `INBOUND_NOTIFY_ENABLED=false` disables all inbound
+  notifications regardless of per-domain settings.
+
+> **Limitations (v1).** The inbound path does **not** verify SPF/DKIM/DMARC
+> on received mail today, so a notification relays the (unauthenticated)
+> sender, subject, and body preview of whatever was accepted — treat the
+> notification's contents as untrusted, exactly like the inbox itself. The
+> HTML part is escaped (no script injection), and the From/Subject are set
+> via Nodemailer (no header injection). Notification volume is bounded only
+> by the SMTP per-IP connection rate limit — there is no per-`notify_email`
+> throttle/digest yet. Inbound sender authentication and a per-address rate
+> cap are tracked as follow-ups on #106.
+
+See [docs/domains.md](domains.md#inbound-notifications-106) for the field and endpoints.
 
 ## Service Methods
 

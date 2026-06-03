@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inbound email notifications (#106).** Each domain can carry a `notify_email`. When the inbound SMTP receiver accepts a message for a recipient on that domain, BunMail sends a "you have new mail" summary email (sender, subject, ~200-char preview, and a dashboard link when `APP_BASE_URL` is set) to that address — sent from `<INBOUND_NOTIFY_FROM_LOCAL>@<recipient domain>` (default `notifications@…`) and DKIM-signed with the domain's own key, so it passes the same SPF/DKIM as outbound. Set or clear the address from the domain detail page in the dashboard, or via the new optional `notifyEmail` field on `POST /api/v1/domains`. Sent fire-and-forget after the inbound row is stored (never delays the SMTP ack); bounces (DSNs) and DMARC reports never trigger it; a sender-domain loop guard skips notifications for mail from one of your own registered domains. New env: `INBOUND_NOTIFY_ENABLED` (default true, global kill switch), `INBOUND_NOTIFY_FROM_LOCAL` (default `notifications`), and `APP_BASE_URL` (optional, for the dashboard link). Webhook events are unchanged — inbound arrival continues to fire the existing `email.received` event.
+
+### Changed
+
+- **Schema:** adds `domains.notify_email varchar(255) NULL` (#106). Legacy rows default to null (notifications disabled). Run `bun run db:migrate` (or rebuild via `docker compose up -d --build`) before deploying.
+
 ## [0.6.1] - 2026-05-29
 
 > **Theme: dashboard timestamps in viewer machine time.** Every server-rendered timestamp on the dashboard now formats in the viewer's browser locale + timezone instead of the server's (UTC in Docker), with relative phrasing for recent activity. No schema changes, no API changes — pull, restart, reload.

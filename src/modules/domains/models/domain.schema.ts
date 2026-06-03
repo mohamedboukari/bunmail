@@ -53,6 +53,18 @@ export const domains = pgTable("domains", {
    */
   unsubscribeUrl: text("unsubscribe_url"),
 
+  /**
+   * Address notified when inbound mail is received for this domain (#106).
+   * When set, every message accepted by the SMTP receiver for a recipient
+   * on this domain triggers a "you have new mail" summary email, sent from
+   * `<INBOUND_NOTIFY_FROM_LOCAL>@<name>` and DKIM-signed with this domain's
+   * own key. Null disables inbound notifications for the domain (the
+   * default). Point this at an EXTERNAL mailbox — an address on a domain
+   * BunMail itself receives for would loop (and is skipped by the
+   * sender-domain loop guard).
+   */
+  notifyEmail: varchar("notify_email", { length: 255 }),
+
   /** When this domain was added */
   createdAt: timestamp("created_at").notNull().defaultNow(),
 

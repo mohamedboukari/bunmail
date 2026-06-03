@@ -168,6 +168,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 | `name`              | string | Yes      | Domain name (e.g. "example.com")                                                                 |
 | `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
 | `unsubscribeUrl`    | string | No       | RFC 8058 one-click HTTPS endpoint. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. |
+| `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
 
 **Response:**
 

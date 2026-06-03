@@ -15,10 +15,12 @@ import { eq } from "drizzle-orm";
 import {
   createDomain,
   getDomainById,
+  getDomainByName,
   listDomains,
   domainExistsByName,
   deleteDomain,
   getDkimDnsRecord,
+  updateDomainNotifyEmail,
 } from "../../src/modules/domains/services/domain.service.ts";
 import { isEncryptedSecret, decryptSecret } from "../../src/utils/crypto.ts";
 import { config } from "../../src/config.ts";
@@ -70,6 +72,50 @@ describe("createDomain", () => {
     });
     expect(created.unsubscribeEmail).toBe("noreply@example.com");
     expect(created.unsubscribeUrl).toBe("https://example.com/unsub");
+  });
+
+  test("notify_email defaults to null and can be set at create time (#106)", async () => {
+    const a = await createDomain({ name: "a.example.com" });
+    expect(a.notifyEmail).toBeNull();
+
+    const b = await createDomain({
+      name: "b.example.com",
+      notifyEmail: "ops@external.com",
+    });
+    expect(b.notifyEmail).toBe("ops@external.com");
+  });
+});
+
+describe("getDomainByName (#106)", () => {
+  test("returns the full row (with DKIM material) for an exact name match", async () => {
+    const created = await createDomain({ name: "example.com" });
+    const fetched = await getDomainByName("example.com");
+    expect(fetched?.id).toBe(created.id);
+    /** Carries the encrypted DKIM key so the notify path can sign. */
+    expect(fetched?.dkimPrivateKey).not.toBeNull();
+    expect(fetched?.dkimSelector).toBe("bunmail");
+  });
+
+  test("returns undefined for an unregistered name", async () => {
+    expect(await getDomainByName("not-registered.com")).toBeUndefined();
+  });
+});
+
+describe("updateDomainNotifyEmail (#106)", () => {
+  test("sets and then clears the notify address", async () => {
+    const created = await createDomain({ name: "example.com" });
+
+    const set = await updateDomainNotifyEmail(created.id, "ops@external.com");
+    expect(set?.notifyEmail).toBe("ops@external.com");
+    expect((await getDomainById(created.id))?.notifyEmail).toBe("ops@external.com");
+
+    const cleared = await updateDomainNotifyEmail(created.id, null);
+    expect(cleared?.notifyEmail).toBeNull();
+    expect((await getDomainById(created.id))?.notifyEmail).toBeNull();
+  });
+
+  test("returns undefined when the domain doesn't exist", async () => {
+    expect(await updateDomainNotifyEmail("dom_doesnotexist", "x@y.com")).toBeUndefined();
   });
 });
 

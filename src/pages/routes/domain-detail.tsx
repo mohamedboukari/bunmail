@@ -85,6 +85,36 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
         </div>
       </div>
 
+      {/* Inbound notifications (#106) */}
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
+        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+          Inbound Notifications
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Get a summary email when mail is received for this domain. Leave empty to
+          disable. Use an external mailbox (not an address on this domain).
+        </p>
+        <form
+          method="POST"
+          action={`/dashboard/domains/${domain.id}/notify-email`}
+          class="flex flex-col sm:flex-row gap-3 sm:items-center"
+        >
+          <input
+            type="email"
+            name="notifyEmail"
+            value={domain.notifyEmail ?? ""}
+            placeholder="ops@yourcompany.com"
+            class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+          />
+          <button
+            type="submit"
+            class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors whitespace-nowrap"
+          >
+            Save
+          </button>
+        </form>
+      </div>
+
       {/* Domain details */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
         <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-4">

@@ -82,6 +82,7 @@ const mockDomain = {
   verifiedAt: null,
   unsubscribeEmail: null as string | null,
   unsubscribeUrl: null as string | null,
+  notifyEmail: null as string | null,
   createdAt: new Date("2024-01-01"),
   updatedAt: new Date("2024-01-01"),
 };

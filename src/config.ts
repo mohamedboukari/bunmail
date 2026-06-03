@@ -112,6 +112,15 @@ export const config = {
     host: optionalEnv("HOST", "0.0.0.0"),
   },
 
+  /**
+   * Public base URL of this BunMail instance (e.g. "https://mail.example.com"),
+   * no trailing slash. Used to build absolute links in outbound system mail —
+   * currently the "view in dashboard" link in inbound notifications (#106).
+   * Optional: when empty, those emails simply omit the link. Trailing slash
+   * is stripped so callers can always append "/dashboard/...".
+   */
+  appBaseUrl: optionalEnv("APP_BASE_URL", "").replace(/\/+$/, ""),
+
   mail: {
     /** Hostname used in SMTP HELO command and Message-ID header */
     hostname: optionalEnv("MAIL_HOSTNAME", "localhost"),
@@ -150,6 +159,31 @@ export const config = {
       /** Rate limit window in seconds */
       rateLimitWindowSec: parseInt(optionalEnv("SMTP_RATE_LIMIT_WINDOW", "60"), 10),
     },
+  },
+
+  /**
+   * Inbound notification (#106). When an inbound message is accepted by
+   * the SMTP receiver for a domain that has a `notify_email` set, BunMail
+   * sends a "you have new mail" summary email to that address, signed with
+   * the recipient domain's own DKIM key. Per-domain opt-in (set the
+   * domain's notify email); these are the instance-wide knobs.
+   */
+  inboundNotify: {
+    /**
+     * Master switch. When false, no inbound notifications are sent
+     * regardless of any domain's `notify_email`. Default true (the
+     * per-domain `notify_email` being null is the real opt-in — this is
+     * an operator kill switch).
+     */
+    enabled: optionalEnv("INBOUND_NOTIFY_ENABLED", "true") === "true",
+
+    /**
+     * Local-part of the From address for notification emails. The full
+     * From is `<fromLocalPart>@<recipient domain>`, so notifications are
+     * sent from the same domain that received the mail and signed with
+     * that domain's DKIM key. Default "notifications".
+     */
+    fromLocalPart: optionalEnv("INBOUND_NOTIFY_FROM_LOCAL", "notifications"),
   },
 
   /** Password-protected web dashboard at /dashboard */
