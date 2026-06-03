@@ -123,6 +123,7 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
       verifiedAt: null,
       unsubscribeEmail: null,
       unsubscribeUrl: null,
+      notifyEmail: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     }),

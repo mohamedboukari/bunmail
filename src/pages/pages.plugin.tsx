@@ -915,6 +915,47 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
+   * POST /dashboard/domains/:id/notify-email
+   * Sets or clears the inbound-notification address for a domain (#106).
+   * An empty submission clears it (disables notifications).
+   */
+  .post(
+    "/domains/:id/notify-email",
+    async ({ params, body, set }) => {
+      const raw = (body.notifyEmail ?? "").trim();
+      /** Empty clears the address; otherwise require a plausible email. */
+      const value = raw === "" ? null : raw;
+      if (value !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Enter a valid email address")}&flashType=error`;
+        return "";
+      }
+
+      const updated = await domainService.updateDomainNotifyEmail(params.id, value);
+
+      if (!updated) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+        return "";
+      }
+
+      const message = value
+        ? "Inbound notifications enabled"
+        : "Inbound notifications disabled";
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=success`;
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ notifyEmail: t.Optional(t.String({ maxLength: 255 })) }),
+    },
+  )
+
+  /**
    * GET /dashboard/domains/:id
    * Single domain detail view with DNS verification status.
    */

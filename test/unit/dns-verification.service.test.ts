@@ -54,6 +54,7 @@ const baseDomain = {
   verifiedAt: null as Date | null,
   unsubscribeEmail: null as string | null,
   unsubscribeUrl: null as string | null,
+  notifyEmail: null as string | null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };

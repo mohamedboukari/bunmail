@@ -452,6 +452,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
 | unsubscribe_email | varchar(255)   | nullable; per-domain mailto override for `List-Unsubscribe` (#40) |
 | unsubscribe_url   | text           | nullable; per-domain URL form for `List-Unsubscribe` + One-Click POST (#40) |
+| notify_email      | varchar(255)   | nullable; address notified on inbound mail for this domain (#106) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |

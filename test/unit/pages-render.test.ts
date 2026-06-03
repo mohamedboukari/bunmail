@@ -64,6 +64,7 @@ const domain = {
   verifiedAt: null,
   unsubscribeEmail: null,
   unsubscribeUrl: null,
+  notifyEmail: null,
   createdAt: now,
   updatedAt: now,
 };
@@ -154,6 +155,14 @@ describe("Dashboard page render smoke tests", () => {
   test("DomainDetailPage", () => {
     const html = String(DomainDetailPage({ domain }));
     expect(html).toContain("example.com");
+    /** Inbound-notification edit form is present (#106). */
+    expect(html).toContain(`/dashboard/domains/${domain.id}/notify-email`);
+    expect(html).toContain('name="notifyEmail"');
+    /** A configured address pre-fills the input. */
+    const withNotify = String(
+      DomainDetailPage({ domain: { ...domain, notifyEmail: "ops@external.com" } }),
+    );
+    expect(withNotify).toContain("ops@external.com");
   });
 
   test("EmailsPage with various states", () => {

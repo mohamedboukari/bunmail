@@ -6,6 +6,7 @@ import { inboundEmails } from "../models/inbound-email.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
+import { notifyInboundReceived } from "./inbound-notify.service.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
@@ -435,6 +436,38 @@ export function start(): void {
             to,
             subject: parsed.subject ?? null,
           });
+
+          /**
+           * Send the per-domain inbound notification (#106), fire-and-forget.
+           * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
+           * reports never trigger it. NOT awaited — a slow notification
+           * (DNS/MX resolution) must never delay the SMTP ack below, which
+           * would risk the upstream MTA timing out and redelivering.
+           *
+           * Domain resolution keys off the **envelope** RCPT TO (the
+           * addresses actually validated + accepted in `onRcptTo`), not the
+           * spoofable `To:` header — so BCC / list mail still notifies the
+           * domain it was received for, and a forged header can't steer
+           * the signing identity. `notifyInboundReceived` never throws; the
+           * `.catch` is a redundant belt.
+           */
+          if (config.inboundNotify.enabled) {
+            const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
+              (r) => r.address,
+            );
+            void notifyInboundReceived({
+              inboundId: id,
+              from,
+              recipients: envelopeRecipients,
+              subject: parsed.subject ?? null,
+              text: parsed.text ?? null,
+            }).catch((err) => {
+              logger.error("Inbound notification dispatch failed", {
+                id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
+          }
 
           callback();
         } catch (error) {

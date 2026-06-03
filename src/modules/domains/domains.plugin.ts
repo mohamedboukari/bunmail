@@ -39,7 +39,10 @@ export const domainsPlugin = new Elysia({
     async ({ body }) => {
       logger.info("POST /api/v1/domains", { name: body.name });
 
-      const domain = await domainService.createDomain({ name: body.name });
+      const domain = await domainService.createDomain({
+        name: body.name,
+        notifyEmail: body.notifyEmail,
+      });
 
       return {
         success: true,
