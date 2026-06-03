@@ -37,6 +37,7 @@ const baseDomain = {
   dkimSelector: "bunmail",
   unsubscribeEmail: null,
   unsubscribeUrl: null,
+  notifyEmail: null,
   spfVerified: false,
   dkimVerified: false,
   dmarcVerified: false,

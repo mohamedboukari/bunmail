@@ -19,6 +19,8 @@ export interface SerializedDomain {
   unsubscribeEmail: string | null;
   /** One-click HTTPS unsubscribe endpoint; null disables `List-Unsubscribe-Post`. */
   unsubscribeUrl: string | null;
+  /** Address notified on inbound mail for this domain; null disables notifications. */
+  notifyEmail: string | null;
   createdAt: Date;
 }
 
@@ -39,6 +41,7 @@ export function serializeDomain(domain: Domain): SerializedDomain {
     verifiedAt: domain.verifiedAt,
     unsubscribeEmail: domain.unsubscribeEmail,
     unsubscribeUrl: domain.unsubscribeUrl,
+    notifyEmail: domain.notifyEmail,
     createdAt: domain.createdAt,
   };
 }

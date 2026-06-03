@@ -21,4 +21,6 @@ export interface CreateDomainInput {
   unsubscribeEmail?: string;
   /** RFC 8058 one-click HTTPS unsubscribe endpoint. Optional. */
   unsubscribeUrl?: string;
+  /** Address notified when inbound mail arrives for this domain (#106). Optional. */
+  notifyEmail?: string;
 }

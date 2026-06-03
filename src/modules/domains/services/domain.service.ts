@@ -75,6 +75,7 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
       dkimSelector: "bunmail",
       unsubscribeEmail: input.unsubscribeEmail ?? null,
       unsubscribeUrl: input.unsubscribeUrl ?? null,
+      notifyEmail: input.notifyEmail ?? null,
     })
     .returning();
 
@@ -127,6 +128,30 @@ export async function getDomainById(id: string): Promise<Domain | undefined> {
 }
 
 /**
+ * Retrieves a single domain by its name.
+ *
+ * Used by the inbound-notification path (#106) to resolve the recipient
+ * domain's `notify_email` + DKIM material from the address an inbound
+ * message was sent to. Returns the full row (including the encrypted
+ * `dkimPrivateKey`) so the caller can sign the notification with the
+ * domain's own key.
+ *
+ * @param name - The domain name (e.g. "example.com")
+ * @returns The domain row, or undefined if not found
+ */
+export async function getDomainByName(name: string): Promise<Domain | undefined> {
+  logger.debug("Fetching domain by name", { name });
+
+  const [domain] = await db.select().from(domains).where(eq(domains.name, name)).limit(1);
+
+  if (!domain) {
+    logger.debug("Domain not found by name", { name });
+  }
+
+  return domain;
+}
+
+/**
  * Checks whether a domain name is registered in BunMail.
  * Used by inbound SMTP spam protection to reject mail to unknown domains.
  *
@@ -140,6 +165,43 @@ export async function domainExistsByName(name: string): Promise<boolean> {
     .where(eq(domains.name, name))
     .limit(1);
   return !!domain;
+}
+
+/**
+ * Updates the inbound-notification address for a domain (#106).
+ *
+ * Pass a non-empty address to enable inbound notifications for the
+ * domain, or `null` to disable them. Returns the updated row, or
+ * `undefined` when no domain matches the id.
+ *
+ * `updatedAt` is bumped so the change is reflected in the audit
+ * timestamp, mirroring how other domain mutations behave.
+ *
+ * @param id - The domain ID to update
+ * @param notifyEmail - The address to notify, or null to clear
+ * @returns The updated domain row, or undefined if not found
+ */
+export async function updateDomainNotifyEmail(
+  id: string,
+  notifyEmail: string | null,
+): Promise<Domain | undefined> {
+  logger.info("Updating domain notify email", {
+    id,
+    hasNotifyEmail: notifyEmail !== null,
+  });
+
+  const [domain] = await db
+    .update(domains)
+    .set({ notifyEmail, updatedAt: new Date() })
+    .where(eq(domains.id, id))
+    .returning();
+
+  if (!domain) {
+    logger.warn("Domain not found for notify-email update", { id });
+    return undefined;
+  }
+
+  return domain;
 }
 
 /**

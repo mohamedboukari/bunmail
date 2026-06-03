@@ -1,0 +1,1 @@
+ALTER TABLE "domains" ADD COLUMN "notify_email" varchar(255);

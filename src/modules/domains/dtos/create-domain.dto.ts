@@ -30,4 +30,11 @@ export const createDomainDto = t.Object({
    * Leave unset for transactional mail.
    */
   unsubscribeUrl: t.Optional(t.String({ format: "uri", minLength: 8, maxLength: 2048 })),
+
+  /**
+   * Address notified when inbound mail is received for this domain (#106).
+   * Optional at create-time; can also be set/cleared later from the
+   * dashboard. Point this at an external mailbox.
+   */
+  notifyEmail: t.Optional(t.String({ format: "email", minLength: 3, maxLength: 255 })),
 });

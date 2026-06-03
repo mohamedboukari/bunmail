@@ -22,6 +22,7 @@ describe("serializeDomain", () => {
     verifiedAt: new Date("2024-06-01"),
     unsubscribeEmail: null as string | null,
     unsubscribeUrl: null as string | null,
+    notifyEmail: null as string | null,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
   };
@@ -70,5 +71,11 @@ describe("serializeDomain", () => {
     });
     expect(withOverrides.unsubscribeEmail).toBe("optout@example.com");
     expect(withOverrides.unsubscribeUrl).toBe("https://example.com/unsubscribe?id=abc");
+  });
+
+  test("exposes notifyEmail (null when unset)", () => {
+    expect(serializeDomain(domain).notifyEmail).toBeNull();
+    const withNotify = serializeDomain({ ...domain, notifyEmail: "ops@external.com" });
+    expect(withNotify.notifyEmail).toBe("ops@external.com");
   });
 });

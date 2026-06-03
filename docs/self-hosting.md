@@ -81,6 +81,11 @@ SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
+# Optional — public base URL, used for the dashboard link in inbound notifications
+APP_BASE_URL=https://mail.yourdomain.com
+# Optional — inbound notifications (per-domain notify_email is the opt-in)
+INBOUND_NOTIFY_ENABLED=true
+INBOUND_NOTIFY_FROM_LOCAL=notifications
 ```
 
 > Generate a session secret: `openssl rand -hex 32`
@@ -88,6 +93,10 @@ TRASH_RETENTION_DAYS=7
 > Generate a DKIM encryption key: `openssl rand -base64 32`. **Required** — boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS` — how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
+
+> `APP_BASE_URL` — public base URL of this instance (no trailing slash). Used only to build the "view in dashboard" link in inbound notification emails; leave unset to omit the link.
+
+> `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL` — inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
 ## 2. DNS Records
 
