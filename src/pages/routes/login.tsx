@@ -2,8 +2,13 @@
  * Login page — standalone (no sidebar navigation).
  * Shows a centered card with a password input and submit button.
  * Displays an error message if the password was wrong.
+ *
+ * @param error    Optional error message shown above the form.
+ * @param disabled When true (login rate-limited, #109), the password input
+ *                 and submit button are disabled so it's clear that retrying
+ *                 won't help until the lockout window passes.
  */
-export function LoginPage({ error }: { error?: string }) {
+export function LoginPage({ error, disabled }: { error?: string; disabled?: boolean }) {
   return (
     <html lang="en" class="h-full">
       <head>
@@ -61,13 +66,15 @@ export function LoginPage({ error }: { error?: string }) {
                 id="password"
                 name="password"
                 required
-                autofocus
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+                autofocus={!disabled}
+                disabled={disabled}
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Enter dashboard password"
               />
               <button
                 type="submit"
-                class="w-full mt-4 px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+                disabled={disabled}
+                class="w-full mt-4 px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-900 dark:disabled:hover:bg-gray-100"
               >
                 Sign in
               </button>

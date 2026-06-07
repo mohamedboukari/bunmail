@@ -81,6 +81,10 @@ SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
+# Number of trusted reverse-proxy hops — set to 1 when BunMail runs behind a
+# single proxy (see section 4) so dashboard login rate limiting (#109) keys off
+# the real client IP instead of the proxy's. Default 0 (raw socket IP).
+DASHBOARD_TRUSTED_PROXY_HOPS=1
 # Optional — public base URL, used for the dashboard link in inbound notifications
 APP_BASE_URL=https://mail.yourdomain.com
 # Optional — inbound notifications (per-domain notify_email is the opt-in)
@@ -97,6 +101,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > `APP_BASE_URL` — public base URL of this instance (no trailing slash). Used only to build the "view in dashboard" link in inbound notification emails; leave unset to omit the link.
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL` — inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
+
+> `DASHBOARD_TRUSTED_PROXY_HOPS` — the dashboard login throttle (#109) rate-limits failed passwords per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare) — BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
 
 ## 2. DNS Records
 
@@ -270,6 +276,8 @@ ln -s /etc/nginx/sites-available/bunmail /etc/nginx/sites-enabled/
 nginx -t && systemctl restart nginx
 certbot --nginx -d mail.yourdomain.com
 ```
+
+> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP — so lockouts are per-attacker, not shared. Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy; otherwise a direct request could forge `X-Forwarded-For`.
 
 ## Firewall Rules
 
