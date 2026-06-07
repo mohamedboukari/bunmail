@@ -4,6 +4,12 @@ import { createHmac, timingSafeEqual } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { redactEmail } from "../utils/redact.ts";
+import {
+  resolveClientIp,
+  isLoginRateLimited,
+  recordFailedLogin,
+  clearLoginAttempts,
+} from "../middleware/login-rate-limit.ts";
 import type { EmailStatus } from "../modules/emails/types/email.types.ts";
 
 /* ─── Page Components ─── */
@@ -187,20 +193,61 @@ export const pagesPlugin = new Elysia({
    */
   .post(
     "/login",
-    ({ body, set }) => {
+    ({ body, set, request, server }) => {
       if (!config.dashboard.password) {
         set.status = 403;
         return <DashboardDisabledPage />;
       }
 
+      /**
+       * Brute-force protection (#109). Resolve the client IP honouring the
+       * configured trusted-proxy-hop count, then enforce the per-IP failed
+       * attempt limit before validating the password. Lockout is checked
+       * first (a read), failures are recorded after a wrong guess, and a
+       * successful login clears the counter.
+       */
+      const { loginRateLimit, trustedProxyHops } = config.dashboard;
+      const ip = resolveClientIp({
+        socketIp: server?.requestIP(request)?.address,
+        forwardedFor: request.headers.get("x-forwarded-for"),
+        trustedProxyHops,
+      });
+      const windowMs = loginRateLimit.windowSec * 1000;
+
+      if (loginRateLimit.enabled) {
+        const { limited, retryAfterSec } = isLoginRateLimited(
+          ip,
+          loginRateLimit.maxAttempts,
+          windowMs,
+        );
+        if (limited) {
+          logger.warn("Dashboard login blocked — too many attempts", {
+            ip,
+            retryAfterSec,
+          });
+          set.status = 429;
+          set.headers["retry-after"] = String(retryAfterSec);
+          const minutes = Math.max(1, Math.ceil(retryAfterSec / 60));
+          return (
+            <LoginPage
+              error={`Too many failed attempts. Try again in ${minutes} minute(s).`}
+              disabled={true}
+            />
+          );
+        }
+      }
+
       if (!validatePassword(body.password)) {
-        logger.warn("Dashboard login failed: invalid password");
+        if (loginRateLimit.enabled) recordFailedLogin(ip, windowMs);
+        logger.warn("Dashboard login failed: invalid password", { ip });
         set.status = 302;
         set.headers["location"] = "/dashboard/login?error=invalid";
         return "";
       }
 
-      logger.info("Dashboard login successful");
+      /** Success — wipe any accumulated failures for this IP. */
+      if (loginRateLimit.enabled) clearLoginAttempts(ip);
+      logger.info("Dashboard login successful", { ip });
 
       /** Set session cookie — HttpOnly, SameSite=Lax, 24h expiry */
       const sessionValue = createSessionCookie();

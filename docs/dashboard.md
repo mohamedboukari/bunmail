@@ -4,10 +4,14 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 
 ## Configuration
 
-| Env Variable       | Required | Default       | Description                                  |
-|--------------------|----------|---------------|----------------------------------------------|
-| DASHBOARD_PASSWORD | No       | _(empty)_     | Password to access dashboard. Empty = disabled |
-| SESSION_SECRET     | No       | random UUID   | Secret for HMAC session cookies              |
+| Env Variable                       | Required | Default       | Description                                  |
+|------------------------------------|----------|---------------|----------------------------------------------|
+| DASHBOARD_PASSWORD                 | No       | _(empty)_     | Password to access dashboard. Empty = disabled |
+| SESSION_SECRET                     | No       | random UUID   | Secret for HMAC session cookies              |
+| DASHBOARD_TRUSTED_PROXY_HOPS       | No       | `0`           | Trusted reverse-proxy hops in front of BunMail, used to resolve the real client IP for login rate limiting. `0` = trust only the raw socket IP. Set to `1` behind a single nginx/Caddy/Cloudflare (`N` for `N` chained proxies). |
+| DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
+| DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout |
+| DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes) |
 
 ## Auth Flow
 
@@ -18,6 +22,23 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 5. On subsequent requests: HMAC recomputed and verified, timestamp checked < 24h
 
 If `DASHBOARD_PASSWORD` is not set, all dashboard routes show a "Dashboard disabled" page.
+
+### Brute-force protection (#109)
+
+`POST /dashboard/login` throttles failed password attempts per client IP using
+an in-memory sliding window (`src/middleware/login-rate-limit.ts`). After
+`DASHBOARD_LOGIN_RATE_LIMIT_MAX` failures within
+`DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` seconds, further attempts from that IP get
+HTTP `429` with a `Retry-After` header until the window expires; a successful
+login clears the counter.
+
+The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from
+the **right** of `X-Forwarded-For` (the leftmost entry is attacker-controlled and
+never trusted). With the default `0`, the header is ignored and the raw socket IP
+is used. Behind a reverse proxy set it to the number of trusted hops (`1` for a
+single proxy) so lockouts are per-attacker rather than shared across the proxy's
+IP — and make sure the origin can only be reached **through** the proxy, or
+`X-Forwarded-For` can't be trusted. State is in-memory and per-replica.
 
 ## Pages
 

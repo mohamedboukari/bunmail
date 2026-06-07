@@ -88,7 +88,8 @@ bunmail/
 │   │   └── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
 │   ├── middleware/
 │   │   ├── auth.ts                       ← API key bearer auth
-│   │   └── rate-limit.ts                 ← Sliding window rate limiter
+│   │   ├── rate-limit.ts                 ← Per-API-key sliding window rate limiter
+│   │   └── login-rate-limit.ts           ← Per-IP dashboard login brute-force limiter (#109)
 │   ├── utils/
 │   │   ├── id.ts                         ← Prefixed ID generator
 │   │   ├── logger.ts                     ← Structured JSON logger
@@ -754,7 +755,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
 
-Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry).
+Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109) — see [Rate Limiting](#rate-limiting).
 
 ### Health
 
@@ -776,11 +777,20 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 
 ## Rate Limiting
 
-- **Algorithm:** Sliding window counter (in-memory Map)
+Two independent in-memory sliding-window limiters:
+
+**API requests** (`src/middleware/rate-limit.ts`)
 - **Default limit:** 100 requests per minute per API key
-- **Response on limit:** `429 Too Many Requests` with `Retry-After` header
 - **Scope:** Per API key ID
-- **Note:** Resets on server restart (single-instance only; Redis-backed in v2)
+- **Response on limit:** `429 Too Many Requests` with `Retry-After` header
+
+**Dashboard login** (`src/middleware/login-rate-limit.ts`, #109)
+- **Default limit:** 5 failed password attempts per 15 minutes, per client IP
+- **Scope:** Per client IP — resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
+- **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login clears the counter
+- **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
+
+Both maps reset on server restart and are per-replica (single-instance only; Redis-backed in v2).
 
 ---
 

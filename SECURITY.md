@@ -45,6 +45,7 @@ For the full picture — assets we protect, attackers we model against, controls
 
 - Always set a strong `DASHBOARD_PASSWORD` — BunMail refuses to boot in production with an empty value (`BUNMAIL_ENV=production` + empty `DASHBOARD_PASSWORD` throws at startup) because the dashboard reads/writes across all API keys.
 - Never expose the dashboard publicly without a reverse proxy + TLS
+- Behind a reverse proxy, set `DASHBOARD_TRUSTED_PROXY_HOPS` to the number of trusted hops (`1` for a single nginx/Caddy/Cloudflare) so the dashboard login throttle (#109) rate-limits per real client IP instead of the proxy's. Keep the origin reachable only through the proxy, or `X-Forwarded-For` can be forged. Login brute-force protection (5 failures / 15 min → HTTP 429) is on by default; tune via `DASHBOARD_LOGIN_RATE_LIMIT_*`.
 - Rotate API keys periodically
 - Keep BunMail and its dependencies up to date
 - Use a firewall to restrict SMTP port access (2525)

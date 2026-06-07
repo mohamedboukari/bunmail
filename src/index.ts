@@ -20,6 +20,10 @@ import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
+import {
+  startLoginRateLimitCleanup,
+  stopLoginRateLimitCleanup,
+} from "./middleware/login-rate-limit.ts";
 import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
 
 /**
@@ -235,6 +239,13 @@ webhookDeliveryWorker.start();
 startRateLimitCleanup();
 
 /**
+ * Start the periodic sweep for the dashboard login brute-force limiter
+ * (#109) — prunes expired per-IP failed-attempt entries so a long-lived
+ * server doesn't accumulate them unbounded under attacker IP rotation.
+ */
+startLoginRateLimitCleanup(config.dashboard.loginRateLimit.windowSec * 1000);
+
+/**
  * Graceful shutdown handler.
  * Stops the queue processor first (no new emails picked up),
  * then stops the HTTP server.
@@ -246,6 +257,7 @@ function shutdown() {
   trashPurge.stop();
   webhookDeliveryWorker.stop();
   stopRateLimitCleanup();
+  stopLoginRateLimitCleanup();
   app.stop();
   process.exit(0);
 }
