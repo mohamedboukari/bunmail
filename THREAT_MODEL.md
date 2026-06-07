@@ -95,7 +95,8 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 ### HTTP API hygiene
 
 - **Per-API-key rate limiting** (`src/middleware/rate-limit.ts`): 100 requests / 60 s, sliding window.
-- **Cleanup interval** (#22): the in-memory rate-limit map is pruned every 5 minutes so distinct keys can't grow it unbounded.
+- **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed passwords **per client IP** (sliding window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit; a successful login clears the counter. Since the dashboard is a single shared password with no username, this is what stops online guessing. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For` — the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
+- **Cleanup interval** (#22): the in-memory rate-limit maps (per-API-key and per-IP login) are pruned every 5 minutes so distinct keys / IPs can't grow them unbounded.
 - **CORS:** none configured by default — the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.
 
 ### Webhooks
@@ -118,7 +119,7 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 | Control | What you must do |
 |---|---|
 | **Disk encryption / DB volume** | DKIM private keys are encrypted at rest (#23) so a DB dump alone leaks no signing material. The dashboard password, session secret, recipient lists, and inbound mail bodies are **not** encrypted — treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage; keep `.env` (which holds the DKIM key) on a different rotation/storage tier than the DB dump. |
-| **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. |
+| **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. Set `DASHBOARD_TRUSTED_PROXY_HOPS` to the number of trusted hops (`1` for a single proxy) so the login throttle (#109) keys off the real client IP — and because that only holds if the origin is unreachable directly, the "never expose `:3000`" rule is what keeps `X-Forwarded-For` trustworthy. |
 | **Firewall / port hygiene** | Inbound SMTP listens on port 25 (or 2525 if `SMTP_PORT=2525`). Block every other port from the public internet. Specifically block `:5432` so the database isn't reachable from anywhere except the app process. |
 | **`.env` secrecy** | `DATABASE_URL`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, and `POSTGRES_PASSWORD` live in `.env`. Don't commit it. Don't paste it into chat tools. Rotate if it leaks. |
 | **PTR / reverse DNS** | Set the rDNS record for your sending IP to match `MAIL_HOSTNAME`. Without this, mail goes to spam regardless of code-side hardening. |
@@ -128,7 +129,7 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 | **API key rotation** | Treat `bm_live_…` keys like any other secret. Revoke (set `is_active = false`) and rotate periodically. |
 | **Backup integrity** | Test restores. A backup you can't restore is not a backup. |
 | **Dashboard access scope** | The dashboard is admin-only — anyone who logs in sees every email across every API key. Don't share the password. |
-| **Scaling caveats** | Rate limit state is in-memory — multiple replicas would each have their own counters. The queue's `queued → sending` transition is now atomic via `FOR UPDATE SKIP LOCKED` (#20), so multiple replicas no longer double-send the same row, but the in-memory rate limit is still per-replica. Use a sticky load-balancer (or consolidate to a single rate-limit Redis) if you scale out. |
+| **Scaling caveats** | Rate limit state is in-memory — multiple replicas would each have their own counters. This applies to both the per-API-key limiter and the per-IP dashboard login throttle (#109): across N replicas an attacker effectively gets N× the login attempts before any one replica locks them out. The queue's `queued → sending` transition is now atomic via `FOR UPDATE SKIP LOCKED` (#20), so multiple replicas no longer double-send the same row, but the in-memory rate limits are still per-replica. Use a sticky load-balancer (or consolidate to a single rate-limit Redis) if you scale out. |
 
 ## 6. Known residual risks
 

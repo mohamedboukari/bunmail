@@ -335,6 +335,22 @@ describe("Dashboard page render smoke tests", () => {
     expect(typeof DashboardDisabledPage()).toBe("string");
   });
 
+  test("LoginPage disables the form only when rate-limited (#109)", () => {
+    /** Matches a standalone `disabled` attribute, not the `disabled:`
+     *  Tailwind variant classes which also contain the substring. */
+    const hasDisabledAttr = /disabled(?![:\w-])/;
+
+    /** Normal error (wrong password) keeps the form editable for a retry. */
+    const normal = String(LoginPage({ error: "Invalid password" }));
+    expect(hasDisabledAttr.test(normal)).toBe(false);
+
+    /** Rate-limited render disables the input + button. */
+    const locked = String(
+      LoginPage({ error: "Too many failed attempts.", disabled: true }),
+    );
+    expect(hasDisabledAttr.test(locked)).toBe(true);
+  });
+
   test("LandingPage", () => {
     expect(typeof LandingPage()).toBe("string");
   });

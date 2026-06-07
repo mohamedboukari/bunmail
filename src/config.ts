@@ -197,6 +197,37 @@ export const config = {
     ),
     /** HMAC secret for session cookies; random UUID by default (resets on restart) */
     sessionSecret: optionalEnv("SESSION_SECRET", randomUUID()),
+
+    /**
+     * Number of trusted reverse-proxy hops in front of BunMail, used to
+     * resolve the real client IP for login rate limiting (#109). `0` (the
+     * default) means don't trust `X-Forwarded-For` at all — use the raw
+     * socket address, which is spoof-proof and correct when BunMail is
+     * directly exposed. `N >= 1` takes the `N`-th `X-Forwarded-For` entry
+     * from the right (the address your trusted proxy observed); counting
+     * from the right is the spoof-resistant approach (the leftmost entry is
+     * attacker-controlled). Set to `1` behind a single nginx/Caddy/Cloudflare.
+     */
+    trustedProxyHops: Math.max(
+      0,
+      parseInt(optionalEnv("DASHBOARD_TRUSTED_PROXY_HOPS", "0"), 10),
+    ),
+
+    /**
+     * Brute-force protection for the login form (#109). Failed password
+     * attempts are counted per client IP in a sliding window; once
+     * `maxAttempts` is reached the login POST returns HTTP 429 until the
+     * window expires. A successful login clears the counter. State is
+     * in-memory and per-replica (same caveat as the API rate limiter).
+     */
+    loginRateLimit: {
+      /** Master switch — set to "false" to disable login throttling. */
+      enabled: optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_ENABLED", "true") === "true",
+      /** Failed attempts allowed per IP per window before lockout. */
+      maxAttempts: parseInt(optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_MAX", "5"), 10),
+      /** Lockout window in seconds (default 900 = 15 minutes). */
+      windowSec: parseInt(optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_WINDOW", "900"), 10),
+    },
   },
 
   /** Log level: debug | info | warn | error — validated at startup */

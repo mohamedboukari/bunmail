@@ -16,7 +16,14 @@ mock.module("../../src/config.ts", () => ({
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
     mail: { hostname: "localhost" },
-    dashboard: { password: "test123", sessionSecret: "e2e-test-secret" },
+    dashboard: {
+      password: "test123",
+      sessionSecret: "e2e-test-secret",
+      /** Trust one proxy hop so tests can drive distinct client IPs via
+       *  the X-Forwarded-For header (app.handle has no real socket). */
+      trustedProxyHops: 1,
+      loginRateLimit: { enabled: true, maxAttempts: 5, windowSec: 900 },
+    },
     logLevel: "error",
   },
 }));
@@ -228,6 +235,77 @@ describe("Dashboard E2E", () => {
       );
       expect(response.status).toBe(302);
       expect(response.headers.get("location")).toBe("/dashboard/login?error=invalid");
+    });
+  });
+
+  describe("POST /dashboard/login brute-force protection (#109)", () => {
+    /** Each test uses a distinct X-Forwarded-For so the module-level
+     *  attempt map doesn't bleed across cases. */
+    const wrongLogin = (ip: string) =>
+      app.handle(
+        new Request("http://localhost/dashboard/login", {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-forwarded-for": ip,
+          },
+          body: "password=wrongpassword",
+        }),
+      );
+
+    test("blocks with 429 + Retry-After after 5 failed attempts from one IP", async () => {
+      const ip = "9.9.9.9";
+      /** First 5 wrong attempts redirect with the invalid-password error. */
+      for (let i = 0; i < 5; i++) {
+        const res = await wrongLogin(ip);
+        expect(res.status).toBe(302);
+      }
+      /** The 6th is locked out. */
+      const blocked = await wrongLogin(ip);
+      expect(blocked.status).toBe(429);
+      expect(blocked.headers.get("retry-after")).toBeTruthy();
+      const html = await blocked.text();
+      expect(html).toContain("Too many failed attempts");
+      /** The lockout response disables the form (standalone `disabled`
+       *  attribute, distinct from the `disabled:` Tailwind classes). */
+      expect(/disabled(?![:\w-])/.test(html)).toBe(true);
+    });
+
+    test("lockout is per-IP — a different IP is unaffected", async () => {
+      const attacker = "9.9.9.10";
+      for (let i = 0; i < 6; i++) await wrongLogin(attacker);
+
+      /** A wrong password from a fresh IP still gets the normal redirect,
+       *  not a 429. */
+      const other = await wrongLogin("9.9.9.11");
+      expect(other.status).toBe(302);
+      expect(other.headers.get("location")).toBe("/dashboard/login?error=invalid");
+    });
+
+    test("a successful login clears the IP's failure counter", async () => {
+      const ip = "9.9.9.12";
+      /** Burn 4 failures (still under the limit of 5). */
+      for (let i = 0; i < 4; i++) await wrongLogin(ip);
+
+      /** Correct password from the same IP succeeds and resets the counter. */
+      const ok = await app.handle(
+        new Request("http://localhost/dashboard/login", {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            "x-forwarded-for": ip,
+          },
+          body: "password=test123",
+        }),
+      );
+      expect(ok.status).toBe(302);
+      expect(ok.headers.get("location")).toBe("/dashboard");
+
+      /** With the counter cleared, 5 fresh failures are needed again — so a
+       *  single wrong attempt still just redirects. */
+      const after = await wrongLogin(ip);
+      expect(after.status).toBe(302);
+      expect(after.headers.get("location")).toBe("/dashboard/login?error=invalid");
     });
   });
 
