@@ -36,7 +36,10 @@ import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
 import { LoginPage, DashboardDisabledPage } from "../../src/pages/routes/login.tsx";
 import { LandingPage } from "../../src/pages/routes/landing.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
-import { HtmlPreview } from "../../src/pages/components/html-preview.tsx";
+import {
+  HtmlPreview,
+  LiveHtmlPreview,
+} from "../../src/pages/components/html-preview.tsx";
 import { Pagination } from "../../src/pages/components/pagination.tsx";
 import { StatusBadge } from "../../src/pages/components/status-badge.tsx";
 
@@ -318,10 +321,17 @@ describe("Dashboard page render smoke tests", () => {
   test("TemplatesPage", () => {
     expect(typeof TemplatesPage({ templates: [template] })).toBe("string");
     expect(typeof TemplatesPage({ templates: [] })).toBe("string");
+    /** Create form ships the live HTML preview iframe + its driver script. */
+    expect(String(TemplatesPage({ templates: [] }))).toContain("live-html-preview-frame");
   });
 
   test("TemplateDetailPage", () => {
     expect(typeof TemplateDetailPage({ template })).toBe("string");
+    /** Edit form seeds the preview from the saved HTML with sample-rendered
+     *  variables ({{name}} -> Alex Doe), not the raw placeholder. */
+    const html = String(TemplateDetailPage({ template }));
+    expect(html).toContain("live-html-preview-frame");
+    expect(html).toContain("Alex Doe");
   });
 
   test("WebhooksPage", () => {
@@ -366,6 +376,20 @@ describe("Component render smoke tests", () => {
     expect(typeof HtmlPreview({ html: "<p>hi</p>" })).toBe("string");
     expect(typeof HtmlPreview({ html: "" })).toBe("string");
     expect(typeof HtmlPreview({ html: "<p>x</p>", title: "Custom" })).toBe("string");
+  });
+
+  test("LiveHtmlPreview — sandboxed iframe seeded with sample-rendered HTML", () => {
+    const empty = String(LiveHtmlPreview({ textareaId: "html" }));
+    expect(empty).toContain("live-html-preview-frame");
+    expect(empty).toContain('sandbox="allow-same-origin"');
+    expect(empty).toContain('data-source="html"');
+
+    /** initialHtml is sample-rendered for the first (pre-JS) paint. */
+    const seeded = String(
+      LiveHtmlPreview({ textareaId: "html", initialHtml: "<p>Hi {{name}}</p>" }),
+    );
+    expect(seeded).toContain("Alex Doe");
+    expect(seeded).not.toContain("{{name}}");
   });
 
   test("Pagination — first / middle / last page", () => {
