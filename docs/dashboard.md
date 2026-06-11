@@ -53,8 +53,8 @@ IP — and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/api-keys          | API keys list + create form                                       |
 | GET /dashboard/domains           | Domains list + add form                                           |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
-| GET /dashboard/templates         | Templates list + create form                                      |
-| GET /dashboard/templates/:id     | Template detail + edit form                                       |
+| GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
+| GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview)                   |
 | GET /dashboard/webhooks          | Webhooks list + create form                                       |
 | GET /dashboard/inbound           | Inbound emails list — bulk-select, per-row trash                  |
 | GET /dashboard/inbound/trash     | Trashed inbound — bulk Restore / Delete-forever / Empty trash     |
