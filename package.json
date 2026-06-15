@@ -73,7 +73,7 @@
     "fflate": "^0.8.2",
     "file-type": "^22.0.1",
     "mailparser": "^3.9.8",
-    "nodemailer": "^8.0.7",
+    "nodemailer": "^9.0.0",
     "smtp-server": "^3.18.4"
   },
   "overrides": {
