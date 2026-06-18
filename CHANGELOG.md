@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Schema:** adds `domains.notify_email varchar(255) NULL` (#106). Legacy rows default to null (notifications disabled). Run `bun run db:migrate` (or rebuild via `docker compose up -d --build`) before deploying.
+- **Dependency refresh.** Routine bump of dev/tooling and runtime deps to their latest patch/minor releases alongside the security fix below: `elysia` 1.4.28→1.4.29, `fast-xml-parser` 5.7.3→5.9.2, `fflate` 0.8.2→0.8.3, plus `eslint` 10.3→10.5, `typescript-eslint` 8.59→8.61, `knip` 6.11→6.17, `prettier` 3.8.3→3.8.4, `bumpp`, `lint-staged`, `@commitlint/*`, `eslint-plugin-prettier`. No behaviour change; full test suite + lint + type-check green.
+
+### Security
+
+- **Patched nodemailer to 9.0.1 — GHSA-p6gq-j5cr-w38f (HIGH, "message-level `raw` option bypasses").** Both the previously pinned `nodemailer@8.x` and the `9.0.0` release are in the advisory's affected range; the fix is `9.0.1`. Top-level `nodemailer` is bumped `^8.0.7 → ^9.0.1`. The transitive copies pinned by `mailparser` and `smtp-server` are also remediated: those two are bumped (`mailparser` 3.9.8→3.9.10, `smtp-server` 3.18.4→3.19.0, both now built against the nodemailer 9.x line) and a `nodemailer: 9.0.1` entry in `overrides` forces their exact-`9.0.0` nested pins up to the patched release, so **no vulnerable nodemailer copy ships in the image** (Trivy fs + image scans go green). No API, schema, or env changes.
+- **Heads-up — nodemailer 9 major behaviour change.** As of nodemailer 9.0.0, HTTPS requests made while *fetching remote content* (attachment `href`/`path` URLs, OAuth2 token endpoints, HTTP/HTTPS proxy `CONNECT`) validate the server's TLS certificate by default. BunMail's default direct-SMTP send path is unaffected; if you rely on remote-URL attachments or OAuth2/proxy against a host with a self-signed/expired/mismatched cert, opt back out per request with `tls.rejectUnauthorized=false`.
 
 ## [0.6.1] - 2026-05-29
 
