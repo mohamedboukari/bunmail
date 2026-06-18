@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-18
+
 ### Added
 
 - **Live HTML preview in the template editor (#112).** The dashboard template create (`/dashboard/templates`) and edit (`/dashboard/templates/:id`) pages now show a live preview beside the HTML editor that re-renders as you type — no save or test send needed. `{{variable}}` placeholders are filled with sample values (common names like `{{name}}`/`{{company}}`/`{{link}}` get realistic samples; others fall back to their own name) so the preview resembles a delivered email; the stored template keeps its raw `{{...}}` markup. The preview reuses the existing sandboxed iframe (`sandbox="allow-same-origin"`, no script execution), is dark-mode aware, and auto-resizes. Dashboard-only — no API, schema, or env changes.
