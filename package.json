@@ -1,6 +1,6 @@
 {
   "name": "bunmail",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Self-hosted email API for developers — free alternative to SendGrid/Resend",
   "module": "src/index.ts",
   "type": "module",
