@@ -178,6 +178,10 @@ bunmail/
 │   │   │   │   └── inbound.serialization.ts
 │   │   │   └── types/
 │   │   │       └── inbound.types.ts
+│   │   ├── smtp-submission/                ← AUTH-required SMTP relay for apps to send THROUGH BunMail (#120)
+│   │   │   ├── services/
+│   │   │   │   └── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
+│   │   │   └── message-mapper.ts           ← pure message → SendEmailInput mapping (BCC-aware)
 │   │   ├── trash/
 │   │   │   └── services/
 │   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows
@@ -849,6 +853,17 @@ volumes:
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
 **Production:** `docker compose up -d` starts both the app and PostgreSQL.
+
+### Optional SMTP listeners
+
+Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners as background services (both off by default; each has a port line in `docker-compose.yml` that's commented out until enabled):
+
+| Listener | Toggle / port env | Purpose |
+|---|---|---|
+| **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (25) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). See [docs/inbound.md](docs/inbound.md). |
+| **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (587) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`; per-IP connection + failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_*` / `SMTP_SUBMISSION_AUTH_RATE_LIMIT_*`. See [docs/smtp-submission.md](docs/smtp-submission.md). |
+
+Both are started from [src/index.ts](src/index.ts) after the queue processor and stopped in the graceful shutdown handler.
 
 ---
 

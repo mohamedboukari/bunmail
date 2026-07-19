@@ -83,6 +83,18 @@ Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver
 
 All four layers **fail open** on internal errors (DNS timeout, DB unreachable) so legitimate mail isn't dropped on infrastructure hiccups.
 
+### SMTP submission (authenticated relay, #120)
+
+The submission server (`src/modules/smtp-submission/services/smtp-submission.service.ts`, opt-in via `SMTP_SUBMISSION_ENABLED`) is a **deliberate relay** for authenticated clients — apps send *through* BunMail to arbitrary recipients. It is a different trust model from the inbound receiver, so its anti-abuse controls differ:
+
+1. **AUTH is the anti-relay control.** `AUTH` is mandatory (`authOptional: false`); the password is treated as a BunMail API key (SHA-256 hashed → `findByHash`, must be active). Unauthenticated clients can't send at all — so, unlike the inbound receiver, recipient domains are intentionally *not* restricted.
+2. **Per-IP failed-AUTH throttle.** Because the password is an API key, failed AUTHs are counted per IP (default 10 / 900 s) and locked out with SMTP `454` before the key is checked — blunts online key brute-forcing. A success clears the counter.
+3. **Per-IP connection rate limiting** — sliding window (default 30 / 60 s).
+4. **Envelope hardening** — 10 MB `SIZE` cap (SMTP 552 on overflow) and a 50-recipient-per-transaction cap (SMTP 452).
+5. **Reuses the outbound gates.** Submitted messages go through `createEmail`, so the per-API-key **suppression** gate and the production **registered-sender-domain** requirement apply exactly as they do for REST sends (rejections surface as SMTP `550`).
+
+**Credential-in-transit risk.** With no TLS configured, `allowInsecureAuth` permits the API key to travel in plaintext — acceptable only on a trusted network (same host / private Docker network). Operators exposing submission more broadly must set `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to known clients. This is called out as an operator responsibility in §5.
+
 ### Outbound delivery
 
 - **DKIM signing** uses per-domain RSA-2048 keys generated at registration time. The private half is **encrypted at rest with AES-256-GCM** using `DKIM_ENCRYPTION_KEY` (#23) — see `SECURITY.md` for format, generation, and rotation. The public half stays plaintext (it's published in DNS).
@@ -121,6 +133,7 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 | **Disk encryption / DB volume** | DKIM private keys are encrypted at rest (#23) so a DB dump alone leaks no signing material. The dashboard password, session secret, recipient lists, and inbound mail bodies are **not** encrypted — treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage; keep `.env` (which holds the DKIM key) on a different rotation/storage tier than the DB dump. |
 | **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. Set `DASHBOARD_TRUSTED_PROXY_HOPS` to the number of trusted hops (`1` for a single proxy) so the login throttle (#109) keys off the real client IP — and because that only holds if the origin is unreachable directly, the "never expose `:3000`" rule is what keeps `X-Forwarded-For` trustworthy. |
 | **Firewall / port hygiene** | Inbound SMTP listens on port 25 (or 2525 if `SMTP_PORT=2525`). Block every other port from the public internet. Specifically block `:5432` so the database isn't reachable from anywhere except the app process. |
+| **SMTP submission exposure (#120)** | The submission server (port 587, opt-in) authenticates with an API key. With no TLS configured it allows plaintext AUTH (`allowInsecureAuth`), so the key travels in the clear — only run it that way on a trusted network (same host / private Docker network). To expose it more broadly, configure `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to the specific apps that use it. Rotate any API key used for SMTP submission like any other secret. |
 | **`.env` secrecy** | `DATABASE_URL`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, and `POSTGRES_PASSWORD` live in `.env`. Don't commit it. Don't paste it into chat tools. Rotate if it leaks. |
 | **PTR / reverse DNS** | Set the rDNS record for your sending IP to match `MAIL_HOSTNAME`. Without this, mail goes to spam regardless of code-side hardening. |
 | **SPF / DKIM / DMARC publishing** | BunMail tells you what records to publish; you have to actually publish them and keep them current. |

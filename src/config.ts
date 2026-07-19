@@ -162,6 +162,61 @@ export const config = {
   },
 
   /**
+   * SMTP submission server (#120). A separate, AUTH-**required** SMTP
+   * listener that lets any SMTP-capable app (Infisical, Netbird, Dify, a
+   * NestJS/Nodemailer backend, …) send *through* BunMail by pointing its
+   * SMTP settings here. Distinct from the inbound receiver above: inbound
+   * has AUTH disabled and validates recipient domains (an MX receiver);
+   * submission authenticates with a `bm_live_` API key and relays to any
+   * recipient via the normal outbound pipeline (queue → DKIM → direct-to-MX).
+   */
+  smtpSubmission: {
+    /** Set to "true" to start the SMTP submission server. Off by default. */
+    enabled: optionalEnv("SMTP_SUBMISSION_ENABLED", "false") === "true",
+    /** Port for the submission server (default 587 — the IANA submission port). */
+    port: parseInt(optionalEnv("SMTP_SUBMISSION_PORT", "587"), 10),
+
+    /**
+     * Optional TLS material. When both a cert and key path are provided,
+     * the server advertises STARTTLS so clients can upgrade the connection
+     * before AUTH. When absent, plaintext AUTH is allowed
+     * (`allowInsecureAuth`) — acceptable only on a trusted network
+     * (same host / private Docker network), which is the common
+     * self-hosted case. Paths are read from disk at server start.
+     */
+    tls: {
+      certPath: optionalEnv("SMTP_SUBMISSION_TLS_CERT", ""),
+      keyPath: optionalEnv("SMTP_SUBMISSION_TLS_KEY", ""),
+    },
+
+    /**
+     * Per-IP connection rate limiting (sliding window), mirroring the
+     * inbound receiver. Blunts abusive connection churn.
+     */
+    connectionRateLimit: {
+      enabled: optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_ENABLED", "true") === "true",
+      max: parseInt(optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_MAX", "30"), 10),
+      windowSec: parseInt(optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_WINDOW", "60"), 10),
+    },
+
+    /**
+     * Per-IP **failed-AUTH** throttle. Because the password is a BunMail
+     * API key, unbounded failed AUTH attempts would let an attacker
+     * brute-force keys. After `maxAttempts` failures within the window an
+     * IP is rejected before the key is even checked. Mirrors the dashboard
+     * login throttle (#109). A successful AUTH clears the counter.
+     */
+    authRateLimit: {
+      enabled: optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED", "true") === "true",
+      maxAttempts: parseInt(optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX", "10"), 10),
+      windowSec: parseInt(
+        optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW", "900"),
+        10,
+      ),
+    },
+  },
+
+  /**
    * Inbound notification (#106). When an inbound message is accepted by
    * the SMTP receiver for a domain that has a `notify_email` set, BunMail
    * sends a "you have new mail" summary email to that address, signed with

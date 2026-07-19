@@ -89,6 +89,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 ## Features
 
 - **Direct SMTP delivery** — sends straight to recipient MX servers, no relay needed
+- **SMTP submission** — apps (Infisical, Netbird, Dify, any Nodemailer backend) send *through* BunMail over SMTP using an API key as the password; switch an app off SendGrid/Brevo with a credentials-only change ([docs/smtp-submission.md](docs/smtp-submission.md))
 - **DKIM signing** — auto-generates 2048-bit RSA keys per domain
 - **SPF / DKIM / DMARC verification** — DNS checks built into the dashboard
 - **Email queue** — Postgres-backed with 3 retries, crash recovery, and exactly-once delivery semantics
