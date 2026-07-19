@@ -11,6 +11,7 @@ import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
 import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
+import { UnauthorizedSenderError } from "./modules/api-keys/errors.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
@@ -137,6 +138,20 @@ const app = new Elysia()
         error: error.message,
         code: "RECIPIENT_SUPPRESSED",
         suppressionId: error.suppressionId,
+      };
+    }
+
+    /**
+     * Sender-authorization rejection (#126). The key is valid (so not 401)
+     * but isn't permitted to send from this `From` address → 403.
+     */
+    if (error instanceof UnauthorizedSenderError) {
+      set.status = 403;
+      return {
+        success: false,
+        error: error.message,
+        code: "UNAUTHORIZED_SENDER",
+        sender: error.sender,
       };
     }
 

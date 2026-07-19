@@ -1,4 +1,4 @@
-import { pgTable, varchar, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, varchar, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 /**
  * API Keys table — stores hashed API keys used to authenticate API requests.
@@ -22,6 +22,18 @@ export const apiKeys = pgTable("api_keys", {
 
   /** Soft-disable flag — when false, the key is rejected at auth middleware */
   isActive: boolean("is_active").notNull().default(true),
+
+  /**
+   * Allowlist of `From` addresses this key may send from (#126). Empty
+   * array (the default) means unrestricted — the key can send from any
+   * registered domain, preserving pre-#126 behaviour. When non-empty, the
+   * `createEmail` gate rejects any send whose `From` isn't in this list,
+   * which stops a key from spoofing arbitrary identities (e.g. a dev key
+   * for `noreply@` sending as `ceo@`). Enforced for both the REST send
+   * API and the SMTP submission server, since both go through
+   * `createEmail`. Addresses are stored lower-cased.
+   */
+  allowedSenders: jsonb("allowed_senders").$type<string[]>().notNull().default([]),
 
   /** Updated on every successful API request — useful for auditing */
   lastUsedAt: timestamp("last_used_at"),

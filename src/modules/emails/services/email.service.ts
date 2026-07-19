@@ -6,6 +6,8 @@ import { templates } from "../../templates/models/template.schema.ts";
 import { renderTemplate } from "../../templates/services/template.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
+import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
+import { UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -68,6 +70,28 @@ export async function createEmail(
       suppressionId: sup.id,
       recipient: rcpt.address,
     });
+  }
+
+  /**
+   * Sender-authorization gate (#126). If the calling key carries a
+   * non-empty `allowedSenders` allowlist, the message's `From` must be on
+   * it — otherwise a key could spoof any identity on any registered domain
+   * (DKIM-signed, so it passes auth). Empty list = unrestricted (the
+   * default), so this is a no-op for keys that haven't opted in. Runs for
+   * both the REST send API and the SMTP submission server, since both call
+   * `createEmail`.
+   */
+  const key = await findApiKeyById(apiKeyId);
+  if (key && key.allowedSenders.length > 0) {
+    const fromLower = input.from.trim().toLowerCase();
+    if (!key.allowedSenders.includes(fromLower)) {
+      logger.warn("Send blocked by allowed-senders list", {
+        id,
+        apiKeyId,
+        from: redactEmail(input.from),
+      });
+      throw new UnauthorizedSenderError(input.from);
+    }
   }
 
   let subject = input.subject ?? "";

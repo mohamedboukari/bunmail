@@ -1,5 +1,6 @@
 import { Elysia, t } from "elysia";
 import { createApiKeyDto } from "./dtos/create-api-key.dto.ts";
+import { updateApiKeyDto } from "./dtos/update-api-key.dto.ts";
 import { serializeApiKey } from "./serializations/api-key.serialization.ts";
 import * as apiKeyService from "./services/api-key.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
@@ -12,6 +13,7 @@ import { logger } from "../../utils/logger.ts";
  * Routes:
  * - POST /        → Create a new API key (returns raw key once)
  * - GET /         → List all API keys (hashes hidden)
+ * - PATCH /:id    → Update name / allowed-senders allowlist (#126)
  * - DELETE /:id   → Revoke (soft-delete) an API key
  *
  * All routes are protected by auth middleware and rate limiting.
@@ -39,7 +41,10 @@ export const apiKeysPlugin = new Elysia({
     async ({ body }) => {
       logger.info("POST /api/v1/api-keys", { name: body.name });
 
-      const { apiKey, rawKey } = await apiKeyService.createApiKey({ name: body.name });
+      const { apiKey, rawKey } = await apiKeyService.createApiKey({
+        name: body.name,
+        allowedSenders: body.allowedSenders,
+      });
 
       return {
         success: true,
@@ -79,6 +84,39 @@ export const apiKeysPlugin = new Elysia({
         tags: ["API Keys"],
         summary: "List API keys",
         description: "Returns all API keys (active and revoked). Key hashes are hidden.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  .patch(
+    "/:id",
+    async ({ params, body, set }) => {
+      logger.info("PATCH /api/v1/api-keys/:id", {
+        apiKeyId: params.id,
+        fields: Object.keys(body),
+      });
+
+      const apiKey = await apiKeyService.updateApiKey(params.id, {
+        name: body.name,
+        allowedSenders: body.allowedSenders,
+      });
+
+      if (!apiKey) {
+        set.status = 404;
+        return { success: false, error: "API key not found" };
+      }
+
+      return { success: true, data: serializeApiKey(apiKey) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: updateApiKeyDto,
+      detail: {
+        tags: ["API Keys"],
+        summary: "Update API key",
+        description:
+          "Update a key's name and/or its allowed-senders allowlist (#126). `allowedSenders` replaces the whole list — add an address by including it, remove one by omitting it. Empty list = unrestricted.",
         security: [{ bearerAuth: [] }],
       },
     },

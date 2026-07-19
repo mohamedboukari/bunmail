@@ -14,4 +14,21 @@ export type ApiKey = InferSelectModel<typeof apiKeys>;
 export interface CreateApiKeyInput {
   /** Human-readable label for the key (e.g. "Production Key") */
   name: string;
+
+  /**
+   * Optional allowlist of `From` addresses this key may send from (#126).
+   * Omit or pass `[]` for unrestricted (any registered domain). Stored
+   * lower-cased/trimmed.
+   */
+  allowedSenders?: string[];
+}
+
+/**
+ * Fields that can be updated on an existing API key (#126). All optional —
+ * only the provided fields change. `allowedSenders` uses replace semantics
+ * (the full desired list); add = include an address, remove = omit it.
+ */
+export interface UpdateApiKeyInput {
+  name?: string;
+  allowedSenders?: string[];
 }

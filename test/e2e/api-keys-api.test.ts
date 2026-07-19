@@ -15,6 +15,7 @@ interface SerializedApiKey {
   name: string;
   keyPrefix: string;
   isActive: boolean;
+  allowedSenders: string[];
   lastUsedAt: string | null;
   createdAt: string;
 }
@@ -73,6 +74,7 @@ const mockApiKey = {
   keyHash: "abc123hash",
   keyPrefix: "bm_live_test",
   isActive: true,
+  allowedSenders: [] as string[],
   lastUsedAt: null,
   createdAt: new Date("2024-01-01"),
   updatedAt: new Date("2024-01-01"),
@@ -80,12 +82,22 @@ const mockApiKey = {
 
 /* ─── Mock api-key service ─── */
 mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
-  createApiKey: mock(() =>
-    Promise.resolve({ apiKey: mockApiKey, rawKey: "bm_live_test_fullkey123" }),
+  createApiKey: mock((input: { name: string; allowedSenders?: string[] }) =>
+    Promise.resolve({
+      apiKey: { ...mockApiKey, allowedSenders: input.allowedSenders ?? [] },
+      rawKey: "bm_live_test_fullkey123",
+    }),
   ),
   listApiKeys: mock(() => Promise.resolve([mockApiKey])),
   revokeApiKey: mock((id: string) =>
     Promise.resolve(id === "key_test123" ? mockApiKey : undefined),
+  ),
+  updateApiKey: mock((id: string, input: { name?: string; allowedSenders?: string[] }) =>
+    Promise.resolve(
+      id === "key_test123"
+        ? { ...mockApiKey, ...input, allowedSenders: input.allowedSenders ?? [] }
+        : undefined,
+    ),
   ),
 }));
 
@@ -146,6 +158,76 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(422);
+    });
+
+    test("accepts allowedSenders and echoes them in the response (#126)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/api-keys", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({
+            name: "Restricted",
+            allowedSenders: ["noreply@example.com"],
+          }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as ApiKeyCreateResponse;
+      expect(body.data.allowedSenders).toEqual(["noreply@example.com"]);
+    });
+
+    test("rejects a non-email allowedSenders entry with 422", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/api-keys", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({ name: "Bad", allowedSenders: ["not-an-email"] }),
+        }),
+      );
+
+      expect(response.status).toBe(422);
+    });
+  });
+
+  describe("PATCH /api/v1/api-keys/:id (#126)", () => {
+    test("updates the allowed-senders list", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/api-keys/key_test123", {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({ allowedSenders: ["ceo@example.com"] }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as ApiKeyResponse;
+      expect(body.success).toBe(true);
+      expect(body.data.allowedSenders).toEqual(["ceo@example.com"]);
+    });
+
+    test("returns 404 for an unknown key", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/api-keys/key_missing", {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({ allowedSenders: [] }),
+        }),
+      );
+
+      expect(response.status).toBe(404);
     });
   });
 

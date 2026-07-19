@@ -10,6 +10,8 @@ export interface SerializedApiKey {
   name: string;
   keyPrefix: string;
   isActive: boolean;
+  /** Allowlist of From addresses this key may send from; `[]` = unrestricted (#126). */
+  allowedSenders: string[];
   lastUsedAt: Date | null;
   createdAt: Date;
 }
@@ -24,6 +26,7 @@ export function serializeApiKey(apiKey: ApiKey): SerializedApiKey {
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     isActive: apiKey.isActive,
+    allowedSenders: apiKey.allowedSenders,
     lastUsedAt: apiKey.lastUsedAt,
     createdAt: apiKey.createdAt,
   };

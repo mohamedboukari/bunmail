@@ -25,12 +25,22 @@ interface EmailChipInputProps {
   id?: string;
   /** Placeholder shown on the (still-empty) text input. */
   placeholder?: string;
+  /**
+   * Pre-filled addresses rendered as chips on load (e.g. an API key's
+   * existing allowed-senders when editing, #126). Omit for an empty field
+   * (the CC/BCC create-time usage). The script seeds its chip list from
+   * the `data-chip-input-initial` attribute so the hidden input submits
+   * the current set even if the user doesn't touch it.
+   */
+  initial?: string[];
 }
 
-export function EmailChipInput({ name, id, placeholder }: EmailChipInputProps) {
+export function EmailChipInput({ name, id, placeholder, initial }: EmailChipInputProps) {
+  const initialValue = (initial ?? []).join(",");
   return (
     <div
       data-chip-input
+      data-chip-input-initial={initialValue}
       class="w-full px-2 py-1 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus-within:ring-2 focus-within:ring-gray-400 dark:focus-within:ring-gray-500 flex flex-wrap gap-1.5 items-center min-h-[38px] cursor-text"
     >
       {/**
@@ -50,7 +60,7 @@ export function EmailChipInput({ name, id, placeholder }: EmailChipInputProps) {
        * chip addresses, kept in sync by the script on every chip add /
        * remove. Backend reads `body[name]` and parses comma-separated.
        */}
-      <input type="hidden" name={name} data-chip-input-hidden />
+      <input type="hidden" name={name} value={initialValue} data-chip-input-hidden />
     </div>
   );
 }
@@ -95,6 +105,14 @@ export function EmailChipInputScript() {
 
             /** Chip strings in insertion order; the hidden input is its join. */
             var chips = [];
+
+            /** Seed from pre-filled initial values (edit mode, #126). */
+            var initialAttr = wrapper.getAttribute('data-chip-input-initial') || '';
+            if (initialAttr) {
+              initialAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean).forEach(function(addr) {
+                if (chips.indexOf(addr) === -1) chips.push(addr);
+              });
+            }
 
             function syncHidden() {
               hiddenInput.value = chips.join(',');
@@ -188,6 +206,9 @@ export function EmailChipInputScript() {
                 if (textInput.value.trim()) tryAddCurrent();
               });
             }
+
+            /** Paint any seeded initial chips (edit mode). */
+            if (chips.length > 0) render();
           }
 
           document.querySelectorAll('[data-chip-input]').forEach(initChipInput);

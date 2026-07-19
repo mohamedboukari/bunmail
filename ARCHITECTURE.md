@@ -450,6 +450,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | key_hash     | varchar(255)   | NOT NULL, UNIQUE                |
 | key_prefix   | varchar(12)    | NOT NULL                        |
 | is_active    | boolean        | NOT NULL, default `true`        |
+| allowed_senders | jsonb       | NOT NULL, default `[]` — `From` allowlist (#126); empty = unrestricted |
 | last_used_at | timestamp      | nullable                        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 
@@ -671,8 +672,9 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 | Method | Path                     | Description           | Auth |
 |--------|--------------------------|-----------------------|------|
-| POST   | /api/v1/api-keys         | Create API key        | Yes  |
+| POST   | /api/v1/api-keys         | Create API key (+ `allowedSenders`) | Yes  |
 | GET    | /api/v1/api-keys         | List API keys         | Yes  |
+| PATCH  | /api/v1/api-keys/:id     | Update name / allowed-senders (#126) | Yes  |
 | DELETE | /api/v1/api-keys/:id     | Revoke API key        | Yes  |
 
 ### Domains
@@ -897,6 +899,7 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - Elysia's global `onError` handler in [src/index.ts](src/index.ts) maps known error classes to structured JSON responses:
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
+  - `UnauthorizedSenderError` → 403 with `{ code: "UNAUTHORIZED_SENDER", sender }` — `From` not in the key's allowed-senders list (#126)
   - Unhandled errors → 500 with the error message (stack traces hidden in production)
 - Email queue failures are logged and stored in the `last_error` column
 
