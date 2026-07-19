@@ -49,6 +49,7 @@ For the full picture — assets we protect, attackers we model against, controls
 - Rotate API keys periodically
 - Keep BunMail and its dependencies up to date
 - Use a firewall to restrict SMTP port access (2525)
+- **SMTP submission (#120), if enabled** (`SMTP_SUBMISSION_ENABLED=true`, port 587): apps authenticate with an API key as the password. Without a configured cert it allows plaintext AUTH — only safe on a trusted network (same host / private Docker network). To expose it beyond that, set `SMTP_SUBMISSION_TLS_CERT`/`SMTP_SUBMISSION_TLS_KEY` (STARTTLS) and firewall port 587 to the specific apps that use it. The per-IP failed-AUTH throttle (`SMTP_SUBMISSION_AUTH_RATE_LIMIT_*`) is on by default. See [docs/smtp-submission.md](docs/smtp-submission.md).
 
 ## DKIM Private Key Encryption at Rest
 

@@ -17,6 +17,7 @@ import { faviconPlugin } from "./pages/favicon.ts";
 import { NotFoundPage } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
+import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submission.service.ts";
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
@@ -220,6 +221,20 @@ if (config.smtp.enabled) {
 }
 
 /**
+ * Start the SMTP submission server (#120) if enabled. This is the
+ * AUTH-required endpoint that lets SMTP-capable apps (Infisical, Netbird,
+ * Dify, a Nodemailer backend, …) send *through* BunMail. Opt-in and
+ * separate from the inbound receiver above — see docs/smtp-submission.md.
+ */
+if (config.smtpSubmission.enabled) {
+  smtpSubmission.start();
+} else {
+  logger.info(
+    "SMTP submission server disabled — set SMTP_SUBMISSION_ENABLED=true (and uncomment the submission port line in docker-compose.yml) to let apps send via SMTP",
+  );
+}
+
+/**
  * Start the trash purge — periodically removes soft-deleted emails
  * older than TRASH_RETENTION_DAYS.
  */
@@ -254,6 +269,7 @@ function shutdown() {
   logger.info("Shutting down...");
   queueService.stop();
   smtpReceiver.stop();
+  smtpSubmission.stop();
   trashPurge.stop();
   webhookDeliveryWorker.stop();
   stopRateLimitCleanup();
