@@ -11,8 +11,19 @@ import { describe, test, expect, mock } from "bun:test";
 /* ─── Mock the config module so we can flip the flag ─── */
 let redactPiiFlag = true;
 
+/**
+ * NOTE: Bun's `mock.module` leaks globally across test files — a mock
+ * registered here stays active for every file Bun loads afterwards. So
+ * this stub must be a *complete* enough `config` that any module which
+ * eagerly reads it at import time still works under the leaked mock.
+ * In particular `src/db/index.ts` evaluates `new SQL(config.database.url)`
+ * at module load; a stub without `database` crashes a later file with
+ * "undefined is not an object (evaluating 'config.database.url')" under
+ * CI's test-file ordering. Keep `database.url` populated. (#119 CI red)
+ */
 mock.module("../../src/config.ts", () => ({
   config: {
+    database: { url: "postgres://test:test@localhost:5432/test" },
     get logRedactPii() {
       return redactPiiFlag;
     },
