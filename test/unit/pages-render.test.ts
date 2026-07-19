@@ -51,6 +51,7 @@ const apiKey = {
   keyHash: "hash",
   keyPrefix: "bm_live_test",
   isActive: true,
+  allowedSenders: [] as string[],
   lastUsedAt: null,
   createdAt: now,
 };

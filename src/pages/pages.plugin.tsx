@@ -59,6 +59,18 @@ function toIdArray(input: string | string[]): string[] {
   return Array.isArray(input) ? input : [input];
 }
 
+/**
+ * Parses the comma-joined value the allowed-senders chip input submits
+ * (#126) into a trimmed, non-empty address array. Empty string → `[]`
+ * (unrestricted). The service normalises (lower-case + dedupe) again.
+ */
+function parseSenderList(input: string | undefined): string[] {
+  return (input ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /* ─── Session Helpers ─── */
 
 /** Max session age in seconds (24 hours) */
@@ -782,6 +794,8 @@ export const pagesPlugin = new Elysia({
       try {
         const { rawKey } = await apiKeyService.createApiKey({
           name: body.name,
+          /** Chip input submits a comma-joined string; split to an array. */
+          allowedSenders: parseSenderList(body.allowedSenders),
         });
 
         logger.info("API key created via dashboard", { name: body.name });
@@ -803,7 +817,33 @@ export const pagesPlugin = new Elysia({
     {
       body: t.Object({
         name: t.String(),
+        allowedSenders: t.Optional(t.String()),
       }),
+    },
+  )
+
+  /**
+   * POST /dashboard/api-keys/:id/senders
+   * Updates a key's allowed-senders allowlist via form submission (#126).
+   * The chip editor submits the full desired list (comma-joined); an empty
+   * value clears the list (back to unrestricted).
+   */
+  .post(
+    "/api-keys/:id/senders",
+    async ({ params, body, set }) => {
+      const updated = await apiKeyService.updateApiKey(params.id, {
+        allowedSenders: parseSenderList(body.allowedSenders),
+      });
+
+      set.status = 302;
+      set.headers["location"] = updated
+        ? `/dashboard/api-keys?flash=${encodeURIComponent("Allowed senders updated")}`
+        : `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ allowedSenders: t.Optional(t.String()) }),
     },
   )
 

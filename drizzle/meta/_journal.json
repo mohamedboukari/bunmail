@@ -71,6 +71,13 @@
       "when": 1784453589807,
       "tag": "0009_parched_marvel_boy",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784455380389,
+      "tag": "0010_chunky_garia",
+      "breakpoints": true
     }
   ]
 }

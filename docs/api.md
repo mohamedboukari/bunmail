@@ -407,15 +407,31 @@ Create a new API key. The raw key is returned **once** — store it securely.
 
 **Request Body:**
 
-| Field  | Type   | Required | Description                        |
-|--------|--------|----------|------------------------------------|
-| `name` | string | Yes      | Human-readable label (1-100 chars) |
+| Field            | Type     | Required | Description                        |
+|------------------|----------|----------|------------------------------------|
+| `name`           | string   | Yes      | Human-readable label (1-100 chars) |
+| `allowedSenders` | string[] | No       | Allowlist of `From` addresses this key may send from (#126). Omit or `[]` = unrestricted. Each must be a valid email; max 100. |
+
+The response includes `allowedSenders`.
 
 ---
 
 #### `GET /api/v1/api-keys`
 
 List all API keys (active and revoked). Key hashes are never exposed.
+
+---
+
+#### `PATCH /api/v1/api-keys/:id`
+
+Update a key's `name` and/or `allowedSenders` (#126). Both optional — only provided fields change. `allowedSenders` **replaces** the whole list (add an address by including it, remove one by omitting it; `[]` clears it back to unrestricted). Returns the serialized key, or `404` if not found.
+
+**Request Body:**
+
+| Field            | Type     | Required | Description                    |
+|------------------|----------|----------|--------------------------------|
+| `name`           | string   | No       | New label (1-100 chars)        |
+| `allowedSenders` | string[] | No       | New allowed-senders list       |
 
 ---
 
@@ -525,11 +541,12 @@ All error responses follow this shape:
 }
 ```
 
-Some 422 responses carry additional structured fields — e.g. suppression-list rejection carries `code: "RECIPIENT_SUPPRESSED"` and `suppressionId` so clients can pivot to `DELETE /api/v1/suppressions/:id`.
+Some responses carry additional structured fields — e.g. suppression-list rejection is `422` with `code: "RECIPIENT_SUPPRESSED"` + `suppressionId` (pivot to `DELETE /api/v1/suppressions/:id`); a sender-authorization rejection (#126) is `403` with `code: "UNAUTHORIZED_SENDER"` + `sender` (the `From` that was rejected — add it to the key's `allowedSenders` via `PATCH /api/v1/api-keys/:id` if intended).
 
-| Status | Meaning                  |
-|--------|--------------------------|
-| 401    | Missing or invalid token |
-| 404    | Resource not found       |
-| 422    | Validation error         |
-| 429    | Rate limit exceeded      |
+| Status | Meaning                                         |
+|--------|-------------------------------------------------|
+| 401    | Missing or invalid token                        |
+| 403    | Authenticated but not permitted (e.g. `From` not in the key's allowed-senders list) |
+| 404    | Resource not found                              |
+| 422    | Validation error                                |
+| 429    | Rate limit exceeded                             |

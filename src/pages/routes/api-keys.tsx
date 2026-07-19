@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { EmailChipInput, EmailChipInputScript } from "../components/email-chip-input.tsx";
 import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
 
 /**
@@ -42,14 +43,32 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
 
       {/* Create API key form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
-        <form method="POST" action="/dashboard/api-keys" class="flex gap-3">
+        <form method="POST" action="/dashboard/api-keys" class="space-y-3">
           <input
             type="text"
             name="name"
             required
             placeholder="Key name (e.g. Production)"
-            class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+            class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
           />
+          <div>
+            <label
+              for="allowedSenders"
+              class="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1"
+            >
+              Allowed senders (optional)
+            </label>
+            <EmailChipInput
+              name="allowedSenders"
+              id="allowedSenders"
+              placeholder="noreply@yourdomain.com"
+            />
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Leave empty to let this key send from any registered domain. When set, the
+              key can only send <strong>From</strong> these exact addresses — this stops
+              it from spoofing other identities (e.g. your CEO).
+            </p>
+          </div>
           <button
             type="submit"
             class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors whitespace-nowrap"
@@ -83,6 +102,9 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                   Created
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Allowed senders
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Actions
                 </th>
               </tr>
@@ -113,6 +135,33 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={key.createdAt} />
                   </td>
+                  <td class="px-4 py-3 min-w-[240px]">
+                    {key.isActive ? (
+                      <form
+                        method="POST"
+                        action={`/dashboard/api-keys/${key.id}/senders`}
+                        class="flex flex-col gap-1.5"
+                      >
+                        <EmailChipInput
+                          name="allowedSenders"
+                          initial={key.allowedSenders}
+                          placeholder="Any registered domain"
+                        />
+                        <button
+                          type="submit"
+                          class="self-start text-xs text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 font-medium"
+                        >
+                          Save senders
+                        </button>
+                      </form>
+                    ) : key.allowedSenders.length > 0 ? (
+                      <span class="text-xs text-gray-500 dark:text-gray-400" safe>
+                        {key.allowedSenders.join(", ")}
+                      </span>
+                    ) : (
+                      <span class="text-xs text-gray-400 dark:text-gray-500">Any</span>
+                    )}
+                  </td>
                   <td class="px-4 py-3">
                     {key.isActive && (
                       <form method="POST" action={`/dashboard/api-keys/${key.id}/revoke`}>
@@ -132,6 +181,9 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
           </table>
         </div>
       )}
+
+      {/* Wires up the create-form + per-row allowed-senders chip inputs. */}
+      <EmailChipInputScript />
     </BaseLayout>
   );
 }

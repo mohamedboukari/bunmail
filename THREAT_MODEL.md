@@ -95,6 +95,12 @@ The submission server (`src/modules/smtp-submission/services/smtp-submission.ser
 
 **Credential-in-transit risk.** With no TLS configured, `allowInsecureAuth` permits the API key to travel in plaintext — acceptable only on a trusted network (same host / private Docker network). Operators exposing submission more broadly must set `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to known clients. This is called out as an operator responsibility in §5.
 
+### Sender authorization / anti-spoofing (#126)
+
+Because outbound mail is DKIM-signed by its sender domain, an API key that can set an arbitrary `From` can send a **fully-authenticated impersonation** (e.g. a dev key sending as `ceo@company.com`). Mitigation: each key has an **allowed-senders allowlist** (`api_keys.allowed_senders`). When non-empty, the `createEmail` gate rejects any send whose `From` isn't on the list — **403 `UNAUTHORIZED_SENDER`** (REST) / **SMTP 550** (submission), before anything is queued. Enforced once in `createEmail`, so it covers the REST API and the SMTP submission server identically. Editable via `PATCH /api/v1/api-keys/:id` or the dashboard.
+
+**Residual (operator responsibility):** the allowlist is **opt-in** — a key with an empty list (the default) can still send as any address on any *registered* domain. Set `allowedSenders` on any key shared with a less-trusted party. Separately, `domains` has no per-key owner, so a key with an empty allowlist can send from **another tenant's** registered domain; per-key domain scoping is tracked as a follow-up.
+
 ### Outbound delivery
 
 - **DKIM signing** uses per-domain RSA-2048 keys generated at registration time. The private half is **encrypted at rest with AES-256-GCM** using `DKIM_ENCRYPTION_KEY` (#23) — see `SECURITY.md` for format, generation, and rotation. The public half stays plaintext (it's published in DNS).

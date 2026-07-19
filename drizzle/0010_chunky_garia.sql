@@ -1,0 +1,1 @@
+ALTER TABLE "api_keys" ADD COLUMN "allowed_senders" jsonb DEFAULT '[]'::jsonb NOT NULL;
