@@ -17,6 +17,7 @@ import { createEmail } from "../../emails/services/email.service.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
+import { recordOutcome, getAcceptedToday } from "./usage.service.ts";
 
 /**
  * The SMTP submission server (#120) lets any SMTP-capable app (Infisical,
@@ -336,6 +337,32 @@ export function start(portOverride?: number): void {
         }
 
         try {
+          /**
+           * Per-key daily quota (#123). Checked before the send so an
+           * over-quota key never queues. `452` is temporary — the quota
+           * window resets at the next UTC day, so the client should retry
+           * later rather than treat it as a permanent failure.
+           */
+          const { dailyQuota } = config.smtpSubmission;
+          if (dailyQuota > 0) {
+            const usedToday = await getAcceptedToday(apiKeyId);
+            if (usedToday >= dailyQuota) {
+              logger.warn("SMTP submission rejected — daily quota exceeded", {
+                apiKeyId,
+                usedToday,
+                dailyQuota,
+              });
+              await recordOutcome(apiKeyId, "rejected");
+              callback(
+                smtpError(
+                  `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
+                  452,
+                ),
+              );
+              return;
+            }
+          }
+
           const rawMessage = Buffer.concat(chunks).toString("utf-8");
           const parsed = await simpleParser(rawMessage);
 
@@ -357,6 +384,7 @@ export function start(portOverride?: number): void {
           });
 
           const email = await createEmail(input, apiKeyId);
+          await recordOutcome(apiKeyId, "accepted");
 
           logger.info("SMTP submission accepted — email queued", {
             id: email.id,
@@ -367,6 +395,8 @@ export function start(portOverride?: number): void {
 
           callback();
         } catch (error) {
+          /** Post-auth rejection — count it against the key's daily usage. */
+          await recordOutcome(apiKeyId, "rejected").catch(() => {});
           if (error instanceof SuppressedRecipientError) {
             logger.warn("SMTP submission rejected — recipient suppressed", {
               apiKeyId,

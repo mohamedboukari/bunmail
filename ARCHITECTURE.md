@@ -179,9 +179,16 @@ bunmail/
 │   │   │   └── types/
 │   │   │       └── inbound.types.ts
 │   │   ├── smtp-submission/                ← AUTH-required SMTP relay for apps to send THROUGH BunMail (#120)
+│   │   │   ├── smtp-submission.plugin.ts    ← Route: GET /stats (usage + quota, #123)
 │   │   │   ├── services/
-│   │   │   │   └── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
-│   │   │   └── message-mapper.ts           ← pure message → SendEmailInput mapping (BCC-aware)
+│   │   │   │   ├── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
+│   │   │   │   └── usage.service.ts         ← per-(key,day) usage counters + quota read (#123)
+│   │   │   ├── message-mapper.ts           ← pure message → SendEmailInput mapping (BCC-aware)
+│   │   │   ├── dtos/                        ← stats-query.dto
+│   │   │   ├── models/
+│   │   │   │   └── smtp-submission-usage.schema.ts ← smtp_submission_usage pgTable (#123)
+│   │   │   └── serializations/
+│   │   │       └── stats.serialization.ts
 │   │   ├── trash/
 │   │   │   └── services/
 │   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows
@@ -567,6 +574,22 @@ Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `cre
 
 Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` upsert).
 
+### `smtp_submission_usage`
+
+Per-`(api_key, UTC day)` counters for the SMTP submission server (#123) — backs the per-key daily quota and the `/api/v1/smtp-submission/stats` endpoint. One row per key per day (not a per-message log). Auth *failures* are not recorded here (no key to attribute to).
+
+| Column       | Type        | Constraints                                     |
+|--------------|-------------|-------------------------------------------------|
+| id           | varchar(36) | PK, prefixed `smu_`                             |
+| api_key_id   | varchar(36) | FK → api_keys.id, NOT NULL, `ON DELETE CASCADE` |
+| day          | date        | NOT NULL; UTC calendar day                      |
+| accepted     | integer     | NOT NULL, default 0                             |
+| rejected     | integer     | NOT NULL, default 0 (post-auth rejections)      |
+| created_at   | timestamptz | NOT NULL, default `now()`                       |
+| updated_at   | timestamptz | NOT NULL, default `now()`                       |
+
+Indexes: `UNIQUE (api_key_id, day)` (quota read + `ON CONFLICT DO UPDATE` upsert + stats range scan).
+
 ### `dmarc_reports` / `dmarc_records`
 
 DMARC aggregate (`rua`) reports parsed from inbound XML attachments (#41). Operator-level data — not tenant-scoped, no FK to `domains` or `api_keys`. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
@@ -691,6 +714,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /api/v1/suppressions                | List, paginated, optional `?email=` filter | Yes  |
 | GET    | /api/v1/suppressions/:id            | Get a suppression by ID                    | Yes  |
 | DELETE | /api/v1/suppressions/:id            | Remove (recipient eligible immediately)    | Yes  |
+| GET    | /api/v1/smtp-submission/stats       | SMTP submission usage + quota (calling key) | Yes  |
 
 `POST /api/v1/emails/send` returns HTTP 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` when the recipient is on the calling key's list. No row inserted, no queue entry, no SMTP attempt. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md).
 

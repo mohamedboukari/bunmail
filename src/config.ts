@@ -177,6 +177,18 @@ export const config = {
     port: parseInt(optionalEnv("SMTP_SUBMISSION_PORT", "587"), 10),
 
     /**
+     * Per-API-key daily send quota (#123). Counts messages accepted via the
+     * submission server per key per UTC day; once a key reaches it, further
+     * submissions are rejected with SMTP 452 until the next UTC day. `0`
+     * (default) means unlimited. Applies only to the SMTP submission path,
+     * not the REST send API.
+     */
+    dailyQuota: Math.max(
+      0,
+      parseInt(optionalEnv("SMTP_SUBMISSION_DAILY_QUOTA", "0"), 10),
+    ),
+
+    /**
      * Optional TLS material. When both a cert and key path are provided,
      * the server advertises STARTTLS so clients can upgrade the connection
      * before AUTH. When absent, plaintext AUTH is allowed
