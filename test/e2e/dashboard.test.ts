@@ -96,6 +96,7 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
         keyHash: "abc",
         keyPrefix: "bm_live_test",
         isActive: true,
+        allowedSenders: [],
         lastUsedAt: null,
         createdAt: new Date(),
       },
@@ -109,6 +110,24 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
       keyHash: "abc",
       keyPrefix: "bm_live_test",
       isActive: false,
+      allowedSenders: [],
+      lastUsedAt: null,
+      createdAt: new Date(),
+    }),
+  ),
+  /**
+   * Included so a cross-file `mock.module` leak (this mock shadowing
+   * api-keys-api.test.ts under CI's file order) can't leave `updateApiKey`
+   * undefined. See #126 / the redact.test.ts leak fix (#121).
+   */
+  updateApiKey: mock(() =>
+    Promise.resolve({
+      id: "key_test123",
+      name: "Test Key",
+      keyHash: "abc",
+      keyPrefix: "bm_live_test",
+      isActive: true,
+      allowedSenders: [],
       lastUsedAt: null,
       createdAt: new Date(),
     }),
