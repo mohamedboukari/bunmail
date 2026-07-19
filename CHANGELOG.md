@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: refresh pinned GitHub Actions in the `github-actions` group (#117, #119).** Two Dependabot batches since v0.7.0. #117 bumped `actions/checkout` 6.0.3→7.0.0 and `actions/cache` 5.0.5→6.1.0 (major versions) plus `softprops/action-gh-release` 3.0.0→3.0.1. #119 re-pinned `github/codeql-action` (init/autobuild/analyze/upload-sarif), `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, `docker/build-push-action`, and `softprops/action-gh-release` to their latest SHAs on the same major tags. CI workflow files only (`.github/workflows/`); no runtime, API, schema, or env changes.
+
+### Fixed
+
+- **Flaky unit CI: incomplete `config` mock leaked across test files (#121).** `test/unit/redact.test.ts` mocked `src/config.ts` with a stub that only defined `logRedactPii`. Because Bun's `mock.module` leaks globally across test files, a later fresh import of `src/db/index.ts` — which evaluates `new SQL(config.database.url)` at module load — crashed with `undefined is not an object (evaluating 'config.database.url')` under CI's Linux test-file ordering (green on macOS, red on CI). The stub now also populates `database.url`, so eagerly-evaluated consumers survive the leaked mock. Test-only; no source or behaviour change. Closes #121.
+
 ## [0.7.0] - 2026-06-18
 
 ### Added
