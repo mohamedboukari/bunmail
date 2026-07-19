@@ -19,6 +19,8 @@ Authorization: Bearer bm_live_<your-api-key>
 
 API keys are managed via the `/api/v1/api-keys` endpoints. The first key is created using the seed script (`bun run src/db/seed.ts`).
 
+> **Sending over SMTP instead of REST?** Besides this HTTP API, BunMail can run an SMTP **submission** server (#120) so apps that only speak SMTP send *through* BunMail — the same `bm_live_…` key is used as the SMTP password. It has no REST endpoints of its own; see [docs/smtp-submission.md](smtp-submission.md).
+
 ## Rate Limiting
 
 - **Limit:** 100 requests per 60-second sliding window per API key

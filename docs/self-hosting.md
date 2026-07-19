@@ -285,8 +285,11 @@ certbot --nginx -d mail.yourdomain.com
 |------|----------|-----------|----------------------------|
 | 25   | TCP      | Outbound  | Send emails to MX servers  |
 | 25   | TCP      | Inbound   | Receive inbound emails     |
+| 587  | TCP      | Inbound   | SMTP submission — apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true`; restrict to the networks your apps live on) |
 | 443  | TCP      | Inbound   | HTTPS (reverse proxy)      |
 | 3000 | TCP      | Inbound   | HTTP API (or via proxy)    |
+
+> **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, uncomment the submission port line in `docker-compose.yml`, and open port 587 to those apps only. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
 
 ## Updating BunMail
 

@@ -17,6 +17,10 @@ services:
       # Inbound SMTP is OFF by default. To enable: (1) uncomment the line below,
       # (2) set SMTP_ENABLED=true and SMTP_PORT=25 in your .env. See docs/inbound.md.
       # - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
+      # SMTP submission (let apps send THROUGH BunMail) is OFF by default. To enable:
+      # (1) uncomment the line below, (2) set SMTP_SUBMISSION_ENABLED=true in your .env.
+      # See docs/smtp-submission.md.
+      # - "${SMTP_SUBMISSION_PORT:-587}:${SMTP_SUBMISSION_PORT:-587}"
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}
