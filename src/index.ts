@@ -9,6 +9,7 @@ import { webhooksPlugin } from "./modules/webhooks/webhooks.plugin.ts";
 import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
 import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
+import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
@@ -184,6 +185,8 @@ const app = new Elysia()
   .use(inboundPlugin)
   /** Suppressions module — POST /, GET /, GET /:id, DELETE /:id */
   .use(suppressionsPlugin)
+  /** SMTP submission stats — GET /stats (usage + quota for the calling key) */
+  .use(smtpSubmissionPlugin)
   /** DMARC reports module — GET /, GET /:id */
   .use(dmarcReportsPlugin)
   /** Dashboard — server-rendered UI under /dashboard */

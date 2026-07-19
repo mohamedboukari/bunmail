@@ -53,6 +53,7 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 |---|---|---|
 | `SMTP_SUBMISSION_ENABLED` | `false` | Start the submission server. |
 | `SMTP_SUBMISSION_PORT` | `587` | Listen port. |
+| `SMTP_SUBMISSION_DAILY_QUOTA` | `0` | Per-API-key messages accepted per UTC day; over-quota → SMTP `452`. `0` = unlimited. See [Quotas](#per-key-daily-quotas-123). |
 | `SMTP_SUBMISSION_TLS_CERT` | _(empty)_ | PEM cert path. When set with the key, STARTTLS is advertised. |
 | `SMTP_SUBMISSION_TLS_KEY` | _(empty)_ | PEM private-key path. |
 | `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting. |
@@ -118,6 +119,44 @@ SMTP from      = notifications@yourdomain.com   (registered + DKIM-verified)
 TLS/STARTTLS   = on if you configured a cert, off on a trusted private network
 ```
 
+## Per-key daily quotas (#123)
+
+Set `SMTP_SUBMISSION_DAILY_QUOTA` to cap how many messages each API key can send via the submission path per **UTC calendar day**. Once a key reaches the cap, further submissions are rejected with SMTP **`452`** (a *temporary* failure — the window resets at `00:00 UTC`, so clients retry rather than treating it as permanent). `0` (default) means unlimited.
+
+- Counts only **accepted** messages toward the cap; rejections don't consume quota.
+- Applies to the SMTP submission path **only** — the REST `POST /api/v1/emails/send` API is unaffected.
+- Usage is tracked per `(api_key, UTC day)` in the `smtp_submission_usage` table (`accepted` / `rejected` counters). Every post-auth outcome is recorded, so `rejected` includes quota hits, suppressed recipients, and unregistered-domain rejections.
+- The check reads the day's accepted count then sends; under high concurrency a key may exceed the cap by a small margin (soft quota).
+
+## Stats endpoint (#123)
+
+### `GET /api/v1/smtp-submission/stats`
+
+Bearer-auth + rate-limited, **scoped to the calling API key** (like the rest of `/api/v1`). Returns per-day accepted/rejected counts for messages sent via the submission server, plus the key's quota status.
+
+**Query params:** `days` (trailing UTC-day window inclusive of today; default `30`, max `365`).
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "window": { "days": 30 },
+    "quota": { "daily": 1000, "usedToday": 42, "remaining": 958 },
+    "totals": { "accepted": 1234, "rejected": 7 },
+    "daily": [
+      { "day": "2026-07-18", "accepted": 40, "rejected": 1 },
+      { "day": "2026-07-19", "accepted": 42, "rejected": 0 }
+    ]
+  }
+}
+```
+
+When quotas are disabled (`SMTP_SUBMISSION_DAILY_QUOTA=0`), `quota.daily` and `quota.remaining` are `null` (not `0`, which would read as "no sends allowed"). Days with no activity are omitted from `daily`.
+
+> Cross-key / instance-wide submission analytics (top keys, rejection-by-reason) and a dashboard view are a separate follow-up — this endpoint is per-key only.
+
 ## Service Methods
 
 ### smtp-submission.service.ts
@@ -128,6 +167,17 @@ Starts the submission server on `SMTP_SUBMISSION_PORT` (or `portOverride`, used 
 #### `stop(): void`
 Gracefully shuts the server down (called from the app's shutdown handler).
 
+### usage.service.ts (#123)
+
+#### `recordOutcome(apiKeyId, "accepted" | "rejected"): Promise<void>`
+Upserts today's `(api_key, UTC day)` row and increments the matching counter atomically (`ON CONFLICT DO UPDATE`).
+
+#### `getAcceptedToday(apiKeyId): Promise<number>`
+Today's accepted count for the key (0 if no row). Backs the quota check.
+
+#### `getStats(apiKeyId, days): Promise<UsageStats>`
+Per-day rows (oldest first) + window totals over the trailing `days` UTC days. Backs the stats endpoint.
+
 ### message-mapper.ts (pure, unit-tested)
 
 #### `buildSubmissionInput(parts): SendEmailInput`
@@ -137,9 +187,17 @@ Turns extracted addresses + subject/body into a `SendEmailInput`: resolves the s
 
 ```
 src/modules/smtp-submission/
+├── smtp-submission.plugin.ts        ← REST: GET /api/v1/smtp-submission/stats (#123)
 ├── services/
-│   └── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; start()/stop()
-└── message-mapper.ts                ← pure message → SendEmailInput mapping
+│   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; start()/stop()
+│   └── usage.service.ts             ← per-(key,day) usage counters + quota read (#123)
+├── message-mapper.ts                ← pure message → SendEmailInput mapping
+├── dtos/
+│   └── stats-query.dto.ts           ← stats query validation
+├── models/
+│   └── smtp-submission-usage.schema.ts ← smtp_submission_usage pgTable (#123)
+└── serializations/
+    └── stats.serialization.ts       ← stats response shaping
 ```
 
-No DB model, routes, DTOs, or serializers: submission is an alternate **ingress** to the existing `emails` table via `createEmail`, and its "responses" are SMTP status codes, not JSON. A future REST surface (e.g. `GET /api/v1/smtp-submission/stats`) or per-key SMTP quotas (with their own table) would add a `plugin` / `dtos` / `models` — tracked in #123.
+The SMTP listener itself has no HTTP routes — it's an alternate **ingress** to the `emails` table via `createEmail`, with SMTP status codes as its "responses". The `plugin` / `dtos` / `models` / `serializations` exist only for the usage-stats REST surface + quota table added in #123.
