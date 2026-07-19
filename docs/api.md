@@ -484,6 +484,36 @@ HTTP/1.1 422 Unprocessable Entity
 
 No row is inserted into `emails`, no queue entry is created.
 
+### SMTP Submission
+
+Usage stats + quota status for the SMTP **submission** server (#120/#123) — the AUTH-required SMTP listener that lets apps send *through* BunMail. The server itself has no HTTP routes; this is the one read-only REST surface. Full setup: [`docs/smtp-submission.md`](smtp-submission.md).
+
+#### `GET /api/v1/smtp-submission/stats`
+
+Per-day accepted/rejected counts for messages the calling API key sent via SMTP submission, plus the key's daily-quota status. Scoped to the calling key.
+
+**Query Parameters:**
+
+| Param  | Type   | Default | Description                                      |
+|--------|--------|---------|--------------------------------------------------|
+| `days` | number | 30      | Trailing UTC-day window (inclusive of today), 1–365 |
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "window": { "days": 30 },
+    "quota": { "daily": 1000, "usedToday": 42, "remaining": 958 },
+    "totals": { "accepted": 1234, "rejected": 7 },
+    "daily": [{ "day": "2026-07-19", "accepted": 42, "rejected": 0 }]
+  }
+}
+```
+
+`quota.daily` and `quota.remaining` are `null` when quotas are disabled (`SMTP_SUBMISSION_DAILY_QUOTA=0`). Days with no activity are omitted from `daily`.
+
 ## Error Response Format
 
 All error responses follow this shape:

@@ -10,7 +10,8 @@ type IdPrefix =
   | "sup"
   | "dmr" // DMARC report (#41)
   | "dmrec" // DMARC report record (per source IP, #41)
-  | "wdl"; // webhook delivery (persisted retry queue, #30)
+  | "wdl" // webhook delivery (persisted retry queue, #30)
+  | "smu"; // SMTP submission usage (per key/day counters, #123)
 
 /**
  * Generates a prefixed unique ID.
