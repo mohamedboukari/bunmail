@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-19
+
 ### Added
 
 - **Per-API-key allowed-senders allowlist — anti-spoofing (#126).** An API key can now carry an allowlist of `From` addresses it may send from. When set, any send (REST `POST /api/v1/emails/send` **or** SMTP submission) whose `From` isn't on the list is rejected — **HTTP 403 `UNAUTHORIZED_SENDER`** over REST, **SMTP 550** over submission — with nothing queued. This closes a spoofing gap: previously any key could send `From: ceo@company.com` on any registered domain and BunMail would DKIM-sign it, so it passed authentication. Empty list (the default) = unrestricted, so **existing keys are unaffected**. Set it at creation (`allowedSenders` on `POST /api/v1/api-keys` or the dashboard chip editor) and edit it later via the new **`PATCH /api/v1/api-keys/:id`** (replace semantics: send the desired list — add by including, remove by omitting) or the per-key editor on the dashboard API Keys page. Enforced once at the `createEmail` gate, so REST and SMTP are covered identically. New `api_keys.allowed_senders` column (migration `0010`). See [docs/api-keys.md](docs/api-keys.md).
