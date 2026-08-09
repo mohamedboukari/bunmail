@@ -89,7 +89,7 @@ describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
   test("createWebhook persists with a 64-char secret + event subscription", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { webhook, secret } = await createWebhook(
-      { url: "https://example.com/hook", events: ["email.sent"] },
+      { url: "https://93.184.216.34/hook", events: ["email.sent"] },
       apiKeyId,
     );
     expect(webhook.id).toMatch(/^whk_/);
@@ -99,7 +99,7 @@ describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
       .select()
       .from(webhooks)
       .where(eq(webhooks.id, webhook.id));
-    expect(persisted?.url).toBe("https://example.com/hook");
+    expect(persisted?.url).toBe("https://93.184.216.34/hook");
     expect(persisted?.events).toEqual(["email.sent"]);
     expect(persisted?.isActive).toBe(true);
   });
@@ -161,12 +161,12 @@ describe("dispatchEvent — end-to-end", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { secret: secret1 } = await seed.webhook({
       apiKeyId,
-      url: "https://hook1.example.com",
+      url: "https://93.184.216.34",
       events: ["email.bounced"],
     });
     const { secret: secret2 } = await seed.webhook({
       apiKeyId,
-      url: "https://hook2.example.com",
+      url: "https://93.184.216.35",
       events: ["email.bounced"],
     });
 
@@ -179,7 +179,7 @@ describe("dispatchEvent — end-to-end", () => {
 
     expect(captured).toHaveLength(2);
     const urls = captured.map((c) => c.url).sort();
-    expect(urls).toEqual(["https://hook1.example.com", "https://hook2.example.com"]);
+    expect(urls).toEqual(["https://93.184.216.34", "https://93.184.216.35"]);
 
     /** Both deliveries share the same JSON body (same event payload). */
     const body1 = JSON.parse(captured[0]!.body);
@@ -210,7 +210,7 @@ describe("dispatchEvent — end-to-end", () => {
     /** Subscribed only to email.sent — should not get email.bounced. */
     await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com",
+      url: "https://93.184.216.34",
       events: ["email.sent"],
     });
 

@@ -42,7 +42,7 @@ const {
 const baseHook = {
   id: "whk_x",
   apiKeyId: "key_owner",
-  url: "https://hook.example.com",
+  url: "https://93.184.216.34/hook",
   events: ["email.sent"],
   secret: "test-secret-32-bytes-padding-padding",
   isActive: true,
@@ -60,7 +60,7 @@ describe("createWebhook", () => {
   test("returns the inserted row + a 64-char hex secret", async () => {
     insertResult = [baseHook];
     const result = await createWebhook(
-      { url: "https://hook.example.com", events: ["email.sent"] },
+      { url: "https://93.184.216.34/hook", events: ["email.sent"] },
       "key_owner",
     );
     expect(result.webhook.id).toBe("whk_x");

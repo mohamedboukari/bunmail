@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Webhook SSRF guard (#128).** Webhook URLs are tenant-supplied and fetched server-side, with the response read back through the delivery API — previously an unvalidated, *exfiltrating* SSRF (register `http://169.254.169.254/…` or `http://127.0.0.1:5432`, get cloud-metadata creds / internal responses back). Now every webhook URL is validated **at creation** (REST + dashboard) **and re-validated before each delivery attempt** (TOCTOU): it must be `https` (set `WEBHOOK_ALLOW_INSECURE_HTTP=true` to also allow `http`), and its host is **DNS-resolved and rejected if any address is private/loopback/link-local/ULA/CGNAT/metadata** (`127/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16`, `::1`, `fc00::/7`, `fe80::/10`, v4-mapped, …). Delivery uses `redirect: "manual"`, so a 3xx into an internal address can't bypass the check (it's counted as a failed delivery). Create-time rejection returns **HTTP 422 `WEBHOOK_URL_BLOCKED`**. New env: `WEBHOOK_ALLOW_INSECURE_HTTP` (default `false`).
 - **Bump `linkify-it` 5.0.1 → 5.0.2 — CVE-2026-59887 (HIGH).** Patches a quadratic-complexity DoS in linkify-it's `mailto:` validator, pulled in transitively via `mailparser`. Forced through an `overrides` entry (the same mechanism used for `nodemailer`); only 5.0.2 resolves in the lockfile, clearing the Trivy HIGH finding. No code or behaviour change.
 
 ## [0.8.0] - 2026-07-19

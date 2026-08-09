@@ -33,6 +33,8 @@ import { webhooks } from "../models/webhook.schema.ts";
 import { signPayload } from "./webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { generateId } from "../../../utils/id.ts";
+import { assertPublicWebhookUrl } from "../../../utils/ssrf-guard.ts";
+import { config } from "../../../config.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
 
 /**
@@ -281,6 +283,23 @@ export async function performHttpAttempt(opts: {
   const sigTimestamp = Math.floor(Date.now() / 1000).toString();
   const signature = signPayload(sigTimestamp, opts.body, opts.secret);
 
+  /**
+   * SSRF re-validation at delivery time (#128). The URL was checked at
+   * create, but DNS can change (rebinding / TOCTOU) and rows created before
+   * this guard existed were never checked — so re-resolve and re-validate
+   * on every attempt. A blocked URL is a failed attempt, not a fetch.
+   */
+  try {
+    await assertPublicWebhookUrl(opts.url, config.webhookDelivery.allowInsecureHttp);
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      error: err instanceof Error ? err.message : String(err),
+      bodyPreview: null,
+    };
+  }
+
   try {
     const response = await fetchFn(opts.url, {
       method: "POST",
@@ -291,6 +310,12 @@ export async function performHttpAttempt(opts: {
         "X-BunMail-Event": opts.event,
       },
       body: opts.body,
+      /**
+       * Never follow redirects (#128) — a 3xx `Location` into an internal
+       * address (169.254.169.254, 127.0.0.1, …) would bypass the pre-fetch
+       * host check. A redirect is treated as a non-2xx delivery failure.
+       */
+      redirect: "manual",
       signal: AbortSignal.timeout(opts.timeoutMs ?? ATTEMPT_TIMEOUT_MS),
     });
 

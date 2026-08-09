@@ -550,5 +550,5 @@ Some responses carry additional structured fields — e.g. suppression-list reje
 | 401    | Missing or invalid token                        |
 | 403    | Authenticated but not permitted — `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130) |
 | 404    | Resource not found                              |
-| 422    | Validation error                                |
+| 422    | Validation error — includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
 | 429    | Rate limit exceeded                             |
