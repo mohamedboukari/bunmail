@@ -56,6 +56,7 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | `SMTP_SUBMISSION_DAILY_QUOTA` | `0` | Per-API-key messages accepted per UTC day; over-quota → SMTP `452`. `0` = unlimited. See [Quotas](#per-key-daily-quotas-123). |
 | `SMTP_SUBMISSION_TLS_CERT` | _(empty)_ | PEM cert path. When set with the key, STARTTLS is advertised. |
 | `SMTP_SUBMISSION_TLS_KEY` | _(empty)_ | PEM private-key path. |
+| `SMTP_SUBMISSION_ALLOW_INSECURE` | `false` | Allow AUTH over plaintext (no TLS). The password is a full-privilege key, so this exposes it to link sniffers. With neither TLS nor this flag the server **refuses to start**. Set `true` only on a trusted network. |
 | `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting. |
 | `SMTP_SUBMISSION_RATE_LIMIT_MAX` | `30` | Max connections per IP per window. |
 | `SMTP_SUBMISSION_RATE_LIMIT_WINDOW` | `60` | Connection window (seconds). |
@@ -65,8 +66,8 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 
 ### TLS / security posture
 
-- **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): STARTTLS is advertised so clients can encrypt before sending the API key.
-- **Without a cert**: plaintext `AUTH` is allowed (`allowInsecureAuth`). Since the API key travels in the clear, only run this on a **trusted network** — the common self-hosted case where the app and BunMail share a host or a private Docker network. Do not expose a plaintext submission port to the public internet.
+- **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): STARTTLS is advertised so clients can encrypt before sending the API key. This is the recommended posture whenever the port isn't strictly loopback.
+- **Without a cert**: plaintext `AUTH` is **refused by default** (#133) — the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
 - **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. A successful AUTH clears the counter.
 
 ### First-boot checklist (Docker Compose)

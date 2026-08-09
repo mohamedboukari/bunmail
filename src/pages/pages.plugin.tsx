@@ -120,6 +120,61 @@ function validateSessionCookie(cookie: string): boolean {
 }
 
 /**
+ * Builds the shared `bm_session` cookie attributes (#133).
+ *
+ * Adds `Secure` in production so the session cookie is never transmitted
+ * over plaintext HTTP (a missing/terminated TLS hop would otherwise expose
+ * it to a network MITM). We don't force `Secure` in development because
+ * local dev runs over `http://localhost` with no TLS. `HttpOnly` (no JS
+ * access) and `SameSite=Lax` (baseline CSRF defense) are always set;
+ * `Path=/dashboard` scopes it to the dashboard.
+ */
+function sessionCookieAttributes(): string {
+  const secure = config.env === "production" ? "; Secure" : "";
+  return `HttpOnly; SameSite=Lax${secure}; Path=/dashboard`;
+}
+
+/**
+ * CSRF origin check for state-mutating dashboard requests (#133).
+ *
+ * `SameSite=Lax` already blocks cross-site cookie-bearing POSTs in modern
+ * browsers, but it's the *only* current defense and older/edge cases slip
+ * through. As a second layer we verify that a POST's `Origin` (falling back
+ * to `Referer`) host matches the request's own host. A cross-site form-POST
+ * carries the attacker's Origin and is rejected; same-origin dashboard
+ * forms always send a matching Origin. A POST with neither header present
+ * is rejected (browsers send Origin on POST; its absence is anomalous).
+ *
+ * @returns true if the request is same-origin (allowed)
+ */
+function isSameOrigin(request: Request): boolean {
+  /**
+   * The target host is taken from the request URL (always present) and
+   * cross-checked against the `Host` header when it exists — behind a proxy
+   * the URL host may be the internal bind address while `Host` carries the
+   * public name, so a match on *either* is same-origin.
+   */
+  const targets = new Set<string>();
+  try {
+    targets.add(new URL(request.url).host);
+  } catch {
+    /** malformed request URL — fall through to Host header only */
+  }
+  const hostHeader = request.headers.get("host");
+  if (hostHeader) targets.add(hostHeader);
+  if (targets.size === 0) return false;
+
+  const source = request.headers.get("origin") ?? request.headers.get("referer");
+  if (!source) return false;
+
+  try {
+    return targets.has(new URL(source).host);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Extracts the bm_session cookie value from the Cookie header.
  *
  * @returns The cookie value, or undefined if not found
@@ -202,6 +257,36 @@ function consumeRevealSecret(token: string | undefined): string | undefined {
   oneTimeReveals.delete(token);
   if (entry.expiresAt <= Date.now()) return undefined;
   return entry.value;
+}
+
+/* ─── DNS-verify throttle (#133) ─── */
+
+/**
+ * `POST /dashboard/domains/:id/verify` runs live DNS lookups (SPF/DKIM/DMARC)
+ * with no throttle; the API rate-limiter only covers `/api/v1/*`. A rapid
+ * click-loop (or a same-origin script) could hammer the resolver. This is a
+ * lightweight per-domain sliding window: at most `DNS_VERIFY_MAX` verifies
+ * per `DNS_VERIFY_WINDOW_MS` per domain id. In-memory/per-process (same
+ * caveat as the other dashboard limiters). Keyed by domain id, not IP, since
+ * the dashboard is a single shared operator — the resource we're protecting
+ * is the DNS lookup for that domain.
+ */
+const DNS_VERIFY_MAX = 5;
+const DNS_VERIFY_WINDOW_MS = 60_000;
+const dnsVerifyHits = new Map<string, number[]>();
+
+/**
+ * Records a verify attempt for `domainId` and returns true if it exceeds the
+ * window budget (i.e. the caller should be throttled). Prunes timestamps
+ * outside the window on each call so the map self-trims.
+ */
+function isDnsVerifyThrottled(domainId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - DNS_VERIFY_WINDOW_MS;
+  const recent = (dnsVerifyHits.get(domainId) ?? []).filter((ts) => ts > cutoff);
+  recent.push(now);
+  dnsVerifyHits.set(domainId, recent);
+  return recent.length > DNS_VERIFY_MAX;
 }
 
 /**
@@ -333,10 +418,10 @@ export const pagesPlugin = new Elysia({
       if (loginRateLimit.enabled) clearLoginAttempts(ip);
       logger.info("Dashboard login successful", { ip });
 
-      /** Set session cookie — HttpOnly, SameSite=Lax, 24h expiry */
+      /** Set session cookie — HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
       const sessionValue = createSessionCookie();
       set.headers["set-cookie"] =
-        `bm_session=${sessionValue}; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=${SESSION_MAX_AGE}`;
+        `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
       set.status = 302;
       set.headers["location"] = "/dashboard";
       return "";
@@ -354,9 +439,8 @@ export const pagesPlugin = new Elysia({
    */
   .post("/logout", ({ set }) => {
     logger.info("Dashboard logout");
-    /** Clear cookie by setting Max-Age=0 */
-    set.headers["set-cookie"] =
-      "bm_session=; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=0";
+    /** Clear cookie by setting Max-Age=0 (same attributes as when set, #133) */
+    set.headers["set-cookie"] = `bm_session=; ${sessionCookieAttributes()}; Max-Age=0`;
     set.status = 302;
     set.headers["location"] = "/dashboard/login";
     return "";
@@ -388,6 +472,22 @@ export const pagesPlugin = new Elysia({
       set.status = 302;
       set.headers["location"] = "/dashboard/login";
       return "";
+    }
+
+    /**
+     * CSRF second layer (#133): every state-mutating dashboard action is a
+     * POST, so require same-origin on POST. `SameSite=Lax` is the primary
+     * defense; this rejects a forged cross-site form-POST that rides the
+     * operator's session cookie. Returns 403 (not a redirect) so it's an
+     * explicit refusal, not a silent bounce.
+     */
+    if (request.method === "POST" && !isSameOrigin(request)) {
+      logger.warn("Dashboard POST rejected: cross-origin (possible CSRF)", {
+        path,
+        origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+      });
+      set.status = 403;
+      return "Forbidden: cross-origin request rejected";
     }
   })
 
@@ -1089,6 +1189,15 @@ export const pagesPlugin = new Elysia({
         set.status = 302;
         set.headers["location"] =
           `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+        return "";
+      }
+
+      /** Throttle live DNS lookups per domain (#133). */
+      if (isDnsVerifyThrottled(params.id)) {
+        logger.warn("Domain DNS verification throttled", { id: params.id });
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Too many verification attempts — wait a minute and try again")}&flashType=error`;
         return "";
       }
 

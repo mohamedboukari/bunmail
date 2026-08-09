@@ -412,6 +412,8 @@ describe("Dashboard E2E", () => {
           headers: {
             cookie: sessionCookie,
             "content-type": "application/x-www-form-urlencoded",
+            /** Same-origin — passes the CSRF guard (#133). */
+            origin: "http://localhost",
           },
           body: "name=TestKey",
         }),
@@ -434,6 +436,7 @@ describe("Dashboard E2E", () => {
           headers: {
             cookie: sessionCookie,
             "content-type": "application/x-www-form-urlencoded",
+            origin: "http://localhost",
           },
           body: "name=RevealKey",
         }),
@@ -467,6 +470,7 @@ describe("Dashboard E2E", () => {
           headers: {
             cookie: sessionCookie,
             "content-type": "application/x-www-form-urlencoded",
+            origin: "http://localhost",
           },
           body: "name=example.com",
         }),
@@ -475,6 +479,36 @@ describe("Dashboard E2E", () => {
       const location = response.headers.get("location")!;
       expect(location).toContain("/dashboard/domains");
       expect(location).toContain("flash=");
+    });
+
+    test("rejects a cross-origin POST with 403 (CSRF guard, #133)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/dashboard/api-keys", {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            "content-type": "application/x-www-form-urlencoded",
+            /** Attacker's origin ≠ request host → rejected. */
+            origin: "http://evil.example",
+          },
+          body: "name=CsrfKey",
+        }),
+      );
+      expect(response.status).toBe(403);
+    });
+
+    test("rejects a POST with no Origin/Referer header (CSRF guard, #133)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/dashboard/api-keys", {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: "name=NoOriginKey",
+        }),
+      );
+      expect(response.status).toBe(403);
     });
   });
 

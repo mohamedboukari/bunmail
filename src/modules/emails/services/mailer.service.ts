@@ -288,8 +288,15 @@ async function sendToMxGroup(args: {
    *  recipient set. */
   const senderDomain = args.from.split("@")[1];
   if (senderDomain) {
-    const mailto = args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`;
-    const url = args.unsubscribe?.url;
+    /**
+     * Strip any CR/LF from the unsubscribe mailto/url before they go into a
+     * header value (#133, header-injection defense-in-depth). These come
+     * from the operator-set domain record, so this is belt-and-braces, but
+     * a stray newline must never split the header.
+     */
+    const stripCrlf = (v: string): string => v.replace(/[\r\n]/g, "");
+    const mailto = stripCrlf(args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`);
+    const url = args.unsubscribe?.url ? stripCrlf(args.unsubscribe.url) : undefined;
     const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
     mailOptions.headers = {
       "List-Unsubscribe": headerValue,
