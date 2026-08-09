@@ -93,6 +93,13 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: XSS scan (dashboard JSX)
+        # `@kitajs/html` does NOT auto-escape interpolated children — every
+        # render of stored/user data needs the `safe` attribute. xss-scan
+        # (@kitajs/ts-html-plugin) fails the build on any unescaped child,
+        # so a new XSS sink can't merge silently (#131, #150).
+        run: bun run lint:xss
+
       - name: Test (unit)
         run: bun test test/unit
 

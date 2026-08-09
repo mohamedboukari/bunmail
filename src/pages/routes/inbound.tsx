@@ -33,7 +33,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
         </a>
       </div>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {emails.length === 0 ? (
         <EmptyState message="No inbound emails yet. Emails sent to your configured addresses will appear here." />

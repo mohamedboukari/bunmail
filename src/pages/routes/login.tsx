@@ -48,8 +48,11 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
           {/* Login card */}
           <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6">
             {/* Error message (shown after wrong password) */}
-            {error && (
-              <div class="bg-red-50 text-red-800 border border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-sm mb-4">
+            {!!error && (
+              <div
+                class="bg-red-50 text-red-800 border border-red-200 dark:bg-red-950 dark:text-red-200 dark:border-red-800 rounded-lg px-4 py-3 text-sm mb-4"
+                safe
+              >
                 {error}
               </div>
             )}

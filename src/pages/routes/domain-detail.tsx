@@ -42,7 +42,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
         </form>
       </div>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Verification status grid */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
@@ -68,7 +68,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
             value={`v=spf1 a mx ip4:<YOUR_SERVER_IP> -all`}
             label="SPF Record"
           />
-          {dkimRecord && (
+          {dkimRecord != null && (
             <DnsRecordEntry
               type="TXT"
               host={`${domain.dkimSelector}._domainkey.${domain.name}`}
@@ -131,7 +131,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
               <TimeDisplay value={domain.createdAt} />
             </p>
           </div>
-          {domain.verifiedAt && (
+          {domain.verifiedAt != null && (
             <div>
               <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
                 Last Verified
@@ -180,11 +180,15 @@ function DnsRecordEntry({
 }) {
   return (
     <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-      <p class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{label}</p>
+      <p class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2" safe>
+        {label}
+      </p>
       <div class="space-y-1 text-xs">
         <div class="flex gap-2">
           <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Type:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100">{type}</span>
+          <span class="font-mono text-gray-900 dark:text-gray-100" safe>
+            {type}
+          </span>
         </div>
         <div class="flex gap-2">
           <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Host:</span>
@@ -209,7 +213,10 @@ function DnsRecordEntry({
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+      <p
+        class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5"
+        safe
+      >
         {label}
       </p>
       <p class="text-gray-900 dark:text-gray-100 break-all" safe>

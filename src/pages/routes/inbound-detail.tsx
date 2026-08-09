@@ -119,7 +119,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
       </div>
 
       {/* HTML content */}
-      {email.html && (
+      {!!email.html && (
         <div class="mb-6">
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
             HTML Content
@@ -132,7 +132,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
       )}
 
       {/* Text content */}
-      {email.textContent && (
+      {!!email.textContent && (
         <div>
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
             Text Content
@@ -159,7 +159,10 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+      <p
+        class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5"
+        safe
+      >
         {label}
       </p>
       <p class="text-gray-900 dark:text-gray-100 break-all" safe>

@@ -105,7 +105,7 @@ export function EmailsPage({
         </a>
       </div>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Filter bar — status tabs (primary axis) + Source / API-key
           dropdowns (#137). All three compose: each control preserves the
@@ -123,6 +123,7 @@ export function EmailsPage({
                     ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
                     : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                 }`}
+                safe
               >
                 {filter.label}
               </a>

@@ -32,7 +32,7 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
         {template.name}
       </h1>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Edit form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
@@ -118,6 +118,7 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
               rows="3"
               placeholder="Plain text fallback"
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              safe
             >
               {template.textContent ?? ""}
             </textarea>

@@ -58,7 +58,7 @@ export function InboundTrashPage({
         {retentionDays === 1 ? "" : "s"}.
       </p>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {emails.length === 0 ? (
         <EmptyState message="Trash is empty." />

@@ -47,9 +47,11 @@ export function WebhookDeliveryDetailPage({
         </a>
       </div>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
-      <h1 class="text-xl font-semibold mb-1 font-mono">{delivery.event}</h1>
+      <h1 class="text-xl font-semibold mb-1 font-mono" safe>
+        {delivery.event}
+      </h1>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-6 break-all" safe>
         {webhook.url}
       </p>
@@ -105,7 +107,7 @@ export function WebhookDeliveryDetailPage({
       )}
 
       {/* Last error */}
-      {delivery.lastError && (
+      {!!delivery.lastError && (
         <section class="mb-6">
           <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
             Last error
@@ -120,7 +122,7 @@ export function WebhookDeliveryDetailPage({
       )}
 
       {/* Last response body preview */}
-      {delivery.lastResponseBody?.bodyPreview && (
+      {!!delivery.lastResponseBody?.bodyPreview && (
         <section class="mb-6">
           <h2 class="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">
             Last response (preview)
@@ -161,7 +163,7 @@ function SummaryCard({
 }) {
   return (
     <div class="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
-      <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+      <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide" safe>
         {label}
       </div>
       <div class={`text-lg font-semibold mt-1 ${mono ? "font-mono" : ""}`} safe>

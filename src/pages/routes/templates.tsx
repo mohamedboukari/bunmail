@@ -18,7 +18,7 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
     <BaseLayout title="Templates" activeNav="templates">
       <h1 class="text-xl font-semibold mb-6">Templates</h1>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Create template form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">

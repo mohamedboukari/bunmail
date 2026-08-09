@@ -99,11 +99,15 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
           <DetailField label="Status" value={email.status} />
           <DetailField label="From" value={email.fromAddress} />
           <DetailField label="To" value={email.toAddress} />
-          {email.cc && <DetailField label="CC" value={email.cc} />}
-          {email.bcc && <DetailField label="BCC" value={email.bcc} />}
+          {!!email.cc && <DetailField label="CC" value={email.cc} />}
+          {!!email.bcc && <DetailField label="BCC" value={email.bcc} />}
           <DetailField label="Attempts" value={String(email.attempts)} />
-          {email.lastError && <DetailField label="Last Error" value={email.lastError} />}
-          {email.messageId && <DetailField label="Message ID" value={email.messageId} />}
+          {!!email.lastError && (
+            <DetailField label="Last Error" value={email.lastError} />
+          )}
+          {!!email.messageId && (
+            <DetailField label="Message ID" value={email.messageId} />
+          )}
           <div>
             <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
               Created
@@ -112,7 +116,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
               <TimeDisplay value={email.createdAt} />
             </p>
           </div>
-          {email.sentAt && (
+          {email.sentAt != null && (
             <div>
               <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
                 Sent At
@@ -126,7 +130,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
       </div>
 
       {/* HTML preview */}
-      {email.html && (
+      {!!email.html && (
         <div class="mb-6">
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
             HTML Preview
@@ -139,7 +143,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
       )}
 
       {/* Text content */}
-      {email.textContent && (
+      {!!email.textContent && (
         <div>
           <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
             Text Content
@@ -162,7 +166,10 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+      <p
+        class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5"
+        safe
+      >
         {label}
       </p>
       <p class="text-gray-900 dark:text-gray-100 break-all" safe>

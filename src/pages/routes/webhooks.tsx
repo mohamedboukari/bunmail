@@ -30,15 +30,18 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
       <h1 class="text-xl font-semibold mb-6">Webhooks</h1>
 
       {/* Flash message */}
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Signing secret shown once after creation */}
-      {secret && (
+      {!!secret && (
         <div class="bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm mb-4">
           <p class="font-medium mb-1">
             Webhook created — copy the signing secret now, it won't be shown again:
           </p>
-          <code class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all">
+          <code
+            class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all"
+            safe
+          >
             {secret}
           </code>
         </div>
@@ -125,7 +128,10 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
                     <div class="flex flex-wrap gap-1">
                       {(Array.isArray(webhook.events) ? webhook.events : []).map(
                         (ev: string) => (
-                          <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                          <span
+                            class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                            safe
+                          >
                             {ev}
                           </span>
                         ),
