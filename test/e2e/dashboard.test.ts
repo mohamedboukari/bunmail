@@ -405,7 +405,7 @@ describe("Dashboard E2E", () => {
       expect(html).toContain("Domains");
     });
 
-    test("POST /dashboard/api-keys creates key and redirects", async () => {
+    test("POST /dashboard/api-keys creates key, redirects with a reveal token — NOT the raw key (#132)", async () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/api-keys", {
           method: "POST",
@@ -419,7 +419,45 @@ describe("Dashboard E2E", () => {
       expect(response.status).toBe(302);
       const location = response.headers.get("location")!;
       expect(location).toContain("/dashboard/api-keys");
-      expect(location).toContain("rawKey=");
+      /** The raw key MUST NOT appear in the URL (leaks to logs/history/Referer). */
+      expect(location).not.toContain("rawKey=");
+      expect(location).not.toContain("bm_live_");
+      /** Only an opaque one-time reveal token rides in the query. */
+      expect(location).toMatch(/[?&]reveal=[a-f0-9]{64}\b/);
+    });
+
+    test("reveal token shows the raw key exactly once, then is spent (#132)", async () => {
+      /** Create → capture the reveal token from the redirect. */
+      const created = await app.handle(
+        new Request("http://localhost/dashboard/api-keys", {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            "content-type": "application/x-www-form-urlencoded",
+          },
+          body: "name=RevealKey",
+        }),
+      );
+      const location = created.headers.get("location")!;
+      const token = location.match(/[?&]reveal=([a-f0-9]{64})\b/)![1];
+
+      /** First GET with the token renders the raw key from the mock. */
+      const first = await app.handle(
+        new Request(`http://localhost/dashboard/api-keys?reveal=${token}`, {
+          headers: { cookie: sessionCookie },
+        }),
+      );
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain("bm_live_test1234567890abcdef12345678");
+
+      /** Second GET with the SAME token no longer reveals it (single-use). */
+      const second = await app.handle(
+        new Request(`http://localhost/dashboard/api-keys?reveal=${token}`, {
+          headers: { cookie: sessionCookie },
+        }),
+      );
+      expect(second.status).toBe(200);
+      expect(await second.text()).not.toContain("bm_live_test1234567890abcdef12345678");
     });
 
     test("POST /dashboard/domains creates domain and redirects", async () => {

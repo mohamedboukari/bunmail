@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { html } from "@elysiajs/html";
-import { createHmac, timingSafeEqual } from "crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { redactEmail } from "../utils/redact.ts";
@@ -130,6 +130,78 @@ function getSessionCookie(request: Request): string | undefined {
 
   const match = cookieHeader.match(/bm_session=([^;]+)/);
   return match?.[1];
+}
+
+/* ─── One-Time Secret Reveal (#132) ─── */
+
+/**
+ * Newly-created secrets — the raw `bm_live_…` API key and the webhook HMAC
+ * secret — are shown to the operator exactly once. They MUST NOT travel in a
+ * URL: query strings leak into browser history, reverse-proxy / CDN / access
+ * logs, and the `Referer` header of any sub-resource the page loads, which
+ * would defeat the "shown once, stored hashed" model (#132).
+ *
+ * Instead of putting the secret in the redirect, we stash it here under an
+ * opaque random token and put only the *token* in the URL. The GET consumes
+ * the token (single-read, deleted immediately) and renders the secret. This
+ * keeps the refresh-safe Post/Redirect/Get flow while keeping the secret out
+ * of every URL/log/history.
+ *
+ * Caveat (documented in SECURITY.md): this store is in-memory and per-process,
+ * like the login rate-limiter and the session model. On a multi-replica deploy
+ * a create on one replica and the follow-up GET on another would miss the
+ * token; the operator would then revoke + recreate. A shared store is a
+ * separate concern, not a regression introduced here.
+ */
+const REVEAL_TTL_MS = 60_000;
+/** Hard cap so a burst of creates can't grow the map unbounded. */
+const REVEAL_MAX_ENTRIES = 1000;
+
+interface RevealEntry {
+  /** The one-time secret to show (raw API key or webhook secret). */
+  value: string;
+  /** Unix epoch ms after which the entry is considered expired. */
+  expiresAt: number;
+}
+
+const oneTimeReveals = new Map<string, RevealEntry>();
+
+/** Drops expired entries; cheap lazy sweep run on each stash. */
+function sweepExpiredReveals(): void {
+  const now = Date.now();
+  for (const [token, entry] of oneTimeReveals) {
+    if (entry.expiresAt <= now) oneTimeReveals.delete(token);
+  }
+}
+
+/**
+ * Stashes a one-time secret and returns the opaque token to put in the URL.
+ * The token is a 32-byte random hex string (unguessable), valid for
+ * {@link REVEAL_TTL_MS} and readable exactly once.
+ */
+function stashRevealSecret(value: string): string {
+  sweepExpiredReveals();
+  /** If we somehow still exceed the cap, evict the oldest insertion. */
+  if (oneTimeReveals.size >= REVEAL_MAX_ENTRIES) {
+    const oldest = oneTimeReveals.keys().next().value;
+    if (oldest) oneTimeReveals.delete(oldest);
+  }
+  const token = randomBytes(32).toString("hex");
+  oneTimeReveals.set(token, { value, expiresAt: Date.now() + REVEAL_TTL_MS });
+  return token;
+}
+
+/**
+ * Consumes a reveal token: returns the secret and deletes it (single-read),
+ * or `undefined` if the token is unknown/expired/already consumed.
+ */
+function consumeRevealSecret(token: string | undefined): string | undefined {
+  if (!token) return undefined;
+  const entry = oneTimeReveals.get(token);
+  if (!entry) return undefined;
+  oneTimeReveals.delete(token);
+  if (entry.expiresAt <= Date.now()) return undefined;
+  return entry.value;
 }
 
 /**
@@ -772,13 +844,20 @@ export const pagesPlugin = new Elysia({
           }
         : undefined;
 
-      return <ApiKeysPage keys={keys} flash={flash} rawKey={query.rawKey} />;
+      /**
+       * The raw key is delivered via a one-time server-side reveal token
+       * (#132) — never in the URL. `consumeRevealSecret` returns it once,
+       * then it's gone.
+       */
+      const rawKey = consumeRevealSecret(query.reveal);
+
+      return <ApiKeysPage keys={keys} flash={flash} rawKey={rawKey} />;
     },
     {
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
-        rawKey: t.Optional(t.String()),
+        reveal: t.Optional(t.String()),
       }),
     },
   )
@@ -805,10 +884,15 @@ export const pagesPlugin = new Elysia({
           isAdmin: body.isAdmin === "on",
         });
 
-        /** Redirect with raw key in query — shown once in a flash message */
+        /**
+         * Redirect with only a one-time reveal TOKEN in the query (#132) —
+         * never the raw key itself. The GET consumes the token and shows
+         * the key once. Keeps secrets out of history / access logs / Referer.
+         */
+        const reveal = stashRevealSecret(rawKey);
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&rawKey=${encodeURIComponent(rawKey)}`;
+          `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&reveal=${reveal}`;
       } catch (error) {
         logger.error("Failed to create API key via dashboard", {
           error: error instanceof Error ? error.message : String(error),
@@ -1287,13 +1371,16 @@ export const pagesPlugin = new Elysia({
             type: (query.flashType ?? "success") as "success" | "error",
           }
         : undefined;
-      return <WebhooksPage webhooks={hooks} flash={flash} secret={query.secret} />;
+      /** One-time reveal of the webhook HMAC secret (#132) — never in URL. */
+      const secret = consumeRevealSecret(query.reveal);
+
+      return <WebhooksPage webhooks={hooks} flash={flash} secret={secret} />;
     },
     {
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
-        secret: t.Optional(t.String()),
+        reveal: t.Optional(t.String()),
       }),
     },
   )
@@ -1317,9 +1404,11 @@ export const pagesPlugin = new Elysia({
           { url: body.url, events },
           activeKey.id,
         );
+        /** One-time reveal token in the URL (#132) — never the secret. */
+        const reveal = stashRevealSecret(secret);
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&secret=${encodeURIComponent(secret)}`;
+          `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&reveal=${reveal}`;
       } catch (error) {
         set.status = 302;
         set.headers["location"] =
