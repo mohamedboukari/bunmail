@@ -33,13 +33,20 @@ The full parse is only attempted when the heuristic matches **and** there's at l
 
 DMARC reports are XML, but receivers compress them three different ways depending on vendor preference. The parser sniffs **magic bytes** rather than trusting `Content-Type` or filename, since both are notoriously inconsistent across implementations.
 
-| Format       | Magic bytes        | Used by              | Decompression           |
-| ------------ | ------------------ | -------------------- | ----------------------- |
-| **gzip**     | `1f 8b`            | Google, Yahoo        | `fflate.gunzipSync`     |
-| **zip**      | `50 4b 03 04`      | Microsoft            | `fflate.unzipSync`      |
-| **raw XML**  | `<?xml`            | Some smaller vendors | none                    |
+| Format       | Magic bytes        | Used by              | Decompression                  |
+| ------------ | ------------------ | -------------------- | ------------------------------ |
+| **gzip**     | `1f 8b`            | Google, Yahoo        | `fflate.Gunzip` (capped)       |
+| **zip**      | `50 4b 03 04`      | Microsoft            | `fflate.Unzip` (capped)        |
+| **raw XML**  | `<?xml`            | Some smaller vendors | none                           |
 
 Anything else returns `null` and the attachment is skipped. Multi-attachment messages are walked in order — the first one that parses wins.
+
+### DoS hardening (#129)
+
+The inbound receiver is **unauthenticated** — anyone can send a crafted report — so decompression is bounded:
+
+- **Output-size cap (decompression bomb):** gzip/zip are inflated with fflate's **streaming** decompressors (`Gunzip`/`Unzip`), fed in 64 KB input slices, and aborted the moment cumulative output crosses **25 MB** (`MAX_DECOMPRESSED_BYTES`). A tiny attachment can otherwise expand ~1000:1 and OOM the process; the cap bounds it (a real RFC 7489 report is far smaller). On abort the attachment is dropped (`null`) and normal inbound storage takes over.
+- **XML entity expansion (billion laughs):** the parser runs with `processEntities: false`, and any input containing a `<!DOCTYPE` is rejected before parsing (RFC 7489 reports never carry one; its only use here would be a nested-entity CPU bomb). fast-xml-parser doesn't fetch external entities, so there's no classic file-read/SSRF XXE.
 
 ## XML shape (RFC 7489 `<feedback>`)
 
@@ -120,7 +127,7 @@ Dashboard pages mirror the REST endpoints:
 
 ## Testing
 
-- **Unit:** [`test/unit/dmarc-parser.test.ts`](../test/unit/dmarc-parser.test.ts) — 21 cases covering RFC 7489 happy path, gzip + zip + raw decompression, the scalar/array quirk, malformed/missing-field drop paths, and the `looksLikeDmarcReport` heuristic.
+- **Unit:** [`test/unit/dmarc-parser.test.ts`](../test/unit/dmarc-parser.test.ts) — RFC 7489 happy path, gzip + zip + raw decompression, the scalar/array quirk, malformed/missing-field drop paths, the `looksLikeDmarcReport` heuristic, and DoS resistance (#129: gzip/zip decompression bombs → `null`, billion-laughs DOCTYPE → `null`, a just-under-cap report still parses). Stored-XSS escaping of report fields is covered by [`test/unit/dmarc-xss.test.ts`](../test/unit/dmarc-xss.test.ts) (#131).
 - **Integration:** [`test/integration/dmarc-handler.integration.test.ts`](../test/integration/dmarc-handler.integration.test.ts) — 8 cases covering happy-path persistence, `ON CONFLICT` dedup, `ON DELETE CASCADE`, the skip-when-not-DMARC path, and the read-side `listDmarcReports` + `getDmarcReportById` plumbing against real Postgres.
 
 ## Manual smoke test (against staging)

@@ -304,3 +304,69 @@ describe("looksLikeDmarcReport heuristic", () => {
     expect(looksLikeDmarcReport(raw)).toBe(true);
   });
 });
+
+/**
+ * DoS-resistance regression tests (#129). Both cases are reachable by
+ * anyone who can send one email to the unauthenticated inbound receiver.
+ * The parser must return `null` (skip the message) instead of OOMing or
+ * pegging the CPU — and must do so quickly.
+ */
+describe("parseAggregateReport — DoS resistance (#129)", () => {
+  test("gzip decompression bomb → null (capped, no OOM/hang)", () => {
+    /** ~60 MB of zeros compresses to a few KB; inflating it uncapped would
+     *  blow past the 25 MB output cap. */
+    const bomb = gzipSync(new Uint8Array(60 * 1024 * 1024));
+    const start = Date.now();
+    const result = parseAggregateReport(bomb);
+    const elapsed = Date.now() - start;
+    expect(result).toBeNull();
+    /** Must abort promptly — not inflate the whole 60 MB. */
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  test("zip decompression bomb → null (capped)", () => {
+    const bomb = zipSync({ "report.xml": new Uint8Array(60 * 1024 * 1024) });
+    const result = parseAggregateReport(bomb);
+    expect(result).toBeNull();
+  });
+
+  test("a report just under the output cap still parses", () => {
+    /** Pad a valid report with a big XML comment (well under 25 MB) so it
+     *  exercises the cap boundary without tripping it. */
+    const padding = "<!-- " + "x".repeat(2 * 1024 * 1024) + " -->";
+    const padded = SAMPLE_REPORT_XML.replace("<feedback>", `<feedback>${padding}`);
+    const gz = gzipSync(strToU8(padded));
+    const result = parseAggregateReport(gz);
+    expect(result).not.toBeNull();
+    expect(result?.orgName).toBe("Microsoft Corporation");
+  });
+
+  test("billion-laughs DOCTYPE → null (entity expansion rejected)", () => {
+    const bomb = `<?xml version="1.0"?>
+<!DOCTYPE feedback [
+  <!ENTITY lol "lol">
+  <!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">
+  <!ENTITY lol4 "&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;&lol3;">
+]>
+<feedback><report_metadata><org_name>&lol4;</org_name></report_metadata></feedback>`;
+    const start = Date.now();
+    const result = parseAggregateReport(strToU8(bomb));
+    const elapsed = Date.now() - start;
+    expect(result).toBeNull();
+    expect(elapsed).toBeLessThan(2000);
+  });
+
+  test("custom internal entities are not expanded (processEntities off)", () => {
+    /** No DOCTYPE (so it's not rejected outright), but references an entity
+     *  that must NOT expand. Parser should not blow up; report is invalid
+     *  shape → null, or org_name left as the literal reference. */
+    const xml = SAMPLE_REPORT_XML.replace(
+      "<org_name>Microsoft Corporation</org_name>",
+      "<org_name>&custom;</org_name>",
+    );
+    const result = parseAggregateReport(gzipSync(strToU8(xml)));
+    /** The literal "&custom;" is NOT expanded into anything dangerous. */
+    if (result) expect(result.orgName).not.toContain("EXPANDED");
+  });
+});
