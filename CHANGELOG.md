@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Bump `linkify-it` 5.0.1 → 5.0.2 — CVE-2026-59887 (HIGH).** Patches a quadratic-complexity DoS in linkify-it's `mailto:` validator, pulled in transitively via `mailparser`. Forced through an `overrides` entry (the same mechanism used for `nodemailer`); only 5.0.2 resolves in the lockfile, clearing the Trivy HIGH finding. No code or behaviour change.
+
 ## [0.8.0] - 2026-07-19
 
 ### Added
