@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Schema:** adds `api_keys.is_admin boolean NOT NULL DEFAULT false` (#130, migration `0011`). **Existing keys are backfilled to `true`** (admin) to preserve pre-#130 behaviour — after deploying, demote any keys you hand to apps/developers from the dashboard. Run `bun run db:migrate` (or rebuild via `docker compose up -d --build`).
 - **Breaking (API):** calling `/api/v1/api-keys`, `/api/v1/domains`, or `/api/v1/inbound` with a **restricted** key now returns `403 ADMIN_REQUIRED` (previously any valid key worked). Existing keys are unaffected (they migrate to admin); only newly-created restricted keys are gated. The dashboard is unaffected (operator session).
+- **Bump Bun 1.3.10 → 1.3.14** (patch) — pinned in the `Dockerfile` (all stages) and the CI workflows (`ci.yml`, `dependabot-lockfile.yml`). Full suite green on 1.3.14. Self-hosters: `docker compose up -d --build` picks up the new base image; run `bun upgrade` locally to match.
 
 ### Security
 
