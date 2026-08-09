@@ -15,6 +15,9 @@ jobs:
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
+    # No `concurrency` cancel here on purpose: never abort a release
+    # mid-publish. Timeout is a hung-runner backstop only.
+    timeout-minutes: 10
 
     steps:
       - name: Checkout

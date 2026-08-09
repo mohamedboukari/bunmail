@@ -11,9 +11,24 @@ on:
   pull_request:
     branches: [main]
 
+# Least-privilege token: CI only reads the repo. No write scope is
+# needed (SARIF uploads live in security.yml / codeql.yml, which grant
+# their own `security-events: write`).
+permissions:
+  contents: read
+
+# Cancel a superseded run when a new commit lands on the same ref, so a
+# quick follow-up push doesn't leave a stale CI run burning a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # Backstop against a hung step (e.g. a wedged Postgres wait) running
+    # to the 6h default cap.
+    timeout-minutes: 15
 
     env:
       DATABASE_URL: postgresql://bunmail:bunmail@localhost:5432/bunmail_test
@@ -46,6 +61,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # CI doesn't push; don't leave the token in .git/config.
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2

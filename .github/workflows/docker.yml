@@ -17,10 +17,16 @@ jobs:
   docker:
     name: Build & Push
     runs-on: ubuntu-latest
+    # No `concurrency` cancel here on purpose: never abort a tag publish
+    # mid-push. Timeout is a hung-runner backstop only.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The build doesn't push git commits; GHCR auth is via login-action.
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
