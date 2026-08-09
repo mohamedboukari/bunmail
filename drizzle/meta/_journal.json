@@ -78,6 +78,13 @@
       "when": 1784455380389,
       "tag": "0010_chunky_garia",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786291871341,
+      "tag": "0011_acoustic_bushwacker",
+      "breakpoints": true
     }
   ]
 }

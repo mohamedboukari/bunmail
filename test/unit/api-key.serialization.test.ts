@@ -15,6 +15,7 @@ describe("serializeApiKey", () => {
     keyHash: "deadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678",
     keyPrefix: "bm_live_abcd",
     isActive: true,
+    isAdmin: false,
     allowedSenders: ["noreply@example.com"],
     lastUsedAt: new Date("2024-06-15"),
     createdAt: new Date("2024-01-01"),

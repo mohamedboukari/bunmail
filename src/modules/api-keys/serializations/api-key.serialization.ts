@@ -10,6 +10,8 @@ export interface SerializedApiKey {
   name: string;
   keyPrefix: string;
   isActive: boolean;
+  /** Admin key (management-plane access) vs restricted / send-only (#130). */
+  isAdmin: boolean;
   /** Allowlist of From addresses this key may send from; `[]` = unrestricted (#126). */
   allowedSenders: string[];
   lastUsedAt: Date | null;
@@ -26,6 +28,7 @@ export function serializeApiKey(apiKey: ApiKey): SerializedApiKey {
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     isActive: apiKey.isActive,
+    isAdmin: apiKey.isAdmin,
     allowedSenders: apiKey.allowedSenders,
     lastUsedAt: apiKey.lastUsedAt,
     createdAt: apiKey.createdAt,

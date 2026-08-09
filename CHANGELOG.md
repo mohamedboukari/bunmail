@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **API-key admin vs. restricted roles — makes allowed-senders (#126) actually enforceable (#130).** API keys now carry an `is_admin` flag. The **management plane** — `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound` — now requires an **admin** key; a restricted key gets **HTTP 403 `ADMIN_REQUIRED`**. This closes the hole where a "restricted" key could `PATCH` its own `allowedSenders` back to empty (re-enabling spoofing), read/delete everyone's inbound mail, or manage/mint other keys. Restricted keys remain fully able to send and manage their own emails/suppressions/templates/webhooks. **`is_admin` is operator-only** — it is set solely from the **dashboard** (a create-form checkbox + a per-key promote/demote toggle) and the seed script; it appears in **no** REST DTO, so an API key can never grant itself or another key admin. New API-created keys default to **restricted**; the dashboard shows an Admin/Restricted badge. See [docs/api-keys.md](docs/api-keys.md).
+
+### Changed
+
+- **Schema:** adds `api_keys.is_admin boolean NOT NULL DEFAULT false` (#130, migration `0011`). **Existing keys are backfilled to `true`** (admin) to preserve pre-#130 behaviour — after deploying, demote any keys you hand to apps/developers from the dashboard. Run `bun run db:migrate` (or rebuild via `docker compose up -d --build`).
+- **Breaking (API):** calling `/api/v1/api-keys`, `/api/v1/domains`, or `/api/v1/inbound` with a **restricted** key now returns `403 ADMIN_REQUIRED` (previously any valid key worked). Existing keys are unaffected (they migrate to admin); only newly-created restricted keys are gated. The dashboard is unaffected (operator session).
+
 ### Security
 
 - **Bump `linkify-it` 5.0.1 → 5.0.2 — CVE-2026-59887 (HIGH).** Patches a quadratic-complexity DoS in linkify-it's `mailto:` validator, pulled in transitively via `mailparser`. Forced through an `overrides` entry (the same mechanism used for `nodemailer`); only 5.0.2 resolves in the lockfile, clearing the Trivy HIGH finding. No code or behaviour change.

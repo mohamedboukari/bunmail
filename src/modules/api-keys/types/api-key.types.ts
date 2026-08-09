@@ -21,6 +21,14 @@ export interface CreateApiKeyInput {
    * lower-cased/trimmed.
    */
   allowedSenders?: string[];
+
+  /**
+   * Whether the key is an admin key (#130). Defaults to `false`
+   * (restricted / send-only). **Operator-only** — the REST create DTO does
+   * NOT expose this; it's set solely by the dashboard and the seed script,
+   * so an API caller can never mint an admin key.
+   */
+  isAdmin?: boolean;
 }
 
 /**

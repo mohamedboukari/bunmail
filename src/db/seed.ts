@@ -31,6 +31,9 @@ async function seed() {
       name: "Development Test Key",
       keyHash: hash,
       keyPrefix: prefix,
+      /** The bootstrap key is an admin key so the operator can manage keys,
+       *  domains, and inbound via the API from a fresh install (#130). */
+      isAdmin: true,
     })
     .returning();
 

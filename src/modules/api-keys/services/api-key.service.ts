@@ -54,12 +54,15 @@ export async function createApiKey(
       keyHash: hash,
       keyPrefix: prefix,
       allowedSenders: normaliseAllowedSenders(input.allowedSenders),
+      /** Default restricted; only the dashboard/seed pass `true` (#130). */
+      isAdmin: input.isAdmin ?? false,
     })
     .returning();
 
   logger.info("API key created", {
     id: apiKey!.id,
     name: apiKey!.name,
+    isAdmin: apiKey!.isAdmin,
     allowedSenders: apiKey!.allowedSenders.length,
   });
 
@@ -176,6 +179,37 @@ export async function findByHash(hash: string): Promise<ApiKey | undefined> {
  */
 export async function findById(id: string): Promise<ApiKey | undefined> {
   const [apiKey] = await db.select().from(apiKeys).where(eq(apiKeys.id, id));
+
+  return apiKey;
+}
+
+/**
+ * Promotes/demotes a key's admin flag (#130). **Operator-only** — this is a
+ * privilege boundary, so it is deliberately NOT reachable from any REST DTO;
+ * only the dashboard (operator session) and the seed script call it. Keeping
+ * it off `updateApiKey` (which the REST `PATCH` uses) guarantees an API key
+ * can never grant itself or another key admin.
+ *
+ * @param id - The API key ID
+ * @param isAdmin - New admin state
+ * @returns The updated row, or undefined if not found
+ */
+export async function setApiKeyAdmin(
+  id: string,
+  isAdmin: boolean,
+): Promise<ApiKey | undefined> {
+  logger.info("Setting API key admin flag", { id, isAdmin });
+
+  const [apiKey] = await db
+    .update(apiKeys)
+    .set({ isAdmin })
+    .where(eq(apiKeys.id, id))
+    .returning();
+
+  if (!apiKey) {
+    logger.warn("API key not found for admin flag update", { id });
+    return undefined;
+  }
 
   return apiKey;
 }

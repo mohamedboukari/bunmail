@@ -70,7 +70,7 @@ export const seed = {
    * suppressions / webhooks / templates → api_keys is a real one in
    * the test DB.
    */
-  async apiKey(opts: { name?: string } = {}): Promise<{
+  async apiKey(opts: { name?: string; isAdmin?: boolean } = {}): Promise<{
     id: string;
     rawKey: string;
     keyPrefix: string;
@@ -82,6 +82,7 @@ export const seed = {
       name: opts.name ?? "test-key",
       keyHash: hash,
       keyPrefix: prefix,
+      isAdmin: opts.isAdmin ?? false,
     });
     return { id, rawKey: raw, keyPrefix: prefix };
   },

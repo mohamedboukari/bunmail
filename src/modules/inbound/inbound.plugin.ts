@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { serializeInboundEmail } from "./serializations/inbound.serialization.ts";
 import * as inboundService from "./services/inbound.service.ts";
-import { authMiddleware } from "../../middleware/auth.ts";
+import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
@@ -23,6 +23,13 @@ export const inboundPlugin = new Elysia({
   normalize: true,
 })
   .use(authMiddleware)
+  /**
+   * Inbound mail is unscoped (every domain's received mail) and operator-level,
+   * so it's admin-only (#130). Restricted keys get 403 rather than being able to
+   * read/delete everyone's inbound. Dashboard reads inbound via the service
+   * directly under operator session auth, unaffected by this gate.
+   */
+  .use(adminMiddleware)
   .use(rateLimitMiddleware)
 
   /**

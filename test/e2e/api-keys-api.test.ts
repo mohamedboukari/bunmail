@@ -107,6 +107,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
   })),
+  adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
 mock.module("../../src/middleware/rate-limit.ts", () => ({

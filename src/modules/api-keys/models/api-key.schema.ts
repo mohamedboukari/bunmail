@@ -24,6 +24,17 @@ export const apiKeys = pgTable("api_keys", {
   isActive: boolean("is_active").notNull().default(true),
 
   /**
+   * Admin flag (#130). Admin keys may call the management plane
+   * (api-keys, domains, inbound); restricted keys (the default for
+   * API-created keys) are send-only + own-data. This is a privilege
+   * boundary, so it is settable **only from the operator dashboard** —
+   * never via the REST API (it appears in no request DTO). Existing keys
+   * were migrated to `true` to preserve pre-#130 behaviour; new
+   * API-created keys default to `false`.
+   */
+  isAdmin: boolean("is_admin").notNull().default(false),
+
+  /**
    * Allowlist of `From` addresses this key may send from (#126). Empty
    * array (the default) means unrestricted — the key can send from any
    * registered domain, preserving pre-#126 behaviour. When non-empty, the
