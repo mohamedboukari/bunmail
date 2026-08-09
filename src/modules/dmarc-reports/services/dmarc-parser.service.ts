@@ -20,7 +20,7 @@
  *   https://datatracker.ietf.org/doc/html/rfc7489#appendix-C
  */
 
-import { gunzipSync, unzipSync, strFromU8 } from "fflate";
+import { Gunzip, Unzip, UnzipInflate, strFromU8 } from "fflate";
 import { XMLParser } from "fast-xml-parser";
 import type {
   ParsedDmarcReport,
@@ -29,6 +29,105 @@ import type {
 
 const GZIP_MAGIC = [0x1f, 0x8b];
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];
+
+/**
+ * Hard cap on decompressed output (#129). The inbound path caps the raw
+ * message at 10 MB, but a gzip/zip attachment can expand ~1000:1, so a
+ * tiny attachment could inflate to multiple GB and OOM / freeze the
+ * (unauthenticated) inbound receiver. A real RFC 7489 aggregate report is
+ * far smaller than this; 25 MB is a generous ceiling that still bounds the
+ * blast radius. Decompression aborts the moment output crosses it.
+ */
+const MAX_DECOMPRESSED_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Feed size per streaming `push()` (#129). We drive fflate's streaming
+ * decompressors with small input slices so the output-size check runs
+ * between slices and we abort *early* on a bomb — pushing the whole buffer
+ * at once would let the decompressor inflate everything in one synchronous
+ * call before we could react.
+ */
+const INFLATE_SLICE_BYTES = 64 * 1024;
+
+/** Raised when decompression output exceeds {@link MAX_DECOMPRESSED_BYTES}. */
+class DecompressionCapError extends Error {
+  constructor() {
+    super("dmarc: decompression exceeded output cap");
+    this.name = "DecompressionCapError";
+  }
+}
+
+/**
+ * Collects streamed output chunks while enforcing the size cap. Throwing
+ * from `add` unwinds the synchronous `push()` loop and aborts inflation.
+ */
+class CappedSink {
+  private chunks: Uint8Array[] = [];
+  private total = 0;
+
+  add(chunk: Uint8Array): void {
+    this.total += chunk.length;
+    if (this.total > MAX_DECOMPRESSED_BYTES) throw new DecompressionCapError();
+    this.chunks.push(chunk);
+  }
+
+  concat(): Uint8Array {
+    const out = new Uint8Array(this.total);
+    let offset = 0;
+    for (const c of this.chunks) {
+      out.set(c, offset);
+      offset += c.length;
+    }
+    return out;
+  }
+}
+
+/** Drives a streaming decompressor with sliced input so the cap can abort early. */
+function pushSliced(
+  bytes: Uint8Array,
+  push: (slice: Uint8Array, final: boolean) => void,
+): void {
+  for (let i = 0; i < bytes.length; i += INFLATE_SLICE_BYTES) {
+    const end = Math.min(i + INFLATE_SLICE_BYTES, bytes.length);
+    push(bytes.subarray(i, end), end >= bytes.length);
+  }
+}
+
+/**
+ * gunzip with a hard output cap (#129). Streams the inflate and throws
+ * {@link DecompressionCapError} once output crosses the ceiling.
+ */
+function gunzipCapped(bytes: Uint8Array): Uint8Array {
+  const sink = new CappedSink();
+  const gunzip = new Gunzip((chunk) => sink.add(chunk));
+  pushSliced(bytes, (slice, final) => gunzip.push(slice, final));
+  return sink.concat();
+}
+
+/**
+ * Unzip the first `.xml` entry with a hard output cap (#129). Streams each
+ * archive member; only the XML entry's bytes are retained. Throws
+ * {@link DecompressionCapError} if the retained output crosses the ceiling.
+ */
+function unzipFirstXmlCapped(bytes: Uint8Array): Uint8Array | null {
+  const sink = new CappedSink();
+  let matched = false;
+
+  const unzip = new Unzip((file) => {
+    /** Take the first XML-shaped member; ignore the rest. */
+    if (matched || !file.name.toLowerCase().endsWith(".xml")) return;
+    matched = true;
+    file.ondata = (err, chunk) => {
+      if (err) throw err;
+      sink.add(chunk);
+    };
+    file.start();
+  });
+  unzip.register(UnzipInflate);
+
+  pushSliced(bytes, (slice, final) => unzip.push(slice, final));
+  return matched ? sink.concat() : null;
+}
 
 /**
  * Detects compression format by file-magic-number. We don't trust the
@@ -58,29 +157,31 @@ function decompressToXml(bytes: Uint8Array): string | null {
   const format = detectFormat(bytes);
   try {
     if (format === "gzip") {
-      return strFromU8(gunzipSync(bytes));
+      /** Capped streaming inflate — aborts on a decompression bomb (#129). */
+      return strFromU8(gunzipCapped(bytes));
     }
     if (format === "zip") {
       /**
        * Microsoft's reports contain a single `.xml` entry. We take the
-       * first XML-shaped file by name suffix; in the unlikely case
-       * there are multiple, we use the first match.
+       * first XML-shaped file by name suffix. Capped streaming unzip aborts
+       * on a bomb (#129).
        */
-      const entries = unzipSync(bytes);
-      const xmlName = Object.keys(entries).find((n) => n.toLowerCase().endsWith(".xml"));
-      if (!xmlName) return null;
-      const data = entries[xmlName];
+      const data = unzipFirstXmlCapped(bytes);
       if (!data) return null;
       return strFromU8(data);
     }
     if (format === "raw") {
+      /** Raw (uncompressed) input can't be a bomb; it's already ≤ the
+       *  inbound 10 MB message cap. */
       const text = strFromU8(bytes);
       /** Sanity-check this looks like an XML report before paying parse cost. */
       if (text.includes("<feedback") && text.includes("<report_metadata")) return text;
       return null;
     }
   } catch {
-    /** Bad zip / gzip bytes → drop. The handler's null-check skips. */
+    /** Bad zip / gzip bytes, or a bomb that hit the cap → drop. The
+     *  handler's null-check skips the message and normal inbound storage
+     *  takes over. */
     return null;
   }
   return null;
@@ -210,11 +311,26 @@ export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | nul
   const xml = decompressToXml(bytes);
   if (!xml) return null;
 
+  /**
+   * Reject any DOCTYPE outright (#129). RFC 7489 aggregate reports never
+   * carry one; its only use here would be an internal-entity "billion
+   * laughs" definition, whose nested expansion pegs CPU during the
+   * synchronous `parse()`. Cheap substring check before we hand the string
+   * to the parser.
+   */
+  if (/<!DOCTYPE/i.test(xml)) return null;
+
   let parsed: Record<string, unknown>;
   try {
     const xmlParser = new XMLParser({
       ignoreAttributes: true,
       parseTagValue: true,
+      /**
+       * Disable entity processing (#129). fast-xml-parser doesn't fetch
+       * external entities (no classic XXE), but internal entity expansion
+       * is a CPU-exhaustion vector; DMARC reports use no custom entities.
+       */
+      processEntities: false,
     });
     parsed = xmlParser.parse(xml);
   } catch {

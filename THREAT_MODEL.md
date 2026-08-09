@@ -85,6 +85,8 @@ Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver
 
 All four layers **fail open** on internal errors (DNS timeout, DB unreachable) so legitimate mail isn't dropped on infrastructure hiccups.
 
+**DMARC report parse hardening (#129).** A message that looks like a DMARC aggregate report is decompressed + XML-parsed on the (unauthenticated) inbound path. Both steps are bounded so one crafted email can't take the receiver down: decompression uses fflate's **streaming** `Gunzip`/`Unzip` fed in slices and **aborts past a 25 MB output cap** (a ~1000:1 gzip bomb would otherwise OOM the process); XML parsing runs with `processEntities: false` and rejects any `<!DOCTYPE` (billion-laughs CPU bomb). On any of these the report is dropped and normal inbound storage takes over. See `src/modules/dmarc-reports/services/dmarc-parser.service.ts`.
+
 ### SMTP submission (authenticated relay, #120)
 
 The submission server (`src/modules/smtp-submission/services/smtp-submission.service.ts`, opt-in via `SMTP_SUBMISSION_ENABLED`) is a **deliberate relay** for authenticated clients — apps send *through* BunMail to arbitrary recipients. It is a different trust model from the inbound receiver, so its anti-abuse controls differ:
