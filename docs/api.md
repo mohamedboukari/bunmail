@@ -83,11 +83,14 @@ Oversize bodies return `422 Unprocessable Entity` from the validation layer.
     "to": "user@example.com",
     "subject": "Welcome!",
     "status": "queued",
+    "source": "api",
     "attempts": 0,
     "createdAt": "2026-03-15T12:00:00.000Z"
   }
 }
 ```
+
+The `source` field is the ingress channel the email arrived through: `api` (this REST endpoint) or `smtp` (the SMTP submission server, #120).
 
 ---
 
@@ -102,6 +105,7 @@ List emails for the authenticated API key with pagination.
 | `page`   | number | 1       | Page number (1-based)                        |
 | `limit`  | number | 20      | Items per page (1-100)                       |
 | `status` | string | —       | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
+| `source` | string | —       | Filter by ingress channel: `api` or `smtp` (#137) |
 
 ---
 

@@ -20,6 +20,7 @@ interface SerializedEmail {
   html: string | null;
   text: string | null;
   status: string;
+  source: string;
   attempts: number;
   lastError: string | null;
   messageId: string | null;
@@ -83,6 +84,7 @@ const mockEmail = {
   html: "<p>Test</p>",
   textContent: "Test",
   status: "queued",
+  source: "api",
   attempts: 0,
   lastError: null,
   messageId: null,
@@ -241,7 +243,31 @@ describe("Emails API E2E", () => {
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.id).toBe("msg_test123");
+      /** Serialized response exposes the ingress channel (#137). */
+      expect(body.data[0]!.source).toBe("api");
       expect(body.pagination.total).toBe(1);
+    });
+
+    test("accepts ?source= filter (#137)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails?source=smtp", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+      /** DTO accepts the value; handler passes it to the service. */
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as EmailListResponse;
+      expect(body.success).toBe(true);
+    });
+
+    test("rejects an invalid ?source= value (#137)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails?source=carrierpigeon", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+      /** Union literal validation → 422. */
+      expect(response.status).toBe(422);
     });
   });
 

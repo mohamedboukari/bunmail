@@ -5,6 +5,13 @@ import type { InferSelectModel } from "drizzle-orm";
 export type EmailStatus = "queued" | "sending" | "sent" | "failed" | "bounced";
 
 /**
+ * Ingress channel an email arrived through (#137):
+ *   - `api`  — REST `POST /api/v1/emails/send`
+ *   - `smtp` — the SMTP submission server (#120)
+ */
+export type EmailSource = "api" | "smtp";
+
+/**
  * The shape of an email row returned from the database.
  * Inferred directly from the Drizzle schema to stay in sync automatically.
  */
@@ -33,6 +40,16 @@ export interface SendEmailInput {
 export interface ListEmailsFilters {
   /** Filter by email status (e.g. only show "sent" or "failed") */
   status?: EmailStatus;
+
+  /** Filter by ingress channel — API vs SMTP submission (#137) */
+  source?: EmailSource;
+
+  /**
+   * Filter by the sending API key (#137). Dashboard-only — the public
+   * `listEmails` is already scoped to the calling key, so this is applied
+   * by the unscoped `listAllEmails` path the dashboard uses.
+   */
+  apiKeyId?: string;
 
   /** Page number for pagination (1-based) */
   page: number;

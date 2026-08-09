@@ -20,8 +20,48 @@ interface EmailsPageProps {
   limit: number;
   /** Currently active status filter (undefined = "all") */
   status?: string;
+  /** Currently active source filter — "api" | "smtp" (undefined = "all") — #137 */
+  source?: string;
+  /** Currently active API-key filter (undefined = "all keys") — #137 */
+  apiKeyId?: string;
+  /** API keys for the filter dropdown (operator/cross-key view) — #137 */
+  apiKeys?: { id: string; name: string; keyPrefix: string }[];
   /** Optional flash message shown after redirect (e.g. "Email moved to trash") */
   flash?: { message: string; type: "success" | "error" };
+}
+
+/**
+ * Builds a `/dashboard/emails` URL that preserves the current filters while
+ * overriding one of them (#137). Passing `null` for a key drops it. Keeps
+ * status tabs, the two dropdowns, and pagination composable.
+ */
+function emailsUrl(
+  current: { status?: string; source?: string; apiKeyId?: string },
+  override: { status?: string | null; source?: string | null; apiKeyId?: string | null },
+): string {
+  const merged = { ...current, ...override };
+  const params = new URLSearchParams();
+  if (merged.status) params.set("status", merged.status);
+  if (merged.source) params.set("source", merged.source);
+  if (merged.apiKeyId) params.set("apiKeyId", merged.apiKeyId);
+  const qs = params.toString();
+  return qs ? `/dashboard/emails?${qs}` : "/dashboard/emails";
+}
+
+/** Small per-row badge distinguishing API vs SMTP-submitted mail (#137). */
+function SourceBadge({ source }: { source: string }) {
+  const isSmtp = source === "smtp";
+  return (
+    <span
+      class={`px-2 py-0.5 text-xs rounded font-medium ${
+        isSmtp
+          ? "bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300"
+          : "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300"
+      }`}
+    >
+      {isSmtp ? "SMTP" : "API"}
+    </span>
+  );
 }
 
 /**
@@ -35,6 +75,9 @@ export function EmailsPage({
   page,
   limit,
   status,
+  source,
+  apiKeyId,
+  apiKeys = [],
   flash,
 }: EmailsPageProps) {
   /** Available status filter tabs */
@@ -46,6 +89,9 @@ export function EmailsPage({
     { label: "Failed", value: "failed" },
     { label: "Bounced", value: "bounced" },
   ];
+
+  /** Current filter state — used to build filter-preserving links. */
+  const activeFilters = { status, source, apiKeyId };
 
   return (
     <BaseLayout title="Emails" activeNav="emails">
@@ -61,23 +107,83 @@ export function EmailsPage({
 
       {flash && <FlashMessage message={flash.message} type={flash.type} />}
 
-      {/* Status filter tabs */}
-      <div class="flex gap-1 mb-4">
-        {filters.map((filter) => {
-          const isActive = (status ?? "") === filter.value;
-          return (
-            <a
-              href={`/dashboard/emails${filter.value ? `?status=${filter.value}` : ""}`}
-              class={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
-                isActive
-                  ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
-                  : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-              }`}
+      {/* Filter bar — status tabs (primary axis) + Source / API-key
+          dropdowns (#137). All three compose: each control preserves the
+          others via emailsUrl(). */}
+      <div class="flex flex-wrap items-center gap-3 mb-4">
+        {/* Status tabs */}
+        <div class="flex gap-1">
+          {filters.map((filter) => {
+            const isActive = (status ?? "") === filter.value;
+            return (
+              <a
+                href={emailsUrl(activeFilters, { status: filter.value || null })}
+                class={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                  isActive
+                    ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
+                    : "text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                }`}
+              >
+                {filter.label}
+              </a>
+            );
+          })}
+        </div>
+
+        <div class="flex items-center gap-3 ml-auto">
+          {/* Source dropdown — navigates on change, preserving other filters. */}
+          <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
+            Source
+            <select
+              class="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
+              onchange="location.assign(this.value)"
             >
-              {filter.label}
-            </a>
-          );
-        })}
+              <option
+                value={emailsUrl(activeFilters, { source: null })}
+                selected={!source}
+              >
+                All
+              </option>
+              <option
+                value={emailsUrl(activeFilters, { source: "api" })}
+                selected={source === "api"}
+              >
+                API
+              </option>
+              <option
+                value={emailsUrl(activeFilters, { source: "smtp" })}
+                selected={source === "smtp"}
+              >
+                SMTP
+              </option>
+            </select>
+          </label>
+
+          {/* API-key dropdown — operator/cross-key view (#137). */}
+          <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
+            API key
+            <select
+              class="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm max-w-[220px]"
+              onchange="location.assign(this.value)"
+            >
+              <option
+                value={emailsUrl(activeFilters, { apiKeyId: null })}
+                selected={!apiKeyId}
+              >
+                All keys
+              </option>
+              {apiKeys.map((k) => (
+                <option
+                  safe
+                  value={emailsUrl(activeFilters, { apiKeyId: k.id })}
+                  selected={apiKeyId === k.id}
+                >
+                  {`${k.name} (${k.keyPrefix}…)`}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
       {emails.length === 0 ? (
@@ -119,6 +225,9 @@ export function EmailsPage({
                       Status
                     </th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                      Source
+                    </th>
+                    <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                       From
                     </th>
                     <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
@@ -148,6 +257,9 @@ export function EmailsPage({
                       </td>
                       <td class="px-4 py-3">
                         <StatusBadge status={email.status} />
+                      </td>
+                      <td class="px-4 py-3">
+                        <SourceBadge source={email.source} />
                       </td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]">
                         <a
@@ -203,13 +315,21 @@ export function EmailsPage({
             />
           ))}
 
-          {/* Pagination */}
+          {/* Pagination — carry all active filters across pages (#137). */}
           <Pagination
             page={page}
             limit={limit}
             total={total}
             baseUrl="/dashboard/emails"
-            extraParams={status ? `status=${status}` : undefined}
+            extraParams={
+              [
+                status ? `status=${encodeURIComponent(status)}` : "",
+                source ? `source=${encodeURIComponent(source)}` : "",
+                apiKeyId ? `apiKeyId=${encodeURIComponent(apiKeyId)}` : "",
+              ]
+                .filter(Boolean)
+                .join("&") || undefined
+            }
           />
 
           {/* Selection-tracking script — toggles bulk bar and select-all checkbox */}

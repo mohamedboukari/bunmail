@@ -86,6 +86,7 @@ const email = {
   html: "<p>hello</p>",
   textContent: null,
   status: "sent" as const,
+  source: "api",
   attempts: 1,
   lastError: null,
   messageId: "<x@y>",

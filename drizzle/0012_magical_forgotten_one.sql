@@ -1,0 +1,1 @@
+ALTER TABLE "emails" ADD COLUMN "source" varchar(10) DEFAULT 'api' NOT NULL;

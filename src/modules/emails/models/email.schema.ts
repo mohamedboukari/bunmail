@@ -112,6 +112,16 @@ export const emails = pgTable(
      */
     status: varchar("status", { length: 20 }).notNull().default("queued"),
 
+    /**
+     * Ingress channel this email arrived through (#137):
+     *   - `api`  — REST `POST /api/v1/emails/send`
+     *   - `smtp` — the SMTP submission server (#120)
+     * Both funnel through `createEmail()`; this column is what lets the
+     * dashboard tell them apart. Defaults to `api` — the submission server
+     * is newer than every pre-existing row, so backfilled rows are all API.
+     */
+    source: varchar("source", { length: 10 }).notNull().default("api"),
+
     /** Number of send attempts so far (max 3 before marking as failed) */
     attempts: integer("attempts").notNull().default(0),
 

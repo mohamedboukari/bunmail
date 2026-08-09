@@ -6,7 +6,11 @@
 
 import { describe, test, expect, beforeEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import { createEmail } from "../../src/modules/emails/services/email.service.ts";
+import {
+  createEmail,
+  listEmails,
+  listAllEmails,
+} from "../../src/modules/emails/services/email.service.ts";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 
@@ -229,5 +233,89 @@ describe("createEmail — FK ON DELETE SET NULL", () => {
     expect(email?.domainId).toBeNull();
     /** Email row still exists — deleted domain shouldn't cascade-drop history. */
     expect(email?.id).toBe(emailId);
+  });
+});
+
+describe("createEmail — source channel + filters (#137)", () => {
+  test("defaults source to 'api'; SMTP path records 'smtp'", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+
+    const viaApi = await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "s", html: "<p>x</p>" },
+      apiKeyId,
+    );
+    const viaSmtp = await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "s", html: "<p>x</p>" },
+      apiKeyId,
+      "smtp",
+    );
+
+    expect(viaApi.source).toBe("api");
+    expect(viaSmtp.source).toBe("smtp");
+  });
+
+  test("listEmails filters by source (scoped to the calling key)", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "api", html: "<p>x</p>" },
+      apiKeyId,
+    );
+    await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "smtp", html: "<p>x</p>" },
+      apiKeyId,
+      "smtp",
+    );
+
+    const smtpOnly = await listEmails(apiKeyId, { page: 1, limit: 20, source: "smtp" });
+    expect(smtpOnly.total).toBe(1);
+    expect(smtpOnly.data[0]?.subject).toBe("smtp");
+
+    const apiOnly = await listEmails(apiKeyId, { page: 1, limit: 20, source: "api" });
+    expect(apiOnly.total).toBe(1);
+    expect(apiOnly.data[0]?.subject).toBe("api");
+
+    const all = await listEmails(apiKeyId, { page: 1, limit: 20 });
+    expect(all.total).toBe(2);
+  });
+
+  test("listAllEmails filters by apiKeyId (dashboard cross-key view)", async () => {
+    const { id: keyA } = await seed.apiKey({ name: "Key A" });
+    const { id: keyB } = await seed.apiKey({ name: "Key B" });
+    await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "fromA", html: "<p>x</p>" },
+      keyA,
+    );
+    await createEmail(
+      { from: "a@example.com", to: "u@example.org", subject: "fromB", html: "<p>x</p>" },
+      keyB,
+      "smtp",
+    );
+
+    const onlyA = await listAllEmails({ page: 1, limit: 20, apiKeyId: keyA });
+    expect(onlyA.total).toBe(1);
+    expect(onlyA.data[0]?.subject).toBe("fromA");
+
+    /** Compose apiKeyId + source: Key B + smtp → the one row. */
+    const bSmtp = await listAllEmails({
+      page: 1,
+      limit: 20,
+      apiKeyId: keyB,
+      source: "smtp",
+    });
+    expect(bSmtp.total).toBe(1);
+    expect(bSmtp.data[0]?.subject).toBe("fromB");
+
+    /** Key B + api → none (its only row is smtp). */
+    const bApi = await listAllEmails({
+      page: 1,
+      limit: 20,
+      apiKeyId: keyB,
+      source: "api",
+    });
+    expect(bApi.total).toBe(0);
+
+    /** Unfiltered → both. */
+    const all = await listAllEmails({ page: 1, limit: 20 });
+    expect(all.total).toBe(2);
   });
 });
