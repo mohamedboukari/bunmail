@@ -1,0 +1,52 @@
+# zizmor configuration — workflow security audit (#145).
+#
+# Every entry here is a DELIBERATE, justified exception. zizmor's default
+# findings are fixed in the workflows themselves wherever fixing is correct;
+# this file only silences findings that are intentional design decisions for
+# the Dependabot lockfile-sync workflow (which by its nature needs the
+# high-risk `pull_request_target` + credential persistence to push back).
+#
+# Docs: https://docs.zizmor.sh/configuration/
+
+rules:
+  # `dependabot-lockfile.yml` runs on `pull_request_target` ON PURPOSE: it
+  # must run in the base-repo context to push the regenerated `bun.lock`
+  # back to the Dependabot PR branch. It's gated on the dependabot actor and
+  # uses `--ignore-scripts`, and only reacts to `package.json` changes. This
+  # is the documented, accepted trade-off (see the file's header comment).
+  dangerous-triggers:
+    ignore:
+      - dependabot-lockfile.yml
+
+  # Same workflow: it deliberately persists the checkout credential because
+  # the "Commit + push lockfile" step pushes back to the PR branch. Removing
+  # the credential would break the workflow's entire purpose.
+  artipacked:
+    ignore:
+      - dependabot-lockfile.yml
+      # gitleaks needs the token to post its PR summary comment and a full
+      # clone (`fetch-depth: 0`) to scan history; the credential is required.
+      - security.yml:98
+
+  # The `github.actor == 'dependabot[bot]'` gate is the standard Dependabot
+  # pattern here: combined with `pull_request_target` from the SAME repo
+  # (forks can't set base-repo secrets) and `--ignore-scripts`, a spoofed
+  # actor can't reach the privileged push path. Accepted.
+  bot-conditions:
+    ignore:
+      - dependabot-lockfile.yml
+
+  # `security-events: write` is granted at the workflow level because THREE
+  # of this workflow's four jobs (trivy-fs, trivy-image, and CodeQL's
+  # upload-sarif) legitimately upload SARIF. Per-job duplication would be
+  # noisier than the single scoped grant; contents stays read-only.
+  excessive-permissions:
+    ignore:
+      - security.yml
+
+  # softprops/action-gh-release is a deliberate choice over a hand-rolled
+  # `gh release` script step — it generates release notes and handles the
+  # upload in one SHA-pinned action. Informational only.
+  superfluous-actions:
+    ignore:
+      - release.yml
