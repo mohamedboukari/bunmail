@@ -1,7 +1,7 @@
 {
   "name": "bunmail",
   "version": "0.8.0",
-  "description": "Self-hosted email API for developers — free alternative to SendGrid/Resend",
+  "description": "Self-hosted email API for developers \u2014 free alternative to SendGrid/Resend",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
@@ -40,25 +40,25 @@
     ]
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.0.2",
-    "@commitlint/config-conventional": "^21.0.2",
+    "@commitlint/cli": "^21.2.1",
+    "@commitlint/config-conventional": "^21.2.0",
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
     "@types/nodemailer": "^8.0.1",
     "@types/smtp-server": "^3.5.13",
-    "bumpp": "^12.0.0",
+    "bumpp": "^12.2.0",
     "drizzle-kit": "^0.31.10",
-    "eslint": "^10.5.0",
+    "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
-    "globals": "^17.6.0",
+    "globals": "^17.9.0",
     "husky": "^9.1.7",
-    "knip": "^6.17.1",
-    "lint-staged": "^17.0.7",
+    "knip": "^6.32.0",
+    "lint-staged": "^17.3.0",
     "postgres": "^3.4.9",
-    "prettier": "^3.8.4",
-    "typescript-eslint": "^8.61.1"
+    "prettier": "^3.9.6",
+    "typescript-eslint": "^8.66.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
@@ -69,21 +69,11 @@
     "@kitajs/html": "^4.2.13",
     "drizzle-orm": "^0.45.2",
     "elysia": "^1.4.29",
-    "fast-xml-parser": "^5.9.2",
+    "fast-xml-parser": "^5.10.1",
     "fflate": "^0.8.3",
     "file-type": "^22.0.1",
-    "mailparser": "^3.9.10",
-    "nodemailer": "^9.0.1",
-    "smtp-server": "^3.19.0"
-  },
-  "overrides": {
-    "defu": "^6.1.7",
-    "flatted": "^3.4.2",
-    "picomatch": "^4.0.4",
-    "yaml": "^2.8.4",
-    "file-type": "^22.0.1",
-    "brace-expansion": "^5.0.5",
-    "nodemailer": "9.0.1",
-    "linkify-it": "^5.0.2"
+    "mailparser": "^3.9.15",
+    "nodemailer": "^9.0.5",
+    "smtp-server": "^3.19.3"
   }
 }

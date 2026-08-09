@@ -183,8 +183,7 @@ function readRecord(record: Record<string, unknown>): ParsedDmarcRecord | null {
   if (!sourceIp) return null;
 
   const dkimAuth = toArray(authResults?.["dkim"])[0] as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   const spfAuth = toArray(authResults?.["spf"])[0] as Record<string, unknown> | undefined;
 
   return {
