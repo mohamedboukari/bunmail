@@ -26,7 +26,7 @@
 # ───────────────────────────────────────────────────────
 
 # ── Stage 1: Install all dependencies (incl. dev) ──
-FROM oven/bun:1.3.10 AS install
+FROM oven/bun:1.3.14 AS install
 
 WORKDIR /app
 
@@ -45,7 +45,7 @@ RUN bun install --frozen-lockfile --ignore-scripts
 # Separate stage so the run image gets node_modules without dev deps.
 # Without this stage the runtime carries drizzle-kit + esbuild, whose
 # bundled Go binaries pull ~36 (false-positive) CVEs into Trivy.
-FROM oven/bun:1.3.10 AS prod-deps
+FROM oven/bun:1.3.14 AS prod-deps
 
 WORKDIR /app
 
@@ -54,7 +54,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts --production
 
 # ── Stage 3: Run ──
-FROM oven/bun:1.3.10 AS run
+FROM oven/bun:1.3.14 AS run
 
 # Apply latest Debian security patches. The base image rebuilds on a
 # cadence, but new Debian CVE patches between rebuilds are exactly what
