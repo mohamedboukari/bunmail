@@ -23,4 +23,7 @@ export const listEmailsDto = t.Object({
       t.Literal("bounced"),
     ]),
   ),
+
+  /** Optional filter: only return emails from this ingress channel (#137) */
+  source: t.Optional(t.Union([t.Literal("api"), t.Literal("smtp")])),
 });

@@ -19,6 +19,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `html`          | text           | nullable                | HTML body                                   |
 | `text_content`  | text           | nullable                | Plain text body                             |
 | `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`. `sent` rows can later transition to `bounced` when a DSN comes back (#24). |
+| `source`        | varchar(10)    | NOT NULL, default `api` | Ingress channel: `api` (REST `POST /api/v1/emails/send`) or `smtp` (SMTP submission server, #120). Existing rows backfill to `api` (#137). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `last_error`    | text           | nullable                | Error message from last failed attempt      |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |

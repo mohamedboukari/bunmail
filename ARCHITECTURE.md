@@ -431,6 +431,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | html          | text           | nullable                        |
 | text_content  | text           | nullable                        |
 | status        | varchar(20)    | NOT NULL, default `'queued'`    |
+| source        | varchar(10)    | NOT NULL, default `'api'` (`api`\|`smtp`, #137) |
 | attempts      | integer        | NOT NULL, default `0`           |
 | last_error    | text           | nullable                        |
 | message_id    | varchar(255)   | nullable (SMTP Message-ID)      |

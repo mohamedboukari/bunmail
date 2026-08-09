@@ -78,6 +78,7 @@ export const emailsPlugin = new Elysia({
         page: query.page ?? 1,
         limit: query.limit ?? 20,
         status: query.status,
+        source: query.source,
       });
 
       return {

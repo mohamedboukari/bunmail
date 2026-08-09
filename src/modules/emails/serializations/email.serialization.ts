@@ -15,6 +15,8 @@ export interface SerializedEmail {
   html: string | null;
   text: string | null;
   status: string;
+  /** Ingress channel: "api" (REST) or "smtp" (submission server) — #137 */
+  source: string;
   attempts: number;
   lastError: string | null;
   messageId: string | null;
@@ -38,6 +40,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     html: email.html,
     text: email.textContent,
     status: email.status,
+    source: email.source,
     attempts: email.attempts,
     lastError: email.lastError,
     messageId: email.messageId,

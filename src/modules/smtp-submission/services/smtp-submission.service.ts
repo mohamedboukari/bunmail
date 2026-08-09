@@ -403,7 +403,8 @@ export function start(portOverride?: number): void {
             text: typeof parsed.text === "string" ? parsed.text : undefined,
           });
 
-          const email = await createEmail(input, apiKeyId);
+          /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
+          const email = await createEmail(input, apiKeyId, "smtp");
           await recordOutcome(apiKeyId, "accepted");
 
           logger.info("SMTP submission accepted — email queued", {

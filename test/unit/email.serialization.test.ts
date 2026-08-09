@@ -21,6 +21,7 @@ describe("serializeEmail", () => {
     html: "<p>Hello</p>",
     textContent: "Hello",
     status: "sent",
+    source: "api",
     attempts: 1,
     lastError: null,
     messageId: "<msg123@mail.example.com>",
@@ -65,6 +66,7 @@ describe("serializeEmail", () => {
     const result = serializeEmail(email);
     expect(result.id).toBe("msg_abc123");
     expect(result.status).toBe("sent");
+    expect(result.source).toBe("api");
     expect(result.attempts).toBe(1);
     expect(result.messageId).toBe("<msg123@mail.example.com>");
     expect(result.cc).toBe("cc@test.com");

@@ -14,7 +14,12 @@ import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
 import { config } from "../../../config.ts";
-import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.types.ts";
+import type {
+  SendEmailInput,
+  ListEmailsFilters,
+  Email,
+  EmailSource,
+} from "../types/email.types.ts";
 
 /**
  * Creates a new email record in the database with status `queued`.
@@ -28,6 +33,9 @@ import type { SendEmailInput, ListEmailsFilters, Email } from "../types/email.ty
 export async function createEmail(
   input: SendEmailInput,
   apiKeyId: string,
+  /** Ingress channel (#137). REST callers use the default; the SMTP
+   *  submission server passes `"smtp"`. */
+  source: EmailSource = "api",
 ): Promise<Email> {
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
@@ -152,6 +160,7 @@ export async function createEmail(
       subject,
       html: htmlContent,
       textContent,
+      source,
     })
     .returning();
 
@@ -212,15 +221,13 @@ export async function listEmails(
 
   /**
    * Build the WHERE clause — always filter by API key + exclude trashed,
-   * optionally by status.
+   * optionally by status and/or source (#137). The `apiKeyId` *filter*
+   * doesn't apply here: this list is already scoped to the calling key.
    */
-  const conditions = filters.status
-    ? and(
-        eq(emails.apiKeyId, apiKeyId),
-        isNull(emails.deletedAt),
-        eq(emails.status, filters.status),
-      )
-    : and(eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt));
+  const clauses = [eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt)];
+  if (filters.status) clauses.push(eq(emails.status, filters.status));
+  if (filters.source) clauses.push(eq(emails.source, filters.source));
+  const conditions = and(...clauses);
 
   /** Run data query and count query in parallel for better performance */
   const [data, [countRow]] = await Promise.all([
@@ -261,10 +268,15 @@ export async function listAllEmails(
 
   logger.debug("Listing all emails (unscoped)", { ...filters, offset });
 
-  /** Build WHERE clause — exclude trashed; optionally filter by status */
-  const conditions = filters.status
-    ? and(isNull(emails.deletedAt), eq(emails.status, filters.status))
-    : isNull(emails.deletedAt);
+  /**
+   * Build WHERE clause — exclude trashed; optionally filter by status,
+   * source, and (dashboard-only) the sending API key (#137).
+   */
+  const clauses = [isNull(emails.deletedAt)];
+  if (filters.status) clauses.push(eq(emails.status, filters.status));
+  if (filters.source) clauses.push(eq(emails.source, filters.source));
+  if (filters.apiKeyId) clauses.push(eq(emails.apiKeyId, filters.apiKeyId));
+  const conditions = and(...clauses);
 
   const [data, [countRow]] = await Promise.all([
     db

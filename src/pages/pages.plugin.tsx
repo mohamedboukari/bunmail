@@ -618,12 +618,22 @@ export const pagesPlugin = new Elysia({
       const page = query.page ? parseInt(query.page, 10) : 1;
       const limit = query.limit ? parseInt(query.limit, 10) : 20;
       const status = query.status || undefined;
+      /** Source + API-key filters (#137). Only pass through valid values. */
+      const source =
+        query.source === "api" || query.source === "smtp" ? query.source : undefined;
+      const apiKeyId = query.apiKeyId || undefined;
 
-      const { data, total } = await emailService.listAllEmails({
-        page,
-        limit,
-        status: status as EmailStatus | undefined,
-      });
+      const [{ data, total }, keys] = await Promise.all([
+        emailService.listAllEmails({
+          page,
+          limit,
+          status: status as EmailStatus | undefined,
+          source,
+          apiKeyId,
+        }),
+        /** Populate the API-key dropdown (operator/cross-key view, #137). */
+        apiKeyService.listApiKeys(),
+      ]);
 
       const flash = query.flash
         ? {
@@ -639,6 +649,9 @@ export const pagesPlugin = new Elysia({
           page={page}
           limit={limit}
           status={status}
+          source={source}
+          apiKeyId={apiKeyId}
+          apiKeys={keys.map((k) => ({ id: k.id, name: k.name, keyPrefix: k.keyPrefix }))}
           flash={flash}
         />
       );
@@ -648,6 +661,8 @@ export const pagesPlugin = new Elysia({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
         status: t.Optional(t.String()),
+        source: t.Optional(t.String()),
+        apiKeyId: t.Optional(t.String()),
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
       }),
