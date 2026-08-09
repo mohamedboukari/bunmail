@@ -154,7 +154,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
     });
     await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/bounce",
+      url: "https://93.184.216.34/bounce",
       events: ["email.bounced"],
     });
 
@@ -188,7 +188,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
     await waitForDispatch();
     expect(captured).toHaveLength(1);
     const req = captured[0]!;
-    expect(req.url).toBe("https://hook.example.com/bounce");
+    expect(req.url).toBe("https://93.184.216.34/bounce");
     expect(req.method).toBe("POST");
     expect(req.headers["x-bunmail-event"]).toBe("email.bounced");
     expect(req.headers["x-bunmail-signature"]).toMatch(/^[a-f0-9]{64}$/);
@@ -214,7 +214,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
     });
     await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/bounce",
+      url: "https://93.184.216.34/bounce",
       events: ["email.bounced"],
     });
 
@@ -271,7 +271,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
     });
     await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/bounce",
+      url: "https://93.184.216.34/bounce",
       events: ["email.bounced"],
     });
 
@@ -305,7 +305,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
     const { id: apiKeyId } = await seed.apiKey();
     await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/bounce",
+      url: "https://93.184.216.34/bounce",
       events: ["email.bounced"],
     });
 

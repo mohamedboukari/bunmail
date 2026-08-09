@@ -4,6 +4,8 @@ import { db } from "../../../db/index.ts";
 import { webhooks } from "../models/webhook.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { assertPublicWebhookUrl } from "../../../utils/ssrf-guard.ts";
+import { config } from "../../../config.ts";
 import type { Webhook, CreateWebhookInput } from "../types/webhook.types.ts";
 
 /**
@@ -16,6 +18,14 @@ export async function createWebhook(
   input: CreateWebhookInput,
   apiKeyId: string,
 ): Promise<{ webhook: Webhook; secret: string }> {
+  /**
+   * SSRF guard (#128): reject URLs that aren't https (unless http is opted
+   * in) or that resolve to a private/loopback/link-local/metadata address,
+   * before we ever store or deliver to them. Throws `BlockedUrlError`,
+   * mapped to HTTP 422 by the global error handler.
+   */
+  await assertPublicWebhookUrl(input.url, config.webhookDelivery.allowInsecureHttp);
+
   const id = generateId("whk");
   const secret = randomBytes(32).toString("hex");
 

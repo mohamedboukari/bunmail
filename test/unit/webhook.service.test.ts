@@ -23,6 +23,26 @@ function chainable<T>(result: T): T {
   return proxy as T;
 }
 
+/**
+ * Own the config mock (complete enough) so a leaked partial stub from an
+ * earlier unit file can't shadow `config.webhookDelivery` — `createWebhook`
+ * reads `config.webhookDelivery.allowInsecureHttp` for the SSRF guard (#128).
+ * Bun's `mock.module` leaks across files; registering ours here (before the
+ * import below) makes it the active one for this file. See the #121 fix.
+ */
+mock.module("../../src/config.ts", () => ({
+  config: {
+    env: "test",
+    database: { url: "postgres://test:test@localhost:5432/test" },
+    server: { port: 3000, host: "0.0.0.0" },
+    mail: { hostname: "localhost" },
+    dashboard: { password: "", sessionSecret: "test-secret" },
+    webhookDelivery: { retentionDays: 30, allowInsecureHttp: false },
+    logLevel: "error",
+    logRedactPii: false,
+  },
+}));
+
 mock.module("../../src/db/index.ts", () => ({
   db: {
     select: mock(() => chainable(selectResult)),
@@ -42,7 +62,7 @@ const {
 const baseHook = {
   id: "whk_x",
   apiKeyId: "key_owner",
-  url: "https://hook.example.com",
+  url: "https://93.184.216.34/hook",
   events: ["email.sent"],
   secret: "test-secret-32-bytes-padding-padding",
   isActive: true,
@@ -60,7 +80,7 @@ describe("createWebhook", () => {
   test("returns the inserted row + a 64-char hex secret", async () => {
     insertResult = [baseHook];
     const result = await createWebhook(
-      { url: "https://hook.example.com", events: ["email.sent"] },
+      { url: "https://93.184.216.34/hook", events: ["email.sent"] },
       "key_owner",
     );
     expect(result.webhook.id).toBe("whk_x");

@@ -12,6 +12,7 @@ import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.t
 import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import { UnauthorizedSenderError } from "./modules/api-keys/errors.ts";
+import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
@@ -153,6 +154,15 @@ const app = new Elysia()
         code: "UNAUTHORIZED_SENDER",
         sender: error.sender,
       };
+    }
+
+    /**
+     * Webhook URL rejected by the SSRF guard (#128) → 422. Surfaces at
+     * create time so the caller sees why the URL was refused.
+     */
+    if (error instanceof BlockedUrlError) {
+      set.status = 422;
+      return { success: false, error: error.message, code: "WEBHOOK_URL_BLOCKED" };
     }
 
     const message = error instanceof Error ? error.message : "Internal server error";

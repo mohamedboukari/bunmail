@@ -65,7 +65,7 @@ describe("enqueueDelivery — initial state", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
 
@@ -102,7 +102,7 @@ describe("worker poll cycle — happy path (2xx response → delivered)", () => 
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
       secret: "unit-test-secret",
     });
@@ -116,7 +116,7 @@ describe("worker poll cycle — happy path (2xx response → delivered)", () => 
 
     /** Captured one HTTP request with the right shape. */
     expect(captured).toHaveLength(1);
-    expect(captured[0]?.url).toBe("https://hook.example.com/x");
+    expect(captured[0]?.url).toBe("https://93.184.216.34/x");
     expect(captured[0]?.headers.get("x-bunmail-event")).toBe("email.sent");
     expect(captured[0]?.headers.get("x-bunmail-signature")).toMatch(/^[a-f0-9]{64}$/);
     expect(captured[0]?.headers.get("x-bunmail-timestamp")).toMatch(/^\d{10}$/);
@@ -136,7 +136,7 @@ describe("worker poll cycle — non-2xx response reschedules with backoff", () =
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const before = Date.now();
@@ -165,7 +165,7 @@ describe("worker poll cycle — non-2xx response reschedules with backoff", () =
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: deliveryId } = await enqueueDelivery({
@@ -190,7 +190,7 @@ describe("worker poll cycle — exhausting retries flips status=failed", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: deliveryId } = await enqueueDelivery({
@@ -227,7 +227,7 @@ describe("worker poll cycle — only claims due rows", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: dueId } = await enqueueDelivery({ webhookId, envelope: envelope() });
@@ -262,7 +262,7 @@ describe("worker poll cycle — concurrent workers see disjoint claims", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const ids: string[] = [];
@@ -302,7 +302,7 @@ describe("worker poll cycle — webhook deactivated after enqueue is skipped + m
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: deliveryId } = await enqueueDelivery({
@@ -328,7 +328,7 @@ describe("replayDelivery — resets a failed row to pending", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: deliveryId } = await enqueueDelivery({
@@ -369,7 +369,7 @@ describe("replayDelivery — resets a failed row to pending", () => {
     const { id: keyB } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId: keyA,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: deliveryId } = await enqueueDelivery({
@@ -417,7 +417,7 @@ describe("listDeliveriesForWebhook — pagination + status filter + tenant scopi
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
 
@@ -474,7 +474,7 @@ describe("purgeOldDeliveries — retention cleanup", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     const { id: oldDelivered } = await enqueueDelivery({
@@ -540,14 +540,14 @@ describe("performHttpAttempt — re-signs per attempt", () => {
      *  clock by sleeping ~1.1s between calls so the unix-second
      *  timestamps differ. */
     await performHttpAttempt({
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       secret: "s",
       body: "{}",
       event: "email.sent",
     });
     await new Promise((r) => setTimeout(r, 1_100));
     await performHttpAttempt({
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       secret: "s",
       body: "{}",
       event: "email.sent",
@@ -565,7 +565,7 @@ describe("CASCADE on webhook delete — deliveries vanish too", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
       apiKeyId,
-      url: "https://hook.example.com/x",
+      url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
     for (let i = 0; i < 3; i++) {

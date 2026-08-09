@@ -354,5 +354,14 @@ export const config = {
      * months after the fact.
      */
     retentionDays: parseInt(optionalEnv("WEBHOOK_DELIVERY_RETENTION_DAYS", "30"), 10),
+
+    /**
+     * SSRF guard (#128). Webhook URLs must be `https` and must not resolve
+     * to a private/loopback/link-local/metadata address. Set
+     * `WEBHOOK_ALLOW_INSECURE_HTTP=true` to also permit `http:` targets
+     * (e.g. an internal-but-public receiver without TLS) — the
+     * private-range block still applies either way.
+     */
+    allowInsecureHttp: optionalEnv("WEBHOOK_ALLOW_INSECURE_HTTP", "false") === "true",
   },
 } as const;

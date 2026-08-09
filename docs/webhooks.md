@@ -2,6 +2,16 @@
 
 Sends real-time event notifications to registered HTTP endpoints when email status changes.
 
+## URL requirements & SSRF guard (#128)
+
+Because BunMail fetches webhook URLs server-side (and the response is readable via the delivery API), URLs are validated at **creation** and re-validated **before every delivery attempt**:
+
+- Must be **`https`**. To allow plaintext `http` targets, set `WEBHOOK_ALLOW_INSECURE_HTTP=true` (the private-range block below still applies).
+- The host is **DNS-resolved**, and the URL is **rejected if any resolved address is private/loopback/link-local/ULA/CGNAT/metadata** — `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16` (incl. `169.254.169.254`), `100.64/10`, `::1`, `fc00::/7`, `fe80::/10`, and v4-mapped equivalents.
+- **Redirects are not followed** (`redirect: "manual"`) — a 3xx counts as a failed delivery, so it can't bounce into an internal address.
+
+A rejected URL at create time returns **HTTP 422** `{ "code": "WEBHOOK_URL_BLOCKED" }`. A URL that only becomes internal later (DNS rebinding, or a row created before this guard) is caught at delivery time and recorded as a failed attempt.
+
 ## Module Layout
 
 ```

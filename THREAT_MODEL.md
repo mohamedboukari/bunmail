@@ -122,6 +122,7 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 ### Webhooks
 
 - Outgoing webhook payloads are HMAC-SHA256 signed using the per-webhook secret. The signature covers `<unix-timestamp>.<raw-body>`; the timestamp is shipped in the `X-BunMail-Timestamp` header and the signature in `X-BunMail-Signature` (#43). Each retry attempt is signed with a fresh timestamp, so a replayed delivery from yesterday fails the freshness check on the receiver. Recommended consumer check: `|now - timestamp| < 5 min`.
+- **SSRF guard (#128).** Webhook URLs are tenant-supplied and fetched server-side, and the response is read back through the delivery API — so an unvalidated URL is an *exfiltrating* SSRF. `src/utils/ssrf-guard.ts` validates every URL **at creation and again before each delivery attempt** (DNS can rebind): scheme must be `https` (or `http` only if `WEBHOOK_ALLOW_INSECURE_HTTP=true`), and the host is resolved and rejected if any address is private/loopback/link-local/ULA/CGNAT/metadata (incl. `169.254.169.254` and v4-mapped v6). Delivery uses `redirect: "manual"` so a 3xx into an internal address can't bypass the check. **Residual:** the guard resolves DNS then fetches (a small TOCTOU window remains against a sub-second rebind); an egress firewall / proxy is the belt-and-suspenders control for hostile multi-tenant use.
 
 ### Dashboard XSS
 
