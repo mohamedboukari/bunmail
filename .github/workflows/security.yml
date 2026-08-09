@@ -36,6 +36,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Lints the workflow files themselves for CI/CD security smells —
+  # unpinned actions, template-injection via ${{ }}, dangerous triggers
+  # (e.g. pull_request_target misuse), and over-broad permissions. Our
+  # workflows are already SHA-pinned + least-privilege; this is the
+  # standing guard that keeps a future edit from regressing that. Findings
+  # upload to the Security tab as SARIF (#145).
+  zizmor:
+    name: zizmor (workflow audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
+
   trivy-fs:
     name: Trivy filesystem scan
     runs-on: ubuntu-latest

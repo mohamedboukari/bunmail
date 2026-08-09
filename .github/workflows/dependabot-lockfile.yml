@@ -61,6 +61,13 @@ jobs:
         run: bun install --ignore-scripts
 
       - name: Commit + push lockfile if it changed
+        # The PR title is passed via `env` (a shell variable), NOT
+        # interpolated as `${{ }}` into the script — a `${{ }}` expansion
+        # would splice an attacker-controllable PR title straight into the
+        # shell (code injection). As a plain env var it's inert data.
+        # zizmor: template-injection.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           if git diff --quiet bun.lock; then
             echo "bun.lock is already in sync — nothing to do."
@@ -69,5 +76,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add bun.lock
-          git commit -m "chore: sync bun.lock for $(echo '${{ github.event.pull_request.title }}' | sed -e 's/^chore(deps): bump //' -e 's/^ci(deps): bump //')"
+          # Strip the dependabot prefix from the (untrusted) title for the
+          # commit subject; quoting keeps it a single data argument.
+          SUBJECT="$(printf '%s' "$PR_TITLE" | sed -e 's/^chore(deps): bump //' -e 's/^ci(deps): bump //')"
+          git commit -m "chore: sync bun.lock for ${SUBJECT}"
           git push
