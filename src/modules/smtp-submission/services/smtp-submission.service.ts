@@ -174,6 +174,26 @@ export function start(portOverride?: number): void {
     }
   }
 
+  /**
+   * Refuse to accept AUTH credentials in cleartext by default (#133). The
+   * password is a full-privilege `bm_live_…` key. Plaintext AUTH is only
+   * allowed when TLS is configured (clients STARTTLS first) or the operator
+   * has explicitly opted in via `SMTP_SUBMISSION_ALLOW_INSECURE=true` for a
+   * trusted-network deployment. Failing fast here beats silently leaking
+   * keys on the wire.
+   */
+  const allowInsecureAuth = config.smtpSubmission.allowInsecureAuth;
+  if (!tlsOptions && !allowInsecureAuth) {
+    throw new Error(
+      "[smtp-submission] Refusing to start: AUTH would be accepted over a\n" +
+        "  plaintext connection, and the password is a full-privilege API key.\n" +
+        "  → Configure TLS (SMTP_SUBMISSION_TLS_CERT + SMTP_SUBMISSION_TLS_KEY)\n" +
+        "    so clients STARTTLS before AUTH, OR set\n" +
+        "    SMTP_SUBMISSION_ALLOW_INSECURE=true if the server is only reachable\n" +
+        "    over a trusted network (same host / private Docker network).",
+    );
+  }
+
   server = new SMTPServer({
     ...tlsOptions,
     secure: false,
@@ -182,12 +202,12 @@ export function start(portOverride?: number): void {
     /** Only password-based mechanisms; the password carries the API key. */
     authMethods: ["PLAIN", "LOGIN"],
     /**
-     * Allow AUTH over a plaintext connection. Acceptable on a trusted
-     * network (same host / private Docker network) — the common
-     * self-hosted case. Operators exposing this beyond a trusted network
-     * should configure SMTP_SUBMISSION_TLS_* and front it appropriately.
+     * Allow AUTH over a plaintext connection only when opted in (#133).
+     * `false` by default; the `start()` guard above already refuses to boot
+     * with neither TLS nor the explicit opt-in, so reaching here with
+     * `false` means TLS is configured and clients STARTTLS before AUTH.
      */
-    allowInsecureAuth: true,
+    allowInsecureAuth,
     size: MAX_MESSAGE_BYTES,
 
     /**

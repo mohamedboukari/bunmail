@@ -7,7 +7,7 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 | Env Variable                       | Required | Default       | Description                                  |
 |------------------------------------|----------|---------------|----------------------------------------------|
 | DASHBOARD_PASSWORD                 | No       | _(empty)_     | Password to access dashboard. Empty = disabled |
-| SESSION_SECRET                     | No       | random UUID   | Secret for HMAC session cookies              |
+| SESSION_SECRET                     | **Prod** | random UUID   | HMAC key for session cookies. **Required when `BUNMAIL_ENV=production`** (app refuses to start without it); random per-process in dev. Generate with `openssl rand -hex 32`. |
 | DASHBOARD_TRUSTED_PROXY_HOPS       | No       | `0`           | Trusted reverse-proxy hops in front of BunMail, used to resolve the real client IP for login rate limiting. `0` = trust only the raw socket IP. Set to `1` behind a single nginx/Caddy/Cloudflare (`N` for `N` chained proxies). |
 | DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
 | DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout |

@@ -174,7 +174,19 @@ const app = new Elysia()
     });
 
     set.status = 500;
-    return { success: false, error: message };
+    /**
+     * Never return the raw exception message in production (#133). Driver
+     * errors embed table/column/query fragments → schema disclosure. The
+     * detail is logged server-side above; the client gets a generic string.
+     * Mapped errors (suppression / unauthorized-sender / blocked-URL) are
+     * handled and returned before this fall-through, so this only masks the
+     * genuinely unexpected 500s. In development we keep the message to aid
+     * debugging.
+     */
+    return {
+      success: false,
+      error: config.env === "production" ? "Internal server error" : message,
+    };
   })
   /** Favicon — SVG served at /favicon.svg */
   .use(faviconPlugin)

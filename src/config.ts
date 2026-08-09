@@ -90,6 +90,32 @@ function readDashboardPassword(env: "development" | "production"): string {
 }
 
 /**
+ * Reads the dashboard session-cookie HMAC secret (#133).
+ *
+ * In development we fall back to a random per-process UUID so `bun run dev`
+ * works with zero config. In **production** that fallback is dangerous: the
+ * secret would differ per process/replica (sessions silently invalidate on
+ * every restart, and multi-replica deploys reject each other's cookies),
+ * which pushes operators toward hardcoding a weak value. So production
+ * requires an explicit `SESSION_SECRET`, mirroring the `DASHBOARD_PASSWORD`
+ * guard — fail fast with a clear message instead of a silent weak default.
+ */
+function readSessionSecret(env: "development" | "production"): string {
+  const secret = optionalEnv("SESSION_SECRET", "");
+  if (env === "production" && secret === "") {
+    throw new Error(
+      "[config] SESSION_SECRET must be set when BUNMAIL_ENV=production.\n" +
+        "  → It is the HMAC key for dashboard session cookies. Without a\n" +
+        "    stable value, sessions reset on every restart and multi-replica\n" +
+        "    deploys reject each other's cookies. Generate one with\n" +
+        "    `openssl rand -hex 32` and put it in your .env.",
+    );
+  }
+  /** Dev fallback: a random per-process secret (resets on restart). */
+  return secret === "" ? randomUUID() : secret;
+}
+
+/**
  * Central application configuration.
  *
  * Every setting is read from environment variables at import time.
@@ -202,6 +228,19 @@ export const config = {
     },
 
     /**
+     * Allow AUTH over a plaintext (non-TLS) connection (#133). The password
+     * is a full-privilege `bm_live_…` key, so plaintext AUTH exposes it to
+     * anyone who can sniff the link. Defaults to **false** — set
+     * `SMTP_SUBMISSION_ALLOW_INSECURE=true` only when the submission server
+     * is reachable solely over a trusted network (same host / private
+     * Docker network) and you accept the risk. When TLS is configured
+     * (`SMTP_SUBMISSION_TLS_*`), clients STARTTLS before AUTH and this flag
+     * is irrelevant. When neither TLS nor this flag is set, the server
+     * refuses to start rather than silently accept cleartext credentials.
+     */
+    allowInsecureAuth: optionalEnv("SMTP_SUBMISSION_ALLOW_INSECURE", "false") === "true",
+
+    /**
      * Per-IP connection rate limiting (sliding window), mirroring the
      * inbound receiver. Blunts abusive connection churn.
      */
@@ -262,8 +301,14 @@ export const config = {
     password: readDashboardPassword(
       optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
     ),
-    /** HMAC secret for session cookies; random UUID by default (resets on restart) */
-    sessionSecret: optionalEnv("SESSION_SECRET", randomUUID()),
+    /**
+     * HMAC secret for session cookies. Required in production; a random
+     * per-process UUID in development (resets on restart). See
+     * `readSessionSecret` (#133).
+     */
+    sessionSecret: readSessionSecret(
+      optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
+    ),
 
     /**
      * Number of trusted reverse-proxy hops in front of BunMail, used to

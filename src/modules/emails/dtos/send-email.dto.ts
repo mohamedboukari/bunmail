@@ -19,11 +19,19 @@ export const MAX_BODY_LENGTH = 5 * 1024 * 1024;
 export const sendEmailDto = t.Object({
   from: t.String({ format: "email" }),
   to: t.String({ format: "email" }),
-  cc: t.Optional(t.String()),
-  bcc: t.Optional(t.String()),
+  /**
+   * `cc`/`bcc` accept a comma-separated address list, so `format: "email"`
+   * (single-address) can't be used. As header-injection defense-in-depth
+   * (#133) we cap the length and reject any CR/LF — a newline in an address
+   * field is the classic SMTP header-injection vector. `\r`/`\n` are matched
+   * via unicode escapes so the intent is explicit. Semantic address parsing
+   * still happens downstream in nodemailer.
+   */
+  cc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
+  bcc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
 
-  /** Required when not using a template */
-  subject: t.Optional(t.String({ maxLength: 500 })),
+  /** Required when not using a template. CR/LF rejected (header injection). */
+  subject: t.Optional(t.String({ maxLength: 500, pattern: "^[^\\u000d\\u000a]*$" })),
   html: t.Optional(t.String({ maxLength: MAX_BODY_LENGTH })),
   text: t.Optional(t.String({ maxLength: MAX_BODY_LENGTH })),
 

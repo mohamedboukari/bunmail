@@ -23,6 +23,15 @@
  * the dev data on every TRUNCATE.
  */
 
+/**
+ * Integration tests exercise the SMTP submission server over plaintext
+ * (no TLS material), which the service now refuses by default (#133). Opt
+ * in here — set before the app's `config` module loads — so the tests can
+ * bind the submission server without a cert. Real deployments set TLS or
+ * this flag deliberately; the test env is a trusted loopback.
+ */
+process.env["SMTP_SUBMISSION_ALLOW_INSECURE"] = "true";
+
 const explicit = process.env["INTEGRATION_DATABASE_URL"];
 if (explicit) {
   process.env["DATABASE_URL"] = explicit;
