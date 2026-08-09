@@ -401,6 +401,8 @@ Get a single report with its per-source-IP records and computed alignment totals
 
 All API key endpoints are prefixed with `/api/v1/api-keys`.
 
+> **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains` and `/api/v1/inbound`. `is_admin` is shown in responses but is **not settable via the API** — only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
+
 #### `POST /api/v1/api-keys`
 
 Create a new API key. The raw key is returned **once** — store it securely.
@@ -546,7 +548,7 @@ Some responses carry additional structured fields — e.g. suppression-list reje
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|
 | 401    | Missing or invalid token                        |
-| 403    | Authenticated but not permitted (e.g. `From` not in the key's allowed-senders list) |
+| 403    | Authenticated but not permitted — `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130) |
 | 404    | Resource not found                              |
 | 422    | Validation error                                |
 | 429    | Rate limit exceeded                             |

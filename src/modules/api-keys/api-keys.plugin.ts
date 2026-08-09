@@ -3,7 +3,7 @@ import { createApiKeyDto } from "./dtos/create-api-key.dto.ts";
 import { updateApiKeyDto } from "./dtos/update-api-key.dto.ts";
 import { serializeApiKey } from "./serializations/api-key.serialization.ts";
 import * as apiKeyService from "./services/api-key.service.ts";
-import { authMiddleware } from "../../middleware/auth.ts";
+import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
@@ -27,6 +27,8 @@ export const apiKeysPlugin = new Elysia({
 })
   /** Apply auth middleware — all routes in this plugin require a valid Bearer token */
   .use(authMiddleware)
+  /** Management plane — admin keys only (#130). Restricted keys get 403. */
+  .use(adminMiddleware)
   /** Apply rate limiting — 100 requests per 60 seconds per API key */
   .use(rateLimitMiddleware)
 

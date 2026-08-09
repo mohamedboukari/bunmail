@@ -450,6 +450,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | key_hash     | varchar(255)   | NOT NULL, UNIQUE                |
 | key_prefix   | varchar(12)    | NOT NULL                        |
 | is_active    | boolean        | NOT NULL, default `true`        |
+| is_admin     | boolean        | NOT NULL, default `false` — admin (management plane) vs restricted / send-only (#130); operator-set only |
 | allowed_senders | jsonb       | NOT NULL, default `[]` — `From` allowlist (#126); empty = unrestricted |
 | last_used_at | timestamp      | nullable                        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
@@ -801,7 +802,8 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 - **Key format:** `bm_live_<random>` (e.g., `bm_live_a1b2c3d4e5f6g7h8`)
 - **Storage:** Only SHA-256 hash stored in DB; raw key shown once at creation
 - **Lookup:** Hash incoming token → match against `key_hash` column
-- **Bootstrap:** Run `bun run seed` to create the first API key
+- **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane — `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound` — returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
+- **Bootstrap:** Run `bun run seed` to create the first API key (admin)
 
 ---
 

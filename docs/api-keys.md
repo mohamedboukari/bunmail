@@ -42,6 +42,7 @@ Client                     Server
 | `key_hash`    | varchar(255)   | NOT NULL, UNIQUE     | SHA-256 hash of raw key                   |
 | `key_prefix`  | varchar(12)    | NOT NULL             | First 12 chars of raw key                 |
 | `is_active`   | boolean        | NOT NULL, default true | Soft-delete flag                        |
+| `is_admin`    | boolean        | NOT NULL, default false | Admin (management-plane) vs restricted / send-only (#130). Operator-set only. |
 | `allowed_senders` | jsonb      | NOT NULL, default `[]` | Allowlist of `From` addresses this key may send from (#126). Empty = unrestricted. |
 | `last_used_at`| timestamp      | nullable             | Updated on each successful auth           |
 | `created_at`  | timestamp      | NOT NULL, default now | Creation timestamp                       |
@@ -88,6 +89,19 @@ Looks up an API key by its SHA-256 hash. Used internally by the auth middleware.
 ### `findById(id: string): Promise<ApiKey | undefined>`
 
 Looks up an API key by ID. Used by the `createEmail` allowed-senders gate (#126) and by `updateApiKey`.
+
+## Admin vs. restricted keys (#130)
+
+API keys come in two tiers:
+
+- **Admin** — may call the **management plane**: `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`. Full operator-level API access.
+- **Restricted** (the default for API-created keys) — **send-only + own data**: send email, and read/manage its own emails, suppressions, templates, webhooks, and submission stats. Calling a management-plane endpoint returns **HTTP 403** with `{ code: "ADMIN_REQUIRED" }`.
+
+This is what makes the allowed-senders allowlist (#126) actually enforceable: without it, a "restricted" key could simply `PATCH` its own `allowedSenders` back to empty (re-enabling spoofing), read all inbound mail, or mint new keys. Restricting the management plane closes that.
+
+**`is_admin` is operator-only.** It is settable **only from the dashboard** — a checkbox on the create form and a per-key **Make admin / Make restricted** toggle — plus the seed script. It appears in **no REST request body** (neither `POST` nor `PATCH /api/v1/api-keys/:id`), so an API caller (even an admin key) can never grant admin. `setApiKeyAdmin()` is the only mutation path and is dashboard-only.
+
+**Migration note:** existing keys were backfilled to **admin** (`is_admin = true`) so nothing breaks on upgrade. After deploying, **demote any key you hand to an app or developer** to restricted from the dashboard. New API-created keys default to restricted. The seed/bootstrap key is admin.
 
 ## Allowed senders (anti-spoofing, #126)
 

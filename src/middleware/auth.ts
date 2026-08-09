@@ -15,6 +15,8 @@ import { logger } from "../utils/logger.ts";
 interface AuthenticatedKey {
   id: string;
   name: string;
+  /** Admin keys may call the management plane (#130). */
+  isAdmin: boolean;
 }
 const authCache = new WeakMap<Request, AuthenticatedKey>();
 
@@ -87,6 +89,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
         id: apiKeys.id,
         name: apiKeys.name,
         isActive: apiKeys.isActive,
+        isAdmin: apiKeys.isAdmin,
       })
       .from(apiKeys)
       .where(eq(apiKeys.keyHash, tokenHash));
@@ -106,7 +109,11 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     }
 
     /** Stash for `resolve` so it doesn't re-hash + re-query */
-    authCache.set(request, { id: apiKey.id, name: apiKey.name });
+    authCache.set(request, {
+      id: apiKey.id,
+      name: apiKey.name,
+      isAdmin: apiKey.isAdmin,
+    });
   })
   /**
    * Resolve — injects API key identity into the request context.
@@ -153,6 +160,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     return {
       apiKeyId: cached.id,
       apiKeyName: cached.name,
+      apiKeyIsAdmin: cached.isAdmin,
     };
   })
   /**
@@ -160,4 +168,31 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
    * and resolve() stay encapsulated inside this plugin and don't apply
    * to routes defined in the parent (e.g. emailsPlugin).
    */
+  .as("scoped");
+
+/**
+ * Admin guard (#130). Use **after** `authMiddleware` on the management-plane
+ * plugins (api-keys, domains, inbound): it reads the same per-request
+ * `authCache` that `authMiddleware.onBeforeHandle` populated and rejects any
+ * non-admin key with 403. Restricted (send-only) keys therefore cannot reach
+ * key management, domain management, or inbound mail — which is what makes the
+ * allowed-senders boundary (#126) actually enforceable.
+ *
+ * Usage: `.use(authMiddleware).use(adminMiddleware)`.
+ */
+export const adminMiddleware = new Elysia({ name: "admin-middleware" })
+  .onBeforeHandle(({ request, set }) => {
+    const cached = authCache.get(request);
+    if (!cached || !cached.isAdmin) {
+      logger.warn("Admin-only endpoint rejected non-admin key", {
+        apiKeyId: cached?.id,
+      });
+      set.status = 403;
+      return {
+        success: false,
+        error: "This endpoint requires an admin API key.",
+        code: "ADMIN_REQUIRED",
+      };
+    }
+  })
   .as("scoped");

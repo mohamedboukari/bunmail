@@ -69,6 +69,21 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
               it from spoofing other identities (e.g. your CEO).
             </p>
           </div>
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              name="isAdmin"
+              class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+            />
+            <span class="text-sm text-gray-700 dark:text-gray-300">
+              Admin key
+              <span class="block text-xs text-gray-500 dark:text-gray-400">
+                Can manage keys, domains, and read inbound mail. Leave unchecked for a
+                restricted <strong>send-only</strong> key (recommended for keys you hand
+                to apps or developers).
+              </span>
+            </span>
+          </label>
           <button
             type="submit"
             class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors whitespace-nowrap"
@@ -94,6 +109,9 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Status
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Access
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Last Used
@@ -128,6 +146,39 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                         Revoked
                       </span>
                     )}
+                  </td>
+                  {/* Access: Admin vs Restricted + a promote/demote toggle (#130) */}
+                  <td class="px-4 py-3">
+                    <div class="flex items-center gap-2">
+                      {key.isAdmin ? (
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                          Admin
+                        </span>
+                      ) : (
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                          Restricted
+                        </span>
+                      )}
+                      {key.isActive && (
+                        <form
+                          method="POST"
+                          action={`/dashboard/api-keys/${key.id}/admin`}
+                          class="inline"
+                        >
+                          <input
+                            type="hidden"
+                            name="isAdmin"
+                            value={key.isAdmin ? "false" : "true"}
+                          />
+                          <button
+                            type="submit"
+                            class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 underline"
+                          >
+                            {key.isAdmin ? "Make restricted" : "Make admin"}
+                          </button>
+                        </form>
+                      )}
+                    </div>
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={key.lastUsedAt} fallback="Never" />

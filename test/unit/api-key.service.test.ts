@@ -34,6 +34,7 @@ const baseKey = {
   keyHash: "abc123",
   keyPrefix: "bm_live_xxxx",
   isActive: true,
+  isAdmin: false,
   allowedSenders: [] as string[],
   lastUsedAt: null,
   createdAt: new Date(),

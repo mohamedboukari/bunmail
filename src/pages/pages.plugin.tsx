@@ -796,9 +796,14 @@ export const pagesPlugin = new Elysia({
           name: body.name,
           /** Chip input submits a comma-joined string; split to an array. */
           allowedSenders: parseSenderList(body.allowedSenders),
+          /** Checkbox → "on" when ticked; operator-only admin grant (#130). */
+          isAdmin: body.isAdmin === "on",
         });
 
-        logger.info("API key created via dashboard", { name: body.name });
+        logger.info("API key created via dashboard", {
+          name: body.name,
+          isAdmin: body.isAdmin === "on",
+        });
 
         /** Redirect with raw key in query — shown once in a flash message */
         set.status = 302;
@@ -818,7 +823,32 @@ export const pagesPlugin = new Elysia({
       body: t.Object({
         name: t.String(),
         allowedSenders: t.Optional(t.String()),
+        isAdmin: t.Optional(t.String()),
       }),
+    },
+  )
+
+  /**
+   * POST /dashboard/api-keys/:id/admin
+   * Promotes/demotes a key's admin flag (#130). Operator-only — this route
+   * lives on the dashboard (session auth), and `setApiKeyAdmin` is not
+   * reachable from any REST DTO, so an API key can never grant itself admin.
+   */
+  .post(
+    "/api-keys/:id/admin",
+    async ({ params, body, set }) => {
+      const isAdmin = body.isAdmin === "true";
+      const updated = await apiKeyService.setApiKeyAdmin(params.id, isAdmin);
+
+      set.status = 302;
+      set.headers["location"] = updated
+        ? `/dashboard/api-keys?flash=${encodeURIComponent(isAdmin ? "Key promoted to admin" : "Key set to restricted")}`
+        : `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+      return "";
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({ isAdmin: t.String() }),
     },
   )
 
