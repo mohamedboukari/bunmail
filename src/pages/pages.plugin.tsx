@@ -1458,8 +1458,7 @@ export const pagesPlugin = new Elysia({
         ? {
             message: query.flash,
             type: (query.flashType === "error" ? "error" : "success") as
-              | "success"
-              | "error",
+              "success" | "error",
           }
         : undefined;
 
