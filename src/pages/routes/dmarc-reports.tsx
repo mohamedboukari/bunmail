@@ -58,6 +58,7 @@ export function DmarcReportsPage({
           </a>
           {domains.map((d) => (
             <a
+              safe
               href={`/dashboard/dmarc-reports?domain=${encodeURIComponent(d)}`}
               class={`px-3 py-1 rounded text-sm ${
                 domainFilter === d
@@ -100,19 +101,25 @@ export function DmarcReportsPage({
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                   <td class="px-4 py-3">
                     <a
+                      safe
                       href={`/dashboard/dmarc-reports/${r.id}`}
                       class="text-blue-600 dark:text-blue-400 hover:underline"
                     >
                       {r.orgName}
                     </a>
                   </td>
-                  <td class="px-4 py-3 font-mono text-xs">{r.domain}</td>
+                  <td safe class="px-4 py-3 font-mono text-xs">
+                    {r.domain}
+                  </td>
                   <td class="px-4 py-3 text-gray-600 dark:text-gray-400 text-xs">
                     <TimeDisplay value={r.dateBegin} /> →{" "}
                     <TimeDisplay value={r.dateEnd} />
                   </td>
                   <td class="px-4 py-3">
-                    <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800">
+                    <span
+                      safe
+                      class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800"
+                    >
                       p={r.policyP}
                     </span>
                   </td>

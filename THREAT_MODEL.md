@@ -28,7 +28,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23) — useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
 | **Privileged insider with DB write** | Forge mail history, grant their own API keys, exfiltrate. | Lower likelihood; full DB write effectively bypasses the app. |
 | **Network adversary on egress path** | Strip TLS on outbound to recipients (downgrade attack). | Realistic on hostile networks; mostly irrelevant on cloud egress. |
-| **Web XSS in dashboard** | Steal session cookie, send mail. | Mitigated by JSX auto-escaping + `safe` discipline. |
+| **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape) — every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate is tracked in #150. |
 
 We **do not** model nation-state attackers with side-channel access to the host — if they're on the box, the game is already over.
 
@@ -128,7 +128,9 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 
 ### Dashboard XSS
 
-- `@kitajs/html` requires explicit `safe` on user-supplied strings; everything else is escaped. The current dashboard codebase audits clean — search for `unsafe`, `innerHTML`, or raw `{{...}}` interpolation if you fork.
+- `@kitajs/html` does **not** auto-escape interpolated children — escaping requires the `safe` attribute on the enclosing element. Every interpolation of stored/user data must carry `safe`; missing it is a stored/reflected XSS.
+- **DMARC pages (#131):** aggregate-report fields (`orgName`, `domain`, `sourceIp`, `disposition`, auth domains/results, raw XML) arrive over the unauthenticated inbound path and were rendered without `safe` — an emailed report with `<img onerror>` would execute in the admin origin. Now all such fields (both DMARC pages) carry `safe`, covered by a render-level regression test (`test/unit/dmarc-xss.test.ts`).
+- **Tooling:** `@kitajs/ts-html-plugin`'s `xss-scan` CLI finds unescaped children. Adopting it as a CI gate + auditing the remaining flagged interpolations is tracked in #150. Inbound **email body** HTML is separately rendered in a sandboxed iframe (`html-preview.tsx`, `sandbox` without `allow-scripts`).
 
 ### Logging
 
