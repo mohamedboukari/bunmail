@@ -27,15 +27,18 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
       <h1 class="text-xl font-semibold mb-6">API Keys</h1>
 
       {/* Flash message */}
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Raw key shown once after creation */}
-      {rawKey && (
+      {!!rawKey && (
         <div class="bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm mb-4">
           <p class="font-medium mb-1">
             API key created — copy it now, it won't be shown again:
           </p>
-          <code class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all">
+          <code
+            class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all"
+            safe
+          >
             {rawKey}
           </code>
         </div>
@@ -133,7 +136,10 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                   <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100" safe>
                     {key.name}
                   </td>
-                  <td class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-gray-400">
+                  <td
+                    class="px-4 py-3 font-mono text-xs text-gray-500 dark:text-gray-400"
+                    safe
+                  >
                     {key.keyPrefix}...
                   </td>
                   <td class="px-4 py-3">

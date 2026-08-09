@@ -73,6 +73,7 @@ export function WebhookDeliveriesPage({
                   ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
                   : "bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300"
               }`}
+              safe
             >
               {f.label}
             </a>
@@ -111,6 +112,7 @@ export function WebhookDeliveriesPage({
                     <a
                       href={`/dashboard/webhooks/deliveries/${d.id}`}
                       class="text-blue-600 dark:text-blue-400 hover:underline font-mono text-xs"
+                      safe
                     >
                       {d.event}
                     </a>
@@ -158,5 +160,9 @@ function StatusBadge({ status }: { status: string }) {
     failed: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
   };
   const cls = styles[status] ?? "bg-gray-100 text-gray-800 dark:bg-gray-800";
-  return <span class={`px-2 py-0.5 text-xs rounded ${cls}`}>{status}</span>;
+  return (
+    <span class={`px-2 py-0.5 text-xs rounded ${cls}`} safe>
+      {status}
+    </span>
+  );
 }

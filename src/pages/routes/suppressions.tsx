@@ -55,7 +55,7 @@ export function SuppressionsPage({
     <BaseLayout title="Suppressions" activeNav="suppressions">
       <h1 class="text-xl font-semibold mb-6">Suppressions</h1>
 
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Filter form — email substring + api key drilldown */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
@@ -94,7 +94,7 @@ export function SuppressionsPage({
             >
               <option value="">All keys</option>
               {apiKeys.map((k) => (
-                <option value={k.id} selected={k.id === filters.apiKeyId}>
+                <option value={k.id} selected={k.id === filters.apiKeyId} safe>
                   {/* Name first, then id suffix in muted form for disambiguation. */}
                   {`${k.name} — ${k.id.slice(0, 12)}…`}
                 </option>
@@ -107,7 +107,7 @@ export function SuppressionsPage({
           >
             Apply
           </button>
-          {(filters.email || filters.apiKeyId) && (
+          {!!(filters.email || filters.apiKeyId) && (
             <a
               href="/dashboard/suppressions"
               class="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors whitespace-nowrap"

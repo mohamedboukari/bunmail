@@ -42,7 +42,7 @@ export function SendEmailPage({
       <h1 class="text-xl font-semibold mb-6">Send Email</h1>
 
       {/* Flash message */}
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Compose form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
@@ -71,7 +71,7 @@ export function SendEmailPage({
                 class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
               >
                 {apiKeys.map((k) => (
-                  <option value={k.id} selected={k.id === defaultApiKeyId}>
+                  <option value={k.id} selected={k.id === defaultApiKeyId} safe>
                     {`${k.name} — ${k.id.slice(0, 12)}…`}
                   </option>
                 ))}

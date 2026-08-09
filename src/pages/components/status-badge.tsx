@@ -18,6 +18,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <span
       class={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colorClass}`}
+      safe
     >
       {status}
     </span>
@@ -45,7 +46,7 @@ export function VerificationBadge({
             clip-rule="evenodd"
           />
         </svg>
-        {label}
+        <span safe>{label}</span>
       </span>
     );
   }
@@ -55,7 +56,7 @@ export function VerificationBadge({
       <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
         <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
       </svg>
-      {label}
+      <span safe>{label}</span>
     </span>
   );
 }

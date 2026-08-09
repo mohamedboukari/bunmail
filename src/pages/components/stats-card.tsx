@@ -39,7 +39,7 @@ export function StatsCard({
       <p class="text-2xl font-semibold mt-1" safe>
         {displayValue ?? value.toLocaleString()}
       </p>
-      {hint && (
+      {!!hint && (
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" safe>
           {hint}
         </p>

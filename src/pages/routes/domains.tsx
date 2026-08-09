@@ -25,7 +25,7 @@ export function DomainsPage({ domains, flash }: DomainsPageProps) {
       <h1 class="text-xl font-semibold mb-6">Domains</h1>
 
       {/* Flash message */}
-      {flash && <FlashMessage message={flash.message} type={flash.type} />}
+      {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
       {/* Add domain form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">

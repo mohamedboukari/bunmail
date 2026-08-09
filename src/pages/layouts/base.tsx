@@ -163,7 +163,7 @@ function Nav({ activeNav }: { activeNav?: string }) {
               }`}
             >
               <link.icon />
-              {link.label}
+              <span safe>{link.label}</span>
             </a>
           );
         })}
