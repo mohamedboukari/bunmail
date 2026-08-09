@@ -42,12 +42,20 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
         </a>
       </div>
 
-      <h1 class="text-xl font-semibold mb-1">{report.orgName}</h1>
+      <h1 safe class="text-xl font-semibold mb-1">
+        {report.orgName}
+      </h1>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
-        Report for <span class="font-mono">{report.domain}</span> ·{" "}
-        <TimeDisplay value={report.dateBegin} /> → <TimeDisplay value={report.dateEnd} />{" "}
-        · policy <span class="font-mono">p={report.policyP}</span> (pct={report.policyPct}
-        )
+        Report for{" "}
+        <span safe class="font-mono">
+          {report.domain}
+        </span>{" "}
+        · <TimeDisplay value={report.dateBegin} /> →{" "}
+        <TimeDisplay value={report.dateEnd} /> · policy{" "}
+        <span safe class="font-mono">
+          p={report.policyP}
+        </span>{" "}
+        (pct={report.policyPct})
       </p>
 
       {/* Summary cards */}
@@ -62,7 +70,7 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
           <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             DKIM aligned
           </div>
-          <div class="text-2xl font-semibold mt-1">
+          <div safe class="text-2xl font-semibold mt-1">
             {pct(totals.dkimAligned, totals.messages)}
           </div>
           <div class="text-xs text-gray-500 mt-1">
@@ -73,7 +81,7 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
           <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             SPF aligned
           </div>
-          <div class="text-2xl font-semibold mt-1">
+          <div safe class="text-2xl font-semibold mt-1">
             {pct(totals.spfAligned, totals.messages)}
           </div>
           <div class="text-xs text-gray-500 mt-1">
@@ -84,7 +92,7 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
           <div class="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
             Both aligned
           </div>
-          <div class="text-2xl font-semibold mt-1">
+          <div safe class="text-2xl font-semibold mt-1">
             {pct(totals.bothAligned, totals.messages)}
           </div>
           <div class="text-xs text-gray-500 mt-1">
@@ -125,10 +133,15 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
               const aligned = r.dkimAligned && r.spfAligned;
               return (
                 <tr class={!aligned ? "bg-amber-50 dark:bg-amber-950/20" : ""}>
-                  <td class="px-4 py-3 font-mono text-xs">{r.sourceIp}</td>
+                  <td safe class="px-4 py-3 font-mono text-xs">
+                    {r.sourceIp}
+                  </td>
                   <td class="px-4 py-3">{r.count}</td>
                   <td class="px-4 py-3">
-                    <span class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800">
+                    <span
+                      safe
+                      class="px-2 py-0.5 text-xs rounded bg-gray-100 dark:bg-gray-800"
+                    >
                       {r.disposition}
                     </span>
                   </td>
@@ -141,9 +154,13 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
                   <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
                     {r.dkimAuthDomain ? (
                       <>
-                        <span class="font-mono">{r.dkimAuthDomain}</span>
-                        {r.dkimSelector ? <> · {r.dkimSelector}</> : null}{" "}
-                        <span class="text-gray-400">{r.dkimResult}</span>
+                        <span safe class="font-mono">
+                          {r.dkimAuthDomain}
+                        </span>
+                        {r.dkimSelector ? <span safe> · {r.dkimSelector}</span> : null}{" "}
+                        <span safe class="text-gray-400">
+                          {r.dkimResult}
+                        </span>
                       </>
                     ) : (
                       <span class="text-gray-400">—</span>
@@ -152,8 +169,12 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
                   <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
                     {r.spfAuthDomain ? (
                       <>
-                        <span class="font-mono">{r.spfAuthDomain}</span>{" "}
-                        <span class="text-gray-400">{r.spfResult}</span>
+                        <span safe class="font-mono">
+                          {r.spfAuthDomain}
+                        </span>{" "}
+                        <span safe class="text-gray-400">
+                          {r.spfResult}
+                        </span>
                       </>
                     ) : (
                       <span class="text-gray-400">—</span>
@@ -171,7 +192,10 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
         <summary class="cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">
           Raw XML
         </summary>
-        <pre class="mt-2 p-4 text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded overflow-x-auto">
+        <pre
+          safe
+          class="mt-2 p-4 text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded overflow-x-auto"
+        >
           {report.rawXml}
         </pre>
       </details>
