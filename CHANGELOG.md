@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-09
+
 ### Added
 
 - **Dashboard emails filters — by source (API vs SMTP) and by API key (#137).** The dashboard emails list gains two composable filters alongside the existing status tabs: a **Source** dropdown (API vs the SMTP submission server, #120) and an **API-key** dropdown (operator/cross-key view). Each email row shows a source badge. Backed by a new `emails.source` column (`'api'`\|`'smtp'`, migration `0012`; existing rows backfill to `'api'`) — REST sends record `api`, SMTP-submission sends record `smtp`. The public REST list gains an optional `?source=api|smtp` filter and the serialized email response now includes `source`; the API-key filter is dashboard-only (the REST list stays scoped to the calling key). Filters compose (e.g. Failed + SMTP + a specific key) and persist across pagination. See [docs/emails.md](docs/emails.md), [docs/api.md](docs/api.md), [docs/dashboard.md](docs/dashboard.md).
