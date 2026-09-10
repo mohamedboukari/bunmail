@@ -29,6 +29,11 @@ Plus **Dependabot** (out of CI but in the same security loop) opens grouped PRs 
     ```
     Don't ignore `CRITICAL` without explicit approval.
   - **False positive (e.g. unused code path)?** Same `.trivyignore` entry + explanation.
+- **Scanner version.** The Trivy CLI is pinned explicitly via the `version:` input on
+  each `aquasecurity/trivy-action` step in `security.yml` (currently `v0.74.0`). The
+  action's own default trails the current release, so without the pin the scan runs an
+  older CVE matcher. Bump it when the scan log prints a `📣 Notices: Version X is now
+  available` line — it's not managed by Dependabot.
 
 ### gitleaks
 - The action posts a comment on the PR with the file/line/rule of every finding.

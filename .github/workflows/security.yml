@@ -70,6 +70,10 @@ jobs:
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          # Pin the scanner itself, not just the action. The action's own
+          # default trails the current release (v0.36.0 ships v0.70.0), so
+          # without this the scan silently runs an old CVE matcher.
+          version: v0.74.0
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
@@ -151,6 +155,7 @@ jobs:
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0
           scan-type: image
           image-ref: bunmail:scan
           severity: HIGH,CRITICAL
@@ -164,6 +169,7 @@ jobs:
         if: steps.trivy-image-sarif.outcome == 'failure'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.74.0
           scan-type: image
           image-ref: bunmail:scan
           severity: HIGH,CRITICAL
