@@ -38,8 +38,8 @@ interface CapturedSend {
 const captured: CapturedSend[] = [];
 let mxResult: Array<{ exchange: string; priority: number }> | Error = [];
 let mxResolver:
-  | ((domain: string) => Promise<Array<{ exchange: string; priority: number }>>)
-  | null = null;
+  ((domain: string) => Promise<Array<{ exchange: string; priority: number }>>) | null =
+  null;
 let sendBehaviour: ((transportHost: string) => Error | void | undefined) | null = null;
 
 mock.module("dns/promises", () => ({
@@ -51,19 +51,23 @@ mock.module("dns/promises", () => ({
   resolveTxt: mock(async () => []),
 }));
 
+const createTransportMock = mock((cfg: Record<string, unknown>) => ({
+  sendMail: mock(async (opts: Record<string, unknown>) => {
+    captured.push({ transportConfig: cfg, mailOptions: opts });
+    if (sendBehaviour) {
+      const result = sendBehaviour(cfg.host as string);
+      if (result instanceof Error) throw result;
+    }
+    return { messageId: "<test-msg@mx.test>" };
+  }),
+}));
+
+/** nodemailer 10 ships `createTransport` as both a named export and a
+ *  member of the default export; mirror both so either import style in
+ *  the code under test resolves to the mock. */
 mock.module("nodemailer", () => ({
-  default: {
-    createTransport: mock((cfg: Record<string, unknown>) => ({
-      sendMail: mock(async (opts: Record<string, unknown>) => {
-        captured.push({ transportConfig: cfg, mailOptions: opts });
-        if (sendBehaviour) {
-          const result = sendBehaviour(cfg.host as string);
-          if (result instanceof Error) throw result;
-        }
-        return { messageId: "<test-msg@mx.test>" };
-      }),
-    })),
-  },
+  createTransport: createTransportMock,
+  default: { createTransport: createTransportMock },
 }));
 
 const { sendMail } = await import("../../src/modules/emails/services/mailer.service.ts");

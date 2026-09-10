@@ -33,8 +33,8 @@ bun run dev
 | `bun run dev`         | Start dev server with watch mode    |
 | `bun test`            | Run all tests                       |
 | `bunx tsc --noEmit`   | Type-check without emitting         |
-| `bun run lint`        | Run ESLint                          |
-| `bun run lint:fix`    | Run ESLint with auto-fix            |
+| `bun run lint`        | Run oxlint (type-aware)             |
+| `bun run lint:fix`    | Run oxlint with auto-fix            |
 | `bun run db:push`     | Push schema to dev DB               |
 | `bun run db:generate` | Generate migration files            |
 | `bun run db:migrate`  | Run migrations                      |

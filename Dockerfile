@@ -6,11 +6,11 @@
 #
 #   1. install    — Resolves dependencies. Runs `bun install` (no
 #                   `--production` so dev deps like `drizzle-kit` and
-#                   `eslint` are available in the build itself, even
+#                   `oxlint` are available in the build itself, even
 #                   though they don't ship to the run stage).
 #   2. prod-deps  — A second `bun install --production --frozen-lockfile`
 #                   into a clean tree so the run stage gets node_modules
-#                   without esbuild, drizzle-kit, eslint, knip, etc.
+#                   without esbuild, drizzle-kit, oxlint, knip, etc.
 #                   This is what closed the ~36 esbuild Go-stdlib CVE
 #                   findings in the Trivy image scan.
 #   3. run        — Final image. Has Bun, the prod node_modules, the

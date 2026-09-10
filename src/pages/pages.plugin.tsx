@@ -10,7 +10,7 @@ import {
   recordFailedLogin,
   clearLoginAttempts,
 } from "../middleware/login-rate-limit.ts";
-import type { EmailStatus } from "../modules/emails/types/email.types.ts";
+import { isEmailStatus } from "../modules/emails/types/email.types.ts";
 
 /* ─── Page Components ─── */
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
@@ -322,6 +322,22 @@ function validatePassword(input: string): boolean {
  *
  * Auth: password-based via DASHBOARD_PASSWORD env var + session cookie.
  */
+
+/**
+ * Builds the flash-banner prop from the `flash` / `flashType` query
+ * params. Both are attacker-controllable, so `flashType` is narrowed to
+ * the two values the banner actually renders rather than asserted — an
+ * `as "success" | "error"` cast would let an arbitrary string through
+ * wearing the union's type.
+ */
+function toFlash(
+  message: string | undefined,
+  rawType: string | undefined,
+): { message: string; type: "success" | "error" } | undefined {
+  if (!message) return undefined;
+  return { message, type: rawType === "error" ? "error" : "success" };
+}
+
 export const pagesPlugin = new Elysia({
   prefix: "/dashboard",
   normalize: true,
@@ -518,12 +534,7 @@ export const pagesPlugin = new Elysia({
       const activeKeys = keys.filter((k) => k.isActive);
       const defaultApiKeyId = activeKeys[0]?.id;
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <SendEmailPage
@@ -617,7 +628,7 @@ export const pagesPlugin = new Elysia({
     async ({ query }) => {
       const page = query.page ? parseInt(query.page, 10) : 1;
       const limit = query.limit ? parseInt(query.limit, 10) : 20;
-      const status = query.status || undefined;
+      const status = isEmailStatus(query.status) ? query.status : undefined;
       /** Source + API-key filters (#137). Only pass through valid values. */
       const source =
         query.source === "api" || query.source === "smtp" ? query.source : undefined;
@@ -627,7 +638,7 @@ export const pagesPlugin = new Elysia({
         emailService.listAllEmails({
           page,
           limit,
-          status: status as EmailStatus | undefined,
+          status,
           source,
           apiKeyId,
         }),
@@ -635,12 +646,7 @@ export const pagesPlugin = new Elysia({
         apiKeyService.listApiKeys(),
       ]);
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <EmailsPage
@@ -724,12 +730,7 @@ export const pagesPlugin = new Elysia({
         limit,
       });
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <EmailsTrashPage
@@ -952,12 +953,7 @@ export const pagesPlugin = new Elysia({
       const keys = await apiKeyService.listApiKeys();
 
       /** Parse flash message from query params (set after create/revoke) */
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       /**
        * The raw key is delivered via a one-time server-side reveal token
@@ -1114,12 +1110,7 @@ export const pagesPlugin = new Elysia({
     async ({ query }) => {
       const domainList = await domainService.listDomains();
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return <DomainsPage domains={domainList} flash={flash} />;
     },
@@ -1294,12 +1285,7 @@ export const pagesPlugin = new Elysia({
         return "Domain not found";
       }
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return <DomainDetailPage domain={domain} flash={flash} />;
     },
@@ -1320,12 +1306,7 @@ export const pagesPlugin = new Elysia({
     "/templates",
     async ({ query }) => {
       const list = await templateService.listAllTemplates();
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
       return <TemplatesPage templates={list} flash={flash} />;
     },
     {
@@ -1393,12 +1374,7 @@ export const pagesPlugin = new Elysia({
         set.status = 404;
         return "Template not found";
       }
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
       return <TemplateDetailPage template={template} flash={flash} />;
     },
     {
@@ -1489,12 +1465,7 @@ export const pagesPlugin = new Elysia({
     "/webhooks",
     async ({ query }) => {
       const hooks = await webhookService.listAllWebhooks();
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
       /** One-time reveal of the webhook HMAC secret (#132) — never in URL. */
       const secret = consumeRevealSecret(query.reveal);
 
@@ -1667,13 +1638,7 @@ export const pagesPlugin = new Elysia({
         return "";
       }
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType === "error" ? "error" : "success") as
-              "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <WebhookDeliveryDetailPage
@@ -1733,12 +1698,7 @@ export const pagesPlugin = new Elysia({
 
       const { data, total } = await inboundService.listInboundEmails({ page, limit });
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <InboundPage
@@ -1775,12 +1735,7 @@ export const pagesPlugin = new Elysia({
         limit,
       });
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <InboundTrashPage
@@ -2140,12 +2095,7 @@ export const pagesPlugin = new Elysia({
         allKeys.map((k) => [k.id, { name: k.name }]),
       );
 
-      const flash = query.flash
-        ? {
-            message: query.flash,
-            type: (query.flashType ?? "success") as "success" | "error",
-          }
-        : undefined;
+      const flash = toFlash(query.flash, query.flashType);
 
       return (
         <SuppressionsPage

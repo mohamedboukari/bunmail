@@ -178,7 +178,7 @@ function parseFallback(raw: string): ParsedBounce | null {
    */
   const diagnostic = raw
     .split(/\r?\n/)
-    .find((l) => l.includes(status!) || (basicMatch && l.includes(basicMatch[0])))
+    .find((l) => l.includes(status) || (basicMatch && l.includes(basicMatch[0])))
     ?.trim();
 
   return {

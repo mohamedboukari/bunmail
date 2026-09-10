@@ -92,11 +92,17 @@ export const rateLimitMiddleware = new Elysia({
    * field. The read is order-dependent: every plugin that uses the
    * rate-limiter calls `.use(authMiddleware).use(rateLimitMiddleware)`
    * so by the time this hook fires, `apiKeyId` is already in the
-   * context if auth ran. The narrow `{ apiKeyId?: string }` cast is
-   * preferred over `Record<string, unknown>` because it expresses
-   * exactly the shape we read — anything else would be a real bug.
+   * context if auth ran. Read via a runtime check rather than a cast so
+   * a missing or non-string field degrades to "unauthenticated" instead
+   * of being trusted as a key id.
    */
-  const { apiKeyId } = context as { apiKeyId?: string };
+  const apiKeyId =
+    typeof context === "object" &&
+    context !== null &&
+    "apiKeyId" in context &&
+    typeof context.apiKeyId === "string"
+      ? context.apiKeyId
+      : undefined;
 
   /**
    * If no apiKeyId is present, auth middleware hasn't run or the route

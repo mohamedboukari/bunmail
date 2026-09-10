@@ -341,7 +341,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     const messageId =
       email.messageId ?? `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
 
-    const existingState = email.deliveryState as DeliveryState | null;
+    const existingState = email.deliveryState;
     /** Capture pre-attempt status per group so we can detect
      *  transitions (retry → failed via hard 5xx) for bounce webhooks. */
     const priorStatuses = new Map<string, DeliveryGroup["status"]>();

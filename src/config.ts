@@ -26,19 +26,42 @@ function optionalEnv(key: string, fallback: string): string {
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
+/** Deployment environments the app distinguishes. */
+const APP_ENVS = ["development", "production"] as const;
+export type AppEnv = (typeof APP_ENVS)[number];
+
+/**
+ * Reads `BUNMAIL_ENV`, narrowing to the union rather than asserting —
+ * several guards key off `production` (#133), so a typo silently
+ * landing in the relaxed branch would be a security problem.
+ */
+function readAppEnv(): AppEnv {
+  const raw = optionalEnv("BUNMAIL_ENV", "development");
+  if (!(APP_ENVS as readonly string[]).includes(raw)) {
+    throw new Error(
+      `[config] Invalid BUNMAIL_ENV "${raw}" — must be one of: ${APP_ENVS.join(", ")}`,
+    );
+  }
+  return raw === "production" ? "production" : "development";
+}
+
 /**
  * Reads `LOG_LEVEL` and validates it against the allowed union.
  * Throws at startup with a clear message on a typo so the operator
  * notices immediately rather than silently getting `info`-equivalent behaviour.
  */
+function isLogLevel(v: string): v is LogLevel {
+  return (LOG_LEVELS as readonly string[]).includes(v);
+}
+
 function readLogLevel(): LogLevel {
   const raw = optionalEnv("LOG_LEVEL", "info");
-  if (!(LOG_LEVELS as readonly string[]).includes(raw)) {
+  if (!isLogLevel(raw)) {
     throw new Error(
       `[config] Invalid LOG_LEVEL "${raw}" — must be one of: ${LOG_LEVELS.join(", ")}`,
     );
   }
-  return raw as LogLevel;
+  return raw;
 }
 
 /**
@@ -124,7 +147,7 @@ function readSessionSecret(env: "development" | "production"): string {
  */
 export const config = {
   /** "development" — relaxed; "production" — strict domain enforcement */
-  env: optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
+  env: readAppEnv(),
 
   database: {
     /** PostgreSQL connection URL (required) */
@@ -298,17 +321,13 @@ export const config = {
      * Empty = dashboard disabled. In production an empty password causes
      * `readDashboardPassword` to throw; see the helper for the rationale.
      */
-    password: readDashboardPassword(
-      optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
-    ),
+    password: readDashboardPassword(readAppEnv()),
     /**
      * HMAC secret for session cookies. Required in production; a random
      * per-process UUID in development (resets on restart). See
      * `readSessionSecret` (#133).
      */
-    sessionSecret: readSessionSecret(
-      optionalEnv("BUNMAIL_ENV", "development") as "development" | "production",
-    ),
+    sessionSecret: readSessionSecret(readAppEnv()),
 
     /**
      * Number of trusted reverse-proxy hops in front of BunMail, used to

@@ -199,12 +199,34 @@ function toArray<T>(v: T | T[] | undefined): T[] {
 }
 
 /**
+ * Type predicate for a parsed XML element. Report bodies arrive over the
+ * **unauthenticated** inbound path (#129), so every nested node is
+ * narrowed rather than asserted — an `as Record<string, unknown>` cast
+ * would let a scalar or array through wearing an object's type.
+ */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Narrowing accessor: the node when it's an element, else `undefined`. */
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return isRecord(v) ? v : undefined;
+}
+
+/**
  * Reads a leaf value as a string, tolerating fast-xml-parser's
  * promoting numerics and booleans to typed values.
  */
 function asString(v: unknown): string {
   if (v === undefined || v === null) return "";
-  return String(v);
+  if (typeof v === "string") return v;
+  /** fast-xml-parser promotes numeric/boolean leaves to typed values. */
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") {
+    return String(v);
+  }
+  /** Anything else is a nested element, not a leaf — "[object Object]" would
+   *  be meaningless (and attacker-influenced) in a report field. */
+  return "";
 }
 
 /** Throws when the supplied feedback object is missing required fields. */
@@ -215,9 +237,9 @@ function readReportMetadata(feedback: Record<string, unknown>): {
   dateBegin: Date;
   dateEnd: Date;
 } {
-  const meta = feedback["report_metadata"] as Record<string, unknown> | undefined;
+  const meta = asRecord(feedback["report_metadata"]);
   if (!meta) throw new Error("DMARC report: missing <report_metadata>");
-  const dateRange = meta["date_range"] as Record<string, unknown> | undefined;
+  const dateRange = asRecord(meta["date_range"]);
   if (!dateRange) throw new Error("DMARC report: missing <date_range>");
   /**
    * `<begin>` / `<end>` are unix timestamps (seconds). Convert to ms
@@ -242,7 +264,7 @@ function readPolicyPublished(feedback: Record<string, unknown>): {
   policyP: string;
   policyPct: number;
 } {
-  const policy = feedback["policy_published"] as Record<string, unknown> | undefined;
+  const policy = asRecord(feedback["policy_published"]);
   if (!policy) throw new Error("DMARC report: missing <policy_published>");
   return {
     domain: asString(policy["domain"]),
@@ -274,18 +296,17 @@ function readPolicyPublished(feedback: Record<string, unknown>): {
  *   </record>
  */
 function readRecord(record: Record<string, unknown>): ParsedDmarcRecord | null {
-  const row = record["row"] as Record<string, unknown> | undefined;
+  const row = asRecord(record["row"]);
   if (!row) return null;
-  const policyEval = row["policy_evaluated"] as Record<string, unknown> | undefined;
-  const identifiers = record["identifiers"] as Record<string, unknown> | undefined;
-  const authResults = record["auth_results"] as Record<string, unknown> | undefined;
+  const policyEval = asRecord(row["policy_evaluated"]);
+  const identifiers = asRecord(record["identifiers"]);
+  const authResults = asRecord(record["auth_results"]);
 
   const sourceIp = asString(row["source_ip"]);
   if (!sourceIp) return null;
 
-  const dkimAuth = toArray(authResults?.["dkim"])[0] as
-    Record<string, unknown> | undefined;
-  const spfAuth = toArray(authResults?.["spf"])[0] as Record<string, unknown> | undefined;
+  const dkimAuth = asRecord(toArray(authResults?.["dkim"])[0]);
+  const spfAuth = asRecord(toArray(authResults?.["spf"])[0]);
 
   return {
     sourceIp,
@@ -337,7 +358,7 @@ export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | nul
     return null;
   }
 
-  const feedback = parsed["feedback"] as Record<string, unknown> | undefined;
+  const feedback = asRecord(parsed["feedback"]);
   if (!feedback) return null;
 
   try {
@@ -345,7 +366,7 @@ export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | nul
     const policy = readPolicyPublished(feedback);
     const recordEls = toArray(feedback["record"]);
     const records: ParsedDmarcRecord[] = recordEls
-      .map((r) => readRecord(r as Record<string, unknown>))
+      .map((r) => (isRecord(r) ? readRecord(r) : null))
       .filter((r): r is ParsedDmarcRecord => r !== null);
 
     return {
