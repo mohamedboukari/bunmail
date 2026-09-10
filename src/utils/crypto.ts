@@ -78,10 +78,12 @@ export function decryptSecret(encrypted: string, key: Buffer): string {
     );
   }
   const parts = encrypted.split(":");
-  if (parts.length !== 4) {
+  const [version, ivB64, ctB64, tagB64] = parts;
+  /** Checks each segment rather than only `parts.length`, so the
+   *  narrowing is visible to the type checker without an assertion. */
+  if (parts.length !== 4 || !version || !ivB64 || !ctB64 || !tagB64) {
     throw new Error("[crypto] Encrypted secret has wrong segment count");
   }
-  const [version, ivB64, ctB64, tagB64] = parts as [string, string, string, string];
   if (version !== SECRET_VERSION_PREFIX) {
     throw new Error(`[crypto] Unknown encrypted-secret version "${version}"`);
   }

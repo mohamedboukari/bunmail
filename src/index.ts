@@ -111,13 +111,13 @@ const app = new Elysia()
    * and returns a consistent JSON response. Prevents stack traces
    * from leaking in production.
    */
-  .onError(({ error, code, set, request }) => {
+  .onError(async ({ error, code, set, request }) => {
     if (code === "NOT_FOUND") {
       set.status = 404;
 
       const accept = request.headers.get("accept") ?? "";
       if (accept.includes("text/html")) {
-        return new Response("<!doctype html>" + NotFoundPage(), {
+        return new Response("<!doctype html>" + (await NotFoundPage()), {
           status: 404,
           headers: { "content-type": "text/html; charset=utf-8" },
         });
@@ -242,7 +242,11 @@ logger.info("BunMail server started", {
  * Start the email queue processor.
  * It polls the DB every 2 seconds for queued emails and sends them.
  */
-queueService.start();
+queueService.start().catch((error: unknown) => {
+  logger.error("Failed to start email queue processor", {
+    error: error instanceof Error ? error.message : String(error),
+  });
+});
 
 /**
  * Start the inbound SMTP server (if enabled).
@@ -314,7 +318,7 @@ function shutdown() {
   webhookDeliveryWorker.stop();
   stopRateLimitCleanup();
   stopLoginRateLimitCleanup();
-  app.stop();
+  void app.stop();
   process.exit(0);
 }
 

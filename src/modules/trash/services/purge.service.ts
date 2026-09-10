@@ -100,7 +100,7 @@ export function start(): void {
   /** Initial run on boot — catches anything that aged out while server
    *  was down. Runs both sweeps; tombstone retention is cheap when the
    *  cutoff is 90 days out and the table is small. */
-  Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
+  void Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
     for (const r of results) {
       if (r.status === "rejected") {
         logger.error("Initial trash purge cycle failed", {
@@ -111,15 +111,17 @@ export function start(): void {
   });
 
   purgeTimer = setInterval(() => {
-    Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
-      for (const r of results) {
-        if (r.status === "rejected") {
-          logger.error("Scheduled trash purge cycle failed", {
-            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-          });
+    void Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then(
+      (results) => {
+        for (const r of results) {
+          if (r.status === "rejected") {
+            logger.error("Scheduled trash purge cycle failed", {
+              error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            });
+          }
         }
-      }
-    });
+      },
+    );
   }, PURGE_INTERVAL_MS);
 }
 

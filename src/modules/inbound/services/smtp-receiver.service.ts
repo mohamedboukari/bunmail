@@ -110,7 +110,7 @@ async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
   /** IPv6 not supported by most DNSBLs — skip */
   if (ip.includes(":")) return false;
 
-  const reversed = ip.split(".").reverse().join(".");
+  const reversed = ip.split(".").toReversed().join(".");
   const query = `${reversed}.${zone}`;
 
   try {
@@ -134,6 +134,17 @@ async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
  * 2. DNSBL IP check (async DNS lookup against Spamhaus ZEN)
  * 3. Recipient domain validation (DB check against registered domains)
  */
+
+/**
+ * Builds the error shape `smtp-server` callbacks expect: a standard
+ * `Error` carrying the SMTP reply code the library writes back to the
+ * client. `Object.assign` widens the type structurally, so call sites
+ * don't need an `as Error & { responseCode: number }` cast.
+ */
+function smtpError(message: string, responseCode: number): Error {
+  return Object.assign(new Error(message), { responseCode });
+}
+
 export function start(): void {
   const port = config.smtp.port;
   const { spamProtection } = config.smtp;
@@ -162,11 +173,7 @@ export function start(): void {
       /** Layer 2: Per-IP rate limiting (runs first — instant, no I/O) */
       if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
         logger.warn("SMTP connection rate limited", { ip });
-        const err = new Error("Too many connections, try again later") as Error & {
-          responseCode: number;
-        };
-        err.responseCode = 421;
-        return callback(err);
+        return callback(smtpError("Too many connections, try again later", 421));
       }
 
       /** Layer 1: DNSBL check (async DNS lookup) */
@@ -178,13 +185,9 @@ export function start(): void {
         .then((listed) => {
           if (listed) {
             logger.warn("SMTP connection rejected — IP blacklisted", { ip });
-            const err = new Error(
-              "Connection rejected — your IP is blacklisted",
-            ) as Error & {
-              responseCode: number;
-            };
-            err.responseCode = 554;
-            return callback(err);
+            return callback(
+              smtpError("Connection rejected — your IP is blacklisted", 554),
+            );
           }
           callback();
         })
@@ -213,11 +216,7 @@ export function start(): void {
         logger.warn("SMTP MAIL FROM rejected — malformed address", {
           address: redactEmail(value),
         });
-        const err = new Error("Sender address is not a valid email address") as Error & {
-          responseCode: number;
-        };
-        err.responseCode = 553;
-        return callback(err);
+        return callback(smtpError("Sender address is not a valid email address", 553));
       }
 
       callback();
@@ -243,11 +242,12 @@ export function start(): void {
           acceptedSoFar,
           ip: session.remoteAddress,
         });
-        const err = new Error(
-          `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
-        ) as Error & { responseCode: number };
-        err.responseCode = 452;
-        return callback(err);
+        return callback(
+          smtpError(
+            `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
+            452,
+          ),
+        );
       }
 
       if (!spamProtection.recipientValidationEnabled) {
@@ -261,11 +261,7 @@ export function start(): void {
         logger.warn("SMTP RCPT TO rejected — invalid address", {
           address: redactEmail(recipientAddress),
         });
-        const err = new Error("Invalid recipient address") as Error & {
-          responseCode: number;
-        };
-        err.responseCode = 550;
-        return callback(err);
+        return callback(smtpError("Invalid recipient address", 550));
       }
 
       domainExistsByName(domain)
@@ -276,11 +272,9 @@ export function start(): void {
               domain,
               ip: session.remoteAddress,
             });
-            const err = new Error(
-              `Recipient domain "${domain}" is not handled here`,
-            ) as Error & { responseCode: number };
-            err.responseCode = 550;
-            return callback(err);
+            return callback(
+              smtpError(`Recipient domain "${domain}" is not handled here`, 550),
+            );
           }
           callback();
         })
@@ -329,155 +323,154 @@ export function start(): void {
           chunks.length = 0;
           stream.unpipe();
           stream.resume();
-          const err = new Error("Message size exceeds limit") as Error & {
-            responseCode: number;
-          };
-          err.responseCode = 552;
-          callback(err);
+          callback(smtpError("Message size exceeds limit", 552));
           return;
         }
 
         chunks.push(chunk);
       });
 
-      stream.on("end", async () => {
-        if (aborted) return;
-        try {
-          const rawMessage = Buffer.concat(chunks).toString("utf-8");
-          const parsed = await simpleParser(rawMessage);
+      stream.on("end", () => {
+        /** The listener must return void; the body is guarded by its own
+         *  try/catch, and `void` keeps a rejected promise from escaping
+         *  as an unhandled rejection. */
+        void (async () => {
+          if (aborted) return;
+          try {
+            const rawMessage = Buffer.concat(chunks).toString("utf-8");
+            const parsed = await simpleParser(rawMessage);
 
-          /**
-           * Bounce branch (#24). If the message is a DSN, route it to
-           * the bounce handler — suppress the recipient, mark the
-           * original email as `bounced`, fire `email.bounced` webhook —
-           * and skip the regular `inbound_emails` insert. Bounces
-           * shouldn't pollute the inbound list (operators get noise
-           * about delivery failures from mailer-daemon@gmail every
-           * time someone mistypes an address).
-           */
-          const bounce = parseBounce(rawMessage);
-          if (bounce) {
-            const result = await handleParsedBounce(bounce);
             /**
-             * `dropped-no-original` means we couldn't link the bounce
-             * back to one of our `emails` rows. We still acknowledge
-             * the SMTP transaction (returning ok keeps the upstream MTA
-             * from retrying); the warning was already logged by the
-             * handler.
+             * Bounce branch (#24). If the message is a DSN, route it to
+             * the bounce handler — suppress the recipient, mark the
+             * original email as `bounced`, fire `email.bounced` webhook —
+             * and skip the regular `inbound_emails` insert. Bounces
+             * shouldn't pollute the inbound list (operators get noise
+             * about delivery failures from mailer-daemon@gmail every
+             * time someone mistypes an address).
              */
-            logger.debug("Bounce branch handled inbound message", { result });
-            callback();
-            return;
-          }
+            const bounce = parseBounce(rawMessage);
+            if (bounce) {
+              const result = await handleParsedBounce(bounce);
+              /**
+               * `dropped-no-original` means we couldn't link the bounce
+               * back to one of our `emails` rows. We still acknowledge
+               * the SMTP transaction (returning ok keeps the upstream MTA
+               * from retrying); the warning was already logged by the
+               * handler.
+               */
+              logger.debug("Bounce branch handled inbound message", { result });
+              callback();
+              return;
+            }
 
-          /**
-           * DMARC aggregate (rua) report branch (#41). If the message
-           * looks like a DMARC report from a remote receiver, parse the
-           * compressed XML attachment and store as `dmarc_reports` +
-           * `dmarc_records` rows. Skip the regular `inbound_emails`
-           * insert — daily DMARC reports would otherwise pile up in
-           * the inbox view and obscure real customer mail.
-           */
-          const attachments = (parsed.attachments ?? []).map((att) => ({
-            filename: att.filename,
-            contentType: att.contentType,
-            content: new Uint8Array(att.content),
-          }));
-          const dmarcResult = await persistDmarcReportFromInbound(
-            rawMessage,
-            attachments,
-            typeof parsed.text === "string" ? parsed.text : null,
-          );
-          if (dmarcResult.outcome === "stored" || dmarcResult.outcome === "duplicate") {
-            logger.debug("DMARC branch handled inbound message", {
-              outcome: dmarcResult.outcome,
-              reportId: dmarcResult.reportId,
-              recordCount: dmarcResult.recordCount,
-            });
-            callback();
-            return;
-          }
-
-          const mailFrom = session.envelope.mailFrom;
-          const from =
-            parsed.from?.value?.[0]?.address ??
-            (mailFrom && typeof mailFrom === "object" ? mailFrom.address : undefined) ??
-            "unknown";
-
-          const to = parsed.to
-            ? ((Array.isArray(parsed.to)
-                ? parsed.to[0]?.value?.[0]?.address
-                : parsed.to.value?.[0]?.address) ?? "")
-            : (session.envelope.rcptTo?.[0]?.address ?? "unknown");
-
-          const id = generateId("inb");
-
-          await db.insert(inboundEmails).values({
-            id,
-            fromAddress: from,
-            toAddress: to,
-            subject: parsed.subject ?? null,
-            html: typeof parsed.html === "string" ? parsed.html : null,
-            textContent: parsed.text ?? null,
-            rawMessage,
-          });
-
-          logger.info("Inbound email received and stored", {
-            id,
-            from: redactEmail(from),
-            to: redactEmail(to),
-            subject: parsed.subject,
-          });
-
-          /** Fire webhook event asynchronously (fire-and-forget) */
-          dispatchEvent("email.received", {
-            inboundEmailId: id,
-            from,
-            to,
-            subject: parsed.subject ?? null,
-          });
-
-          /**
-           * Send the per-domain inbound notification (#106), fire-and-forget.
-           * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
-           * reports never trigger it. NOT awaited — a slow notification
-           * (DNS/MX resolution) must never delay the SMTP ack below, which
-           * would risk the upstream MTA timing out and redelivering.
-           *
-           * Domain resolution keys off the **envelope** RCPT TO (the
-           * addresses actually validated + accepted in `onRcptTo`), not the
-           * spoofable `To:` header — so BCC / list mail still notifies the
-           * domain it was received for, and a forged header can't steer
-           * the signing identity. `notifyInboundReceived` never throws; the
-           * `.catch` is a redundant belt.
-           */
-          if (config.inboundNotify.enabled) {
-            const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
-              (r) => r.address,
+            /**
+             * DMARC aggregate (rua) report branch (#41). If the message
+             * looks like a DMARC report from a remote receiver, parse the
+             * compressed XML attachment and store as `dmarc_reports` +
+             * `dmarc_records` rows. Skip the regular `inbound_emails`
+             * insert — daily DMARC reports would otherwise pile up in
+             * the inbox view and obscure real customer mail.
+             */
+            const attachments = (parsed.attachments ?? []).map((att) => ({
+              filename: att.filename,
+              contentType: att.contentType,
+              content: new Uint8Array(att.content),
+            }));
+            const dmarcResult = await persistDmarcReportFromInbound(
+              rawMessage,
+              attachments,
+              typeof parsed.text === "string" ? parsed.text : null,
             );
-            void notifyInboundReceived({
-              inboundId: id,
-              from,
-              recipients: envelopeRecipients,
-              subject: parsed.subject ?? null,
-              text: parsed.text ?? null,
-            }).catch((err) => {
-              logger.error("Inbound notification dispatch failed", {
-                id,
-                error: err instanceof Error ? err.message : String(err),
+            if (dmarcResult.outcome === "stored" || dmarcResult.outcome === "duplicate") {
+              logger.debug("DMARC branch handled inbound message", {
+                outcome: dmarcResult.outcome,
+                reportId: dmarcResult.reportId,
+                recordCount: dmarcResult.recordCount,
               });
-            });
-          }
+              callback();
+              return;
+            }
 
-          callback();
-        } catch (error) {
-          logger.error("Failed to process inbound email", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          callback(
-            new Error("Failed to process message") as Error & { responseCode: number },
-          );
-        }
+            const mailFrom = session.envelope.mailFrom;
+            const from =
+              parsed.from?.value?.[0]?.address ??
+              (mailFrom && typeof mailFrom === "object" ? mailFrom.address : undefined) ??
+              "unknown";
+
+            const to = parsed.to
+              ? ((Array.isArray(parsed.to)
+                  ? parsed.to[0]?.value?.[0]?.address
+                  : parsed.to.value?.[0]?.address) ?? "")
+              : (session.envelope.rcptTo?.[0]?.address ?? "unknown");
+
+            const id = generateId("inb");
+
+            await db.insert(inboundEmails).values({
+              id,
+              fromAddress: from,
+              toAddress: to,
+              subject: parsed.subject ?? null,
+              html: typeof parsed.html === "string" ? parsed.html : null,
+              textContent: parsed.text ?? null,
+              rawMessage,
+            });
+
+            logger.info("Inbound email received and stored", {
+              id,
+              from: redactEmail(from),
+              to: redactEmail(to),
+              subject: parsed.subject,
+            });
+
+            /** Fire webhook event asynchronously (fire-and-forget) */
+            dispatchEvent("email.received", {
+              inboundEmailId: id,
+              from,
+              to,
+              subject: parsed.subject ?? null,
+            });
+
+            /**
+             * Send the per-domain inbound notification (#106), fire-and-forget.
+             * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
+             * reports never trigger it. NOT awaited — a slow notification
+             * (DNS/MX resolution) must never delay the SMTP ack below, which
+             * would risk the upstream MTA timing out and redelivering.
+             *
+             * Domain resolution keys off the **envelope** RCPT TO (the
+             * addresses actually validated + accepted in `onRcptTo`), not the
+             * spoofable `To:` header — so BCC / list mail still notifies the
+             * domain it was received for, and a forged header can't steer
+             * the signing identity. `notifyInboundReceived` never throws; the
+             * `.catch` is a redundant belt.
+             */
+            if (config.inboundNotify.enabled) {
+              const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
+                (r) => r.address,
+              );
+              void notifyInboundReceived({
+                inboundId: id,
+                from,
+                recipients: envelopeRecipients,
+                subject: parsed.subject ?? null,
+                text: parsed.text ?? null,
+              }).catch((err) => {
+                logger.error("Inbound notification dispatch failed", {
+                  id,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+            }
+
+            callback();
+          } catch (error) {
+            logger.error("Failed to process inbound email", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            callback(smtpError("Failed to process message", 451));
+          }
+        })();
       });
     },
   });

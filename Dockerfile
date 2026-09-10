@@ -6,13 +6,15 @@
 #
 #   1. install    — Resolves dependencies. Runs `bun install` (no
 #                   `--production` so dev deps like `drizzle-kit` and
-#                   `eslint` are available in the build itself, even
+#                   `oxlint` are available in the build itself, even
 #                   though they don't ship to the run stage).
 #   2. prod-deps  — A second `bun install --production --frozen-lockfile`
 #                   into a clean tree so the run stage gets node_modules
-#                   without esbuild, drizzle-kit, eslint, knip, etc.
-#                   This is what closed the ~36 esbuild Go-stdlib CVE
-#                   findings in the Trivy image scan.
+#                   without esbuild, drizzle-kit, oxlint, knip, etc.,
+#                   then strips the TypeScript compiler (a Go binary
+#                   since TS 7) that arrives as a transitive peer.
+#                   This is what closed the ~36 esbuild and 10 tsc
+#                   Go-stdlib CVE findings in the Trivy image scan.
 #   3. run        — Final image. Has Bun, the prod node_modules, the
 #                   pre-generated SQL migration files (committed), and
 #                   the runtime migrator (`src/db/migrate.ts`). No
@@ -52,6 +54,22 @@ WORKDIR /app
 COPY package.json bun.lock ./
 
 RUN bun install --frozen-lockfile --ignore-scripts --production
+
+# TypeScript still lands in the production tree: it's an auto-installed
+# *peer* of `@kitajs/ts-html-plugin`, which `@elysiajs/html` (a runtime
+# dependency) pulls in as a hard dependency.
+#
+# Since TypeScript 7 the compiler is a native **Go** binary
+# (`@typescript/typescript-<platform>/lib/tsc`), so it drags the Go
+# stdlib's CVEs into the published image — 10 HIGH on the first TS 7
+# build. That's the same class of finding the production install above
+# already addresses for esbuild.
+#
+# Bun transpiles `.ts` natively and never shells out to `tsc`, and the
+# run stage's CMD is `bun run db:migrate && bun run start` — neither
+# touches the compiler. So strip it.
+RUN rm -rf node_modules/typescript node_modules/@typescript \
+  node_modules/.bin/tsc node_modules/.bin/tsserver
 
 # ── Stage 3: Run ──
 FROM oven/bun:1.3.14 AS run

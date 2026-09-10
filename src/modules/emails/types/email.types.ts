@@ -2,7 +2,13 @@ import type { emails } from "../models/email.schema.ts";
 import type { InferSelectModel } from "drizzle-orm";
 
 /** All possible statuses an email can be in during its lifecycle */
-export type EmailStatus = "queued" | "sending" | "sent" | "failed" | "bounced";
+export const EMAIL_STATUSES = ["queued", "sending", "sent", "failed", "bounced"] as const;
+export type EmailStatus = (typeof EMAIL_STATUSES)[number];
+
+/** Narrows a query-string value to a known status (dashboard filters). */
+export function isEmailStatus(v: string | undefined): v is EmailStatus {
+  return v !== undefined && (EMAIL_STATUSES as readonly string[]).includes(v);
+}
 
 /**
  * Ingress channel an email arrived through (#137):
