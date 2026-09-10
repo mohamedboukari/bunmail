@@ -41,41 +41,40 @@
     ]
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
+    "@commitlint/cli": "^21.2.2",
+    "@commitlint/config-conventional": "^21.2.2",
     "@eslint/js": "^10.0.1",
     "@kitajs/ts-html-plugin": "^4.1.4",
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
-    "@types/nodemailer": "^8.0.1",
     "@types/smtp-server": "^3.5.13",
-    "bumpp": "^12.2.0",
+    "bumpp": "^12.3.0",
     "drizzle-kit": "^0.31.10",
-    "eslint": "^10.8.1",
+    "eslint": "^10.10.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.6",
-    "globals": "^17.9.0",
+    "globals": "^17.12.0",
     "husky": "^9.1.7",
-    "knip": "^6.32.0",
-    "lint-staged": "^17.3.0",
+    "knip": "^6.35.1",
+    "lint-staged": "^17.5.0",
     "postgres": "^3.4.9",
     "prettier": "^3.9.6",
-    "typescript-eslint": "^8.66.0"
+    "typescript-eslint": "^8.70.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
   },
   "dependencies": {
     "@elysiajs/html": "^1.4.2",
-    "@elysiajs/openapi": "^1.4.15",
+    "@elysiajs/openapi": "^1.4.16",
     "@kitajs/html": "^4.2.13",
     "drizzle-orm": "^0.45.2",
-    "elysia": "^1.4.29",
-    "fast-xml-parser": "^5.10.1",
+    "elysia": "^1.4.30",
+    "fast-xml-parser": "^5.11.1",
     "fflate": "^0.8.3",
-    "file-type": "^22.0.1",
-    "mailparser": "^3.9.15",
-    "nodemailer": "^9.0.5",
-    "smtp-server": "^3.19.3"
+    "file-type": "^22.0.2",
+    "mailparser": "^3.9.24",
+    "nodemailer": "^10.0.3",
+    "smtp-server": "^3.19.10"
   }
 }

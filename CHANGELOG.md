@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Trivy HIGH: stack-exhaustion DoS in `deepmerge-ts` — CVE-2026-40345 (#161).** The `Security` workflow had been failing on `main` since 2026-08-21; both the Trivy fs and image scans flagged `deepmerge-ts@7.1.5` (stack exhaustion when merging recursive object graphs, fixed upstream in 8.0.0). It reached us on a **runtime** path — inbound email parsing — via `mailparser` → `html-to-text@10.0.0` → `deepmerge-ts@^7.1.5`. Bumping `mailparser` to 3.9.24 pulls `html-to-text@10.0.1`, which requires `deepmerge-ts@^8.0.1` (resolves to 8.0.2), clearing the finding. Remediated properly — **no `.trivyignore` suppression added**.
+
+### Changed
+
+- **Bump the pinned Trivy scanner v0.70.0 → v0.74.0 (#161).** `aquasecurity/trivy-action@v0.36.0` defaults to Trivy `v0.70.0`, so the scans were running a CVE matcher several releases behind while the action itself was current. All three scan steps in `security.yml` now pass an explicit `version: v0.74.0`. Pinned inline rather than via a workflow-level `env:` — trivy-action forwards `TRIVY_*` environment variables to the CLI as configuration, so a `TRIVY_VERSION` env risks colliding with scanner config. Documented as a manual maintenance item in [docs/security-ci.md](docs/security-ci.md) (Dependabot doesn't track it).
+- **Dependency refresh (`ncu -u`), including `nodemailer` 9 → 10 (#162).** Runtime: `nodemailer` 9.0.5→10.0.3, `mailparser` 3.9.15→3.9.24, `smtp-server` 3.19.3→3.19.10, `fast-xml-parser` 5.10.1→5.11.1, `file-type` 22.0.1→22.0.2, `elysia` 1.4.29→1.4.30, `@elysiajs/openapi` 1.4.15→1.4.16. Dev tooling: `eslint` 10.8.1→10.10.0, `typescript-eslint` 8.66.0→8.70.0, `knip` 6.32.0→6.35.1, `lint-staged` 17.3.0→17.5.0, `globals` 17.9.0→17.12.0, `bumpp` 12.2.0→12.3.0, `@commitlint/*` 21.2.x→21.2.2. Full suite green (449 unit/e2e + 129 integration), plus lint, `xss-scan`, knip and type-check.
+- **Removed the `@types/nodemailer` devDependency.** nodemailer 10 was rewritten in TypeScript and ships its own types, which supersede the DefinitelyTyped package. Verified by type-checking with `@types/nodemailer` removed from `node_modules` entirely — clean, including the `nodemailer/lib/mailer` subpath import in `mailer.service.ts`. Note nodemailer 10 requires **Node.js ≥ 20**; irrelevant under Bun, but relevant to anyone vendoring the code. This bump also de-duplicates nodemailer in the image: `mailparser@3.9.24` pins `nodemailer@10.0.3`, so leaving the top-level dep on 9.x would have shipped two copies.
+
 ## [0.9.0] - 2026-08-09
 
 ### Added
