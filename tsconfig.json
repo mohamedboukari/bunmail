@@ -15,8 +15,8 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
 
-    // Path aliases
-    "baseUrl": ".",
+    // Path aliases — `paths` is resolved relative to this file. `baseUrl`
+    // was removed in TypeScript 7 (TS5102) and isn't needed here.
     "paths": {
       "@/*": ["./src/*"]
     },

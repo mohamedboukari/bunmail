@@ -14,12 +14,12 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "bunx tsc --noEmit",
-    "lint": "eslint src/",
-    "lint:fix": "eslint src/ --fix",
+    "lint": "oxlint --type-aware src/",
+    "lint:fix": "oxlint --type-aware src/ --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "lint:xss": "xss-scan",
+    "lint:xss": "bun run xss:toolchain && L=node_modules/.cache/xss-scan.log; node_modules/.cache/xss-toolchain/node_modules/.bin/xss-scan > $L 2>&1; cat $L; grep -q 'No XSS vulnerabilities found' $L",
     "test": "bun test test/unit test/e2e",
     "test:unit": "bun test test/unit",
     "test:e2e": "bun test test/e2e",
@@ -28,12 +28,13 @@
     "test:all": "bun test test/unit test/e2e && bun run test:integration",
     "test:coverage": "bun test test/unit test/e2e --coverage",
     "release": "bumpp",
-    "prepare": "husky"
+    "prepare": "husky",
+    "xss:toolchain": "D=node_modules/.cache/xss-toolchain; test -x $D/node_modules/.bin/xss-scan || (mkdir -p $D && printf '%s' '{\"name\":\"xss-toolchain\",\"private\":true}' > $D/package.json && bun add --cwd $D typescript@5.9.3 @kitajs/html@4.2.13 @kitajs/ts-html-plugin@4.1.4)"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
       "prettier --write",
-      "eslint --fix",
+      "oxlint --fix",
       "bash -c 'bunx tsc --noEmit'"
     ],
     "*.{json,yml,yaml}": [
@@ -43,26 +44,19 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.2",
     "@commitlint/config-conventional": "^21.2.2",
-    "@eslint/js": "^10.0.1",
-    "@kitajs/ts-html-plugin": "^4.1.4",
     "@types/bun": "latest",
     "@types/mailparser": "^3.4.6",
     "@types/smtp-server": "^3.5.13",
     "bumpp": "^12.3.0",
     "drizzle-kit": "^0.31.10",
-    "eslint": "^10.10.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.6",
-    "globals": "^17.12.0",
     "husky": "^9.1.7",
     "knip": "^6.35.1",
     "lint-staged": "^17.5.0",
+    "oxlint": "^1.82.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "postgres": "^3.4.9",
     "prettier": "^3.9.6",
-    "typescript-eslint": "^8.70.0"
-  },
-  "peerDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@elysiajs/html": "^1.4.2",

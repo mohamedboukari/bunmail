@@ -81,7 +81,7 @@ export function EmailTombstonesPage({
         <EmptyState
           message={
             messageIdFilter
-              ? `No tombstone matches Message-ID "${messageIdFilter}". Either we never sent it, or it was hard-deleted more than ${90} days ago and the tombstone has aged out.`
+              ? `No tombstone matches Message-ID "${messageIdFilter}". Either we never sent it, or it was hard-deleted more than 90 days ago and the tombstone has aged out.`
               : "No tombstones yet. They appear here whenever the trash purge sweep or a permanent-delete action hard-deletes an email."
           }
         />

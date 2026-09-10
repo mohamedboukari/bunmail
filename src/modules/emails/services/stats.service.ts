@@ -166,7 +166,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     totalWebhooks: webhookCount[0]?.total ?? 0,
   };
 
-  logger.debug("Dashboard stats fetched", stats as unknown as Record<string, unknown>);
+  logger.debug("Dashboard stats fetched", { ...stats });
 
   return stats;
 }

@@ -18,9 +18,6 @@ import { isIP } from "net";
 /** Thrown when a URL is refused by the guard. Callers map it to 4xx / a failed delivery. */
 export class BlockedUrlError extends Error {
   override readonly name = "BlockedUrlError";
-  constructor(message: string) {
-    super(message);
-  }
 }
 
 /* ─── IP range checks ─── */

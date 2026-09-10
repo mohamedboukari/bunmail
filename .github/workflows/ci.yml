@@ -98,6 +98,12 @@ jobs:
         # render of stored/user data needs the `safe` attribute. xss-scan
         # (@kitajs/ts-html-plugin) fails the build on any unescaped child,
         # so a new XSS sink can't merge silently (#131, #150).
+        #
+        # The scanner is a TypeScript *language service* plugin and TS 7
+        # removed the classic compiler API, so it runs from its own pinned
+        # TS 5.9 toolchain bootstrapped under node_modules/.cache (#163).
+        # The script fails closed: xss-scan exits 0 even when it crashes,
+        # so a run only passes if it printed its success sentinel.
         run: bun run lint:xss
 
       - name: Test (unit)

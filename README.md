@@ -227,8 +227,8 @@ bun run dev            # start dev server (--watch)
 bun test               # run all tests
 bun test test/unit     # unit tests only
 bun test test/e2e      # integration tests only
-bunx tsc --noEmit      # type check
-bun run lint           # eslint
+bunx tsc --noEmit      # type check (TypeScript 7, native)
+bun run lint           # oxlint (type-aware)
 docker compose up -d   # full stack with Postgres
 ```
 

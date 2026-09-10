@@ -67,7 +67,7 @@ export async function withMxLock<T>(
      *  by a releasing caller; we don't increment `active` here because
      *  the releaser left it unchanged when it handed off. */
     await new Promise<void>((resolve) => {
-      lock!.queue.push(resolve);
+      lock.queue.push(resolve);
     });
   }
 

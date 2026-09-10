@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
@@ -255,7 +255,7 @@ async function sendToMxGroup(args: {
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
 }): Promise<void> {
-  const transport = nodemailer.createTransport({
+  const transport = createTransport({
     host: args.mxHost,
     port: 25,
     secure: false,

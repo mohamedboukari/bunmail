@@ -7,8 +7,8 @@ import { LandingPage } from "./routes/landing.tsx";
  */
 export const landingPlugin = new Elysia().get(
   "/",
-  () => {
-    return new Response("<!doctype html>" + LandingPage(), {
+  async () => {
+    return new Response("<!doctype html>" + (await LandingPage()), {
       headers: { "content-type": "text/html; charset=utf-8" },
     });
   },

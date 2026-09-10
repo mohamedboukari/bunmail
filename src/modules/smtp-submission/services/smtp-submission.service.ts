@@ -133,9 +133,8 @@ function extractAddresses(field: AddressObject | AddressObject[] | undefined): s
  * submitting client sees a real rejection instead of a generic failure.
  */
 function smtpError(message: string, responseCode: number): Error {
-  const err = new Error(message) as Error & { responseCode: number };
-  err.responseCode = responseCode;
-  return err;
+  /** `Object.assign` widens the type structurally, so no cast is needed. */
+  return Object.assign(new Error(message), { responseCode });
 }
 
 /* ─── Server lifecycle ─── */
@@ -345,92 +344,97 @@ export function start(portOverride?: number): void {
         chunks.push(chunk);
       });
 
-      stream.on("end", async () => {
-        if (aborted) return;
+      stream.on("end", () => {
+        /** The listener must return void; the body is guarded by its own
+         *  try/catch, and `void` keeps a rejected promise from escaping
+         *  as an unhandled rejection. */
+        void (async () => {
+          if (aborted) return;
 
-        /** onAuth stashed the API key id here; guard defensively. */
-        const apiKeyId = session.user;
-        if (!apiKeyId) {
-          logger.error("SMTP submission DATA without an authenticated session");
-          callback(smtpError("Authentication required", 530));
-          return;
-        }
-
-        try {
-          /**
-           * Per-key daily quota (#123). Checked before the send so an
-           * over-quota key never queues. `452` is temporary — the quota
-           * window resets at the next UTC day, so the client should retry
-           * later rather than treat it as a permanent failure.
-           */
-          const { dailyQuota } = config.smtpSubmission;
-          if (dailyQuota > 0) {
-            const usedToday = await getAcceptedToday(apiKeyId);
-            if (usedToday >= dailyQuota) {
-              logger.warn("SMTP submission rejected — daily quota exceeded", {
-                apiKeyId,
-                usedToday,
-                dailyQuota,
-              });
-              await recordOutcome(apiKeyId, "rejected");
-              callback(
-                smtpError(
-                  `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
-                  452,
-                ),
-              );
-              return;
-            }
-          }
-
-          const rawMessage = Buffer.concat(chunks).toString("utf-8");
-          const parsed = await simpleParser(rawMessage);
-
-          const envelopeFrom =
-            session.envelope.mailFrom && typeof session.envelope.mailFrom === "object"
-              ? session.envelope.mailFrom.address
-              : undefined;
-
-          /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
-          const input: SendEmailInput = buildSubmissionInput({
-            fromHeader: parsed.from?.value?.[0]?.address,
-            envelopeFrom,
-            toHeader: extractAddresses(parsed.to),
-            ccHeader: extractAddresses(parsed.cc),
-            envelopeRecipients: (session.envelope.rcptTo ?? []).map((r) => r.address),
-            subject: parsed.subject ?? "",
-            html: typeof parsed.html === "string" ? parsed.html : undefined,
-            text: typeof parsed.text === "string" ? parsed.text : undefined,
-          });
-
-          /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
-          const email = await createEmail(input, apiKeyId, "smtp");
-          await recordOutcome(apiKeyId, "accepted");
-
-          logger.info("SMTP submission accepted — email queued", {
-            id: email.id,
-            apiKeyId,
-            from: redactEmail(input.from),
-            to: redactEmail(input.to),
-          });
-
-          callback();
-        } catch (error) {
-          /** Post-auth rejection — count it against the key's daily usage. */
-          await recordOutcome(apiKeyId, "rejected").catch(() => {});
-          if (error instanceof SuppressedRecipientError) {
-            logger.warn("SMTP submission rejected — recipient suppressed", {
-              apiKeyId,
-              suppressionId: error.suppressionId,
-            });
-            callback(smtpError(error.message, 550));
+          /** onAuth stashed the API key id here; guard defensively. */
+          const apiKeyId = session.user;
+          if (!apiKeyId) {
+            logger.error("SMTP submission DATA without an authenticated session");
+            callback(smtpError("Authentication required", 530));
             return;
           }
-          const message = error instanceof Error ? error.message : String(error);
-          logger.warn("SMTP submission rejected", { apiKeyId, error: message });
-          /** Sender-domain / validation errors from createEmail → 550. */
-          callback(smtpError(message, 550));
-        }
+
+          try {
+            /**
+             * Per-key daily quota (#123). Checked before the send so an
+             * over-quota key never queues. `452` is temporary — the quota
+             * window resets at the next UTC day, so the client should retry
+             * later rather than treat it as a permanent failure.
+             */
+            const { dailyQuota } = config.smtpSubmission;
+            if (dailyQuota > 0) {
+              const usedToday = await getAcceptedToday(apiKeyId);
+              if (usedToday >= dailyQuota) {
+                logger.warn("SMTP submission rejected — daily quota exceeded", {
+                  apiKeyId,
+                  usedToday,
+                  dailyQuota,
+                });
+                await recordOutcome(apiKeyId, "rejected");
+                callback(
+                  smtpError(
+                    `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
+                    452,
+                  ),
+                );
+                return;
+              }
+            }
+
+            const rawMessage = Buffer.concat(chunks).toString("utf-8");
+            const parsed = await simpleParser(rawMessage);
+
+            const envelopeFrom =
+              session.envelope.mailFrom && typeof session.envelope.mailFrom === "object"
+                ? session.envelope.mailFrom.address
+                : undefined;
+
+            /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
+            const input: SendEmailInput = buildSubmissionInput({
+              fromHeader: parsed.from?.value?.[0]?.address,
+              envelopeFrom,
+              toHeader: extractAddresses(parsed.to),
+              ccHeader: extractAddresses(parsed.cc),
+              envelopeRecipients: (session.envelope.rcptTo ?? []).map((r) => r.address),
+              subject: parsed.subject ?? "",
+              html: typeof parsed.html === "string" ? parsed.html : undefined,
+              text: typeof parsed.text === "string" ? parsed.text : undefined,
+            });
+
+            /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
+            const email = await createEmail(input, apiKeyId, "smtp");
+            await recordOutcome(apiKeyId, "accepted");
+
+            logger.info("SMTP submission accepted — email queued", {
+              id: email.id,
+              apiKeyId,
+              from: redactEmail(input.from),
+              to: redactEmail(input.to),
+            });
+
+            callback();
+          } catch (error) {
+            /** Post-auth rejection — count it against the key's daily usage. */
+            await recordOutcome(apiKeyId, "rejected").catch(() => {});
+            if (error instanceof SuppressedRecipientError) {
+              logger.warn("SMTP submission rejected — recipient suppressed", {
+                apiKeyId,
+                suppressionId: error.suppressionId,
+              });
+              callback(smtpError(error.message, 550));
+              return;
+            }
+            const message = error instanceof Error ? error.message : String(error);
+            logger.warn("SMTP submission rejected", { apiKeyId, error: message });
+            /** Sender-domain / validation errors from createEmail → 550. */
+            callback(smtpError(message, 550));
+          }
+        })();
       });
     },
   });

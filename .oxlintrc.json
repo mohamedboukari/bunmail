@@ -1,0 +1,81 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // Replaces ESLint + typescript-eslint (#163). typescript-eslint's peer
+  // range is `typescript <6.1.0` and it calls the classic TS compiler API,
+  // which TypeScript 7 removed — so it cannot run here. oxlint's type-aware
+  // mode is powered by tsgolint, i.e. the same typescript-go engine.
+  "plugins": ["typescript", "oxc", "unicorn", "promise", "node", "import"],
+
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+
+  "env": {
+    "es2024": true,
+    "node": true
+  },
+
+  "rules": {
+    // ─── Ported 1:1 from the old eslint.config.mjs ───
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unused-vars": [
+      "warn",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "typescript/consistent-type-imports": "warn",
+    "no-console": "warn",
+
+    // ─── Type-aware rules the old config never enabled ───
+    // These found 7 real defects on adoption, including unawaited promises
+    // in the queue/purge/startup paths and JSX.Element (= string |
+    // Promise<string>) being string-concatenated.
+    "typescript/no-floating-promises": "error",
+    "typescript/await-thenable": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-unsafe-type-assertion": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "promise/no-return-wrap": "error",
+    "promise/param-names": "error",
+
+    // ─── Deliberately disabled, with reasons ───
+
+    // `smtp-server` has a callback API — onConnect/onRcptTo/onData all take
+    // a `callback(err?)` that must be invoked from inside async work. The
+    // rule assumes we own the API and could return a promise instead; we
+    // don't. All 9 findings were in the inbound/submission SMTP services.
+    "promise/no-callback-in-promise": "off",
+
+    // Requires every `.then()` to return a value. All 7 findings were
+    // terminal fire-and-forget chains that only log (DNSBL lookups, purge
+    // sweeps, webhook dispatch) — nothing consumes the result, so a
+    // `return undefined` would be pure ceremony.
+    "promise/always-return": "off",
+
+    // Sequential awaits here are deliberate: migrations must apply in
+    // journal order, and per-MX sends are serialised on purpose by
+    // utils/mx-throttle.ts (parallelising would hammer one MX and hurt
+    // deliverability). See #163 for the dashboard-side loops, which may
+    // genuinely be parallelisable.
+    "no-await-in-loop": "off",
+
+    // Conflicts with the project convention of prefixing intentionally
+    // unused bindings with `_` (see CLAUDE.md and no-unused-vars above).
+    "no-underscore-dangle": "off",
+
+    // Wants nested helpers hoisted when they don't close over anything.
+    // The three findings are small render/format helpers where hoisting
+    // costs locality for no safety gain.
+    "unicorn/consistent-function-scoping": "off",
+
+    // Elysia guards short-circuit by returning a value and continue by
+    // returning nothing, so mixed returns are the framework's contract,
+    // not a defect. TypeScript already checks the actual return type.
+    "typescript/consistent-return": "off"
+  },
+
+  "ignorePatterns": ["dist/", "drizzle/", "node_modules/", "public/"]
+}
