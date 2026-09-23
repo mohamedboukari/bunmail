@@ -2,11 +2,11 @@
  * Shared utilities for integration tests. Each test file imports the
  * helpers it needs:
  *
- *   - `truncateAll()`  — wipe every test-scoped table; call from `beforeEach`
- *   - `seed.*`          — factory functions returning fully-formed rows
- *   - `closeDb()`       — close the SQL pool; call from `afterAll`
+ *   - `truncateAll()`: wipe every test-scoped table; call from `beforeEach`
+ *   - `seed.*`: factory functions returning fully-formed rows
+ *   - `closeDb()`: close the SQL pool; call from `afterAll`
  *
- * The helpers use the **same `db` singleton** the production code uses —
+ * The helpers use the **same `db` singleton** the production code uses:
  * `_preload.ts` has already pointed it at `bunmail_test`. That means
  * service-layer code under test runs against real Postgres with real
  * Drizzle queries; tests catch SQL bugs, FK behaviour, constraint
@@ -28,7 +28,7 @@ import { config } from "../../src/config.ts";
 /**
  * Wipe every test-relevant table in dependency order. Inbound emails,
  * trash purge state, and the migrations bookkeeping table are
- * intentionally NOT truncated — the schema is set up by
+ * intentionally NOT truncated: the schema is set up by
  * `scripts/test-integration-setup.ts` (or `db:migrate` in CI) and
  * persists across test runs to keep the suite fast.
  *

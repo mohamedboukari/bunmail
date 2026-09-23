@@ -10,7 +10,7 @@
  *   - Retry behaviour on non-2xx responses (3 attempts with exponential
  *     backoff in production; we override to fast retries in tests)
  *
- * Outbound HTTP is intercepted by stubbing the global `fetch` — we
+ * Outbound HTTP is intercepted by stubbing the global `fetch`: we
  * record what was sent without actually hitting the network.
  */
 
@@ -43,25 +43,28 @@ beforeEach(async () => {
   await truncateAll();
   captured.length = 0;
   /** Replace fetch with a recording stub that returns 200. */
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers).forEach((value, key) => {
-      headers[key] = value;
-    });
-    captured.push({
-      url,
-      method: init?.method ?? "GET",
-      headers,
-      body: typeof init?.body === "string" ? init.body : "",
-    });
-    return new Response("ok", { status: 200 });
-  }) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(
+    mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((value, key) => {
+        headers[key] = value;
+      });
+      captured.push({
+        url,
+        method: init?.method ?? "GET",
+        headers,
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      return new Response("ok", { status: 200 });
+    }),
+    { preconnect: originalFetch.preconnect },
+  );
 });
 
 afterEach(() => {
@@ -74,11 +77,11 @@ afterEach(() => {
  * is fire-and-forget, so we wait briefly for the enqueue inserts to
  * commit before we ask the worker to claim them.
  *
- * Pre-#30 this was just a setTimeout — the old implementation POSTed
+ * Pre-#30 this was just a setTimeout: the old implementation POSTed
  * directly from `dispatchEvent`'s fire-and-forget chain. Now the POST
  * happens via the worker poll, so we drive one tick manually. The
  * tests' assertions (signed payload shape, fetch call count) are
- * unchanged — we just have an extra async hop to walk through.
+ * unchanged: we just have an extra async hop to walk through.
  */
 async function waitForDispatch(ms = 100): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,10 +115,10 @@ describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
       url: "https://example.com/h",
       events: ["email.sent"],
     });
-    /** Wrong key — no-op. */
+    /** Wrong key: no-op. */
     expect(await deleteWebhook(hookId, keyB)).toBeUndefined();
     expect(await listWebhooks(keyA)).toHaveLength(1);
-    /** Right key — deletes. */
+    /** Right key: deletes. */
     const deleted = await deleteWebhook(hookId, keyA);
     expect(deleted?.id).toBe(hookId);
     expect(await listWebhooks(keyA)).toHaveLength(0);
@@ -137,7 +140,7 @@ describe("findWebhooksForEvent (event filtering)", () => {
       url: "https://b.example.com",
       events: ["email.bounced"],
     });
-    /** Inactive — should be excluded even though it subscribes to email.sent. */
+    /** Inactive, should be excluded even though it subscribes to email.sent. */
     const { id: inactiveId } = await seed.webhook({
       apiKeyId,
       url: "https://c.example.com",
@@ -156,7 +159,7 @@ describe("findWebhooksForEvent (event filtering)", () => {
   });
 });
 
-describe("dispatchEvent — end-to-end", () => {
+describe("dispatchEvent: end-to-end", () => {
   test("posts to every subscribed webhook with signed headers", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { secret: secret1 } = await seed.webhook({
@@ -207,7 +210,7 @@ describe("dispatchEvent — end-to-end", () => {
 
   test("doesn't dispatch when no subscribers match", async () => {
     const { id: apiKeyId } = await seed.apiKey();
-    /** Subscribed only to email.sent — should not get email.bounced. */
+    /** Subscribed only to email.sent, should not get email.bounced. */
     await seed.webhook({
       apiKeyId,
       url: "https://93.184.216.34",

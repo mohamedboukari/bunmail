@@ -23,7 +23,7 @@ import {
 
 const NOW = new Date("2026-05-10T12:00:00.000Z");
 
-describe("nextAttemptAt — backoff schedule", () => {
+describe("nextAttemptAt: backoff schedule", () => {
   test("attempts=1 → wait 1 minute", () => {
     const next = nextAttemptAt(1, NOW)!;
     expect(next.getTime() - NOW.getTime()).toBe(1 * 60_000);
@@ -54,7 +54,7 @@ describe("nextAttemptAt — backoff schedule", () => {
     expect(nextAttemptAt(99, NOW)).toBeNull();
   });
 
-  test("attempts=0 (defensive — caller bug) → null", () => {
+  test("attempts=0 (defensive: caller bug) → null", () => {
     /** A fresh enqueue has attempts=0; we should never call this with 0
      *  in production, but if we do, return null rather than fall off the
      *  end of the array. */
@@ -62,16 +62,16 @@ describe("nextAttemptAt — backoff schedule", () => {
   });
 });
 
-describe("schedule constants — contract", () => {
+describe("schedule constants: contract", () => {
   test("RETRY_BACKOFF_MINUTES matches the documented schedule", () => {
     /** If this changes, update CHANGELOG, docs/webhooks.md, and the
-     *  acceptance criteria in #30 in lockstep — it's a behavioural
+     *  acceptance criteria in #30 in lockstep: it's a behavioural
      *  contract operators rely on. */
     expect([...RETRY_BACKOFF_MINUTES]).toEqual([1, 5, 15, 60]);
   });
 
   test("MAX_DELIVERY_ATTEMPTS is one more than the schedule length", () => {
-    /** The first attempt fires immediately on enqueue — it doesn't use
+    /** The first attempt fires immediately on enqueue: it doesn't use
      *  the schedule. Each subsequent attempt consumes one schedule entry.
      *  So with 4 schedule entries, we get 5 attempts total. */
     expect(MAX_DELIVERY_ATTEMPTS).toBe(RETRY_BACKOFF_MINUTES.length + 1);

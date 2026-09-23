@@ -91,13 +91,13 @@ const RAW_REPORT_MAIL =
 
 beforeEach(async () => {
   await truncateAll();
-  /** dmarc_reports / dmarc_records aren't in `truncateAll` — wipe them
+  /** dmarc_reports / dmarc_records aren't in `truncateAll`: wipe them
    *  here so each test starts clean. */
   await db.delete(dmarcRecords);
   await db.delete(dmarcReports);
 });
 
-describe("persistDmarcReportFromInbound — happy path", () => {
+describe("persistDmarcReportFromInbound: happy path", () => {
   test("stores the report + all records in one transaction", async () => {
     const result = await persistDmarcReportFromInbound(
       RAW_REPORT_MAIL,
@@ -140,7 +140,7 @@ describe("persistDmarcReportFromInbound — happy path", () => {
   });
 });
 
-describe("persistDmarcReportFromInbound — dedup + skip", () => {
+describe("persistDmarcReportFromInbound: dedup + skip", () => {
   test("re-receiving the same report (same org_email + report_id) returns 'duplicate'", async () => {
     const first = await persistDmarcReportFromInbound(
       RAW_REPORT_MAIL,
@@ -155,7 +155,7 @@ describe("persistDmarcReportFromInbound — dedup + skip", () => {
       null,
     );
     expect(second.outcome).toBe("duplicate");
-    /** Same report id surfaced — caller can log "we already have this". */
+    /** Same report id surfaced: caller can log "we already have this". */
     expect(second.reportId).toBe(first.reportId);
 
     /** Records weren't double-inserted. */
@@ -201,7 +201,7 @@ describe("ON DELETE CASCADE on dmarc_reports → dmarc_records", () => {
     /** Delete the parent report. */
     await db.delete(dmarcReports).where(eq(dmarcReports.id, result.reportId!));
 
-    /** CASCADE — records are gone too. */
+    /** CASCADE: records are gone too. */
     const after = await db.select().from(dmarcRecords);
     expect(after).toHaveLength(0);
   });

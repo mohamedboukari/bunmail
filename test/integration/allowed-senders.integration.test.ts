@@ -37,7 +37,7 @@ beforeEach(async () => {
   await truncateAll();
 });
 
-describe("createEmail — allowed-senders gate (covers REST + SMTP)", () => {
+describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
   test("empty allowlist (default) permits any sender", async () => {
     const { apiKey } = await createApiKey({ name: "unrestricted" });
     const email = await createEmail(
@@ -64,7 +64,7 @@ describe("createEmail — allowed-senders gate (covers REST + SMTP)", () => {
       name: "restricted",
       allowedSenders: ["noreply@example.com"],
     });
-    await expect(
+    expect(
       createEmail(
         { from: "ceo@example.com", to: "user@example.org", subject: "spoof" },
         apiKey.id,
@@ -95,7 +95,7 @@ describe("createEmail — allowed-senders gate (covers REST + SMTP)", () => {
     });
 
     /** Blocked before adding. */
-    await expect(
+    expect(
       createEmail(
         { from: "ceo@example.com", to: "user@example.org", subject: "1" },
         apiKey.id,
@@ -114,7 +114,7 @@ describe("createEmail — allowed-senders gate (covers REST + SMTP)", () => {
 
     /** Remove ceo@ → blocked again. */
     await updateApiKey(apiKey.id, { allowedSenders: ["noreply@example.com"] });
-    await expect(
+    expect(
       createEmail(
         { from: "ceo@example.com", to: "user@example.org", subject: "3" },
         apiKey.id,
@@ -131,7 +131,7 @@ describe("SMTP submission respects the allowlist (live server)", () => {
     });
 
     /** Disallowed From → SMTP rejects (createEmail throws → 550). */
-    await expect(
+    expect(
       transport(rawKey).sendMail({
         from: "ceo@example.com",
         to: "user@example.org",

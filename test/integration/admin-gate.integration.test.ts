@@ -3,7 +3,7 @@
  * real Postgres, exercising the REAL `authMiddleware` + `adminMiddleware` +
  * plugin over HTTP (no mocks). Proves that:
  *   - an admin key reaches the management plane (200),
- *   - a restricted key is rejected (403 ADMIN_REQUIRED) — including the
+ *   - a restricted key is rejected (403 ADMIN_REQUIRED), including the
  *     #126-bypass path (PATCH your own allowedSenders), which is the whole
  *     point of this issue.
  */
@@ -13,6 +13,7 @@ import { Elysia } from "elysia";
 import { apiKeysPlugin } from "../../src/modules/api-keys/api-keys.plugin.ts";
 import { inboundPlugin } from "../../src/modules/inbound/inbound.plugin.ts";
 import { truncateAll, seed } from "./_helpers.ts";
+import { readJson } from "../read-json.ts";
 
 const app = new Elysia().use(apiKeysPlugin).use(inboundPlugin);
 
@@ -23,7 +24,7 @@ function req(path: string, key: string, init: RequestInit = {}) {
       headers: {
         authorization: `Bearer ${key}`,
         "content-type": "application/json",
-        ...(init.headers ?? {}),
+        ...Object.fromEntries(new Headers(init.headers)),
       },
     }),
   );
@@ -49,7 +50,7 @@ describe("admin/restricted key gate (#130)", () => {
 
     const list = await req("/api/v1/api-keys", rawKey);
     expect(list.status).toBe(403);
-    const body = (await list.json()) as { code?: string };
+    const body = await readJson<{ code?: string }>(list);
     expect(body.code).toBe("ADMIN_REQUIRED");
 
     const inbound = await req("/api/v1/inbound", rawKey);

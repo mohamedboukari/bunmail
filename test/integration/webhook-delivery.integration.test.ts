@@ -5,7 +5,7 @@
  * loop: enqueue → claim → deliver → reschedule on failure → terminate
  * at `failed` after the cap → replay flips back to `pending`.
  *
- * Outbound HTTP is intercepted by stubbing `globalThis.fetch` — same
+ * Outbound HTTP is intercepted by stubbing `globalThis.fetch`: same
  * pattern as `webhook-dispatch.integration.test.ts` and
  * `inbound-bounce-flow.integration.test.ts`. Each test installs its
  * own scripted handler so we can drive 2xx vs 5xx vs network-error
@@ -42,13 +42,16 @@ afterEach(() => {
 
 /** Helper: reusable scripted-fetch installer. */
 function installFetch(handler: (req: Request) => Promise<Response> | Response) {
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-    const req =
-      input instanceof Request
-        ? input
-        : new Request(typeof input === "string" ? input : input.toString(), init);
-    return handler(req);
-  }) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(
+    mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const req =
+        input instanceof Request
+          ? input
+          : new Request(typeof input === "string" ? input : input.toString(), init);
+      return handler(req);
+    }),
+    { preconnect: originalFetch.preconnect },
+  );
 }
 
 /** Build a small standard envelope for tests. */
@@ -60,7 +63,7 @@ function envelope(event: "email.sent" | "email.bounced" = "email.sent") {
   } as const;
 }
 
-describe("enqueueDelivery — initial state", () => {
+describe("enqueueDelivery: initial state", () => {
   test("inserts a pending row with attempts=0 and next_attempt_at=now-ish", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
@@ -82,7 +85,7 @@ describe("enqueueDelivery — initial state", () => {
     expect(row?.status).toBe("pending");
     expect(row?.attempts).toBe(0);
     expect(row?.event).toBe("email.sent");
-    /** Body bytes are stored verbatim — re-signed per attempt by the worker. */
+    /** Body bytes are stored verbatim: re-signed per attempt by the worker. */
     expect(JSON.parse(row!.payload)).toEqual(envelope());
     /** `next_attempt_at` should be set to ~now (defaultNow). */
     const nextMs = row!.nextAttemptAt.getTime();
@@ -91,7 +94,7 @@ describe("enqueueDelivery — initial state", () => {
   });
 });
 
-describe("worker poll cycle — happy path (2xx response → delivered)", () => {
+describe("worker poll cycle: happy path (2xx response → delivered)", () => {
   test("delivers and marks status=delivered with deliveredAt set", async () => {
     const captured: Array<{ url: string; body: string; headers: Headers }> = [];
     installFetch(async (req) => {
@@ -129,7 +132,7 @@ describe("worker poll cycle — happy path (2xx response → delivered)", () => 
   });
 });
 
-describe("worker poll cycle — non-2xx response reschedules with backoff", () => {
+describe("worker poll cycle: non-2xx response reschedules with backoff", () => {
   test("first failure: status stays pending, attempts=1, next_attempt_at advanced 1m", async () => {
     installFetch(() => new Response("server error", { status: 500 }));
 
@@ -153,7 +156,7 @@ describe("worker poll cycle — non-2xx response reschedules with backoff", () =
     expect(row?.lastResponseStatus).toBe(500);
     expect(row?.lastError).toContain("HTTP 500");
     /** Should be scheduled ~1 minute from now (RETRY_BACKOFF_MINUTES[0]). */
-    const expectedNextMs = before + RETRY_BACKOFF_MINUTES[0]! * 60_000;
+    const expectedNextMs = before + RETRY_BACKOFF_MINUTES[0] * 60_000;
     expect(Math.abs(row!.nextAttemptAt.getTime() - expectedNextMs)).toBeLessThan(5_000);
   });
 
@@ -183,7 +186,7 @@ describe("worker poll cycle — non-2xx response reschedules with backoff", () =
   });
 });
 
-describe("worker poll cycle — exhausting retries flips status=failed", () => {
+describe("worker poll cycle: exhausting retries flips status=failed", () => {
   test("after MAX_DELIVERY_ATTEMPTS failures, row terminates at failed", async () => {
     installFetch(() => new Response("nope", { status: 500 }));
 
@@ -200,7 +203,7 @@ describe("worker poll cycle — exhausting retries flips status=failed", () => {
 
     /** Step the worker forward one attempt at a time. After each attempt
      *  we shove `next_attempt_at` back to now() so the next runPollCycle
-     *  picks it up — saves us waiting through real backoff in tests. */
+     *  picks it up: saves us waiting through real backoff in tests. */
     for (let i = 0; i < 5; i++) {
       await runPollCycle();
       await db
@@ -216,7 +219,7 @@ describe("worker poll cycle — exhausting retries flips status=failed", () => {
   });
 });
 
-describe("worker poll cycle — only claims due rows", () => {
+describe("worker poll cycle, only claims due rows", () => {
   test("future-scheduled rows are NOT claimed", async () => {
     let calls = 0;
     installFetch(() => {
@@ -254,9 +257,9 @@ describe("worker poll cycle — only claims due rows", () => {
   });
 });
 
-describe("worker poll cycle — concurrent workers see disjoint claims", () => {
+describe("worker poll cycle: concurrent workers see disjoint claims", () => {
   test("two parallel poll cycles claim distinct rows (FOR UPDATE SKIP LOCKED)", async () => {
-    /** All requests succeed — we just want to verify no row is double-claimed. */
+    /** All requests succeed: we just want to verify no row is double-claimed. */
     installFetch(() => new Response("ok", { status: 200 }));
 
     const { id: apiKeyId } = await seed.apiKey();
@@ -291,7 +294,7 @@ describe("worker poll cycle — concurrent workers see disjoint claims", () => {
   });
 });
 
-describe("worker poll cycle — webhook deactivated after enqueue is skipped + marked failed", () => {
+describe("worker poll cycle: webhook deactivated after enqueue is skipped + marked failed", () => {
   test("inactive webhook → row terminates at failed without HTTP attempt", async () => {
     let calls = 0;
     installFetch(() => {
@@ -321,7 +324,7 @@ describe("worker poll cycle — webhook deactivated after enqueue is skipped + m
   });
 });
 
-describe("replayDelivery — resets a failed row to pending", () => {
+describe("replayDelivery: resets a failed row to pending", () => {
   test("flips status, zeroes attempts, sets next_attempt_at to now", async () => {
     installFetch(() => new Response("nope", { status: 500 }));
 
@@ -356,7 +359,7 @@ describe("replayDelivery — resets a failed row to pending", () => {
     expect(replayed?.deliveredAt).toBeNull();
     expect(replayed!.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(before - 100);
 
-    /** Now have the worker pick it up — this time the receiver responds 200. */
+    /** Now have the worker pick it up: this time the receiver responds 200. */
     installFetch(() => new Response("ok", { status: 200 }));
     await runPollCycle();
     row = await getDeliveryById({ deliveryId, apiKeyId });
@@ -381,7 +384,7 @@ describe("replayDelivery — resets a failed row to pending", () => {
   });
 });
 
-describe("listDeliveriesForWebhook — pagination + status filter + tenant scoping", () => {
+describe("listDeliveriesForWebhook: pagination + status filter + tenant scoping", () => {
   test("scopes to the calling api key; foreign keys see empty result", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
@@ -401,7 +404,7 @@ describe("listDeliveriesForWebhook — pagination + status filter + tenant scopi
     });
     expect(ownerView.total).toBe(1);
 
-    /** A different api key sees nothing — even with the right webhook id. */
+    /** A different api key sees nothing, even with the right webhook id. */
     const strangerView = await listDeliveriesForWebhook({
       webhookId: hookA,
       apiKeyId: keyB,
@@ -468,7 +471,7 @@ describe("listDeliveriesForWebhook — pagination + status filter + tenant scopi
   });
 });
 
-describe("purgeOldDeliveries — retention cleanup", () => {
+describe("purgeOldDeliveries: retention cleanup", () => {
   test("deletes only delivered rows older than the cutoff; failed kept indefinitely", async () => {
     installFetch(() => new Response("ok", { status: 200 }));
     const { id: apiKeyId } = await seed.apiKey();
@@ -488,13 +491,13 @@ describe("purgeOldDeliveries — retention cleanup", () => {
     /** Run the worker so both transition to delivered. */
     await runPollCycle();
 
-    /** Backdate one of them — pretend it was created 60 days ago. */
+    /** Backdate one of them: pretend it was created 60 days ago. */
     await db
       .update(webhookDeliveries)
       .set({ createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) })
       .where(eq(webhookDeliveries.id, oldDelivered));
 
-    /** Also seed a failed row that's old — should NOT be purged. */
+    /** Also seed a failed row that's old, should NOT be purged. */
     installFetch(() => new Response("nope", { status: 500 }));
     const { id: oldFailed } = await enqueueDelivery({
       webhookId,
@@ -524,7 +527,7 @@ describe("purgeOldDeliveries — retention cleanup", () => {
   });
 });
 
-describe("performHttpAttempt — re-signs per attempt", () => {
+describe("performHttpAttempt: re-signs per attempt", () => {
   test("two attempts ship two distinct signing timestamps", async () => {
     const captured: Array<{ ts: string; sig: string }> = [];
     installFetch((req) => {
@@ -560,7 +563,7 @@ describe("performHttpAttempt — re-signs per attempt", () => {
   });
 });
 
-describe("CASCADE on webhook delete — deliveries vanish too", () => {
+describe("CASCADE on webhook delete: deliveries vanish too", () => {
   test("deleting the webhook cascades and deletes all its deliveries", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
@@ -591,7 +594,7 @@ describe("CASCADE on webhook delete — deliveries vanish too", () => {
   });
 });
 
-describe("claimDueDeliveries — direct call (sanity)", () => {
+describe("claimDueDeliveries: direct call (sanity)", () => {
   test("returns hydrated rows with url + secret joined in", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({

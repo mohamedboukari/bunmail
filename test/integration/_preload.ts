@@ -1,6 +1,6 @@
 /**
  * Integration test preload. Wired in via the `--preload` flag on the
- * `test:integration` script in `package.json` — runs **after** the
+ * `test:integration` script in `package.json`: runs **after** the
  * global `test/setup.ts` preload from `bunfig.toml` and **before** any
  * test file imports the app code.
  *
@@ -11,22 +11,22 @@
  * MUST happen before any service module is touched.
  *
  * URL resolution order:
- *   1. `INTEGRATION_DATABASE_URL` if set — explicit override, wins
+ *   1. `INTEGRATION_DATABASE_URL` if set: explicit override, wins
  *   2. Existing `DATABASE_URL` if it already points at a `*_test`
- *      database — CI sets it this way directly via the workflow env
+ *      database: CI sets it this way directly via the workflow env
  *   3. Construct from `POSTGRES_USER` / `POSTGRES_PASSWORD` (loaded
  *      from `.env`) targeting `bunmail_test` on localhost:5432
  *
  * The third path is the local-dev default. If a developer's `.env`
  * has `DATABASE_URL` pointing at their dev DB, we DELIBERATELY don't
- * use it — running integration tests against the dev DB would corrupt
+ * use it: running integration tests against the dev DB would corrupt
  * the dev data on every TRUNCATE.
  */
 
 /**
  * Integration tests exercise the SMTP submission server over plaintext
  * (no TLS material), which the service now refuses by default (#133). Opt
- * in here — set before the app's `config` module loads — so the tests can
+ * in here, set before the app's `config` module loads, so the tests can
  * bind the submission server without a cert. Real deployments set TLS or
  * this flag deliberately; the test env is a trusted loopback.
  */

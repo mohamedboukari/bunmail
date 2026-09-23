@@ -5,9 +5,9 @@
  *   - `ON CONFLICT DO UPDATE` upsert behaviour (re-suppressing
  *     overwrites a row instead of inserting a duplicate)
  *   - Address normalisation (lower-case + trim) at the gate's WHERE
- *   - Expiry filter (`gt(expiresAt, now())`) — soft suppressions
+ *   - Expiry filter (`gt(expiresAt, now())`): soft suppressions
  *     in the past should NOT block sends; ones in the future should
- *   - `ON DELETE CASCADE` from `api_keys` — revoking a key wipes its
+ *   - `ON DELETE CASCADE` from `api_keys`: revoking a key wipes its
  *     suppression list
  *
  * Each test starts from a clean DB via `truncateAll()`.
@@ -86,7 +86,7 @@ describe("isSuppressed", () => {
     expect(await isSuppressed(apiKeyId, "ALICE@EXAMPLE.COM")).toBeDefined();
   });
 
-  test("isolates suppressions per api_key — one tenant's bounces don't gate another's", async () => {
+  test("isolates suppressions per api_key: one tenant's bounces don't gate another's", async () => {
     const { id: keyA } = await seed.apiKey({ name: "tenant-a" });
     const { id: keyB } = await seed.apiKey({ name: "tenant-b" });
     await seed.suppression({
@@ -99,7 +99,7 @@ describe("isSuppressed", () => {
   });
 });
 
-describe("addFromBounce — upsert", () => {
+describe("addFromBounce: upsert", () => {
   test("inserts a fresh row on first call", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const result = await addFromBounce(apiKeyId, {
@@ -118,7 +118,7 @@ describe("addFromBounce — upsert", () => {
     expect(row?.reason).toBe("bounce");
   });
 
-  test("upserts on the unique (api_key_id, email) constraint — second call overwrites", async () => {
+  test("upserts on the unique (api_key_id, email) constraint: second call overwrites", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const first = await addFromBounce(apiKeyId, {
       email: "user@example.com",
@@ -145,7 +145,7 @@ describe("addFromBounce — upsert", () => {
   });
 });
 
-describe("createSuppression — manual upsert clears bounce metadata", () => {
+describe("createSuppression: manual upsert clears bounce metadata", () => {
   test("manual re-suppression of a previously-bounced address clears bounce_type / diagnostic_code", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     /** First, an automated bounce suppression. */
@@ -165,7 +165,7 @@ describe("createSuppression — manual upsert clears bounce metadata", () => {
       .from(suppressions)
       .where(eq(suppressions.email, "user@example.com"));
     expect(row?.reason).toBe("manual");
-    /** Stale bounce metadata cleared — operator's manual override doesn't
+    /** Stale bounce metadata cleared: operator's manual override doesn't
      *  carry forward "this was a bounce" provenance that's no longer true. */
     expect(row?.bounceType).toBeNull();
     expect(row?.diagnosticCode).toBeNull();
@@ -224,7 +224,7 @@ describe("listSuppressions / getSuppressionById / deleteSuppression", () => {
     expect(result.data[0]?.email).toBe("alice@example.com");
   });
 
-  test("getSuppressionById is scoped — different api key returns undefined", async () => {
+  test("getSuppressionById is scoped: different api key returns undefined", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
     const { id: supId } = await seed.suppression({
@@ -244,10 +244,10 @@ describe("listSuppressions / getSuppressionById / deleteSuppression", () => {
       email: "a@example.com",
       reason: "manual",
     });
-    /** Wrong key — no-op. */
+    /** Wrong key: no-op. */
     expect(await deleteSuppression(supId, keyB)).toBeUndefined();
     expect(await getSuppressionById(supId, keyA)).toBeDefined();
-    /** Right key — deletes. */
+    /** Right key: deletes. */
     const deleted = await deleteSuppression(supId, keyA);
     expect(deleted?.id).toBe(supId);
     expect(await getSuppressionById(supId, keyA)).toBeUndefined();

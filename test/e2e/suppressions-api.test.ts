@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the Suppressions API (/api/v1/suppressions).
@@ -38,7 +39,7 @@ interface ErrorResponse {
   error: string;
 }
 
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -48,7 +49,7 @@ mock.module("../../src/config.ts", () => ({
   },
 }));
 
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -57,7 +58,7 @@ mock.module("../../src/utils/logger.ts", () => ({
   },
 }));
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -83,22 +84,25 @@ const mockBounceSuppression = {
   sourceEmailId: "msg_origin",
 };
 
-mock.module("../../src/modules/suppressions/services/suppression.service.ts", () => ({
-  createSuppression: mock(() => Promise.resolve(mockSuppression)),
-  listSuppressions: mock(() =>
-    Promise.resolve({ data: [mockSuppression, mockBounceSuppression], total: 2 }),
-  ),
-  getSuppressionById: mock((id: string) =>
-    Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
-  ),
-  deleteSuppression: mock((id: string) =>
-    Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
-  ),
-  isSuppressed: mock(() => Promise.resolve(undefined)),
-  addFromBounce: mock(() => Promise.resolve(mockBounceSuppression)),
-}));
+void mock.module(
+  "../../src/modules/suppressions/services/suppression.service.ts",
+  () => ({
+    createSuppression: mock(() => Promise.resolve(mockSuppression)),
+    listSuppressions: mock(() =>
+      Promise.resolve({ data: [mockSuppression, mockBounceSuppression], total: 2 }),
+    ),
+    getSuppressionById: mock((id: string) =>
+      Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
+    ),
+    deleteSuppression: mock((id: string) =>
+      Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
+    ),
+    isSuppressed: mock(() => Promise.resolve(undefined)),
+    addFromBounce: mock(() => Promise.resolve(mockBounceSuppression)),
+  }),
+);
 
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -106,7 +110,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -133,12 +137,12 @@ describe("Suppressions API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as SuppressionResponse;
+      const body = await readJson<SuppressionResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("sup_test123");
       expect(body.data.email).toBe("blocked@example.com");
       expect(body.data.reason).toBe("manual");
-      /** Public response should never carry the apiKeyId — it's the caller's own. */
+      /** Public response should never carry the apiKeyId: it's the caller's own. */
       expect("apiKeyId" in body.data).toBe(false);
     });
 
@@ -183,7 +187,7 @@ describe("Suppressions API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as SuppressionListResponse;
+      const body = await readJson<SuppressionListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(2);
       expect(body.pagination.total).toBe(2);
@@ -203,7 +207,7 @@ describe("Suppressions API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as SuppressionResponse;
+      const body = await readJson<SuppressionResponse>(response);
       expect(body.data.id).toBe("sup_test123");
     });
 
@@ -216,7 +220,7 @@ describe("Suppressions API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
     });
   });
@@ -231,7 +235,7 @@ describe("Suppressions API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as SuppressionResponse;
+      const body = await readJson<SuppressionResponse>(response);
       expect(body.data.id).toBe("sup_test123");
     });
 

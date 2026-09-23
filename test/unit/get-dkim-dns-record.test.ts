@@ -8,7 +8,7 @@ import { describe, test, expect, mock } from "bun:test";
  */
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -19,7 +19,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -29,7 +29,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 

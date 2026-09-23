@@ -18,7 +18,7 @@ beforeEach(async () => {
   await truncateAll();
 });
 
-describe("createEmail — happy path", () => {
+describe("createEmail: happy path", () => {
   test("inserts a row in 'queued' status with FK to api_key and domain", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: domainId, name } = await seed.domain();
@@ -43,7 +43,7 @@ describe("createEmail — happy path", () => {
 
   test("leaves domainId null when sender domain isn't registered (in dev mode)", async () => {
     const { id: apiKeyId } = await seed.apiKey();
-    /** No domain row inserted — sender domain unknown. In `BUNMAIL_ENV !==
+    /** No domain row inserted: sender domain unknown. In `BUNMAIL_ENV !==
      *  'production'` (default for tests), createEmail allows this. */
     const email = await createEmail(
       {
@@ -58,7 +58,7 @@ describe("createEmail — happy path", () => {
   });
 });
 
-describe("createEmail — suppression gate (#25)", () => {
+describe("createEmail: suppression gate (#25)", () => {
   test("throws SuppressedRecipientError when recipient has a permanent suppression", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: supId } = await seed.suppression({
@@ -82,15 +82,17 @@ describe("createEmail — suppression gate (#25)", () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(SuppressedRecipientError);
-    expect((thrown as SuppressedRecipientError).suppressionId).toBe(supId);
-    expect((thrown as SuppressedRecipientError).recipient).toBe("blocked@example.com");
+    expect(thrown).toMatchObject({
+      suppressionId: supId,
+      recipient: "blocked@example.com",
+    });
 
-    /** No row inserted — gate fires before INSERT. */
+    /** No row inserted: gate fires before INSERT. */
     const all = await db.select().from(emails);
     expect(all).toHaveLength(0);
   });
 
-  test("normalises recipient address — case+whitespace doesn't bypass the gate", async () => {
+  test("normalises recipient address: case+whitespace doesn't bypass the gate", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     await seed.suppression({
       apiKeyId,
@@ -123,7 +125,7 @@ describe("createEmail — suppression gate (#25)", () => {
       bounceType: "soft",
       expiresAt: new Date(Date.now() - 60_000),
     });
-    /** No throw — suppression is past its expiry. */
+    /** No throw: suppression is past its expiry. */
     const email = await createEmail(
       {
         from: "hello@yourdns.example",
@@ -136,7 +138,7 @@ describe("createEmail — suppression gate (#25)", () => {
     expect(email.status).toBe("queued");
   });
 
-  test("suppression is per-API-key — tenant B can still send to address suppressed by tenant A", async () => {
+  test("suppression is per-API-key: tenant B can still send to address suppressed by tenant A", async () => {
     const { id: keyA } = await seed.apiKey({ name: "tenant-a" });
     const { id: keyB } = await seed.apiKey({ name: "tenant-b" });
     await seed.suppression({
@@ -159,7 +161,7 @@ describe("createEmail — suppression gate (#25)", () => {
   });
 });
 
-describe("createEmail — template-based send", () => {
+describe("createEmail: template-based send", () => {
   test("resolves the template and substitutes variables", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: tplId } = await seed.template({
@@ -205,11 +207,14 @@ describe("createEmail — template-based send", () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toMatch(/Template .* not found/);
+    expect(thrown).toHaveProperty(
+      "message",
+      expect.stringMatching(/Template .* not found/),
+    );
   });
 });
 
-describe("createEmail — FK ON DELETE SET NULL", () => {
+describe("createEmail: FK ON DELETE SET NULL", () => {
   test("deleting a domain detaches its emails (sets domain_id to null)", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: domainId, name } = await seed.domain();
@@ -219,7 +224,7 @@ describe("createEmail — FK ON DELETE SET NULL", () => {
       fromAddress: `hello@${name}`,
     });
 
-    /** Delete the domain — schema's `ON DELETE SET NULL` should detach. */
+    /** Delete the domain: schema's `ON DELETE SET NULL` should detach. */
     await db
       .delete((await import("../../src/modules/domains/models/domain.schema.ts")).domains)
       .where(
@@ -231,12 +236,12 @@ describe("createEmail — FK ON DELETE SET NULL", () => {
 
     const [email] = await db.select().from(emails).where(eq(emails.id, emailId));
     expect(email?.domainId).toBeNull();
-    /** Email row still exists — deleted domain shouldn't cascade-drop history. */
+    /** Email row still exists: deleted domain shouldn't cascade-drop history. */
     expect(email?.id).toBe(emailId);
   });
 });
 
-describe("createEmail — source channel + filters (#137)", () => {
+describe("createEmail: source channel + filters (#137)", () => {
   test("defaults source to 'api'; SMTP path records 'smtp'", async () => {
     const { id: apiKeyId } = await seed.apiKey();
 

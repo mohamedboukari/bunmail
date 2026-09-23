@@ -14,10 +14,12 @@ function chainable<T>(result: T): T {
     },
   };
   const proxy = new Proxy({}, handler);
+  /** The Proxy answers any property chain the service builds, so it stands in for T by design. */
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return proxy as T;
 }
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {
     select: mock(() => chainable(selectResult)),
     insert: mock(() => chainable(insertResult)),

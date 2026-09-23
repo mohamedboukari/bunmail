@@ -133,7 +133,7 @@ const SINGLE_RECORD_XML = `<?xml version="1.0" encoding="UTF-8" ?>
   </record>
 </feedback>`;
 
-describe("parseAggregateReport — RFC 7489 happy path", () => {
+describe("parseAggregateReport: RFC 7489 happy path", () => {
   test("parses raw XML (no compression)", () => {
     const parsed = parseAggregateReport(strToU8(SAMPLE_REPORT_XML));
     expect(parsed).not.toBeNull();
@@ -176,17 +176,17 @@ describe("parseAggregateReport — RFC 7489 happy path", () => {
     expect(second.disposition).toBe("quarantine");
     expect(second.dkimAligned).toBe(false);
     expect(second.spfAligned).toBe(false);
-    /** No DKIM auth_results in this record — fields are null. */
+    /** No DKIM auth_results in this record: fields are null. */
     expect(second.dkimAuthDomain).toBeNull();
     expect(second.dkimSelector).toBeNull();
-    /** SPF auth result is present and aimed at a DIFFERENT domain — the signal that
+    /** SPF auth result is present and aimed at a DIFFERENT domain: the signal that
      *  someone else's mail is getting forwarded with our From header. */
     expect(second.spfAuthDomain).toBe("different-domain.example");
     expect(second.spfResult).toBe("fail");
   });
 });
 
-describe("parseAggregateReport — compression formats", () => {
+describe("parseAggregateReport: compression formats", () => {
   test("gzipped XML (Google / Yahoo style)", () => {
     const compressed = gzipSync(strToU8(SAMPLE_REPORT_XML));
     const parsed = parseAggregateReport(compressed);
@@ -203,8 +203,8 @@ describe("parseAggregateReport — compression formats", () => {
   });
 });
 
-describe("parseAggregateReport — fast-xml-parser scalar/array quirk", () => {
-  test("single-record report — fast-xml-parser collapses to scalar; parser coerces back", () => {
+describe("parseAggregateReport: fast-xml-parser scalar/array quirk", () => {
+  test("single-record report: fast-xml-parser collapses to scalar; parser coerces back", () => {
     const parsed = parseAggregateReport(strToU8(SINGLE_RECORD_XML));
     expect(parsed).not.toBeNull();
     expect(parsed!.records).toHaveLength(1);
@@ -212,13 +212,13 @@ describe("parseAggregateReport — fast-xml-parser scalar/array quirk", () => {
   });
 });
 
-describe("parseAggregateReport — drop paths", () => {
+describe("parseAggregateReport: drop paths", () => {
   test("non-XML bytes return null", () => {
     expect(parseAggregateReport(strToU8("hello world"))).toBeNull();
   });
 
   test("invalid gzip bytes return null", () => {
-    /** 1f 8b magic but garbage after — gunzip throws. */
+    /** 1f 8b magic but garbage after: gunzip throws. */
     expect(parseAggregateReport(new Uint8Array([0x1f, 0x8b, 0x00, 0x00]))).toBeNull();
   });
 
@@ -309,9 +309,9 @@ describe("looksLikeDmarcReport heuristic", () => {
  * DoS-resistance regression tests (#129). Both cases are reachable by
  * anyone who can send one email to the unauthenticated inbound receiver.
  * The parser must return `null` (skip the message) instead of OOMing or
- * pegging the CPU — and must do so quickly.
+ * pegging the CPU, and must do so quickly.
  */
-describe("parseAggregateReport — DoS resistance (#129)", () => {
+describe("parseAggregateReport: DoS resistance (#129)", () => {
   test("gzip decompression bomb → null (capped, no OOM/hang)", () => {
     /** ~60 MB of zeros compresses to a few KB; inflating it uncapped would
      *  blow past the 25 MB output cap. */
@@ -320,7 +320,7 @@ describe("parseAggregateReport — DoS resistance (#129)", () => {
     const result = parseAggregateReport(bomb);
     const elapsed = Date.now() - start;
     expect(result).toBeNull();
-    /** Must abort promptly — not inflate the whole 60 MB. */
+    /** Must abort promptly, not inflate the whole 60 MB. */
     expect(elapsed).toBeLessThan(2000);
   });
 

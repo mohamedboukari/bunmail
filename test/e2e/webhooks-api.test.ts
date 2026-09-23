@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the Webhooks API (/api/v1/webhooks).
@@ -40,7 +41,7 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -51,7 +52,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -61,7 +62,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -78,7 +79,7 @@ const mockWebhook = {
 };
 
 /* ─── Mock webhook service ─── */
-mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
+void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   createWebhook: mock(() =>
     Promise.resolve({ webhook: mockWebhook, secret: "supersecret123" }),
   ),
@@ -91,7 +92,7 @@ mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -99,7 +100,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -128,7 +129,7 @@ describe("Webhooks API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as WebhookCreateResponse;
+      const body = await readJson<WebhookCreateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("whk_test123");
       expect(body.data.url).toBe("https://example.com/hook");
@@ -161,13 +162,13 @@ describe("Webhooks API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as WebhookListResponse;
+      const body = await readJson<WebhookListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.id).toBe("whk_test123");
       expect(body.data[0]!.url).toBe("https://example.com/hook");
       /** Secret must not be exposed in list response */
-      expect((body.data[0] as unknown as Record<string, unknown>).secret).toBeUndefined();
+      expect(body.data[0]).not.toHaveProperty("secret");
     });
   });
 
@@ -181,7 +182,7 @@ describe("Webhooks API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as WebhookResponse;
+      const body = await readJson<WebhookResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("whk_test123");
     });
@@ -195,7 +196,7 @@ describe("Webhooks API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Webhook not found");
     });

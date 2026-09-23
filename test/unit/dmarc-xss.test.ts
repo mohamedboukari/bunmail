@@ -12,7 +12,7 @@ import type {
  * DMARC aggregate reports arrive over the UNAUTHENTICATED inbound path and
  * their fields (`org_name`, `domain`, `source_ip`, `disposition`, auth
  * domains/results, and the raw XML) are stored verbatim. `@kitajs/html` does
- * NOT auto-escape interpolated children — escaping needs the `safe`
+ * NOT auto-escape interpolated children: escaping needs the `safe`
  * attribute. If a page omits `safe`, an attacker-supplied `<script>`/`<img
  * onerror>` executes in the admin dashboard origin.
  *
@@ -23,7 +23,7 @@ import type {
 
 /** A payload whose escaped form differs unmistakably from its raw form. */
 const XSS = `<img src=x onerror="alert(1)">`;
-/** After HTML-escaping, `<` becomes `&lt;` — the payload can't open a tag. */
+/** After HTML-escaping, `<` becomes `&lt;`: the payload can't open a tag. */
 const ESCAPED_LT = "&lt;img";
 
 function makeReport(overrides: Partial<DmarcReport> = {}): DmarcReport {
@@ -62,9 +62,9 @@ function makeRecord(overrides: Partial<DmarcRecord> = {}): DmarcRecord {
   };
 }
 
-describe("DMARC reports list — XSS (#131)", () => {
-  test("escapes attacker-controlled orgName / domain / policyP / filter", () => {
-    const html = DmarcReportsPage({
+describe("DMARC reports list: XSS (#131)", () => {
+  test("escapes attacker-controlled orgName / domain / policyP / filter", async () => {
+    const html = await DmarcReportsPage({
       reports: [makeReport()],
       total: 1,
       page: 1,
@@ -72,7 +72,7 @@ describe("DMARC reports list — XSS (#131)", () => {
       domainFilter: undefined,
       /** Two domains so the filter chips (which render {d}) are shown. */
       domains: [XSS, "b.example.com"],
-    }).toString();
+    });
 
     /** The unescaped payload must NOT be present as a live tag. */
     expect(html).not.toContain(XSS);
@@ -81,24 +81,24 @@ describe("DMARC reports list — XSS (#131)", () => {
   });
 });
 
-describe("DMARC report detail — XSS (#131)", () => {
-  test("escapes header fields, per-record fields, and raw XML", () => {
-    const html = DmarcReportDetailPage({
+describe("DMARC report detail: XSS (#131)", () => {
+  test("escapes header fields, per-record fields, and raw XML", async () => {
+    const html = await DmarcReportDetailPage({
       report: makeReport(),
       records: [makeRecord()],
-    }).toString();
+    });
 
     expect(html).not.toContain(XSS);
     expect(html).toContain(ESCAPED_LT);
   });
 
-  test("escapes even when optional auth domains are absent", () => {
-    const html = DmarcReportDetailPage({
+  test("escapes even when optional auth domains are absent", async () => {
+    const html = await DmarcReportDetailPage({
       report: makeReport({ orgName: "clean", domain: "clean", policyP: "reject" }),
       records: [makeRecord({ dkimAuthDomain: null, spfAuthDomain: null })],
-    }).toString();
+    });
 
-    /** sourceIp/disposition still carry the payload — must be escaped. */
+    /** sourceIp/disposition still carry the payload, must be escaped. */
     expect(html).not.toContain(XSS);
     expect(html).toContain(ESCAPED_LT);
   });

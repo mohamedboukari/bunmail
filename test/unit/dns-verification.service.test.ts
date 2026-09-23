@@ -17,17 +17,16 @@ const dbUpdates: Array<Record<string, unknown>> = [];
  * tests in the same process) need to be exported so cross-file
  * `mock.module` calls don't shadow each other's missing exports.
  */
-mock.module("dns/promises", () => ({
+void mock.module("dns/promises", () => ({
   resolveTxt: mock(async (hostname: string) => {
     if (hostname in txtRecords) return txtRecords[hostname];
-    const err = new Error(`ENOTFOUND ${hostname}`) as Error & { code: string };
-    err.code = "ENOTFOUND";
+    const err = Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
     throw err;
   }),
   resolveMx: mock(async () => []),
 }));
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {
     update: mock(() => ({
       set: mock((values: Record<string, unknown>) => {
@@ -66,7 +65,7 @@ beforeEach(() => {
   dbUpdates.length = 0;
 });
 
-describe("verifyDomain — SPF", () => {
+describe("verifyDomain: SPF", () => {
   test("returns true when an SPF record is present", async () => {
     txtRecords["example.com"] = [["v=spf1 a mx ip4:1.2.3.4 -all"]];
     txtRecords["bunmail._domainkey.example.com"] = [];
@@ -90,7 +89,7 @@ describe("verifyDomain — SPF", () => {
   });
 });
 
-describe("verifyDomain — DKIM", () => {
+describe("verifyDomain: DKIM", () => {
   test("returns true when the DKIM record contains the expected public key", async () => {
     txtRecords["bunmail._domainkey.example.com"] = [
       [`v=DKIM1; k=rsa; p=${expectedPubKey}`],
@@ -130,7 +129,7 @@ describe("verifyDomain — DKIM", () => {
   });
 });
 
-describe("verifyDomain — DMARC", () => {
+describe("verifyDomain: DMARC", () => {
   test("returns true when a v=DMARC1 record is present at _dmarc.<domain>", async () => {
     txtRecords["_dmarc.example.com"] = [
       ["v=DMARC1; p=quarantine; rua=mailto:x@example.com"],
@@ -145,7 +144,7 @@ describe("verifyDomain — DMARC", () => {
   });
 });
 
-describe("verifyDomain — persistence", () => {
+describe("verifyDomain: persistence", () => {
   test("writes the verification result to the domains row with a fresh verifiedAt", async () => {
     txtRecords["example.com"] = [["v=spf1 -all"]];
     txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=none"]];

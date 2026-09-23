@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the Domains API (/api/v1/domains).
@@ -43,7 +44,7 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -54,7 +55,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -64,7 +65,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -88,7 +89,7 @@ const mockDomain = {
 };
 
 /* ─── Mock domain service ─── */
-mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
+void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   createDomain: mock(() => Promise.resolve(mockDomain)),
   listDomains: mock(() => Promise.resolve([mockDomain])),
   getDomainById: mock((id: string) =>
@@ -101,7 +102,7 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -109,7 +110,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -136,7 +137,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as DomainResponse;
+      const body = await readJson<DomainResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("dom_test123");
       expect(body.data.name).toBe("example.com");
@@ -169,7 +170,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as DomainListResponse;
+      const body = await readJson<DomainListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       const first = body.data[0]!;
@@ -188,7 +189,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as DomainResponse;
+      const body = await readJson<DomainResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("dom_test123");
     });
@@ -201,7 +202,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Domain not found");
     });
@@ -217,7 +218,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as DomainResponse;
+      const body = await readJson<DomainResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("dom_test123");
     });
@@ -231,7 +232,7 @@ describe("Domains API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
     });
   });

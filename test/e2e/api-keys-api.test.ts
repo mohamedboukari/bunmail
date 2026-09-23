@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the API Keys API (/api/v1/api-keys).
@@ -42,7 +43,7 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -53,7 +54,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -63,7 +64,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -81,7 +82,7 @@ const mockApiKey = {
 };
 
 /* ─── Mock api-key service ─── */
-mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
+void mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
   createApiKey: mock((input: { name: string; allowedSenders?: string[] }) =>
     Promise.resolve({
       apiKey: { ...mockApiKey, allowedSenders: input.allowedSenders ?? [] },
@@ -102,7 +103,7 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -110,7 +111,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -136,14 +137,14 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as ApiKeyCreateResponse;
+      const body = await readJson<ApiKeyCreateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("key_test123");
       expect(body.data.name).toBe("Test Key");
       expect(body.data.keyPrefix).toBe("bm_live_test");
       expect(body.data.key).toBe("bm_live_test_fullkey123");
       /** keyHash must not be exposed */
-      expect((body.data as unknown as Record<string, unknown>).keyHash).toBeUndefined();
+      expect(body.data).not.toHaveProperty("keyHash");
     });
 
     test("returns 422 on missing name", async () => {
@@ -177,7 +178,7 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as ApiKeyCreateResponse;
+      const body = await readJson<ApiKeyCreateResponse>(response);
       expect(body.data.allowedSenders).toEqual(["noreply@example.com"]);
     });
 
@@ -211,7 +212,7 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as ApiKeyResponse;
+      const body = await readJson<ApiKeyResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.allowedSenders).toEqual(["ceo@example.com"]);
     });
@@ -241,14 +242,12 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as ApiKeyListResponse;
+      const body = await readJson<ApiKeyListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.name).toBe("Test Key");
       /** keyHash must not be exposed in list */
-      expect(
-        (body.data[0] as unknown as Record<string, unknown>).keyHash,
-      ).toBeUndefined();
+      expect(body.data[0]).not.toHaveProperty("keyHash");
     });
   });
 
@@ -262,7 +261,7 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as ApiKeyResponse;
+      const body = await readJson<ApiKeyResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("key_test123");
     });
@@ -276,7 +275,7 @@ describe("API Keys API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("API key not found");
     });

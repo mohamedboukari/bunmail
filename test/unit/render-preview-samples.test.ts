@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { renderPreviewSamples } from "../../src/pages/components/html-preview.tsx";
 
 /**
- * Unit tests for renderPreviewSamples() — the sample-value substitution that
+ * Unit tests for renderPreviewSamples(): the sample-value substitution that
  * powers the dashboard template HTML preview. It must match the `{{\w+}}`
  * matcher of renderTemplate() (same placeholder grammar) but always fill
  * matched placeholders with a sample value.
@@ -19,8 +19,8 @@ describe("renderPreviewSamples", () => {
   });
 
   test("substitutes multiple distinct placeholders in one pass", () => {
-    expect(renderPreviewSamples("Hi {{firstName}} at {{company}} — {{link}}")).toBe(
-      "Hi Alex at Acme Inc — https://example.com",
+    expect(renderPreviewSamples("Hi {{firstName}} at {{company}}: {{link}}")).toBe(
+      "Hi Alex at Acme Inc: https://example.com",
     );
   });
 

@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
 
 /**
- * Trivial unit test for the error class — the constructor wires up
+ * Trivial unit test for the error class: the constructor wires up
  * `.suppressionId`, `.recipient`, and the human-readable message.
  * Currently 0% covered because nothing constructs it directly outside
  * production code; integration tests catch instances of it but the

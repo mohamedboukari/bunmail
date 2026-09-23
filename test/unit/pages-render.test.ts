@@ -14,7 +14,7 @@ import { describe, test, expect } from "bun:test";
  *   - Real markup correctness (we'd need DOM-level snapshots)
  *   - Browser interactivity / form submissions (no JS in our pages)
  *
- * The plugin-level `dashboard.test.ts` e2e covers routing + auth — these
+ * The plugin-level `dashboard.test.ts` e2e covers routing + auth: these
  * tests cover the rendering layer beneath. Together they exercise the
  * full HTML response path.
  */
@@ -134,20 +134,18 @@ const webhook = {
 };
 
 describe("Dashboard page render smoke tests", () => {
-  test("ApiKeysPage with empty list renders", () => {
-    const html = String(ApiKeysPage({ keys: [] }));
+  test("ApiKeysPage with empty list renders", async () => {
+    const html = await ApiKeysPage({ keys: [] });
     expect(typeof html).toBe("string");
     expect(html.length).toBeGreaterThan(100);
   });
 
-  test("ApiKeysPage with keys + flash + rawKey", () => {
-    const html = String(
-      ApiKeysPage({
-        keys: [apiKey],
-        flash: { message: "ok", type: "success" },
-        rawKey: "bm_live_xxx",
-      }),
-    );
+  test("ApiKeysPage with keys + flash + rawKey", async () => {
+    const html = await ApiKeysPage({
+      keys: [apiKey],
+      flash: { message: "ok", type: "success" },
+      rawKey: "bm_live_xxx",
+    });
     expect(html).toContain("Test");
   });
 
@@ -158,16 +156,16 @@ describe("Dashboard page render smoke tests", () => {
     ).toBe("string");
   });
 
-  test("DomainDetailPage", () => {
-    const html = String(DomainDetailPage({ domain }));
+  test("DomainDetailPage", async () => {
+    const html = await DomainDetailPage({ domain });
     expect(html).toContain("example.com");
     /** Inbound-notification edit form is present (#106). */
     expect(html).toContain(`/dashboard/domains/${domain.id}/notify-email`);
     expect(html).toContain('name="notifyEmail"');
     /** A configured address pre-fills the input. */
-    const withNotify = String(
-      DomainDetailPage({ domain: { ...domain, notifyEmail: "ops@external.com" } }),
-    );
+    const withNotify = await DomainDetailPage({
+      domain: { ...domain, notifyEmail: "ops@external.com" },
+    });
     expect(withNotify).toContain("ops@external.com");
   });
 
@@ -264,7 +262,7 @@ describe("Dashboard page render smoke tests", () => {
     ).toBe("string");
     /** Empty-keys path renders the "create one first" notice (#89). */
     expect(typeof SendEmailPage({ apiKeys: [] })).toBe("string");
-    /** Pre-fill path used by the inbound-reply route (#86) — every
+    /** Pre-fill path used by the inbound-reply route (#86): every
      *  field populated, including HTML that needs escaping in the
      *  textarea. */
     expect(
@@ -321,18 +319,18 @@ describe("Dashboard page render smoke tests", () => {
     ).toBe("string");
   });
 
-  test("TemplatesPage", () => {
+  test("TemplatesPage", async () => {
     expect(typeof TemplatesPage({ templates: [template] })).toBe("string");
     expect(typeof TemplatesPage({ templates: [] })).toBe("string");
     /** Create form ships the live HTML preview iframe + its driver script. */
-    expect(String(TemplatesPage({ templates: [] }))).toContain("live-html-preview-frame");
+    expect(await TemplatesPage({ templates: [] })).toContain("live-html-preview-frame");
   });
 
-  test("TemplateDetailPage", () => {
+  test("TemplateDetailPage", async () => {
     expect(typeof TemplateDetailPage({ template })).toBe("string");
     /** Edit form seeds the preview from the saved HTML with sample-rendered
      *  variables ({{name}} -> Alex Doe), not the raw placeholder. */
-    const html = String(TemplateDetailPage({ template }));
+    const html = await TemplateDetailPage({ template });
     expect(html).toContain("live-html-preview-frame");
     expect(html).toContain("Alex Doe");
   });
@@ -348,19 +346,20 @@ describe("Dashboard page render smoke tests", () => {
     expect(typeof DashboardDisabledPage()).toBe("string");
   });
 
-  test("LoginPage disables the form only when rate-limited (#109)", () => {
+  test("LoginPage disables the form only when rate-limited (#109)", async () => {
     /** Matches a standalone `disabled` attribute, not the `disabled:`
      *  Tailwind variant classes which also contain the substring. */
     const hasDisabledAttr = /disabled(?![:\w-])/;
 
     /** Normal error (wrong password) keeps the form editable for a retry. */
-    const normal = String(LoginPage({ error: "Invalid password" }));
+    const normal = await LoginPage({ error: "Invalid password" });
     expect(hasDisabledAttr.test(normal)).toBe(false);
 
     /** Rate-limited render disables the input + button. */
-    const locked = String(
-      LoginPage({ error: "Too many failed attempts.", disabled: true }),
-    );
+    const locked = await LoginPage({
+      error: "Too many failed attempts.",
+      disabled: true,
+    });
     expect(hasDisabledAttr.test(locked)).toBe(true);
   });
 
@@ -381,21 +380,22 @@ describe("Component render smoke tests", () => {
     expect(typeof HtmlPreview({ html: "<p>x</p>", title: "Custom" })).toBe("string");
   });
 
-  test("LiveHtmlPreview — sandboxed iframe seeded with sample-rendered HTML", () => {
-    const empty = String(LiveHtmlPreview({ textareaId: "html" }));
+  test("LiveHtmlPreview: sandboxed iframe seeded with sample-rendered HTML", async () => {
+    const empty = await LiveHtmlPreview({ textareaId: "html" });
     expect(empty).toContain("live-html-preview-frame");
     expect(empty).toContain('sandbox="allow-same-origin"');
     expect(empty).toContain('data-source="html"');
 
     /** initialHtml is sample-rendered for the first (pre-JS) paint. */
-    const seeded = String(
-      LiveHtmlPreview({ textareaId: "html", initialHtml: "<p>Hi {{name}}</p>" }),
-    );
+    const seeded = await LiveHtmlPreview({
+      textareaId: "html",
+      initialHtml: "<p>Hi {{name}}</p>",
+    });
     expect(seeded).toContain("Alex Doe");
     expect(seeded).not.toContain("{{name}}");
   });
 
-  test("Pagination — first / middle / last page", () => {
+  test("Pagination: first / middle / last page", () => {
     expect(
       typeof Pagination({ page: 1, limit: 20, total: 100, baseUrl: "/dashboard/emails" }),
     ).toBe("string");
@@ -405,7 +405,7 @@ describe("Component render smoke tests", () => {
     expect(
       typeof Pagination({ page: 5, limit: 20, total: 100, baseUrl: "/dashboard/emails" }),
     ).toBe("string");
-    /** Single page — should render nothing meaningful but shouldn't throw. */
+    /** Single page, should render nothing meaningful but shouldn't throw. */
     expect(typeof Pagination({ page: 1, limit: 20, total: 5, baseUrl: "/x" })).toBe(
       "string",
     );
@@ -415,7 +415,7 @@ describe("Component render smoke tests", () => {
     for (const status of ["queued", "sending", "sent", "failed", "bounced"]) {
       expect(typeof StatusBadge({ status })).toBe("string");
     }
-    /** Unknown status — should still render. */
+    /** Unknown status, should still render. */
     expect(typeof StatusBadge({ status: "unknown" })).toBe("string");
   });
 });

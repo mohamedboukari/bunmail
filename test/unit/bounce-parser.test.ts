@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { parseBounce } from "../../src/modules/bounces/services/bounce-parser.service.ts";
 
 /**
- * Unit tests for the DSN parser. Pure function — fixtures in, parsed
+ * Unit tests for the DSN parser. Pure function: fixtures in, parsed
  * shape out. No DB, no mocks needed.
  *
  * Coverage:
@@ -131,7 +131,7 @@ Hey! Just wanted to say my server returned 5.1.1 last week (totally
 unrelated technical mention), but everything's fine now. Reply when you can.
 `;
 
-describe("parseBounce — RFC 3464 path", () => {
+describe("parseBounce: RFC 3464 path", () => {
   test("parses a hard bounce (5.1.1) and links to Original-Message-ID", () => {
     const parsed = parseBounce(RFC_HARD_BOUNCE);
     expect(parsed).not.toBeNull();
@@ -157,12 +157,12 @@ describe("parseBounce — RFC 3464 path", () => {
     expect(parseBounce(RFC_DELIVERED_REPORT)).toBeNull();
   });
 
-  test("returns null when Original-Message-ID is missing — can't link to a tenant", () => {
+  test("returns null when Original-Message-ID is missing, can't link to a tenant", () => {
     expect(parseBounce(RFC_BOUNCE_WITHOUT_ORIGINAL_ID)).toBeNull();
   });
 });
 
-describe("parseBounce — fallback path", () => {
+describe("parseBounce: fallback path", () => {
   test("parses a qmail-style plain-text bounce via In-Reply-To", () => {
     const parsed = parseBounce(QMAIL_FALLBACK_BOUNCE);
     expect(parsed).not.toBeNull();

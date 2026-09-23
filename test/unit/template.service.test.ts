@@ -8,7 +8,7 @@ import { describe, test, expect, mock, beforeEach } from "bun:test";
  * `getTemplateById` early-return short-circuit in `updateTemplate`.
  *
  * Real CRUD against Postgres is also exercised in integration tests
- * (when the template integration spec is added) — those catch the
+ * (when the template integration spec is added): those catch the
  * actual SQL bugs Drizzle would emit. These mocked tests catch
  * argument shape and return-value branching.
  */
@@ -37,10 +37,12 @@ function chainable<T>(result: T): T {
     },
   };
   const proxy = new Proxy({}, handler);
+  /** The Proxy answers any property chain the service builds, so it stands in for T by design. */
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return proxy as T;
 }
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {
     select: mock(() => chainable(fixture.selectResult ?? [])),
     insert: mock(() => chainable(fixture.insertResult ?? [])),

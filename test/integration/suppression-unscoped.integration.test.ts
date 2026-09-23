@@ -2,7 +2,7 @@
  * Integration tests for the unscoped suppression methods that back the
  * `/dashboard/suppressions` page (#89). These run against a real
  * Postgres so they cover real Drizzle queries, real ILIKE matching,
- * real FK behaviour — none of which the unit tests touch.
+ * real FK behaviour: none of which the unit tests touch.
  *
  * The whole reason these methods exist is that operators couldn't
  * recover from auto-suppressions filed under a key other than their
@@ -33,7 +33,7 @@ describe("listAllSuppressions (unscoped)", () => {
 
     expect(total).toBe(2);
     expect(data.map((r) => r.email).sort()).toEqual(["a@example.com", "b@example.com"]);
-    /** Two distinct api keys represented — proves the unscoped view. */
+    /** Two distinct api keys represented: proves the unscoped view. */
     expect(new Set(data.map((r) => r.apiKeyId)).size).toBe(2);
   });
 
@@ -100,7 +100,7 @@ describe("deleteSuppressionByIdUnscoped (the #89 footgun fix)", () => {
     /**
      * The actual scenario #89 was filed for: auto-suppression gets
      * filed under whichever key happened to be sending. The
-     * operator's Bearer token is a *different* key — so the scoped
+     * operator's Bearer token is a *different* key, so the scoped
      * delete API would return 404. The dashboard's unscoped path is
      * what lets them recover.
      */

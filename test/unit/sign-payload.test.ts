@@ -4,14 +4,14 @@ import { createHmac } from "crypto";
 /**
  * Unit tests for the signPayload logic used by the webhook dispatch service.
  *
- * Replicates the function locally rather than importing the real one — the
+ * Replicates the function locally rather than importing the real one: the
  * real one pulls the config + db graph through its module imports, which
  * would require mocking. We just verify the cryptographic shape:
  *
  *   signature = HMAC-SHA256(secret, "<timestamp>.<body>")
  *
  * If this gets out of sync with `webhook-dispatch.service.ts:signPayload`,
- * tests start failing — see the `matches dispatch-service construction`
+ * tests start failing, see the `matches dispatch-service construction`
  * test for the exact byte-level contract.
  */
 function signPayload(timestamp: string, body: string, secret: string): string {
@@ -25,7 +25,7 @@ describe("signPayload", () => {
     expect(sig).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  test("is deterministic — same input always produces same output", () => {
+  test("is deterministic: same input always produces same output", () => {
     const sig1 = signPayload("1717000000", "hello", "secret");
     const sig2 = signPayload("1717000000", "hello", "secret");
     expect(sig1).toBe(sig2);

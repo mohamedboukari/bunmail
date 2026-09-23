@@ -11,7 +11,7 @@ import { Elysia } from "elysia";
  */
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -29,7 +29,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -39,7 +39,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock services ─── */
-mock.module("../../src/modules/emails/services/stats.service.ts", () => ({
+void mock.module("../../src/modules/emails/services/stats.service.ts", () => ({
   getDashboardStats: mock(() =>
     Promise.resolve({
       totalEmails: 42,
@@ -62,14 +62,14 @@ mock.module("../../src/modules/emails/services/stats.service.ts", () => ({
   ),
 }));
 
-mock.module("../../src/modules/emails/services/email.service.ts", () => ({
+void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   /** Reads */
   listAllEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   listEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   getEmailById: mock(() => Promise.resolve(undefined)),
   createEmail: mock(() => Promise.resolve({})),
-  /** Trash — included so this mock can leak into other e2e tests
+  /** Trash: included so this mock can leak into other e2e tests
    *  without stripping fields they depend on. */
   trashEmail: mock(() => Promise.resolve(undefined)),
   trashEmails: mock(() => Promise.resolve(0)),
@@ -86,7 +86,7 @@ mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   getTrashedEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
 }));
 
-mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
+void mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
   listApiKeys: mock(() => Promise.resolve([])),
   createApiKey: mock(() =>
     Promise.resolve({
@@ -134,7 +134,7 @@ mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
   ),
 }));
 
-mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
+void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   listDomains: mock(() => Promise.resolve([])),
   createDomain: mock(() =>
     Promise.resolve({
@@ -159,11 +159,14 @@ mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   getDkimDnsRecord: mock(() => null),
 }));
 
-mock.module("../../src/modules/domains/services/dns-verification.service.ts", () => ({
-  verifyDomain: mock(() => Promise.resolve()),
-}));
+void mock.module(
+  "../../src/modules/domains/services/dns-verification.service.ts",
+  () => ({
+    verifyDomain: mock(() => Promise.resolve()),
+  }),
+);
 
-mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+void mock.module("../../src/modules/templates/services/template.service.ts", () => ({
   renderTemplate: mock(() => ""),
   createTemplate: mock(() => Promise.resolve({})),
   listTemplates: mock(() => Promise.resolve([])),
@@ -174,7 +177,7 @@ mock.module("../../src/modules/templates/services/template.service.ts", () => ({
   deleteTemplate: mock(() => Promise.resolve(undefined)),
 }));
 
-mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
+void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   createWebhook: mock(() => Promise.resolve({})),
   listWebhooks: mock(() => Promise.resolve([])),
   listAllWebhooks: mock(() => Promise.resolve([])),
@@ -182,7 +185,7 @@ mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   findWebhooksForEvent: mock(() => Promise.resolve([])),
 }));
 
-mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({
+void mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({
   listInboundEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   listTrashedInboundEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   getInboundEmailById: mock(() => Promise.resolve(undefined)),
@@ -194,7 +197,7 @@ mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({
   emptyInboundTrash: mock(() => Promise.resolve(0)),
 }));
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -290,7 +293,7 @@ describe("Dashboard E2E", () => {
       expect(/disabled(?![:\w-])/.test(html)).toBe(true);
     });
 
-    test("lockout is per-IP — a different IP is unaffected", async () => {
+    test("lockout is per-IP: a different IP is unaffected", async () => {
       const attacker = "9.9.9.10";
       for (let i = 0; i < 6; i++) await wrongLogin(attacker);
 
@@ -320,7 +323,7 @@ describe("Dashboard E2E", () => {
       expect(ok.status).toBe(302);
       expect(ok.headers.get("location")).toBe("/dashboard");
 
-      /** With the counter cleared, 5 fresh failures are needed again — so a
+      /** With the counter cleared, 5 fresh failures are needed again, so a
        *  single wrong attempt still just redirects. */
       const after = await wrongLogin(ip);
       expect(after.status).toBe(302);
@@ -405,14 +408,14 @@ describe("Dashboard E2E", () => {
       expect(html).toContain("Domains");
     });
 
-    test("POST /dashboard/api-keys creates key, redirects with a reveal token — NOT the raw key (#132)", async () => {
+    test("POST /dashboard/api-keys creates key, redirects with a reveal token, NOT the raw key (#132)", async () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/api-keys", {
           method: "POST",
           headers: {
             cookie: sessionCookie,
             "content-type": "application/x-www-form-urlencoded",
-            /** Same-origin — passes the CSRF guard (#133). */
+            /** Same-origin: passes the CSRF guard (#133). */
             origin: "http://localhost",
           },
           body: "name=TestKey",

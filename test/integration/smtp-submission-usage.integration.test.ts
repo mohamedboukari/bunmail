@@ -56,7 +56,7 @@ describe("usage service", () => {
 
     expect(await usage.getAcceptedToday(apiKeyId)).toBe(2);
 
-    /** Exactly one row per (key, day) — the upsert, not one row per event. */
+    /** Exactly one row per (key, day): the upsert, not one row per event. */
     const rows = await db.select().from(smtpSubmissionUsage);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.accepted).toBe(2);
@@ -106,7 +106,7 @@ describe("daily quota enforcement (live server)", () => {
     expect(first.accepted.length).toBeGreaterThan(0);
 
     /** Second send is over quota → rejected. */
-    await expect(
+    expect(
       transport(rawKey).sendMail({
         from: "hello@unregistered.test",
         to: "user@example.org",

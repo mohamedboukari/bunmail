@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the SMTP submission stats API
@@ -24,7 +25,7 @@ interface StatsResponse {
 /** Flipped per-describe to exercise both the quota and unlimited shapes. */
 let mockDailyQuota = 100;
 
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -37,7 +38,7 @@ mock.module("../../src/config.ts", () => ({
   },
 }));
 
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -46,9 +47,9 @@ mock.module("../../src/utils/logger.ts", () => ({
   },
 }));
 
-mock.module("../../src/db/index.ts", () => ({ db: {} }));
+void mock.module("../../src/db/index.ts", () => ({ db: {} }));
 
-mock.module("../../src/modules/smtp-submission/services/usage.service.ts", () => ({
+void mock.module("../../src/modules/smtp-submission/services/usage.service.ts", () => ({
   getStats: mock((_apiKeyId: string, days: number) =>
     Promise.resolve({
       days,
@@ -59,7 +60,7 @@ mock.module("../../src/modules/smtp-submission/services/usage.service.ts", () =>
   getAcceptedToday: mock(() => Promise.resolve(7)),
 }));
 
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -67,7 +68,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -90,7 +91,7 @@ describe("SMTP submission stats API E2E", () => {
     const response = await getStats();
     expect(response.status).toBe(200);
 
-    const body = (await response.json()) as StatsResponse;
+    const body = await readJson<StatsResponse>(response);
     expect(body.success).toBe(true);
     expect(body.data.window.days).toBe(30); // default
     expect(body.data.totals).toEqual({ accepted: 7, rejected: 2 });
@@ -101,14 +102,14 @@ describe("SMTP submission stats API E2E", () => {
   test("honours the days query param", async () => {
     mockDailyQuota = 100;
     const response = await getStats("?days=7");
-    const body = (await response.json()) as StatsResponse;
+    const body = await readJson<StatsResponse>(response);
     expect(body.data.window.days).toBe(7);
   });
 
   test("reports unlimited quota as null (not a literal 0)", async () => {
     mockDailyQuota = 0;
     const response = await getStats();
-    const body = (await response.json()) as StatsResponse;
+    const body = await readJson<StatsResponse>(response);
     expect(body.data.quota.daily).toBeNull();
     expect(body.data.quota.remaining).toBeNull();
     expect(body.data.quota.usedToday).toBe(7);

@@ -92,7 +92,7 @@ const ORIGINAL = {
   toAddress: "user@example.com",
 };
 
-describe("handleBounce — happy paths", () => {
+describe("handleBounce: happy paths", () => {
   test("hard bounce: persists permanent suppression, marks email bounced, fires webhook", async () => {
     const { deps, calls } = makeDeps({ email: ORIGINAL });
 
@@ -138,7 +138,7 @@ describe("handleBounce — happy paths", () => {
   });
 });
 
-describe("handleBounce — escalation", () => {
+describe("handleBounce: escalation", () => {
   test("second soft bounce while previous soft suppression active escalates to hard", async () => {
     const { deps, calls } = makeDeps({
       email: ORIGINAL,
@@ -168,7 +168,7 @@ describe("handleBounce — escalation", () => {
   });
 });
 
-describe("handleBounce — drop paths", () => {
+describe("handleBounce: drop paths", () => {
   test("returns dropped-no-original when the original email isn't found", async () => {
     const { deps, calls } = makeDeps({ email: undefined });
 
