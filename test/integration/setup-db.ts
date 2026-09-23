@@ -71,7 +71,7 @@ logger.info("Setup: done", {
 });
 process.exit(0);
 
-/** Top-level await requires the file be a module. No static imports/
- *  exports exist (we use dynamic import everywhere to control eval
- *  order), so add an empty export to satisfy the TS module check. */
-
+/** Top-level await requires the file be a module. It has no static
+ *  imports/exports (dynamic import everywhere controls eval order), so
+ *  it relies on `"moduleDetection": "force"` in tsconfig.json rather than
+ *  an empty `export {}`. */
