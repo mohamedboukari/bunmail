@@ -545,7 +545,7 @@ describe("performHttpAttempt — re-signs per attempt", () => {
       body: "{}",
       event: "email.sent",
     });
-    await new Promise((r) => setTimeout(r, 1_100));
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
     await performHttpAttempt({
       url: "https://93.184.216.34/x",
       secret: "s",

@@ -81,7 +81,7 @@ afterEach(() => {
  * POST — the worker is what hits the consumer.
  */
 async function waitForDispatch(ms = 100): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
   await runPollCycle();
 }
 

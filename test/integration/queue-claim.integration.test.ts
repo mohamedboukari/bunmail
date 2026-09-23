@@ -85,9 +85,9 @@ describe("claimNextEmails — atomic queued → sending claim", () => {
     /** Tiny await to guarantee distinct created_at — Postgres timestamptz is
      *  microsecond-precision but seeding in a tight loop can collide on slow
      *  CI runners. 5ms is plenty. */
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const { id: middle } = await seed.email({ apiKeyId, status: "queued" });
-    await new Promise((r) => setTimeout(r, 5));
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const { id: newest } = await seed.email({ apiKeyId, status: "queued" });
 
     const claimed = await claimNextEmails(2);

@@ -81,7 +81,7 @@ afterEach(() => {
  * unchanged — we just have an extra async hop to walk through.
  */
 async function waitForDispatch(ms = 100): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
   await runPollCycle();
 }
 
