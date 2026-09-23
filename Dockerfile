@@ -1,21 +1,21 @@
 # ───────────────────────────────────────────────────────
-# BunMail — Multi-stage Dockerfile
+# BunMail: Multi-stage Dockerfile
 #
 # Three stages so the runtime image carries only what's needed at
 # request time:
 #
-#   1. install    — Resolves dependencies. Runs `bun install` (no
+#   1. install: Resolves dependencies. Runs `bun install` (no
 #                   `--production` so dev deps like `drizzle-kit` and
 #                   `oxlint` are available in the build itself, even
 #                   though they don't ship to the run stage).
-#   2. prod-deps  — A second `bun install --production --frozen-lockfile`
+#   2. prod-deps: A second `bun install --production --frozen-lockfile`
 #                   into a clean tree so the run stage gets node_modules
 #                   without esbuild, drizzle-kit, oxlint, knip, etc.,
 #                   then strips the TypeScript compiler (a Go binary
 #                   since TS 7) that arrives as a transitive peer.
 #                   This is what closed the ~36 esbuild and 10 tsc
 #                   Go-stdlib CVE findings in the Trivy image scan.
-#   3. run        — Final image. Has Bun, the prod node_modules, the
+#   3. run: Final image. Has Bun, the prod node_modules, the
 #                   pre-generated SQL migration files (committed), and
 #                   the runtime migrator (`src/db/migrate.ts`). No
 #                   drizzle-kit at runtime.
@@ -33,7 +33,7 @@ FROM oven/bun:1.3.14 AS install
 WORKDIR /app
 
 # `bun.lock` is required for `--frozen-lockfile`, which makes the
-# install deterministic — same versions every build.
+# install deterministic: same versions every build.
 COPY package.json bun.lock ./
 
 # `--frozen-lockfile` aborts if the lockfile is missing/out-of-date,
@@ -61,12 +61,12 @@ RUN bun install --frozen-lockfile --ignore-scripts --production
 #
 # Since TypeScript 7 the compiler is a native **Go** binary
 # (`@typescript/typescript-<platform>/lib/tsc`), so it drags the Go
-# stdlib's CVEs into the published image — 10 HIGH on the first TS 7
+# stdlib's CVEs into the published image: 10 HIGH on the first TS 7
 # build. That's the same class of finding the production install above
 # already addresses for esbuild.
 #
 # Bun transpiles `.ts` natively and never shells out to `tsc`, and the
-# run stage's CMD is `bun run db:migrate && bun run start` — neither
+# run stage's CMD is `bun run db:migrate && bun run start`: neither
 # touches the compiler. So strip it.
 RUN rm -rf node_modules/typescript node_modules/@typescript \
   node_modules/.bin/tsc node_modules/.bin/tsserver
@@ -79,7 +79,7 @@ FROM oven/bun:1.3.14 AS run
 # Trivy was flagging. Same pattern the official Node/Python images use.
 #
 # APT_CACHE_BUST is set to github.run_id in CI so Docker never serves a
-# stale cached layer — every workflow run fetches the current package list.
+# stale cached layer: every workflow run fetches the current package list.
 ARG APT_CACHE_BUST
 RUN apt-get update \
   && apt-get upgrade -y --no-install-recommends \
@@ -101,7 +101,7 @@ COPY drizzle/ ./drizzle/
 # Expose the HTTP API port and (optionally) the inbound SMTP port
 EXPOSE 3000 2525
 
-# Health check — Docker & orchestrators use this to determine container health
+# Health check: Docker & orchestrators use this to determine container health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD bun -e "const r = await fetch('http://localhost:3000/health'); if (!r.ok) process.exit(1);"
 

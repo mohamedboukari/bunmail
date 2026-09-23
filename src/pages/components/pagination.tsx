@@ -15,7 +15,7 @@ interface PaginationProps {
 }
 
 /**
- * Pagination — prev/next page links at the bottom of table views.
+ * Pagination: prev/next page links at the bottom of table views.
  * Preserves existing query params (like status filters) when navigating.
  */
 export function Pagination({

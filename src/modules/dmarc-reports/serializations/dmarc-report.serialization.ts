@@ -1,7 +1,7 @@
 import type { DmarcReport, DmarcRecord } from "../types/dmarc-report.types.ts";
 
 /**
- * Public response shape for the list endpoint. Drops `rawXml` — list
+ * Public response shape for the list endpoint. Drops `rawXml`: list
  * responses don't need the raw XML, the detail endpoint surfaces it
  * separately when the operator wants to inspect.
  */
@@ -36,7 +36,7 @@ export function serializeDmarcReportSummary(
 }
 
 /**
- * Detail response — summary plus per-record breakdown. We DO surface
+ * Detail response: summary plus per-record breakdown. We DO surface
  * `rawXml` here so operators investigating an alignment failure can
  * see exactly what the receiver sent.
  */
@@ -71,7 +71,7 @@ export function serializeDmarcReportDetail(
   records: DmarcRecord[],
 ): SerializedDmarcReportDetail {
   /**
-   * Pre-compute the totals the dashboard surfaces — alignment rates
+   * Pre-compute the totals the dashboard surfaces: alignment rates
    * are derived from the raw records but having them on the response
    * means the dashboard doesn't have to re-aggregate client-side.
    */

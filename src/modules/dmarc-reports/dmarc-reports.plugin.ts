@@ -10,14 +10,14 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * DMARC reports plugin — read-only API for inspecting aggregate
+ * DMARC reports plugin: read-only API for inspecting aggregate
  * reports parsed from inbound DMARC `rua` mail (#41).
  *
  * Routes:
  * - GET /              List reports, paginated, optional `?domain=` filter
  * - GET /:id           Detail with per-source-IP records + computed totals
  *
- * Reports are operator-level data (not tenant-scoped) — see
+ * Reports are operator-level data (not tenant-scoped), see
  * docs/dmarc-reports.md for the rationale. All routes still require a
  * Bearer token; in this codebase that's effectively admin auth.
  */

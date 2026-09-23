@@ -122,7 +122,7 @@ export async function getTrashedInboundEmailById(
 }
 
 /**
- * Restores a trashed inbound email — clears deleted_at.
+ * Restores a trashed inbound email: clears deleted_at.
  */
 export async function restoreInboundEmail(id: string): Promise<InboundEmail | undefined> {
   logger.info("Restoring inbound email", { id });
@@ -136,7 +136,7 @@ export async function restoreInboundEmail(id: string): Promise<InboundEmail | un
 
 /**
  * Permanently deletes a trashed inbound email. Only works on already-trashed
- * rows — protects against bypassing the trash workflow.
+ * rows: protects against bypassing the trash workflow.
  */
 export async function permanentDeleteInboundEmail(
   id: string,
@@ -150,7 +150,7 @@ export async function permanentDeleteInboundEmail(
 }
 
 /**
- * Empties the inbound trash — permanently deletes all trashed inbound rows.
+ * Empties the inbound trash: permanently deletes all trashed inbound rows.
  * Returns count purged.
  */
 export async function emptyInboundTrash(): Promise<number> {

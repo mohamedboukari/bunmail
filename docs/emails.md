@@ -26,17 +26,17 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
 | `created_at`    | timestamp      | NOT NULL, default now   | When the email was queued                   |
 | `updated_at`    | timestamp      | NOT NULL, default now   | Last modification timestamp                 |
-| `deleted_at`    | timestamp      | nullable                | Soft-delete marker — when set, the email is in trash and excluded from normal lists. Auto-purged after `TRASH_RETENTION_DAYS`. |
+| `deleted_at`    | timestamp      | nullable                | Soft-delete marker, when set, the email is in trash and excluded from normal lists. Auto-purged after `TRASH_RETENTION_DAYS`. |
 
 **Foreign keys:**
 
-- `domain_id → domains.id` — `ON DELETE SET NULL`. Deleting a domain detaches its emails instead of blocking, preserving the email history while removing the domain.
+- `domain_id → domains.id`: `ON DELETE SET NULL`. Deleting a domain detaches its emails instead of blocking, preserving the email history while removing the domain.
 
 **Indexes:**
 
-- `idx_emails_status_created` — `(status, created_at)` — queue processor uses this
-- `idx_emails_api_key_id` — `(api_key_id)` — fast filtering by API key
-- `idx_emails_api_key_deleted` — `(api_key_id, deleted_at)` — trash list / purge queries
+- `idx_emails_status_created` (`(status, created_at)`) queue processor uses this
+- `idx_emails_api_key_id`, `(api_key_id)`, fast filtering by API key
+- `idx_emails_api_key_deleted` (`(api_key_id, deleted_at)`) trash list / purge queries
 
 ## Module Layout
 
@@ -76,7 +76,7 @@ Provide `subject`, `html`, and/or `text` inline:
 
 ### Template-based
 
-Provide `templateId` and `variables` — subject/body are rendered from the template:
+Provide `templateId` and `variables`: subject/body are rendered from the template:
 
 ```json
 {
@@ -106,7 +106,7 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header. Resolution
 | `unsubscribe_url = "https://x.com/u/abc"` | `List-Unsubscribe: <mailto:unsubscribe@{from-domain}>, <https://x.com/u/abc>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
 | Both set | Both forms in the same `List-Unsubscribe`, plus the `One-Click` POST header |
 
-**Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders need the URL form too — Gmail's "high volume" thresholds (>5k/day to gmail) require RFC 8058 one-click via the URL + POST headers.
+**Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders need the URL form too: Gmail's "high volume" thresholds (>5k/day to gmail) require RFC 8058 one-click via the URL + POST headers.
 
 **Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
 
@@ -125,7 +125,7 @@ Creates an email record with status `queued`. Resolves templates if `templateId`
 Retrieves a non-trashed email scoped to the requesting API key.
 
 #### `getEmailByIdUnscoped(id): Promise<Email | undefined>`
-Dashboard variant — no API-key scope. Excludes trashed.
+Dashboard variant: no API-key scope. Excludes trashed.
 
 #### `listEmails(apiKeyId, filters): Promise<{ data, total }>` / `listAllEmails(filters)`
 Paginated listing with optional status filter. Trashed rows excluded.
@@ -147,9 +147,9 @@ Hard delete. Only operates on already-trashed rows.
 #### `emptyEmailsTrash(apiKeyId)`
 Permanently deletes every trashed email for the key. Returns count.
 
-**Trash (unscoped — dashboard only)**
+**Trash (unscoped: dashboard only)**
 
-`trashEmailUnscoped`, `trashEmailsUnscoped`, `listTrashedEmailsUnscoped`, `getTrashedEmailByIdUnscoped`, `restoreEmailUnscoped`, `permanentDeleteEmailUnscoped`, `emptyEmailsTrashUnscoped` — same semantics, no API-key filter.
+`trashEmailUnscoped`, `trashEmailsUnscoped`, `listTrashedEmailsUnscoped`, `getTrashedEmailByIdUnscoped`, `restoreEmailUnscoped`, `permanentDeleteEmailUnscoped`, `emptyEmailsTrashUnscoped`: same semantics, no API-key filter.
 
 ### mailer.service.ts
 
@@ -182,7 +182,7 @@ queued ──→ sending ──→ sent ✓        → webhook: email.sent
   │           │  │
   │           │  └───→ bounced ✗     → webhook: email.bounced (source: inline)
   │           │       (inline 5xx)     set by handleSendFailure (#68)
-  │           │                        on attempt 1 — stops retrying
+  │           │                        on attempt 1: stops retrying
   │           │
   └───────────┴───→ queued (retry, attempts < 3, soft 4xx or infra error)
 
@@ -205,8 +205,8 @@ See [docs/bounces.md](bounces.md) for both bounce paths.
 Each `emails` row can address recipients across multiple domains (`to` + `cc` + `bcc`). On send, the mailer service:
 
 1. Parses all three fields into a flat recipient list (kind preserved; `to` > `cc` > `bcc` precedence on dedup).
-2. Resolves the MX for each unique domain — one DNS query per domain, issued in parallel.
-3. **Groups recipients by destination MX**. Two domains that share an MX (CNAME aliases, shared receiving infrastructure) merge into one group — fewer SMTP connections.
+2. Resolves the MX for each unique domain: one DNS query per domain, issued in parallel.
+3. **Groups recipients by destination MX**. Two domains that share an MX (CNAME aliases, shared receiving infrastructure) merge into one group: fewer SMTP connections.
 4. Generates one canonical `Message-ID:` for the whole email so all recipients see the same identifier (bounce/complaint feedback loops join on this).
 5. For each MX group, opens one SMTP session and submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only.
 
@@ -234,31 +234,31 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 }
 ```
 
-**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal — either a hard 5xx that auto-suppressed the recipients, or the row hit its retry cap with this group still pending).
+**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: either a hard 5xx that auto-suppressed the recipients, or the row hit its retry cap with this group still pending).
 
 **Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
 
-**Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately — no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
+**Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately: no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
 
 ### Aggregate status semantics
 
 | Per-group outcomes | Email status | Auto-suppression | Retry |
 |---|---|---|---|
-| All groups `sent` | `sent` | — | — |
-| Any group `retry` AND row attempts < cap | `queued` (retry pass) | per-recipient on `failed` groups only | yes — only `retry` groups re-submitted |
-| Cap exhausted with any `retry` left | `failed` (or `bounced` if any hard) | per-recipient on `failed` groups (hard 5xx) | — |
-| All groups `failed`, any hard 5xx | `bounced` | per-recipient on each failed group | — |
-| All groups `failed`, all transient | `failed` | — | — |
-| Mixed: some `sent`, some `failed` | `sent` (partial delivery) | per-recipient on the failed groups (hard 5xx) | — |
+| All groups `sent` | `sent` | none | none |
+| Any group `retry` AND row attempts < cap | `queued` (retry pass) | per-recipient on `failed` groups only | yes, only `retry` groups re-submitted |
+| Cap exhausted with any `retry` left | `failed` (or `bounced` if any hard) | per-recipient on `failed` groups (hard 5xx) | none |
+| All groups `failed`, any hard 5xx | `bounced` | per-recipient on each failed group | none |
+| All groups `failed`, all transient | `failed` | none | none |
+| Mixed: some `sent`, some `failed` | `sent` (partial delivery) | per-recipient on the failed groups (hard 5xx) | none |
 
-The `email.sent` webhook fires **once** when the row first transitions to having any group in `sent`. The `email.bounced` webhook fires per recipient that hits a hard 5xx — duplicate dispatches across retry passes are suppressed by comparing against the prior state.
+The `email.sent` webhook fires **once** when the row first transitions to having any group in `sent`. The `email.bounced` webhook fires per recipient that hits a hard 5xx: duplicate dispatches across retry passes are suppressed by comparing against the prior state.
 
 ## Queue Architecture
 
 - **Polling interval:** 2 seconds
 - **Batch size:** 5 emails per cycle
 - **Max attempts:** 3
-- **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims — running multiple BunMail instances against the same DB will not double-send.
+- **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims: running multiple BunMail instances against the same DB will not double-send.
 - **Per-MX throttle (#91):** SMTP sessions are throttled per destination MX via a module-level semaphore (`src/utils/mx-throttle.ts`). Default is **one parallel session per MX** (configurable via `MAIL_MX_CONCURRENCY`). Sends to different MXs run in parallel; sends to the same MX serialize. The semaphore holds across poll cycles, so back-to-back batches that share a destination can't pile up either. This is what stops strict receivers (Outlook, Yahoo) from `421`ing parallel sessions from the same source IP. Operators with established IP reputation can raise the cap to 2-3; values above 3 are rarely worth it.
 - **Crash recovery:** On startup, `sending` → `queued`
 - **DKIM:** Automatically signs with domain's RSA key when available
@@ -266,7 +266,7 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 
 ## Tombstones (#34)
 
-Hard-deleting an email — whether by the periodic trash purge sweep, the per-row `DELETE /:id/permanent` API, or the bulk `POST /trash/empty` — writes a snapshot to the `email_tombstones` table **before** it actually deletes the row. Tombstones preserve only **identifiers**: `id`, `apiKeyId`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`. Body / html / text are deliberately dropped — purging the body is the whole point of trash retention; the tombstone is forensic-only.
+Hard-deleting an email: whether by the periodic trash purge sweep, the per-row `DELETE /:id/permanent` API, or the bulk `POST /trash/empty`: writes a snapshot to the `email_tombstones` table **before** it actually deletes the row. Tombstones preserve only **identifiers**: `id`, `apiKeyId`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`. Body / html / text are deliberately dropped: purging the body is the whole point of trash retention; the tombstone is forensic-only.
 
 ### Why
 
@@ -280,25 +280,25 @@ emails row (sent/bounced/failed)
        ▼  user soft-deletes (deleted_at = now())
 emails row (in trash)
        │
-       ▼  TRASH_RETENTION_DAYS later — purge sweep, or operator hits "permanent"
+       ▼  TRASH_RETENTION_DAYS later: purge sweep, or operator hits "permanent"
        │  ╳── all five hard-delete paths route through `deleteEmailsWithTombstones`
        │     which wraps INSERT INTO email_tombstones + DELETE FROM emails in one tx
        ▼
 email_tombstones row (snapshot)  ←─ readable via API + dashboard for TOMBSTONE_RETENTION_DAYS
        │
-       ▼  TOMBSTONE_RETENTION_DAYS later — `runTombstoneRetention` sweeps it
+       ▼  TOMBSTONE_RETENTION_DAYS later: `runTombstoneRetention` sweeps it
 (gone forever)
 ```
 
-### Snapshot semantics — no foreign keys
+### Snapshot semantics: no foreign keys
 
-Tombstones must outlive the `api_keys` row that owned the original email — exactly the audit-trail use case is "you revoked the key, but a complaint about a message it sent six weeks ago just arrived". So `apiKeyId` on the tombstone is a **denormalised text snapshot**, not a FK. CASCADE on api_keys deletion does not touch tombstones.
+Tombstones must outlive the `api_keys` row that owned the original email: exactly the audit-trail use case is "you revoked the key, but a complaint about a message it sent six weeks ago just arrived". So `apiKeyId` on the tombstone is a **denormalised text snapshot**, not a FK. CASCADE on api_keys deletion does not touch tombstones.
 
 ### Read API
 
 ```bash
 # Trace a Message-ID (the bounce/complaint hot path).
-# Accepts both wrapped and unwrapped forms — operators paste from logs / DSNs.
+# Accepts both wrapped and unwrapped forms: operators paste from logs / DSNs.
 curl https://your-host/api/v1/emails/tombstones?messageId=abc-123@your-domain \
   -H "Authorization: Bearer $BM_KEY"
 
@@ -318,4 +318,4 @@ TOMBSTONE_RETENTION_DAYS=90   # default; how long tombstones survive their paren
 ### Out of scope
 
 - **Inbound tombstones.** Inbound emails have a different shape (`fromAddress` / `receivedAt` instead of `toAddress` / `sentAt`); the audit-trail value is real but a separate ticket. Today the inbound trash purge still hard-deletes without a snapshot.
-- **Restore from tombstone.** Tombstones don't keep the body — there's nothing to restore. They're read-only forensic data.
+- **Restore from tombstone.** Tombstones don't keep the body: there's nothing to restore. They're read-only forensic data.

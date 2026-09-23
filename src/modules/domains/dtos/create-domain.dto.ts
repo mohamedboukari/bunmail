@@ -3,7 +3,7 @@ import { t } from "elysia";
 /**
  * Validation schema for POST /api/v1/domains request body.
  *
- * Only `name` is required — DKIM key generation is handled later.
+ * Only `name` is required: DKIM key generation is handled later.
  *
  * Optional `unsubscribeEmail` / `unsubscribeUrl` override the defaults
  * BunMail emits in the outbound `List-Unsubscribe` header. Set them

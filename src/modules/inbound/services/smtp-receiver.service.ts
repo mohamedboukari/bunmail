@@ -15,7 +15,7 @@ import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 
 /**
- * Maximum size (bytes) of any single inbound message — RFC 5321 SIZE
+ * Maximum size (bytes) of any single inbound message: RFC 5321 SIZE
  * extension value advertised on connect, and the upper bound enforced
  * inside `onData`. 10 MB matches typical receiving-MTA defaults.
  */
@@ -29,7 +29,7 @@ const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
 const MAX_RECIPIENTS_PER_TRANSACTION = 50;
 
 /**
- * Permissive RFC-5321-ish address validator — rejects obviously broken
+ * Permissive RFC-5321-ish address validator: rejects obviously broken
  * envelopes (`MAIL FROM:<>` is allowed for bounces, see `onMailFrom`).
  * We don't enforce full RFC 5321 here because real-world senders are
  * varied and a strict regex would drop legitimate mail.
@@ -70,7 +70,7 @@ function isRateLimited(ip: string): boolean {
   const now = Date.now();
   const entry = rateLimitMap.get(ip);
 
-  /** New IP or expired window — start fresh */
+  /** New IP or expired window: start fresh */
   if (!entry || now - entry.windowStart >= windowMs) {
     rateLimitMap.set(ip, { count: 1, windowStart: now });
     return false;
@@ -96,7 +96,7 @@ function isRateLimited(ip: string): boolean {
  * @returns true if the IP is blacklisted
  */
 async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
-  /** Skip private / loopback IPs — they're never in DNSBLs */
+  /** Skip private / loopback IPs: they're never in DNSBLs */
   if (
     ip === "127.0.0.1" ||
     ip === "::1" ||
@@ -107,7 +107,7 @@ async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
     return false;
   }
 
-  /** IPv6 not supported by most DNSBLs — skip */
+  /** IPv6 not supported by most DNSBLs: skip */
   if (ip.includes(":")) return false;
 
   const reversed = ip.split(".").toReversed().join(".");
@@ -117,7 +117,7 @@ async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
     const results = await resolve4(query);
     return results.length > 0;
   } catch {
-    /** NOTFOUND, TIMEOUT, etc. — IP is not listed (fail open) */
+    /** NOTFOUND, TIMEOUT, etc.: IP is not listed (fail open) */
     return false;
   }
 }
@@ -170,7 +170,7 @@ export function start(): void {
     onConnect(session, callback) {
       const ip = session.remoteAddress;
 
-      /** Layer 2: Per-IP rate limiting (runs first — instant, no I/O) */
+      /** Layer 2: Per-IP rate limiting (runs first, instant, no I/O) */
       if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
         logger.warn("SMTP connection rate limited", { ip });
         return callback(smtpError("Too many connections, try again later", 421));
@@ -184,22 +184,22 @@ export function start(): void {
       isBlacklistedIp(ip, spamProtection.dnsblZone)
         .then((listed) => {
           if (listed) {
-            logger.warn("SMTP connection rejected — IP blacklisted", { ip });
+            logger.warn("SMTP connection rejected: IP blacklisted", { ip });
             return callback(
-              smtpError("Connection rejected — your IP is blacklisted", 554),
+              smtpError("Connection rejected: your IP is blacklisted", 554),
             );
           }
           callback();
         })
         .catch(() => {
-          /** DNS lookup failed — allow connection (fail open) */
+          /** DNS lookup failed: allow connection (fail open) */
           callback();
         });
     },
 
     /**
      * Called for each MAIL FROM command. Performs cheap envelope-level
-     * validation only — sender authenticity is enforced via SPF/DKIM
+     * validation only: sender authenticity is enforced via SPF/DKIM
      * later (and via DNSBL in `onConnect`). The empty envelope sender
      * `<>` is explicitly allowed because it's how DSN bounces address
      * themselves per RFC 3464.
@@ -213,7 +213,7 @@ export function start(): void {
       }
 
       if (!BASIC_ADDRESS_RE.test(value)) {
-        logger.warn("SMTP MAIL FROM rejected — malformed address", {
+        logger.warn("SMTP MAIL FROM rejected: malformed address", {
           address: redactEmail(value),
         });
         return callback(smtpError("Sender address is not a valid email address", 553));
@@ -238,7 +238,7 @@ export function start(): void {
        */
       const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
       if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
-        logger.warn("SMTP RCPT TO rejected — too many recipients", {
+        logger.warn("SMTP RCPT TO rejected: too many recipients", {
           acceptedSoFar,
           ip: session.remoteAddress,
         });
@@ -258,7 +258,7 @@ export function start(): void {
       const domain = recipientAddress.split("@")[1]?.toLowerCase();
 
       if (!domain) {
-        logger.warn("SMTP RCPT TO rejected — invalid address", {
+        logger.warn("SMTP RCPT TO rejected: invalid address", {
           address: redactEmail(recipientAddress),
         });
         return callback(smtpError("Invalid recipient address", 550));
@@ -267,7 +267,7 @@ export function start(): void {
       domainExistsByName(domain)
         .then((exists) => {
           if (!exists) {
-            logger.warn("SMTP RCPT TO rejected — unknown domain", {
+            logger.warn("SMTP RCPT TO rejected: unknown domain", {
               address: redactEmail(recipientAddress),
               domain,
               ip: session.remoteAddress,
@@ -279,7 +279,7 @@ export function start(): void {
           callback();
         })
         .catch((error) => {
-          /** DB query failed — allow through (fail open) */
+          /** DB query failed: allow through (fail open) */
           logger.error("Domain lookup failed during RCPT TO check", {
             error: error instanceof Error ? error.message : String(error),
           });
@@ -314,7 +314,7 @@ export function start(): void {
          */
         if (totalBytes > MAX_MESSAGE_BYTES) {
           aborted = true;
-          logger.warn("SMTP DATA rejected — message exceeds size cap", {
+          logger.warn("SMTP DATA rejected: message exceeds size cap", {
             ip: session.remoteAddress,
             totalBytes,
             cap: MAX_MESSAGE_BYTES,
@@ -342,8 +342,8 @@ export function start(): void {
 
             /**
              * Bounce branch (#24). If the message is a DSN, route it to
-             * the bounce handler — suppress the recipient, mark the
-             * original email as `bounced`, fire `email.bounced` webhook —
+             * the bounce handler: suppress the recipient, mark the
+             * original email as `bounced`, fire `email.bounced` webhook,
              * and skip the regular `inbound_emails` insert. Bounces
              * shouldn't pollute the inbound list (operators get noise
              * about delivery failures from mailer-daemon@gmail every
@@ -369,7 +369,7 @@ export function start(): void {
              * looks like a DMARC report from a remote receiver, parse the
              * compressed XML attachment and store as `dmarc_reports` +
              * `dmarc_records` rows. Skip the regular `inbound_emails`
-             * insert — daily DMARC reports would otherwise pile up in
+             * insert: daily DMARC reports would otherwise pile up in
              * the inbox view and obscure real customer mail.
              */
             const attachments = (parsed.attachments ?? []).map((att) => ({
@@ -434,13 +434,13 @@ export function start(): void {
             /**
              * Send the per-domain inbound notification (#106), fire-and-forget.
              * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
-             * reports never trigger it. NOT awaited — a slow notification
+             * reports never trigger it. NOT awaited: a slow notification
              * (DNS/MX resolution) must never delay the SMTP ack below, which
              * would risk the upstream MTA timing out and redelivering.
              *
              * Domain resolution keys off the **envelope** RCPT TO (the
              * addresses actually validated + accepted in `onRcptTo`), not the
-             * spoofable `To:` header — so BCC / list mail still notifies the
+             * spoofable `To:` header, so BCC / list mail still notifies the
              * domain it was received for, and a forged header can't steer
              * the signing identity. `notifyInboundReceived` never throws; the
              * `.catch` is a redundant belt.

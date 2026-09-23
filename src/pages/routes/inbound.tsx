@@ -17,7 +17,7 @@ interface InboundPageProps {
 }
 
 /**
- * Inbound emails list page — table of received emails with bulk-select trash
+ * Inbound emails list page: table of received emails with bulk-select trash
  * action, per-row trash button, Trash link, and pagination.
  */
 export function InboundPage({ emails, total, page, limit, flash }: InboundPageProps) {

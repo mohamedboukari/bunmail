@@ -13,7 +13,7 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * Webhooks plugin — registers webhook management routes under /api/v1/webhooks.
+ * Webhooks plugin: registers webhook management routes under /api/v1/webhooks.
  *
  * Routes:
  * - POST /        → Register a new webhook endpoint
@@ -51,7 +51,7 @@ export const webhooksPlugin = new Elysia({
         tags: ["Webhooks"],
         summary: "Create webhook",
         description:
-          "Registers a new webhook endpoint. Returns the signing secret once — store it securely.",
+          "Registers a new webhook endpoint. Returns the signing secret once: store it securely.",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -104,7 +104,7 @@ export const webhooksPlugin = new Elysia({
   )
 
   /**
-   * GET /api/v1/webhooks/:id/deliveries — paginated history of every
+   * GET /api/v1/webhooks/:id/deliveries, paginated history of every
    * delivery attempt for one webhook (#30). Operators use this to
    * answer "did event X make it through?" without grepping logs.
    */
@@ -129,8 +129,8 @@ export const webhooksPlugin = new Elysia({
       });
 
       /** If the lookup turned up empty AND the webhook itself doesn't
-       *  exist for this api key, surface 404 rather than an empty list
-       *  — otherwise the caller can't distinguish "no deliveries yet"
+       *  exist for this api key, surface 404 rather than an empty list,
+       *  otherwise the caller can't distinguish "no deliveries yet"
        *  from "wrong id / wrong key". */
       if (data.length === 0 && total === 0) {
         const ownsWebhook = await webhookService.findWebhookById(params.id, apiKeyId);
@@ -160,7 +160,7 @@ export const webhooksPlugin = new Elysia({
   )
 
   /**
-   * GET /api/v1/webhooks/deliveries/:deliveryId — full detail of one
+   * GET /api/v1/webhooks/deliveries/:deliveryId, full detail of one
    * attempt, including the request body bytes (for signature
    * debugging) and the truncated response preview.
    */
@@ -190,7 +190,7 @@ export const webhooksPlugin = new Elysia({
   )
 
   /**
-   * POST /api/v1/webhooks/deliveries/:deliveryId/replay — manually
+   * POST /api/v1/webhooks/deliveries/:deliveryId/replay, manually
    * retry a failed (or stuck) delivery. Resets attempts to 0 and flips
    * status back to pending; the worker re-attempts on the next poll.
    */

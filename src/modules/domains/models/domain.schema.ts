@@ -1,7 +1,7 @@
 import { pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core";
 
 /**
- * Domains table — tracks sender domains and their email authentication status.
+ * Domains table: tracks sender domains and their email authentication status.
  *
  * Each domain can have DKIM keys generated for it. The user must add DNS records
  * (SPF, DKIM TXT, DMARC) and then trigger verification. Emails sent from a
@@ -11,13 +11,13 @@ export const domains = pgTable("domains", {
   /** Unique identifier, prefixed with `dom_` (e.g. dom_a1b2c3...) */
   id: varchar("id", { length: 36 }).primaryKey(),
 
-  /** The domain name (e.g. "example.com") — must be unique */
+  /** The domain name (e.g. "example.com"), must be unique */
   name: varchar("name", { length: 255 }).notNull().unique(),
 
   /** RSA 2048-bit private key for DKIM signing (PEM format, stored in DB) */
   dkimPrivateKey: text("dkim_private_key"),
 
-  /** Corresponding public key — provided to the user for DNS TXT record setup */
+  /** Corresponding public key: provided to the user for DNS TXT record setup */
   dkimPublicKey: text("dkim_public_key"),
 
   /** DKIM selector (subdomain prefix for the TXT record, default "bunmail") */
@@ -49,7 +49,7 @@ export const domains = pgTable("domains", {
    * mailer emits `List-Unsubscribe: <mailto:...>, <https://...>` plus
    * `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, which Gmail
    * requires for high-volume bulk senders. Leave null for transactional
-   * mail — the mailto-only form is enough.
+   * mail: the mailto-only form is enough.
    */
   unsubscribeUrl: text("unsubscribe_url"),
 
@@ -59,7 +59,7 @@ export const domains = pgTable("domains", {
    * on this domain triggers a "you have new mail" summary email, sent from
    * `<INBOUND_NOTIFY_FROM_LOCAL>@<name>` and DKIM-signed with this domain's
    * own key. Null disables inbound notifications for the domain (the
-   * default). Point this at an EXTERNAL mailbox — an address on a domain
+   * default). Point this at an EXTERNAL mailbox: an address on a domain
    * BunMail itself receives for would loop (and is skipped by the
    * sender-domain loop guard).
    */

@@ -4,7 +4,7 @@
  * BunMail stores `to`, `cc`, `bcc` as comma-separated text on each
  * email row. Sending to recipients on multiple domains requires
  * splitting the envelope per destination MX while keeping the message
- * body (and its `To:` / `Cc:` headers — that's what makes CC visible)
+ * body (and its `To:` / `Cc:` headers: that's what makes CC visible)
  * identical across groups. This module handles the parsing + grouping;
  * the actual SMTP submission lives in `mailer.service.ts`. (#87)
  */
@@ -14,9 +14,9 @@ export type RecipientKind = "to" | "cc" | "bcc";
 export interface Recipient {
   /** Original kind on the email row. Determines header visibility (BCC is envelope-only). */
   kind: RecipientKind;
-  /** Address as it should appear in RCPT TO — preserves original case for the local-part. */
+  /** Address as it should appear in RCPT TO: preserves original case for the local-part. */
   address: string;
-  /** Lowercased domain — used to resolve MX. */
+  /** Lowercased domain: used to resolve MX. */
   domain: string;
 }
 
@@ -24,7 +24,7 @@ export interface Recipient {
  * Loose email shape check. Matches `local@host.tld`; not the full RFC
  * 5322 grammar (which would over-accept). Anything that survives here
  * still has to satisfy the receiving server's own parser, so we
- * deliberately stay lenient — strict-on-our-side rejection just
+ * deliberately stay lenient: strict-on-our-side rejection just
  * trades one footgun (invalid mail accepted) for another (valid mail
  * refused).
  */
@@ -86,7 +86,7 @@ export type MxResolver = (domain: string) => Promise<string>;
  * map.
  *
  * Two domains pointing at the same MX host (CNAME aliases, shared
- * receiving infrastructure) merge into one group — fewer SMTP
+ * receiving infrastructure) merge into one group: fewer SMTP
  * connections, exactly what we want.
  *
  * **Domain-level failure handling:** if MX resolution fails for some
@@ -110,7 +110,7 @@ export async function groupByMx(
 
   /**
    * Resolve all domains in parallel. `allSettled` so one failed
-   * resolution doesn't cancel the others — we want to deliver to as
+   * resolution doesn't cancel the others: we want to deliver to as
    * many groups as possible.
    */
   const settled = await Promise.allSettled(

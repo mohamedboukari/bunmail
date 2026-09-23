@@ -1,7 +1,7 @@
 import { pgTable, varchar, boolean, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 /**
- * API Keys table — stores hashed API keys used to authenticate API requests.
+ * API Keys table: stores hashed API keys used to authenticate API requests.
  *
  * The raw key (e.g. `bm_live_abc123...`) is shown to the user once at creation.
  * Only the SHA-256 hash is persisted. On each request, the incoming bearer token
@@ -14,20 +14,20 @@ export const apiKeys = pgTable("api_keys", {
   /** Human-readable label chosen by the user (e.g. "Production Key") */
   name: varchar("name", { length: 100 }).notNull(),
 
-  /** SHA-256 hash of the raw API key — used for auth lookup */
+  /** SHA-256 hash of the raw API key: used for auth lookup */
   keyHash: varchar("key_hash", { length: 255 }).notNull().unique(),
 
-  /** First 8 chars of the raw key — helps users identify which key is which */
+  /** First 8 chars of the raw key: helps users identify which key is which */
   keyPrefix: varchar("key_prefix", { length: 12 }).notNull(),
 
-  /** Soft-disable flag — when false, the key is rejected at auth middleware */
+  /** Soft-disable flag, when false, the key is rejected at auth middleware */
   isActive: boolean("is_active").notNull().default(true),
 
   /**
    * Admin flag (#130). Admin keys may call the management plane
    * (api-keys, domains, inbound); restricted keys (the default for
    * API-created keys) are send-only + own-data. This is a privilege
-   * boundary, so it is settable **only from the operator dashboard** —
+   * boundary, so it is settable **only from the operator dashboard**:
    * never via the REST API (it appears in no request DTO). Existing keys
    * were migrated to `true` to preserve pre-#130 behaviour; new
    * API-created keys default to `false`.
@@ -36,7 +36,7 @@ export const apiKeys = pgTable("api_keys", {
 
   /**
    * Allowlist of `From` addresses this key may send from (#126). Empty
-   * array (the default) means unrestricted — the key can send from any
+   * array (the default) means unrestricted: the key can send from any
    * registered domain, preserving pre-#126 behaviour. When non-empty, the
    * `createEmail` gate rejects any send whose `From` isn't in this list,
    * which stops a key from spoofing arbitrary identities (e.g. a dev key
@@ -46,7 +46,7 @@ export const apiKeys = pgTable("api_keys", {
    */
   allowedSenders: jsonb("allowed_senders").$type<string[]>().notNull().default([]),
 
-  /** Updated on every successful API request — useful for auditing */
+  /** Updated on every successful API request: useful for auditing */
   lastUsedAt: timestamp("last_used_at"),
 
   /** When this key was created */

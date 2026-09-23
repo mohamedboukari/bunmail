@@ -8,7 +8,7 @@
  *      tuple into a `webhook_deliveries` row at `status='pending'`.
  *      `dispatchEvent` calls this once per subscribed webhook.
  *   2. **Claim + send.** `claimAndDeliverDueAttempts` pulls the next N
- *      due rows atomically (FOR UPDATE SKIP LOCKED — same pattern as
+ *      due rows atomically (FOR UPDATE SKIP LOCKED: same pattern as
  *      the email queue claim from #20), POSTs each one, and updates
  *      the row to `delivered`, rescheduled, or `failed`.
  *   3. **Replay.** `replayDelivery` flips a `failed` row back to
@@ -20,7 +20,7 @@
  * indefinitely for forensics. `delivered` rows get reaped by the
  * retention cleanup (see {@link purgeOldDeliveries}).
  *
- * The signature is NOT stored on the row — it's recomputed per attempt
+ * The signature is NOT stored on the row: it's recomputed per attempt
  * with a fresh timestamp so a 6-hour-old retry doesn't ship a stale
  * signature that the consumer's freshness window (5 min default) would
  * reject. Body bytes are stored verbatim once at enqueue time.
@@ -78,7 +78,7 @@ const RESPONSE_PREVIEW_LIMIT = 2048;
 
 interface DeliveryEnvelope {
   event: WebhookEventType;
-  /** ISO string — the time the event was *raised*, not the time it was
+  /** ISO string: the time the event was *raised*, not the time it was
    *  delivered. Stored verbatim in the body so consumers can reason
    *  about event ordering even after retries. */
   timestamp: string;
@@ -112,7 +112,7 @@ export async function enqueueDelivery(opts: {
  */
 export function nextAttemptAt(attempts: number, now: Date = new Date()): Date | null {
   /** `attempts` is the count *after* the most-recent failure has been
-   *  recorded — so attempts=1 means one attempt made, schedule wait
+   *  recorded, so attempts=1 means one attempt made, schedule wait
    *  according to RETRY_BACKOFF_MINUTES[0]. */
   const idx = attempts - 1;
   if (idx < 0 || idx >= RETRY_BACKOFF_MINUTES.length) return null;
@@ -122,11 +122,11 @@ export function nextAttemptAt(attempts: number, now: Date = new Date()): Date | 
 
 /**
  * Claims up to `n` due `pending` rows and returns them with the
- * webhook secret + url joined in. Atomic — two concurrent workers will
+ * webhook secret + url joined in. Atomic: two concurrent workers will
  * never see the same row, same guarantee as the email queue claim
  * from #20.
  *
- * The claim does NOT mutate `attempts` — that gets bumped by
+ * The claim does NOT mutate `attempts`: that gets bumped by
  * `recordAttempt` after the actual HTTP call lands. We only need the
  * lock-and-mark-in-progress semantics here, and `status` flips from
  * `pending` to itself (a no-op-but-locks-the-row update). Drizzle
@@ -134,7 +134,7 @@ export function nextAttemptAt(attempts: number, now: Date = new Date()): Date | 
  * cleanly without an UPDATE wrapper, and we want exclusive locks so
  * concurrent workers' SKIP LOCKED actually skips.
  *
- * Internal — exposed for the worker only.
+ * Internal: exposed for the worker only.
  */
 export async function claimDueDeliveries(
   n: number,
@@ -157,7 +157,7 @@ export async function claimDueDeliveries(
    * than the JS `now` we got from the caller. Why: rows set
    * `next_attempt_at` via Drizzle's `defaultNow()` (= Postgres NOW())
    * at insert time. On a CI runner with a containerised Postgres, the
-   * DB clock can drift a few ms ahead of the worker process's clock —
+   * DB clock can drift a few ms ahead of the worker process's clock,
    * which means a freshly-enqueued row's `next_attempt_at` is in the
    * Node-perceived future for a brief window, and the claim's `<=`
    * filter excludes it. Comparing both sides in DB time sidesteps the
@@ -189,7 +189,7 @@ export async function claimDueDeliveries(
    *  `next_attempt_at` with either the real backoff schedule (failure)
    *  or sets `delivered_at` (success). If the worker process crashes
    *  before `recordAttempt` runs, the lock expires after ATTEMPT_LOCK_MS
-   *  and the row becomes claimable again — natural crash recovery
+   *  and the row becomes claimable again: natural crash recovery
    *  with no explicit `recoverInterrupted` step needed. */
   const claimed = await db
     .update(webhookDeliveries)
@@ -218,7 +218,7 @@ export async function claimDueDeliveries(
 
   /** Drop deliveries whose webhook was deactivated after enqueue. We
    *  mark them `failed` rather than send to a hook the operator has
-   *  paused — that's the operator's stated intent. */
+   *  paused: that's the operator's stated intent. */
   const live: typeof claimed = [];
   for (const row of claimed) {
     const hook = hookById.get(row.webhookId);
@@ -231,7 +231,7 @@ export async function claimDueDeliveries(
           updatedAt: now,
         })
         .where(eq(webhookDeliveries.id, row.id));
-      logger.warn("Webhook delivery cancelled — webhook inactive", {
+      logger.warn("Webhook delivery cancelled: webhook inactive", {
         deliveryId: row.id,
         webhookId: row.webhookId,
       });
@@ -266,7 +266,7 @@ interface AttemptOutcome {
  * the side effect is the network call; the return value is enough for
  * the caller to update the delivery row.
  *
- * Re-signs per attempt — that's the whole point of separating the
+ * Re-signs per attempt: that's the whole point of separating the
  * stored body from the signature. A row sitting in `pending` for 6
  * hours, when finally retried, ships a fresh timestamp the consumer's
  * 5-min freshness window will accept.
@@ -286,7 +286,7 @@ export async function performHttpAttempt(opts: {
   /**
    * SSRF re-validation at delivery time (#128). The URL was checked at
    * create, but DNS can change (rebinding / TOCTOU) and rows created before
-   * this guard existed were never checked — so re-resolve and re-validate
+   * this guard existed were never checked, so re-resolve and re-validate
    * on every attempt. A blocked URL is a failed attempt, not a fetch.
    */
   try {
@@ -311,7 +311,7 @@ export async function performHttpAttempt(opts: {
       },
       body: opts.body,
       /**
-       * Never follow redirects (#128) — a 3xx `Location` into an internal
+       * Never follow redirects (#128): a 3xx `Location` into an internal
        * address (169.254.169.254, 127.0.0.1, …) would bypass the pre-fetch
        * host check. A redirect is treated as a non-2xx delivery failure.
        */
@@ -325,7 +325,7 @@ export async function performHttpAttempt(opts: {
       bodyPreview = text.slice(0, RESPONSE_PREVIEW_LIMIT);
     } catch {
       /** Body read can fail (already-consumed, network reset). Not
-       *  fatal — the status code is the load-bearing signal. */
+       *  fatal: the status code is the load-bearing signal. */
     }
 
     return {
@@ -379,7 +379,7 @@ export async function recordAttempt(opts: {
 
   const next = nextAttemptAt(newAttempts, now);
   if (next === null) {
-    /** Cap reached — terminal failure. */
+    /** Cap reached: terminal failure. */
     await db
       .update(webhookDeliveries)
       .set({
@@ -424,7 +424,7 @@ export async function listDeliveriesForWebhook(opts: {
   page: number;
   limit: number;
 }): Promise<{ data: Array<typeof webhookDeliveries.$inferSelect>; total: number }> {
-  /** Confirm the webhook belongs to this api key — defence in depth.
+  /** Confirm the webhook belongs to this api key: defence in depth.
    *  The plugin layer already gates on the api key but we don't want
    *  this service to be a footgun if called from a different code
    *  path later. */
@@ -488,7 +488,7 @@ export async function getDeliveryById(opts: {
  * now so the worker picks it up on the next poll. Used by operators
  * to manually retry a `failed` (or stuck) row.
  *
- * Resets `attempts` to 0 — the operator is starting a fresh retry
+ * Resets `attempts` to 0: the operator is starting a fresh retry
  * cycle, not continuing the old one. Otherwise replay of a 5x-failed
  * row would immediately re-flip to `failed` after one more attempt.
  *
@@ -533,7 +533,7 @@ export async function replayDelivery(opts: {
 
 /**
  * Purges `delivered` rows older than the retention cutoff. `failed`
- * rows are kept indefinitely — operators want them for forensic
+ * rows are kept indefinitely: operators want them for forensic
  * "did this event ever land?" queries even months later.
  *
  * Run from the worker poll loop (once an hour, not on every tick).

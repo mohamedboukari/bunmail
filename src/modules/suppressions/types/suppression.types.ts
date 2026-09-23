@@ -9,7 +9,7 @@ export type Suppression = InferSelectModel<typeof suppressions>;
 
 /**
  * Reasons we accept at the API boundary. The DB column is plain text for
- * forward compatibility — a finer split (e.g. `bounce.hard.no_user`) can
+ * forward compatibility: a finer split (e.g. `bounce.hard.no_user`) can
  * land later without a migration. The API DTO restricts incoming reasons
  * to this set so we don't grow stringly-typed accidentally.
  */
@@ -26,7 +26,7 @@ export type BounceType = (typeof BOUNCE_TYPES)[number];
 
 /**
  * Input accepted by the manual `POST /suppressions` endpoint. A subset
- * of the schema columns — the bounce-specific fields are populated by
+ * of the schema columns: the bounce-specific fields are populated by
  * the auto-suppression path (#24) only.
  */
 export interface CreateSuppressionInput {

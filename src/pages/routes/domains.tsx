@@ -16,7 +16,7 @@ interface DomainsPageProps {
 }
 
 /**
- * Domains page — shows an add form and table of all registered sender domains.
+ * Domains page: shows an add form and table of all registered sender domains.
  * Each domain shows SPF/DKIM/DMARC verification status.
  */
 export function DomainsPage({ domains, flash }: DomainsPageProps) {

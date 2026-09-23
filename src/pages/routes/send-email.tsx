@@ -10,13 +10,13 @@ interface SendEmailPageProps {
   flash?: { message: string; type: "success" | "error" };
   /** Active API keys the operator can choose to send "as" (#89). */
   apiKeys: ApiKey[];
-  /** Key id pre-selected in the dropdown — default-first-active matches
+  /** Key id pre-selected in the dropdown: default-first-active matches
    *  the pre-#89 silent behaviour but now it's visible and overridable. */
   defaultApiKeyId?: string;
   /**
    * Pre-fill values for the compose form (#86). Set by callers like
    * the "Reply to inbound" route; the operator can still edit each
-   * field before sending. All optional — when omitted the form
+   * field before sending. All optional, when omitted the form
    * renders with placeholders only.
    */
   prefill?: {
@@ -29,7 +29,7 @@ interface SendEmailPageProps {
 }
 
 /**
- * Send Email page — compose and send emails via the dashboard.
+ * Send Email page: compose and send emails via the dashboard.
  */
 export function SendEmailPage({
   flash,
@@ -47,7 +47,7 @@ export function SendEmailPage({
       {/* Compose form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
         <form method="POST" action="/dashboard/send" class="space-y-4">
-          {/* "Sending as" — explicit api-key picker (#89). Pre-#89 the
+          {/* "Sending as": explicit api-key picker (#89). Pre-#89 the
               dashboard picked the first active key silently, which made
               auto-suppressions get filed against an invisible key. The
               picker keeps the default but makes it overridable and
@@ -72,7 +72,7 @@ export function SendEmailPage({
               >
                 {apiKeys.map((k) => (
                   <option value={k.id} selected={k.id === defaultApiKeyId} safe>
-                    {`${k.name} — ${k.id.slice(0, 12)}…`}
+                    {`${k.name}: ${k.id.slice(0, 12)}…`}
                   </option>
                 ))}
               </select>
@@ -120,7 +120,7 @@ export function SendEmailPage({
             </div>
           </div>
 
-          {/* cc / bcc — chip input (#85): type and press comma/space/Enter to add */}
+          {/* cc / bcc: chip input (#85): type and press comma/space/Enter to add */}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label
@@ -217,7 +217,7 @@ export function SendEmailPage({
         </form>
       </div>
 
-      {/* Behaviour for the CC / BCC chip inputs — single block handles both. */}
+      {/* Behaviour for the CC / BCC chip inputs: single block handles both. */}
       <EmailChipInputScript />
     </BaseLayout>
   );

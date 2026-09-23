@@ -18,7 +18,7 @@ interface ApiKeysPageProps {
 }
 
 /**
- * API Keys page — shows a create form and table of all API keys.
+ * API Keys page: shows a create form and table of all API keys.
  * After creating a key, the raw key is displayed in a flash message (shown once).
  */
 export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
@@ -33,7 +33,7 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
       {!!rawKey && (
         <div class="bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm mb-4">
           <p class="font-medium mb-1">
-            API key created — copy it now, it won't be shown again:
+            API key created: copy it now, it won't be shown again:
           </p>
           <code
             class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all"
@@ -68,8 +68,8 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
             />
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
               Leave empty to let this key send from any registered domain. When set, the
-              key can only send <strong>From</strong> these exact addresses — this stops
-              it from spoofing other identities (e.g. your CEO).
+              key can only send <strong>From</strong> these exact addresses: this stops it
+              from spoofing other identities (e.g. your CEO).
             </p>
           </div>
           <label class="flex items-start gap-2 cursor-pointer">

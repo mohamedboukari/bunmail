@@ -6,7 +6,7 @@ BunMail's test suite has three tiers, each catching a different class of bug. Pr
 
 | Tier | Location | What it catches | Speed | Mocked? |
 |---|---|---|---|---|
-| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness — parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~400ms for 240+ tests | DB, network, time |
+| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness: parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~400ms for 240+ tests | DB, network, time |
 | **E2E plugin** | [test/e2e/](../test/e2e/) | Elysia plugin routing, auth flow, request/response shapes, error handling. Services and DB are mocked at the import boundary. | ~150ms for 70 tests | DB, services |
 | **Integration** | [test/integration/](../test/integration/) | Real Drizzle SQL execution, FK / `ON DELETE` behaviour, `ON CONFLICT DO UPDATE` upserts, transaction semantics, schema drift between TS models and the live DB. End-to-end DSN flow (DSN bytes → suppression + `email.bounced` webhook), atomic queue claim under concurrency, etc. | ~2s for 55+ tests | Outbound HTTP only |
 
@@ -26,7 +26,7 @@ bun run test:coverage                 # unit + e2e with coverage table
 
 ## Pre-commit runs `test:all`
 
-The `.husky/pre-commit` hook runs `bun run test:all` — same suite CI runs. **First-time on a fresh checkout you need:**
+The `.husky/pre-commit` hook runs `bun run test:all`: same suite CI runs. **First-time on a fresh checkout you need:**
 
 ```bash
 bun run test:integration:setup
@@ -59,9 +59,9 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 
 ### What the integration tier doesn't cover
 
-- **`mailer.service.ts`** — Nodemailer wrapper. Would need `mailcatcher` / `maildev` in compose. Skipped.
-- **`dns-verification.service.ts`** — DNS resolver, flaky in CI. Mock at the `resolve()` boundary if needed.
-- **Dashboard JSX rendering** — server-rendered HTML, snapshot-tested via `dashboard.test.ts` at the e2e tier already. Snapshots have low value-to-maintenance ratio for our scope.
+- **`mailer.service.ts`**: Nodemailer wrapper. Would need `mailcatcher` / `maildev` in compose. Skipped.
+- **`dns-verification.service.ts`**: DNS resolver, flaky in CI. Mock at the `resolve()` boundary if needed.
+- **Dashboard JSX rendering**: server-rendered HTML, snapshot-tested via `dashboard.test.ts` at the e2e tier already. Snapshots have low value-to-maintenance ratio for our scope.
 
 ## CI configuration
 
@@ -94,9 +94,9 @@ The threshold in [bunfig.toml](../bunfig.toml) (`line = 0.65, function = 0.60`) 
 
 | When you... | Add a test in... |
 |---|---|
-| Write a pure function (parser, classifier, helper) | `test/unit/<name>.test.ts` — feed in fixtures, assert output |
-| Add a route or change a request/response shape | `test/e2e/<feature>-api.test.ts` — exercise via `app.handle(new Request(...))` with services mocked |
-| Add a service method that touches the DB | `test/integration/<service>.integration.test.ts` — run the real method against the real DB, use seed factories from `_helpers.ts` |
+| Write a pure function (parser, classifier, helper) | `test/unit/<name>.test.ts`: feed in fixtures, assert output |
+| Add a route or change a request/response shape | `test/e2e/<feature>-api.test.ts`: exercise via `app.handle(new Request(...))` with services mocked |
+| Add a service method that touches the DB | `test/integration/<service>.integration.test.ts`: run the real method against the real DB, use seed factories from `_helpers.ts` |
 
 When adding a service unit test, prefer the **dependency-injection pattern**: extract a pure orchestration function that takes its dependencies as callbacks (see `resolveDomainForEmail`, `handleBounce`, `handleSendFailure`). Then the unit test feeds fake callbacks; the production wrapper wires real implementations.
 
@@ -104,5 +104,5 @@ When adding a service unit test, prefer the **dependency-injection pattern**: ex
 
 - Use `@example.com` / `@example.org` / `@example.net` in test fixtures (RFC 2606 reserved).
 - Use unique `from` and `to` per test to avoid accidental cross-test interference.
-- Don't rely on row counts surviving across tests — `truncateAll` runs between every test.
-- Don't import production secrets into tests — `test/setup.ts` and `test/integration/_preload.ts` set deterministic dummy values.
+- Don't rely on row counts surviving across tests: `truncateAll` runs between every test.
+- Don't import production secrets into tests: `test/setup.ts` and `test/integration/_preload.ts` set deterministic dummy values.

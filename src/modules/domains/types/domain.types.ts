@@ -10,7 +10,7 @@ export type Domain = InferSelectModel<typeof domains>;
 /**
  * Input required to create a new domain.
  *
- * `name` is the only required field — DKIM keys are generated server-side.
+ * `name` is the only required field: DKIM keys are generated server-side.
  * The unsubscribe fields override the defaults BunMail emits on outbound
  * `List-Unsubscribe` headers; both are optional.
  */

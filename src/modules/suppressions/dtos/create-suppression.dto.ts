@@ -2,7 +2,7 @@ import { t } from "elysia";
 import { SUPPRESSION_REASONS } from "../types/suppression.types.ts";
 
 /**
- * Validation schema for `POST /api/v1/suppressions` — manual addition.
+ * Validation schema for `POST /api/v1/suppressions`: manual addition.
  *
  * `reason` is restricted to the known union; the DB column is plain text
  * for forward compatibility, but the API surface is strict so consumers

@@ -1,5 +1,5 @@
 /**
- * Seed script — creates a test API key for local development.
+ * Seed script: creates a test API key for local development.
  *
  * Run with: bun run src/db/seed.ts
  *
@@ -7,7 +7,7 @@
  * the database, and prints the raw key to stdout. Copy the raw key and
  * use it as `Authorization: Bearer <key>` for all API requests.
  *
- * The raw key is shown ONCE — it is not stored anywhere.
+ * The raw key is shown ONCE: it is not stored anywhere.
  */
 import { db } from "./index.ts";
 import { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
@@ -40,11 +40,11 @@ async function seed() {
   logger.info("Test API key created", { id: key!.id, name: key!.name, prefix });
 
   /**
-   * Log the raw key clearly — this is the ONLY time it will be shown.
+   * Log the raw key clearly: this is the ONLY time it will be shown.
    * Copy it and use as: Authorization: Bearer <raw key>
    */
   logger.info("========================================");
-  logger.info("  YOUR API KEY (save it — shown once!)");
+  logger.info("  YOUR API KEY (save it: shown once!)");
   logger.info("========================================");
   logger.info("  Raw key", { key: raw });
   logger.info("========================================");

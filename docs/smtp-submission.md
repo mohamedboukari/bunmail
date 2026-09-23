@@ -1,10 +1,10 @@
 # SMTP Submission Module
 
-Lets any SMTP-capable application send **through** BunMail by pointing its SMTP settings at BunMail and authenticating with a BunMail API key. This is what makes BunMail a drop-in replacement for SendGrid/Brevo/Mailgun **SMTP relays** — switch an app to BunMail by changing SMTP credentials only, no code changes.
+Lets any SMTP-capable application send **through** BunMail by pointing its SMTP settings at BunMail and authenticating with a BunMail API key. This is what makes BunMail a drop-in replacement for SendGrid/Brevo/Mailgun **SMTP relays**: switch an app to BunMail by changing SMTP credentials only, no code changes.
 
 Introduced in #120.
 
-## Submission vs. inbound — two different SMTP servers
+## Submission vs. inbound: two different SMTP servers
 
 BunMail runs (up to) two independent SMTP listeners. They are **not** the same thing:
 
@@ -28,7 +28,7 @@ Point the app's SMTP settings at BunMail:
 | **Host** | your BunMail host (e.g. `mail.yourdomain.com`, or `localhost` on the same box) |
 | **Port** | `587` (or your `SMTP_SUBMISSION_PORT`) |
 | **Encryption** | STARTTLS if you configured a cert (below); otherwise none / plaintext |
-| **Username** | anything — `apikey` is conventional (mirrors SendGrid) |
+| **Username** | anything: `apikey` is conventional (mirrors SendGrid) |
 | **Password** | a BunMail API key, `bm_live_…` |
 | **From** | an address on a domain **registered + DKIM-verified** in BunMail |
 
@@ -38,10 +38,10 @@ The password is treated as the API key: SHA-256 hashed and looked up exactly lik
 
 ## What gets relayed
 
-The submitted message is parsed and mapped to the same fields the REST send API accepts, then handed to `createEmail` — so it flows through the identical queue, retry, DKIM-signing, suppression, and webhook machinery as an API send.
+The submitted message is parsed and mapped to the same fields the REST send API accepts, then handed to `createEmail`, so it flows through the identical queue, retry, DKIM-signing, suppression, and webhook machinery as an API send.
 
-- **From / To / Cc / Subject / HTML / Text** — mapped from the message.
-- **BCC** — envelope recipients (`RCPT TO`) that don't appear in the visible `To`/`Cc` headers are treated as blind recipients: delivered, but never rendered in the message headers.
+- **From / To / Cc / Subject / HTML / Text**: mapped from the message.
+- **BCC**: envelope recipients (`RCPT TO`) that don't appear in the visible `To`/`Cc` headers are treated as blind recipients: delivered, but never rendered in the message headers.
 
 ### Not forwarded (v1 limitations)
 
@@ -67,7 +67,7 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 ### TLS / security posture
 
 - **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): STARTTLS is advertised so clients can encrypt before sending the API key. This is the recommended posture whenever the port isn't strictly loopback.
-- **Without a cert**: plaintext `AUTH` is **refused by default** (#133) — the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
+- **Without a cert**: plaintext `AUTH` is **refused by default** (#133): the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
 - **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. A successful AUTH clears the counter.
 
 ### First-boot checklist (Docker Compose)
@@ -78,13 +78,13 @@ Submission is **off by default**. To enable it:
 2. **`docker-compose.yml`**: uncomment the submission port line under `services.app.ports` (commented out by default so a fresh checkout doesn't bind 587).
 3. **Firewall**: allow inbound TCP on 587 from the networks your apps live on.
 
-Then `docker compose up -d --build`. When submission is off, the app logs `SMTP submission server disabled — set SMTP_SUBMISSION_ENABLED=true …` at startup.
+Then `docker compose up -d --build`. When submission is off, the app logs `SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true …` at startup.
 
 ## Integration examples
 
 ### NestJS (`@nestjs-modules/mailer` / Nodemailer)
 
-Already SMTP-based — switching from SendGrid/Brevo to BunMail is a `.env` change only:
+Already SMTP-based: switching from SendGrid/Brevo to BunMail is a `.env` change only:
 
 ```env
 EMAIL_HOST=mail.yourdomain.com   # your BunMail host
@@ -122,10 +122,10 @@ TLS/STARTTLS   = on if you configured a cert, off on a trusted private network
 
 ## Per-key daily quotas (#123)
 
-Set `SMTP_SUBMISSION_DAILY_QUOTA` to cap how many messages each API key can send via the submission path per **UTC calendar day**. Once a key reaches the cap, further submissions are rejected with SMTP **`452`** (a *temporary* failure — the window resets at `00:00 UTC`, so clients retry rather than treating it as permanent). `0` (default) means unlimited.
+Set `SMTP_SUBMISSION_DAILY_QUOTA` to cap how many messages each API key can send via the submission path per **UTC calendar day**. Once a key reaches the cap, further submissions are rejected with SMTP **`452`** (a *temporary* failure: the window resets at `00:00 UTC`, so clients retry rather than treating it as permanent). `0` (default) means unlimited.
 
 - Counts only **accepted** messages toward the cap; rejections don't consume quota.
-- Applies to the SMTP submission path **only** — the REST `POST /api/v1/emails/send` API is unaffected.
+- Applies to the SMTP submission path **only**: the REST `POST /api/v1/emails/send` API is unaffected.
 - Usage is tracked per `(api_key, UTC day)` in the `smtp_submission_usage` table (`accepted` / `rejected` counters). Every post-auth outcome is recorded, so `rejected` includes quota hits, suppressed recipients, and unregistered-domain rejections.
 - The check reads the day's accepted count then sends; under high concurrency a key may exceed the cap by a small margin (soft quota).
 
@@ -156,7 +156,7 @@ Bearer-auth + rate-limited, **scoped to the calling API key** (like the rest of 
 
 When quotas are disabled (`SMTP_SUBMISSION_DAILY_QUOTA=0`), `quota.daily` and `quota.remaining` are `null` (not `0`, which would read as "no sends allowed"). Days with no activity are omitted from `daily`.
 
-> Cross-key / instance-wide submission analytics (top keys, rejection-by-reason) and a dashboard view are a separate follow-up — this endpoint is per-key only.
+> Cross-key / instance-wide submission analytics (top keys, rejection-by-reason) and a dashboard view are a separate follow-up: this endpoint is per-key only.
 
 ## Service Methods
 
@@ -201,4 +201,4 @@ src/modules/smtp-submission/
     └── stats.serialization.ts       ← stats response shaping
 ```
 
-The SMTP listener itself has no HTTP routes — it's an alternate **ingress** to the `emails` table via `createEmail`, with SMTP status codes as its "responses". The `plugin` / `dtos` / `models` / `serializations` exist only for the usage-stats REST surface + quota table added in #123.
+The SMTP listener itself has no HTTP routes: it's an alternate **ingress** to the `emails` table via `createEmail`, with SMTP status codes as its "responses". The `plugin` / `dtos` / `models` / `serializations` exist only for the usage-stats REST surface + quota table added in #123.

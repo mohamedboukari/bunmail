@@ -20,9 +20,9 @@ import { TimeDisplayScript } from "../components/time-display.tsx";
  * Every dashboard page is rendered inside this layout.
  */
 interface BaseLayoutProps {
-  /** Page title — appended to "BunMail" in the <title> tag */
+  /** Page title: appended to "BunMail" in the <title> tag */
   title: string;
-  /** Currently active nav item — used to highlight the active link */
+  /** Currently active nav item: used to highlight the active link */
   activeNav?:
     | "home"
     | "emails"
@@ -37,7 +37,7 @@ interface BaseLayoutProps {
 }
 
 /**
- * Base HTML layout — wraps every dashboard page.
+ * Base HTML layout: wraps every dashboard page.
  *
  * Includes Tailwind CDN, dark mode inline script (prevents flash),
  * sidebar navigation, and a main content area.
@@ -53,7 +53,7 @@ export function BaseLayout({
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <title safe>{`${title} — BunMail`}</title>
+        <title safe>{`${title}: BunMail`}</title>
         {/* Tailwind CSS via CDN */}
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
@@ -61,7 +61,7 @@ export function BaseLayout({
             tailwind.config = { darkMode: 'class' };
           `}
         </script>
-        {/* Inline dark mode script — runs before paint to prevent flash of wrong theme */}
+        {/* Inline dark mode script: runs before paint to prevent flash of wrong theme */}
         <script>
           {`
             (function() {
@@ -81,7 +81,7 @@ export function BaseLayout({
           {/* Main content area */}
           <main class="flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
         </div>
-        {/* Prevent double form submissions — disables button + shows spinner on first click */}
+        {/* Prevent double form submissions: disables button + shows spinner on first click */}
         <script>
           {`
             document.querySelectorAll('form').forEach(function(form) {
@@ -169,7 +169,7 @@ function Nav({ activeNav }: { activeNav?: string }) {
         })}
       </nav>
 
-      {/* Bottom actions — docs, theme toggle + logout */}
+      {/* Bottom actions: docs, theme toggle + logout */}
       <div class="p-3 border-t border-gray-200 dark:border-gray-800 space-y-1">
         <a
           href="/api/docs"

@@ -9,7 +9,7 @@ import { config } from "../config.ts";
  *   "" / null          → empty string
  *   not-an-email       → returned unchanged (no `@` to anchor on)
  *
- * Domain is preserved deliberately — operators frequently need to
+ * Domain is preserved deliberately: operators frequently need to
  * distinguish "Gmail rejected us" from "our own domain rejected us"
  * during incident response, and the domain alone isn't PII.
  *

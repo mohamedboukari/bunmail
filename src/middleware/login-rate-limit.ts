@@ -13,13 +13,13 @@ import { logger } from "../utils/logger.ts";
  * Config-free by design: thresholds are passed in by the caller (the
  * pages plugin reads them from `config`). Keeping `config` out of this
  * module lets the unit test import it with no environment and no
- * `mock.module` — `config.ts` throws at import time and Bun's
+ * `mock.module`: `config.ts` throws at import time and Bun's
  * `mock.module` leaks across test files.
  *
  * Mirrors the in-memory sliding-window pattern used by the SMTP receiver
  * (`src/modules/inbound/services/smtp-receiver.service.ts`) and the HTTP
  * per-API-key limiter (`src/middleware/rate-limit.ts`). State is
- * in-memory and resets on restart — acceptable for the single-instance
+ * in-memory and resets on restart: acceptable for the single-instance
  * default; multi-replica deployments would each keep their own counters.
  */
 
@@ -30,7 +30,7 @@ import { logger } from "../utils/logger.ts";
  * reverse-proxy hops.
  *
  * Security: the leftmost `X-Forwarded-For` entry is attacker-controlled
- * and must never be used for rate limiting — a direct request can carry a
+ * and must never be used for rate limiting: a direct request can carry a
  * forged `X-Forwarded-For: 1.2.3.4`. The robust approach (MDN / OWASP) is
  * to count from the right: with `N` trusted proxy hops in front of
  * BunMail, the real client is the `N`-th entry from the right of the
@@ -46,7 +46,7 @@ import { logger } from "../utils/logger.ts";
  *   address rather than trusting a partial/forged header.
  *
  * Returns `"unknown"` when no address is available at all (e.g. unit/e2e
- * requests with no underlying socket) — such requests share one bucket,
+ * requests with no underlying socket): such requests share one bucket,
  * which is acceptable.
  *
  * @param opts.socketIp          The raw transport peer address, if known.
@@ -60,7 +60,7 @@ export function resolveClientIp(opts: {
 }): string {
   const { socketIp, forwardedFor, trustedProxyHops } = opts;
 
-  /** No trusted proxy — the socket address is the only trustworthy source. */
+  /** No trusted proxy: the socket address is the only trustworthy source. */
   if (trustedProxyHops <= 0) {
     return socketIp ?? "unknown";
   }
@@ -74,7 +74,7 @@ export function resolveClientIp(opts: {
   /**
    * Take the `N`-th entry from the right. If the chain is shorter than the
    * configured hop count, the header didn't pass through the expected
-   * proxies — don't trust it; fall back to the socket address.
+   * proxies: don't trust it; fall back to the socket address.
    */
   if (chain.length >= trustedProxyHops) {
     return chain[chain.length - trustedProxyHops] ?? socketIp ?? "unknown";
@@ -95,13 +95,13 @@ interface LoginAttemptEntry {
 
 /**
  * In-memory map of client IP → failed-attempt state. Exported for unit
- * testing (assert/reset between cases) — the running server mutates it via
+ * testing (assert/reset between cases): the running server mutates it via
  * the helpers below.
  */
 export const loginAttemptMap = new Map<string, LoginAttemptEntry>();
 
 /**
- * Checks whether an IP is currently locked out. Pure read — does NOT
+ * Checks whether an IP is currently locked out. Pure read, does NOT
  * mutate the map, so the caller can decide to reject before validating the
  * password. The lockout clears automatically once the window expires.
  *
@@ -116,7 +116,7 @@ export function isLoginRateLimited(
 ): { limited: boolean; retryAfterSec: number } {
   const entry = loginAttemptMap.get(ip);
 
-  /** No record, or the window has fully expired — not limited. */
+  /** No record, or the window has fully expired, not limited. */
   if (!entry || now - entry.windowStart >= windowMs) {
     return { limited: false, retryAfterSec: 0 };
   }
@@ -169,7 +169,7 @@ let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 /**
  * Removes entries whose window has fully expired. Without this, distinct
  * attacker IPs arriving over a long lifetime would grow the map unbounded.
- * Exported for unit testing — the running server uses the interval below.
+ * Exported for unit testing: the running server uses the interval below.
  */
 export function pruneExpiredLoginAttempts(
   windowMs: number,
@@ -187,7 +187,7 @@ export function pruneExpiredLoginAttempts(
 
 /**
  * Starts a periodic sweep that drops expired entries from the in-memory
- * login-attempt map. Idempotent — calling twice is a no-op while the
+ * login-attempt map. Idempotent: calling twice is a no-op while the
  * interval is running. Mirrors `startRateLimitCleanup` in `rate-limit.ts`.
  *
  * @param windowMs The configured failure window, in milliseconds.
@@ -203,7 +203,7 @@ export function startLoginRateLimitCleanup(windowMs: number): void {
   });
 }
 
-/** Stops the periodic sweep — called from the graceful shutdown handler. */
+/** Stops the periodic sweep: called from the graceful shutdown handler. */
 export function stopLoginRateLimitCleanup(): void {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);

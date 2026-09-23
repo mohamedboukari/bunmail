@@ -7,7 +7,7 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * Templates plugin — CRUD for email templates under /api/v1/templates.
+ * Templates plugin: CRUD for email templates under /api/v1/templates.
  *
  * Routes:
  * - POST /        → Create a template

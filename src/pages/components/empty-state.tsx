@@ -1,5 +1,5 @@
 /**
- * Empty state — "No data yet" placeholder shown when tables have no rows.
+ * Empty state: "No data yet" placeholder shown when tables have no rows.
  * Provides a centered message with optional call-to-action text.
  */
 export function EmptyState({ message }: { message: string }) {

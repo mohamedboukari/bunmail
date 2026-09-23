@@ -37,7 +37,7 @@ the **right** of `X-Forwarded-For` (the leftmost entry is attacker-controlled an
 never trusted). With the default `0`, the header is ignored and the raw socket IP
 is used. Behind a reverse proxy set it to the number of trusted hops (`1` for a
 single proxy) so lockouts are per-attacker rather than shared across the proxy's
-IP — and make sure the origin can only be reached **through** the proxy, or
+IP, and make sure the origin can only be reached **through** the proxy, or
 `X-Forwarded-For` can't be trusted. State is in-memory and per-replica.
 
 ## Pages
@@ -45,10 +45,10 @@ IP — and make sure the origin can only be reached **through** the proxy, or
 | Route                            | Description                                                       |
 |----------------------------------|-------------------------------------------------------------------|
 | GET /dashboard/login             | Login form (standalone, no nav)                                   |
-| GET /dashboard                   | Stats overview — outbound, inbound, configuration sections        |
+| GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
 | GET /dashboard/send              | Compose & send emails from dashboard                              |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
-| GET /dashboard/emails/trash      | Trashed emails — bulk Restore / Delete-forever / Empty trash      |
+| GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
 | GET /dashboard/api-keys          | API keys list + create form                                       |
 | GET /dashboard/domains           | Domains list + add form                                           |
@@ -56,15 +56,15 @@ IP — and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
 | GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview)                   |
 | GET /dashboard/webhooks          | Webhooks list + create form                                       |
-| GET /dashboard/inbound           | Inbound emails list — bulk-select, per-row trash                  |
-| GET /dashboard/inbound/trash     | Trashed inbound — bulk Restore / Delete-forever / Empty trash     |
+| GET /dashboard/inbound           | Inbound emails list: bulk-select, per-row trash                  |
+| GET /dashboard/inbound/trash     | Trashed inbound: bulk Restore / Delete-forever / Empty trash     |
 | GET /dashboard/inbound/:id       | Inbound email detail + HTML preview                               |
 
 ## Design System
 
 - **CSS:** Tailwind CSS via CDN
 - **Dark mode:** Class-based (`darkMode: 'class'`), stored in `localStorage('bm-theme')`
-- **Color palette:** Neutral grays — `gray-50` to `gray-950`
+- **Color palette:** Neutral grays: `gray-50` to `gray-950`
 - **Cards:** `bg-white dark:bg-gray-900` with subtle borders
 - **Status badges:** Muted colors (emerald for sent, amber for queued, blue for sending, red for failed)
 
@@ -113,7 +113,7 @@ load with relative-time text (`5m ago`, `Yesterday 14:32`, `Jan 5, 14:32`,
 `Jan 5, 2024, 14:32`) in the **viewer's browser locale + timezone**.
 
 The full absolute timestamp is always available via the `title` tooltip.
-The component intentionally exposes no date-only format — the dashboard
+The component intentionally exposes no date-only format: the dashboard
 never shows a bare date; every rendered value carries date and time.
 
 When adding a new dashboard route that displays a timestamp:
@@ -126,7 +126,7 @@ import { TimeDisplay } from "../components/time-display.tsx";
 ```
 
 Do not call `toLocaleString()` / `toLocaleDateString()` / `toISOString()`
-directly in JSX — those run on the server and bake in the server's tz/locale.
+directly in JSX: those run on the server and bake in the server's tz/locale.
 
 ## Form Actions
 
@@ -154,4 +154,4 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Bulk permanent delete → `POST /dashboard/emails/trash/bulk-permanent`
 - Empty trash → `POST /dashboard/emails/trash/empty`
 
-**Inbound trash** — same shape under `/dashboard/inbound/...`.
+**Inbound trash**: same shape under `/dashboard/inbound/...`.

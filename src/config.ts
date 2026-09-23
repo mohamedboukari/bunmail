@@ -22,7 +22,7 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
-/** Allowed log-level values — must match the logger implementation. */
+/** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
@@ -31,7 +31,7 @@ const APP_ENVS = ["development", "production"] as const;
 export type AppEnv = (typeof APP_ENVS)[number];
 
 /**
- * Reads `BUNMAIL_ENV`, narrowing to the union rather than asserting —
+ * Reads `BUNMAIL_ENV`, narrowing to the union rather than asserting:
  * several guards key off `production` (#133), so a typo silently
  * landing in the relaxed branch would be a security problem.
  */
@@ -39,7 +39,7 @@ function readAppEnv(): AppEnv {
   const raw = optionalEnv("BUNMAIL_ENV", "development");
   if (!(APP_ENVS as readonly string[]).includes(raw)) {
     throw new Error(
-      `[config] Invalid BUNMAIL_ENV "${raw}" — must be one of: ${APP_ENVS.join(", ")}`,
+      `[config] Invalid BUNMAIL_ENV "${raw}", must be one of: ${APP_ENVS.join(", ")}`,
     );
   }
   return raw === "production" ? "production" : "development";
@@ -58,7 +58,7 @@ function readLogLevel(): LogLevel {
   const raw = optionalEnv("LOG_LEVEL", "info");
   if (!isLogLevel(raw)) {
     throw new Error(
-      `[config] Invalid LOG_LEVEL "${raw}" — must be one of: ${LOG_LEVELS.join(", ")}`,
+      `[config] Invalid LOG_LEVEL "${raw}", must be one of: ${LOG_LEVELS.join(", ")}`,
     );
   }
   return raw;
@@ -69,7 +69,7 @@ function readLogLevel(): LogLevel {
  * a `Buffer`. The key encrypts `domains.dkim_private_key` at rest using
  * AES-256-GCM via `src/utils/crypto.ts`.
  *
- * Required in **both** dev and prod — silently allowing dev to store
+ * Required in **both** dev and prod: silently allowing dev to store
  * plaintext is the kind of thing that ships to production by accident.
  * The error message points at `openssl rand -base64 32` so a fresh
  * checkout has a single one-line setup step.
@@ -121,7 +121,7 @@ function readDashboardPassword(env: "development" | "production"): string {
  * every restart, and multi-replica deploys reject each other's cookies),
  * which pushes operators toward hardcoding a weak value. So production
  * requires an explicit `SESSION_SECRET`, mirroring the `DASHBOARD_PASSWORD`
- * guard — fail fast with a clear message instead of a silent weak default.
+ * guard: fail fast with a clear message instead of a silent weak default.
  */
 function readSessionSecret(env: "development" | "production"): string {
   const secret = optionalEnv("SESSION_SECRET", "");
@@ -146,7 +146,7 @@ function readSessionSecret(env: "development" | "production"): string {
  * See `.env.example` for the full list with descriptions.
  */
 export const config = {
-  /** "development" — relaxed; "production" — strict domain enforcement */
+  /** "development", relaxed; "production", strict domain enforcement */
   env: readAppEnv(),
 
   database: {
@@ -163,7 +163,7 @@ export const config = {
 
   /**
    * Public base URL of this BunMail instance (e.g. "https://mail.example.com"),
-   * no trailing slash. Used to build absolute links in outbound system mail —
+   * no trailing slash. Used to build absolute links in outbound system mail:
    * currently the "view in dashboard" link in inbound notifications (#106).
    * Optional: when empty, those emails simply omit the link. Trailing slash
    * is stripped so callers can always append "/dashboard/...".
@@ -192,7 +192,7 @@ export const config = {
     /** Set to "true" to enable the inbound SMTP server */
     enabled: optionalEnv("SMTP_ENABLED", "false") === "true",
 
-    /** Spam protection layers — all enabled by default when SMTP is on */
+    /** Spam protection layers: all enabled by default when SMTP is on */
     spamProtection: {
       /** Check connecting IPs against a DNSBL (e.g. Spamhaus ZEN) */
       dnsblEnabled: optionalEnv("SMTP_DNSBL_ENABLED", "true") === "true",
@@ -222,7 +222,7 @@ export const config = {
   smtpSubmission: {
     /** Set to "true" to start the SMTP submission server. Off by default. */
     enabled: optionalEnv("SMTP_SUBMISSION_ENABLED", "false") === "true",
-    /** Port for the submission server (default 587 — the IANA submission port). */
+    /** Port for the submission server (default 587: the IANA submission port). */
     port: parseInt(optionalEnv("SMTP_SUBMISSION_PORT", "587"), 10),
 
     /**
@@ -241,7 +241,7 @@ export const config = {
      * Optional TLS material. When both a cert and key path are provided,
      * the server advertises STARTTLS so clients can upgrade the connection
      * before AUTH. When absent, plaintext AUTH is allowed
-     * (`allowInsecureAuth`) — acceptable only on a trusted network
+     * (`allowInsecureAuth`): acceptable only on a trusted network
      * (same host / private Docker network), which is the common
      * self-hosted case. Paths are read from disk at server start.
      */
@@ -253,7 +253,7 @@ export const config = {
     /**
      * Allow AUTH over a plaintext (non-TLS) connection (#133). The password
      * is a full-privilege `bm_live_…` key, so plaintext AUTH exposes it to
-     * anyone who can sniff the link. Defaults to **false** — set
+     * anyone who can sniff the link. Defaults to **false**: set
      * `SMTP_SUBMISSION_ALLOW_INSECURE=true` only when the submission server
      * is reachable solely over a trusted network (same host / private
      * Docker network) and you accept the risk. When TLS is configured
@@ -301,7 +301,7 @@ export const config = {
     /**
      * Master switch. When false, no inbound notifications are sent
      * regardless of any domain's `notify_email`. Default true (the
-     * per-domain `notify_email` being null is the real opt-in — this is
+     * per-domain `notify_email` being null is the real opt-in: this is
      * an operator kill switch).
      */
     enabled: optionalEnv("INBOUND_NOTIFY_ENABLED", "true") === "true",
@@ -332,7 +332,7 @@ export const config = {
     /**
      * Number of trusted reverse-proxy hops in front of BunMail, used to
      * resolve the real client IP for login rate limiting (#109). `0` (the
-     * default) means don't trust `X-Forwarded-For` at all — use the raw
+     * default) means don't trust `X-Forwarded-For` at all: use the raw
      * socket address, which is spoof-proof and correct when BunMail is
      * directly exposed. `N >= 1` takes the `N`-th `X-Forwarded-For` entry
      * from the right (the address your trusted proxy observed); counting
@@ -352,7 +352,7 @@ export const config = {
      * in-memory and per-replica (same caveat as the API rate limiter).
      */
     loginRateLimit: {
-      /** Master switch — set to "false" to disable login throttling. */
+      /** Master switch: set to "false" to disable login throttling. */
       enabled: optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_ENABLED", "true") === "true",
       /** Failed attempts allowed per IP per window before lockout. */
       maxAttempts: parseInt(optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_MAX", "5"), 10),
@@ -361,7 +361,7 @@ export const config = {
     },
   },
 
-  /** Log level: debug | info | warn | error — validated at startup */
+  /** Log level: debug | info | warn | error, validated at startup */
   logLevel: readLogLevel(),
 
   /**
@@ -379,7 +379,7 @@ export const config = {
   /**
    * 32-byte AES-256 key used to encrypt `domains.dkim_private_key` at
    * rest (AES-256-GCM, see `src/utils/crypto.ts`). Read once at startup
-   * and reused — never logged. Rotation is documented in `SECURITY.md`.
+   * and reused: never logged. Rotation is documented in `SECURITY.md`.
    */
   dkimEncryptionKey: readDkimEncryptionKey(),
 
@@ -398,13 +398,13 @@ export const config = {
      * tombstone preserves identifiers (id, message_id, to, subject,
      * status) so operators can trace late complaints / bounces back to
      * a sent message even after the body has been purged. Default 90
-     * days — long enough to cover most receiver feedback windows.
+     * days: long enough to cover most receiver feedback windows.
      */
     tombstoneRetentionDays: parseInt(optionalEnv("TOMBSTONE_RETENTION_DAYS", "90"), 10),
   },
 
   /**
-   * Webhook delivery queue (#30). Persisted retry loop config —
+   * Webhook delivery queue (#30). Persisted retry loop config:
    * tuned for the realistic consumer-outage profile rather than burst
    * latency. The retry schedule itself (1m / 5m / 15m / 1h / 6h) lives
    * in `webhook-delivery.service.ts` because it's a behavioural
@@ -414,7 +414,7 @@ export const config = {
     /**
      * How many days `delivered` rows are retained before the cleanup
      * task deletes them. `failed` rows are kept indefinitely for
-     * forensics — operators want to answer "did this event ever land?"
+     * forensics: operators want to answer "did this event ever land?"
      * months after the fact.
      */
     retentionDays: parseInt(optionalEnv("WEBHOOK_DELIVERY_RETENTION_DAYS", "30"), 10),
@@ -423,7 +423,7 @@ export const config = {
      * SSRF guard (#128). Webhook URLs must be `https` and must not resolve
      * to a private/loopback/link-local/metadata address. Set
      * `WEBHOOK_ALLOW_INSECURE_HTTP=true` to also permit `http:` targets
-     * (e.g. an internal-but-public receiver without TLS) — the
+     * (e.g. an internal-but-public receiver without TLS): the
      * private-range block still applies either way.
      */
     allowInsecureHttp: optionalEnv("WEBHOOK_ALLOW_INSECURE_HTTP", "false") === "true",

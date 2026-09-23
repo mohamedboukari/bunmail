@@ -27,7 +27,7 @@ function normaliseEmail(email: string): string {
  * means the row exists and either has no expiry or the expiry is in
  * the future.
  *
- * Hot path — runs on every send. The composite `(api_key_id, email)`
+ * Hot path: runs on every send. The composite `(api_key_id, email)`
  * index serves it; one btree probe.
  */
 export async function isSuppressed(
@@ -55,7 +55,7 @@ export async function isSuppressed(
 
 /**
  * Manual addition. Used by `POST /api/v1/suppressions`. Idempotent via
- * `ON CONFLICT (api_key_id, email) DO UPDATE` — re-suppressing an
+ * `ON CONFLICT (api_key_id, email) DO UPDATE`: re-suppressing an
  * address upserts the row, so a customer can update the reason or the
  * expiry without first deleting.
  *
@@ -93,7 +93,7 @@ export async function createSuppression(
         reason: input.reason,
         expiresAt: input.expiresAt ?? null,
         /**
-         * Manual upserts clear bounce-specific metadata — they didn't
+         * Manual upserts clear bounce-specific metadata: they didn't
          * come from a DSN. Leaving stale fields would mislead operators.
          */
         bounceType: null,
@@ -109,10 +109,10 @@ export async function createSuppression(
 /**
  * Auto-suppression hook for the future bounce path (#24). Different
  * shape from the manual `createSuppression` because we *want* the bounce
- * metadata persisted here — operators triaging a deliverability issue
+ * metadata persisted here: operators triaging a deliverability issue
  * need the diagnostic code + source email.
  *
- * Forces `reason = 'bounce'`. Idempotent — re-calling with a fresh
+ * Forces `reason = 'bounce'`. Idempotent: re-calling with a fresh
  * bounce updates the existing row (later bounce wins). Exported so
  * #24's DSN parser can call it directly.
  */
@@ -159,7 +159,7 @@ export async function addFromBounce(
 }
 
 /**
- * Paginated list, scoped to one API key. `email` is exact-match — the
+ * Paginated list, scoped to one API key. `email` is exact-match: the
  * indexed lookup serves both the gate and this query path.
  */
 export async function listSuppressions(
@@ -191,7 +191,7 @@ export async function listSuppressions(
 }
 
 /**
- * Single-row read. Scoped — a key can only fetch its own suppressions,
+ * Single-row read. Scoped: a key can only fetch its own suppressions,
  * just like every other module's read paths.
  */
 export async function getSuppressionById(
@@ -225,7 +225,7 @@ export async function deleteSuppression(
 /* ─── Unscoped variants for the dashboard (#89) ─── */
 
 /**
- * Paginated list across **all** API keys — admin-scoped view used by
+ * Paginated list across **all** API keys: admin-scoped view used by
  * `/dashboard/suppressions`. The scoped {@link listSuppressions} is
  * useless to the dashboard operator: auto-suppressions get filed
  * under whichever key the failing send happened to use, and the
@@ -234,10 +234,10 @@ export async function deleteSuppression(
  * DB. (#89)
  *
  * Filters:
- *   - `email` — case-insensitive *substring* match. The scoped variant
+ *   - `email`: case-insensitive *substring* match. The scoped variant
  *     uses exact match (it serves the hot-path send gate). The dashboard
  *     wants "find anything containing 'gmail.com'" UX, so we use ILIKE.
- *   - `apiKeyId` — exact match. Lets the operator drill into a single
+ *   - `apiKeyId`: exact match. Lets the operator drill into a single
  *     key's suppressions after spotting them in the global view.
  */
 export async function listAllSuppressions(filters: {
@@ -252,7 +252,7 @@ export async function listAllSuppressions(filters: {
 
   const conditions = [];
   if (filters.email) {
-    /** ILIKE for case-insensitive substring search — matches the
+    /** ILIKE for case-insensitive substring search: matches the
      *  dashboard's "find anything with gmail.com" expectation. */
     conditions.push(
       sql`${suppressions.email} ILIKE ${"%" + filters.email.toLowerCase() + "%"}`,
@@ -282,7 +282,7 @@ export async function listAllSuppressions(filters: {
 
 /**
  * Hard delete by ID, no api-key check. The dashboard caller already
- * authenticated against the dashboard session — we trust the operator
+ * authenticated against the dashboard session: we trust the operator
  * to delete any suppression they can see. Returns the deleted row
  * (for logging / serialisation) or `undefined` when nothing matched.
  */

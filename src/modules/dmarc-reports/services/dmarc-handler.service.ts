@@ -9,7 +9,7 @@
  * reports would otherwise pile up in the inbox view).
  *
  * Same orchestration-with-injected-deps pattern as `bounce-handler`
- * from #24 — the core decision logic is unit-testable; the public
+ * from #24: the core decision logic is unit-testable; the public
  * wrapper supplies real DB callbacks.
  */
 
@@ -47,7 +47,7 @@ export interface DmarcHandlerDeps {
 }
 
 export interface HandleDmarcResult {
-  /** "stored" — fresh report inserted; "duplicate" — already had it; "skipped" — not a report. */
+  /** "stored", fresh report inserted; "duplicate", already had it; "skipped", not a report. */
   outcome: "stored" | "duplicate" | "skipped";
   reportId?: string;
   recordCount?: number;
@@ -67,7 +67,7 @@ export async function handleInboundDmarcReport(
 ): Promise<HandleDmarcResult> {
   /**
    * Cheap pre-filter: sender / subject / content-type heuristics. If
-   * none match, this almost certainly isn't a DMARC report — skip the
+   * none match, this almost certainly isn't a DMARC report: skip the
    * decompression cost.
    */
   if (!looksLikeDmarcReport(rawMessage)) {
@@ -75,7 +75,7 @@ export async function handleInboundDmarcReport(
   }
 
   /**
-   * Try every attachment in turn — the report is usually the first one
+   * Try every attachment in turn: the report is usually the first one
    * but receivers occasionally include a human-readable HTML preamble
    * as a separate attachment that we'd skip on parse failure.
    */
@@ -121,7 +121,7 @@ export async function handleInboundDmarcReport(
     };
   }
 
-  logger.debug("DMARC report deduplicated — already stored", {
+  logger.debug("DMARC report deduplicated: already stored", {
     orgEmail: parsed.orgEmail,
     reportId: parsed.reportId,
   });
@@ -130,7 +130,7 @@ export async function handleInboundDmarcReport(
 
 /**
  * Real-DB implementation of `persistReport`. Uses a transaction so the
- * report row + its records insert atomically — partial state would
+ * report row + its records insert atomically: partial state would
  * produce orphan reports in the dashboard.
  */
 async function persistReportToDb(
@@ -167,7 +167,7 @@ async function persistReportToDb(
 
     if (inserted.length === 0) {
       /**
-       * Conflict — an existing row has the same (org_email, report_id).
+       * Conflict: an existing row has the same (org_email, report_id).
        * Look it up so the caller can return its id (useful for logging
        * and for the smoke-test path that re-sends the same report).
        */

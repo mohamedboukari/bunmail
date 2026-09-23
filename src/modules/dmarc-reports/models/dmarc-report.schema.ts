@@ -9,9 +9,9 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * DMARC aggregate (rua) report — one row per report received from a
+ * DMARC aggregate (rua) report: one row per report received from a
  * remote receiver (Microsoft, Google, Yahoo, etc.). Reports are about
- * a domain, NOT a tenant — receivers send them to the address listed
+ * a domain, NOT a tenant: receivers send them to the address listed
  * in `_dmarc.<domain>` TXT's `rua=` tag, which is operator-managed.
  *
  * Per-source-IP detail lives in the sibling `dmarc_records` table.
@@ -32,7 +32,7 @@ export const dmarcReports = pgTable(
 
     /**
      * Mailbox the report was sent from (e.g. `noreply-dmarc-support@google.com`).
-     * Combined with `reportId` to de-dupe — receivers occasionally re-send
+     * Combined with `reportId` to de-dupe: receivers occasionally re-send
      * the same report.
      */
     orgEmail: varchar("org_email", { length: 255 }).notNull(),
@@ -41,7 +41,7 @@ export const dmarcReports = pgTable(
     reportId: varchar("report_id", { length: 255 }).notNull(),
 
     /**
-     * Domain this report concerns — the `<policy_published><domain>`
+     * Domain this report concerns: the `<policy_published><domain>`
      * value. Stored as plain text (not FK) so reports for unregistered
      * or typo'd domains can still be parsed and surfaced.
      */

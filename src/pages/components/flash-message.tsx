@@ -9,7 +9,7 @@ interface FlashMessageProps {
 }
 
 /**
- * Flash message — success/error banner shown after form actions.
+ * Flash message: success/error banner shown after form actions.
  * Used to display feedback like "API key created" or "Invalid password".
  */
 export function FlashMessage({ message, type }: FlashMessageProps) {

@@ -11,7 +11,7 @@ interface TemplatesPageProps {
 }
 
 /**
- * Templates page — shows a create form and table of all email templates.
+ * Templates page: shows a create form and table of all email templates.
  */
 export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
   return (
@@ -75,7 +75,7 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
               </div>
             </div>
             <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-              Live preview — variables are shown with sample values.
+              Live preview: variables are shown with sample values.
             </p>
           </div>
           <div>
@@ -163,7 +163,7 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400">
                     {template.variables && template.variables.length > 0
                       ? template.variables.join(", ")
-                      : "—"}
+                      : "n/a"}
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={template.createdAt} />

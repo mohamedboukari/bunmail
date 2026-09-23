@@ -60,7 +60,7 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
   /**
    * Encrypt the PEM-encoded private key with AES-256-GCM before it ever
    * touches the database. The plaintext PEM only lives in memory inside
-   * this function and is never logged. Public key stays plaintext — it's
+   * this function and is never logged. Public key stays plaintext: it's
    * literally published in DNS, no threat in storing it raw.
    */
   const encryptedPrivateKey = encryptSecret(privateKey, config.dkimEncryptionKey);

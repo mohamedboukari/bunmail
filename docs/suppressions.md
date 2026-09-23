@@ -2,7 +2,7 @@
 
 The suppression list is the gate between an API request and the email queue. Addresses on the list are rejected at `POST /api/v1/emails/send` with HTTP 422 and never reach the queue, the SMTP path, or the recipient's mailbox.
 
-The list exists because **repeated sends to bouncing addresses are the fastest way to kill IP reputation**. Receivers (Gmail, Yahoo, Outlook) track sender reputation per-IP and per-domain; once you've sent to a few hundred non-existent mailboxes, your messages start landing in spam — even for legitimate recipients.
+The list exists because **repeated sends to bouncing addresses are the fastest way to kill IP reputation**. Receivers (Gmail, Yahoo, Outlook) track sender reputation per-IP and per-domain; once you've sent to a few hundred non-existent mailboxes, your messages start landing in spam, even for legitimate recipients.
 
 ## Scoping
 
@@ -18,18 +18,18 @@ A suppression is **active** when:
 - the row exists for `(api_key_id, normalised_email)`, AND
 - `expires_at IS NULL` (permanent), OR `expires_at > now()` (not yet expired)
 
-Expired rows stay in the table — they're not auto-purged today. If you need cleanup, schedule a background job; for typical usage the table stays small.
+Expired rows stay in the table: they're not auto-purged today. If you need cleanup, schedule a background job; for typical usage the table stays small.
 
 ## Reasons
 
 | Value | When |
 |---|---|
 | `bounce` | Auto-set by the bounce module (#24) when a Delivery Status Notification arrives at the inbound SMTP. The DSN parser calls `addFromBounce()` and persists `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. See [docs/bounces.md](bounces.md). |
-| `complaint` | Reserved for FBL (Feedback Loop) processing — when a recipient marks your message as spam. Not implemented yet. |
+| `complaint` | Reserved for FBL (Feedback Loop) processing, when a recipient marks your message as spam. Not implemented yet. |
 | `manual` | Operator/customer added the address themselves (e.g. "I know this address bounces, just block it"). |
 | `unsubscribe` | Reserved for future one-click unsubscribe handling per Gmail's Feb-2024 sender requirements. The DB column accepts it today; no endpoint sets it yet. |
 
-The DB column is plain `text` for forward compatibility — a finer split (e.g. `bounce.hard.no_user`) can land later without a migration. The API DTO restricts incoming reasons to the four values above.
+The DB column is plain `text` for forward compatibility: a finer split (e.g. `bounce.hard.no_user`) can land later without a migration. The API DTO restricts incoming reasons to the four values above.
 
 ## Schema
 
@@ -46,8 +46,8 @@ The DB column is plain `text` for forward compatibility — a finer split (e.g. 
 | `created_at` | `timestamptz` | Default `now()` |
 
 Indexes:
-- `UNIQUE (api_key_id, email)` — service uses this for `ON CONFLICT DO UPDATE`
-- `(api_key_id, email)` — composite btree, serves the gate's hot lookup
+- `UNIQUE (api_key_id, email)`: service uses this for `ON CONFLICT DO UPDATE`
+- `(api_key_id, email)`: composite btree, serves the gate's hot lookup
 
 ## API surface
 
@@ -55,14 +55,14 @@ All endpoints are scoped to the calling key's `apiKeyId` (read from the auth mid
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/v1/suppressions` | Manual add (idempotent — re-suppressing upserts) |
+| `POST` | `/api/v1/suppressions` | Manual add (idempotent: re-suppressing upserts) |
 | `GET` | `/api/v1/suppressions` | Paginated list, optional `?email=` exact-match filter |
 | `GET` | `/api/v1/suppressions/:id` | Read one |
 | `DELETE` | `/api/v1/suppressions/:id` | Remove (recipient becomes eligible immediately) |
 
 ## Dashboard surface (admin-scoped, #89)
 
-The API surface is per-key, but auto-suppressions are filed under whichever key happened to be sending when the bounce arrived — which is almost never the same as the operator's Bearer-token key. Without an unscoped view, a stuck auto-suppression meant SSH-ing into Postgres and writing SQL. The dashboard fixes that:
+The API surface is per-key, but auto-suppressions are filed under whichever key happened to be sending when the bounce arrived, which is almost never the same as the operator's Bearer-token key. Without an unscoped view, a stuck auto-suppression meant SSH-ing into Postgres and writing SQL. The dashboard fixes that:
 
 | Path | Purpose |
 |---|---|
@@ -100,7 +100,7 @@ Content-Type: application/json
 
 The `suppressionId` lets clients pivot directly to `DELETE /api/v1/suppressions/:id` if the block was a mistake.
 
-The email is **not** inserted into the `emails` table. There's no row to retry, no queue entry, no SMTP attempt — the gate is hard-fail before any side effect.
+The email is **not** inserted into the `emails` table. There's no row to retry, no queue entry, no SMTP attempt: the gate is hard-fail before any side effect.
 
 ## Auto-suppression on bounces (#24)
 
@@ -108,7 +108,7 @@ The bounce module (#24) closes the loop: when the inbound SMTP receives a Delive
 
 Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 
-The `processEmail` retry path deliberately **does not** auto-suppress on `MAX_ATTEMPTS` exhaustion — that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
+The `processEmail` retry path deliberately **does not** auto-suppress on `MAX_ATTEMPTS` exhaustion: that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
 
 ## Out of scope (separate tickets)
 

@@ -8,7 +8,7 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * API Keys plugin — registers all API key management routes under /api/v1/api-keys.
+ * API Keys plugin: registers all API key management routes under /api/v1/api-keys.
  *
  * Routes:
  * - POST /        → Create a new API key (returns raw key once)
@@ -17,25 +17,25 @@ import { logger } from "../../utils/logger.ts";
  * - DELETE /:id   → Revoke (soft-delete) an API key
  *
  * All routes are protected by auth middleware and rate limiting.
- * This means you need an existing API key to manage keys — the first
+ * This means you need an existing API key to manage keys: the first
  * key is created via the seed script.
  */
 export const apiKeysPlugin = new Elysia({
   prefix: "/api/v1/api-keys",
-  /** Normalize URLs — /api/v1/api-keys and /api/v1/api-keys/ both work */
+  /** Normalize URLs: /api/v1/api-keys and /api/v1/api-keys/ both work */
   normalize: true,
 })
-  /** Apply auth middleware — all routes in this plugin require a valid Bearer token */
+  /** Apply auth middleware: all routes in this plugin require a valid Bearer token */
   .use(authMiddleware)
-  /** Management plane — admin keys only (#130). Restricted keys get 403. */
+  /** Management plane: admin keys only (#130). Restricted keys get 403. */
   .use(adminMiddleware)
-  /** Apply rate limiting — 100 requests per 60 seconds per API key */
+  /** Apply rate limiting: 100 requests per 60 seconds per API key */
   .use(rateLimitMiddleware)
 
   /**
    * POST /api/v1/api-keys
    *
-   * Creates a new API key. The raw key is returned in the response —
+   * Creates a new API key. The raw key is returned in the response:
    * this is the ONLY time it will be visible. Store it securely.
    */
   .post(
@@ -52,7 +52,7 @@ export const apiKeysPlugin = new Elysia({
         success: true,
         data: {
           ...serializeApiKey(apiKey),
-          /** The raw key — shown once at creation time, never again */
+          /** The raw key: shown once at creation time, never again */
           key: rawKey,
         },
       };
@@ -63,7 +63,7 @@ export const apiKeysPlugin = new Elysia({
         tags: ["API Keys"],
         summary: "Create API key",
         description:
-          "Creates a new API key. The raw key is returned once — store it securely.",
+          "Creates a new API key. The raw key is returned once: store it securely.",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -118,7 +118,7 @@ export const apiKeysPlugin = new Elysia({
         tags: ["API Keys"],
         summary: "Update API key",
         description:
-          "Update a key's name and/or its allowed-senders allowlist (#126). `allowedSenders` replaces the whole list — add an address by including it, remove one by omitting it. Empty list = unrestricted.",
+          "Update a key's name and/or its allowed-senders allowlist (#126). `allowedSenders` replaces the whole list: add an address by including it, remove one by omitting it. Empty list = unrestricted.",
         security: [{ bearerAuth: [] }],
       },
     },

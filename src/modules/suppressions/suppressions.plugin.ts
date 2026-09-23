@@ -9,7 +9,7 @@ import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
 
 /**
- * Suppression list plugin — addresses we refuse to send to.
+ * Suppression list plugin: addresses we refuse to send to.
  *
  * Routes (all auth-required, scoped to the calling API key):
  * - POST   /                Manually add an address
@@ -17,7 +17,7 @@ import { redactEmail } from "../../utils/redact.ts";
  * - GET    /:id             Read one
  * - DELETE /:id             Remove (allows re-sending to the recipient)
  *
- * The actual send-time gate lives in `email.service.createEmail` — when
+ * The actual send-time gate lives in `email.service.createEmail`, when
  * a recipient is on the list, that path throws `SuppressedRecipientError`
  * which the global `onError` handler maps to HTTP 422.
  */
@@ -58,7 +58,7 @@ export const suppressionsPlugin = new Elysia({
         tags: ["Suppressions"],
         summary: "Add an address to the suppression list",
         description:
-          "Idempotent — re-suppressing an existing address upserts the row. Subsequent sends to this recipient under this API key will return 422.",
+          "Idempotent: re-suppressing an existing address upserts the row. Subsequent sends to this recipient under this API key will return 422.",
         security: [{ bearerAuth: [] }],
       },
     },

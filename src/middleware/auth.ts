@@ -23,7 +23,7 @@ const authCache = new WeakMap<Request, AuthenticatedKey>();
 /**
  * Minimum interval between `last_used_at` writes for the same API key.
  * Without this throttle a hot key under sustained load would fire one
- * `UPDATE` per request — pure write amplification with no observable
+ * `UPDATE` per request: pure write amplification with no observable
  * benefit (the timestamp is only used for "stale key" UX, not security).
  *
  * Trade-off: `last_used_at` can lag by up to this window. 60 seconds
@@ -33,12 +33,12 @@ const LAST_USED_THROTTLE_MS = 60_000;
 const lastUsedWriteAt = new Map<string, number>();
 
 /**
- * Auth middleware — validates Bearer tokens on every request.
+ * Auth middleware: validates Bearer tokens on every request.
  *
  * Flow:
- * 1. `onBeforeHandle` — validates the token, rejects invalid requests,
+ * 1. `onBeforeHandle`: validates the token, rejects invalid requests,
  *    caches the matched API key on the Request.
- * 2. `resolve` — reads the cached key and injects `apiKeyId` /
+ * 2. `resolve`: reads the cached key and injects `apiKeyId` /
  *    `apiKeyName` into the context. Performs no DB or crypto work.
  *
  * Usage: `.use(authMiddleware)` on any Elysia plugin that needs protection.
@@ -46,7 +46,7 @@ const lastUsedWriteAt = new Map<string, number>();
  */
 export const authMiddleware = new Elysia({ name: "auth-middleware" })
   /**
-   * Guard — rejects requests with missing, invalid, or revoked API keys.
+   * Guard: rejects requests with missing, invalid, or revoked API keys.
    * Returning a value short-circuits the request.
    */
   .onBeforeHandle(async ({ request, set }) => {
@@ -66,7 +66,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
       set.status = 401;
       return {
         success: false,
-        error: "Invalid Authorization scheme — expected Bearer token",
+        error: "Invalid Authorization scheme: expected Bearer token",
       };
     }
 
@@ -116,7 +116,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     });
   })
   /**
-   * Resolve — injects API key identity into the request context.
+   * Resolve: injects API key identity into the request context.
    * Reads from the per-request cache populated by `onBeforeHandle`.
    * Never reaches here unless the guard already passed.
    */
@@ -132,7 +132,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     }
 
     /**
-     * Update `last_used_at` — throttled per key so a hot caller doesn't
+     * Update `last_used_at`: throttled per key so a hot caller doesn't
      * fire one `UPDATE` per request. The previous-write timestamp lives
      * in `lastUsedWriteAt`; we only enqueue a new write when the
      * throttle window has elapsed. Fire-and-forget; errors logged.
@@ -164,7 +164,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     };
   })
   /**
-   * Lift hooks to the parent plugin scope — without this, onBeforeHandle
+   * Lift hooks to the parent plugin scope, without this, onBeforeHandle
    * and resolve() stay encapsulated inside this plugin and don't apply
    * to routes defined in the parent (e.g. emailsPlugin).
    */
@@ -175,7 +175,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
  * plugins (api-keys, domains, inbound): it reads the same per-request
  * `authCache` that `authMiddleware.onBeforeHandle` populated and rejects any
  * non-admin key with 403. Restricted (send-only) keys therefore cannot reach
- * key management, domain management, or inbound mail — which is what makes the
+ * key management, domain management, or inbound mail, which is what makes the
  * allowed-senders boundary (#126) actually enforceable.
  *
  * Usage: `.use(authMiddleware).use(adminMiddleware)`.

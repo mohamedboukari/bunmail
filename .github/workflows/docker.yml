@@ -1,4 +1,4 @@
-# Docker — builds and pushes the BunMail image to GitHub Container Registry.
+# Docker: builds and pushes the BunMail image to GitHub Container Registry.
 # Trigger: on every release tag (v*) or manual dispatch.
 
 name: Docker
@@ -66,7 +66,7 @@ jobs:
 
       - name: Attest build provenance
         # Signs SLSA build provenance for the pushed image, keyless via
-        # Sigstore (OIDC — no cosign key to store/rotate). Binds the
+        # Sigstore (OIDC: no cosign key to store/rotate). Binds the
         # attestation to the immutable image digest, not the tag, so a
         # later retag can't inherit the signature. Consumers verify with
         # `gh attestation verify oci://ghcr.io/<repo>@<digest> --owner <owner>`.

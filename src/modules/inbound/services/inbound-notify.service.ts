@@ -16,13 +16,13 @@ import type { Domain } from "../../domains/types/domain.types.ts";
  *
  * When the SMTP receiver accepts an inbound message for a domain that has
  * a `notify_email` set, this sends a small "you have new mail" summary
- * email to that address — sender, subject, a short preview, and (when
+ * email to that address: sender, subject, a short preview, and (when
  * `APP_BASE_URL` is configured) a link to the message in the dashboard.
  *
  * The notification is sent FROM `<INBOUND_NOTIFY_FROM_LOCAL>@<recipient
  * domain>` and DKIM-signed with that domain's own key, so it passes the
  * same SPF/DKIM the operator already set up for outbound. It is sent
- * out-of-band via {@link sendMail} (no `emails` row) — there is no owning
+ * out-of-band via {@link sendMail} (no `emails` row): there is no owning
  * API key in the per-domain model, and a notification doesn't belong in
  * the sender's outbound log. The send outcome is logged instead.
  *
@@ -41,7 +41,7 @@ export interface InboundNotificationContent {
   text: string;
 }
 
-/** Inputs for {@link buildInboundNotification} — pure, no I/O. */
+/** Inputs for {@link buildInboundNotification}: pure, no I/O. */
 export interface BuildNotificationInput {
   /** Address the inbound mail was sent to (the BunMail mailbox). */
   to: string;
@@ -76,7 +76,7 @@ function buildPreview(text: string | null): string {
 }
 
 /**
- * Composes the summary notification email. Pure function — all values are
+ * Composes the summary notification email. Pure function: all values are
  * provided by the caller, every user-controlled field is HTML-escaped in
  * the HTML part, and the subject carries the original subject so the
  * notification is glanceable in an inbox list.
@@ -104,12 +104,11 @@ export function buildInboundNotification(
   }
   textLines.push(
     "",
-    "—",
     `Sent by BunMail because inbound notifications are enabled for ${input.to.split("@")[1] ?? input.to}.`,
   );
   const text = textLines.join("\n");
 
-  /** HTML part — escaped user input, minimal inline styling. */
+  /** HTML part: escaped user input, minimal inline styling. */
   const previewHtml = preview
     ? `<p style="margin:16px 0;padding:12px 16px;background:#f6f8fa;border-radius:6px;color:#444;white-space:pre-wrap;">${escapeHtml(
         preview,
@@ -143,13 +142,13 @@ export function buildInboundNotification(
  * Decrypts a domain's stored DKIM private key, mirroring the queue's
  * fail-open behaviour: null stays null, plaintext (boot encrypter not yet
  * run) is used as-is with a warning, and a decrypt failure logs and
- * returns null so the notification still sends — unsigned — rather than
+ * returns null so the notification still sends, unsigned, rather than
  * being dropped.
  */
 function decryptDkimPrivateKey(stored: string | null, domainName: string): string | null {
   if (stored === null) return null;
   if (!isEncryptedSecret(stored)) {
-    logger.warn("DKIM private key stored as plaintext — boot encrypter has not run", {
+    logger.warn("DKIM private key stored as plaintext: boot encrypter has not run", {
       domain: domainName,
     });
     return stored;
@@ -157,7 +156,7 @@ function decryptDkimPrivateKey(stored: string | null, domainName: string): strin
   try {
     return decryptSecret(stored, config.dkimEncryptionKey);
   } catch (err) {
-    logger.error("Failed to decrypt DKIM private key — sending notification unsigned", {
+    logger.error("Failed to decrypt DKIM private key: sending notification unsigned", {
       domain: domainName,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -184,8 +183,8 @@ export interface NotifyInboundInput {
   from: string;
   /**
    * The **envelope** RCPT TO addresses the receiver actually accepted
-   * (`session.envelope.rcptTo`). Domain resolution keys off these — NOT
-   * the spoofable `To:` header — so BCC / list mail still notifies the
+   * (`session.envelope.rcptTo`). Domain resolution keys off these, NOT
+   * the spoofable `To:` header, so BCC / list mail still notifies the
    * domain the message was received for, and a forged header can't steer
    * which domain's identity/key signs the notification. One message can be
    * addressed to several registered domains; each notify-enabled one gets
@@ -203,7 +202,7 @@ export interface NotifyInboundInput {
  * a `notify_email` configured.
  *
  * Resolution + guards:
- *   1. **Loop guard** — skip entirely when the inbound sender's domain is
+ *   1. **Loop guard**: skip entirely when the inbound sender's domain is
  *      itself a registered BunMail domain. Notifications are sent from
  *      `notifications@<our domain>`, so a notification that loops back in
  *      (or any intra-system mail) is suppressed rather than re-notifying.
@@ -211,16 +210,16 @@ export interface NotifyInboundInput {
  *      domain with a `notify_email`, send one summary email (signed with
  *      that domain's own key).
  *
- * Never throws — the whole body is wrapped so every failure (DB lookups,
+ * Never throws: the whole body is wrapped so every failure (DB lookups,
  * the send) is logged and swallowed. The caller invokes it fire-and-forget
  * after the SMTP ack, and the contract holds even without a `.catch`.
  */
 export async function notifyInboundReceived(input: NotifyInboundInput): Promise<void> {
   try {
-    /** Loop guard — don't notify on mail from one of our own domains. */
+    /** Loop guard: don't notify on mail from one of our own domains. */
     const senderDomain = input.from.split("@")[1]?.toLowerCase();
     if (senderDomain && (await domainExistsByName(senderDomain))) {
-      logger.info("Inbound notify skipped — sender is a registered domain (loop guard)", {
+      logger.info("Inbound notify skipped: sender is a registered domain (loop guard)", {
         from: redactEmail(input.from),
       });
       return;
@@ -233,7 +232,7 @@ export async function notifyInboundReceived(input: NotifyInboundInput): Promise<
       if (domainName && !byDomain.has(domainName)) byDomain.set(domainName, addr);
     }
     if (byDomain.size === 0) {
-      logger.debug("Inbound notify skipped — no envelope recipients", {
+      logger.debug("Inbound notify skipped: no envelope recipients", {
         inboundId: input.inboundId,
       });
       return;
@@ -292,7 +291,7 @@ async function sendDomainNotification(
       messageId,
       dkim,
     });
-    /** sendMail doesn't throw on a dead recipient MX — it reports per-group
+    /** sendMail doesn't throw on a dead recipient MX: it reports per-group
      *  outcomes. Only claim "sent" when a group actually landed. */
     const delivered = Object.values(result.deliveryState).some(
       (g) => g.status === "sent",

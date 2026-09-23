@@ -14,7 +14,7 @@ bun install
 
 # Copy environment config
 cp .env.example .env
-# Edit .env — at minimum set DATABASE_URL
+# Edit .env: at minimum set DATABASE_URL
 
 # Push schema to dev database
 bun run db:push
@@ -71,7 +71,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/). The commit 
 
 ## Code Style
 
-- TypeScript strict mode — no `any` types
+- TypeScript strict mode: no `any` types
 - Use proper types, not unsafe casts
 - Keep route handlers thin; business logic goes in services
 - Only services access the database

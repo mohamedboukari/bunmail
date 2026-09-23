@@ -11,14 +11,14 @@ interface WebhookDeliveryDetailPageProps {
 }
 
 /**
- * Webhook delivery detail (#30) — full view of one attempt: payload
+ * Webhook delivery detail (#30), a full view of one attempt: payload
  * bytes that were POSTed, attempt counter, last error / HTTP status,
  * scheduled next attempt time, and a Replay button that flips a
  * `failed` row back to `pending` so the worker re-tries it.
  *
  * The payload is the exact JSON that gets re-signed per attempt; copying
  * from this page is the canonical way to debug "the receiver rejected
- * my signature" — paste the body bytes + the timestamp from the most
+ * my signature": paste the body bytes + the timestamp from the most
  * recent attempt's request log into your verifier.
  */
 export function WebhookDeliveryDetailPage({
@@ -27,7 +27,7 @@ export function WebhookDeliveryDetailPage({
   flash,
 }: WebhookDeliveryDetailPageProps) {
   /** Try to pretty-print the stored payload for display. The wire bytes
-   *  remain compact (the field stores compact JSON) — this is just a
+   *  remain compact (the field stores compact JSON): this is just a
    *  visual aid. Falls back to raw if it's somehow not JSON. */
   let prettyPayload = delivery.payload;
   try {
@@ -65,7 +65,7 @@ export function WebhookDeliveryDetailPage({
           value={
             delivery.lastResponseStatus !== null
               ? String(delivery.lastResponseStatus)
-              : "—"
+              : "n/a"
           }
           mono
         />
@@ -79,13 +79,13 @@ export function WebhookDeliveryDetailPage({
             ) : delivery.status === "pending" ? (
               <TimeDisplay value={delivery.nextAttemptAt} />
             ) : (
-              "—"
+              "n/a"
             )}
           </div>
         </div>
       </div>
 
-      {/* Replay action — only meaningful for non-delivered rows */}
+      {/* Replay action, only meaningful for non-delivered rows */}
       {delivery.status !== "delivered" && (
         <div class="mb-6">
           <form

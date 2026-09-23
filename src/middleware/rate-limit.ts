@@ -14,7 +14,7 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
  * Tracks request counts per API key within a sliding time window.
  * Key: API key ID, Value: request count and window start timestamp.
  *
- * Resets on server restart — acceptable for MVP. A production system
+ * Resets on server restart: acceptable for MVP. A production system
  * would use Redis or a shared store for multi-instance deployments.
  */
 interface RateLimitEntry {
@@ -31,7 +31,7 @@ let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Removes entries whose window has fully expired.
- * Exported for unit testing — the running server uses the interval below.
+ * Exported for unit testing: the running server uses the interval below.
  */
 export function pruneExpiredEntries(now: number = Date.now()): number {
   let removed = 0;
@@ -49,7 +49,7 @@ export function pruneExpiredEntries(now: number = Date.now()): number {
  * rate-limit map. Without this, distinct API keys arriving over a long
  * lifetime would grow the map unbounded.
  *
- * Idempotent — calling twice is a no-op while the interval is running.
+ * Idempotent: calling twice is a no-op while the interval is running.
  * Mirrors the SMTP receiver's rate-limit cleanup pattern.
  */
 export function startRateLimitCleanup(): void {
@@ -60,7 +60,7 @@ export function startRateLimitCleanup(): void {
   });
 }
 
-/** Stops the periodic sweep — called from the graceful shutdown handler. */
+/** Stops the periodic sweep: called from the graceful shutdown handler. */
 export function stopRateLimitCleanup(): void {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
@@ -70,7 +70,7 @@ export function stopRateLimitCleanup(): void {
 }
 
 /**
- * Rate-limit middleware — enforces per-API-key request limits.
+ * Rate-limit middleware: enforces per-API-key request limits.
  *
  * Sliding window algorithm:
  * 1. Look up the API key's current window in the in-memory map
@@ -87,7 +87,7 @@ export const rateLimitMiddleware = new Elysia({
    * Read `apiKeyId` from the derived auth context.
    *
    * The auth middleware adds `apiKeyId` via `.resolve()`, but this
-   * plugin is its own `Elysia` instance — it doesn't statically know
+   * plugin is its own `Elysia` instance: it doesn't statically know
    * about the auth middleware's context, so TypeScript can't see the
    * field. The read is order-dependent: every plugin that uses the
    * rate-limiter calls `.use(authMiddleware).use(rateLimitMiddleware)`
@@ -106,7 +106,7 @@ export const rateLimitMiddleware = new Elysia({
 
   /**
    * If no apiKeyId is present, auth middleware hasn't run or the route
-   * is unprotected — skip rate limiting silently.
+   * is unprotected: skip rate limiting silently.
    */
   if (!apiKeyId) {
     return;
@@ -118,7 +118,7 @@ export const rateLimitMiddleware = new Elysia({
   const entry = rateLimitMap.get(apiKeyId);
 
   if (!entry || now - entry.windowStart >= WINDOW_MS) {
-    /** No entry or window expired — start a new window */
+    /** No entry or window expired: start a new window */
     rateLimitMap.set(apiKeyId, { count: 1, windowStart: now });
     return;
   }
@@ -142,7 +142,7 @@ export const rateLimitMiddleware = new Elysia({
 
     return {
       success: false,
-      error: "Rate limit exceeded — try again later",
+      error: "Rate limit exceeded: try again later",
       retryAfter,
     };
   }

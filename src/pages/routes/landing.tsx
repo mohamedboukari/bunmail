@@ -1,7 +1,7 @@
 import { SunIcon, MoonIcon } from "../assets/icons.tsx";
 
 /**
- * Landing page — standalone (no sidebar navigation).
+ * Landing page: standalone (no sidebar navigation).
  * Developer-focused home page introducing BunMail with hero,
  * curl code snippet, features grid, quick start steps, and footer.
  */
@@ -12,14 +12,14 @@ export function LandingPage() {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <title>BunMail — Self-hosted Email API for Developers</title>
+        <title>BunMail | Self-hosted Email API for Developers</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
           {`
             tailwind.config = { darkMode: 'class' };
           `}
         </script>
-        {/* Dark mode initialization — runs before paint to avoid flash */}
+        {/* Dark mode initialization: runs before paint to avoid flash */}
         <script>
           {`
             (function() {
@@ -77,7 +77,7 @@ export function LandingPage() {
         <main class="max-w-5xl mx-auto px-4 py-16">
           {/* ─── Hero Section ─── */}
           <section class="text-center mb-20">
-            {/* Inline SVG illustration — envelope with code brackets */}
+            {/* Inline SVG illustration: envelope with code brackets */}
             <div class="flex justify-center mb-8">
               <svg
                 width="120"
@@ -358,7 +358,7 @@ export function LandingPage() {
  * Card uses flex column with `h-full` so all three steps stretch to the
  * same height regardless of which command is longest. The code box gets
  * `whitespace-nowrap overflow-x-auto` so a long command (the git clone URL)
- * scrolls instead of wrapping — keeping all three cards visually aligned
+ * scrolls instead of wrapping: keeping all three cards visually aligned
  * at one line of code.
  */
 function QuickStartStep({
@@ -378,7 +378,7 @@ function QuickStartStep({
       <h3 class="font-medium text-sm mb-2" safe>
         {title}
       </h3>
-      {/* Code block — fixed-height single line, horizontally scrollable on overflow */}
+      {/* Code block: fixed-height single line, horizontally scrollable on overflow */}
       <div class="mt-auto w-full bg-gray-900 dark:bg-gray-800 rounded-lg px-4 py-3 overflow-x-auto">
         <code class="text-xs text-gray-100 whitespace-nowrap block" safe>
           {command}

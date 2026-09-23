@@ -1,5 +1,5 @@
 /**
- * HtmlPreview — renders user-provided HTML content in a sandboxed iframe
+ * HtmlPreview: renders user-provided HTML content in a sandboxed iframe
  * with automatic dark mode support.
  *
  * Injects a small CSS reset into the srcdoc so the iframe background
@@ -22,7 +22,7 @@ interface HtmlPreviewProps {
  *
  * Extracted as a constant so the server-rendered srcdoc (`wrapWithDarkModeStyles`)
  * and the client-side live updater (`LiveHtmlPreviewScript`) share one source of
- * truth and produce byte-identical markup — no flash when the script takes over.
+ * truth and produce byte-identical markup: no flash when the script takes over.
  */
 const PREVIEW_STYLE_BLOCK = `<style>
 html, body { background: #fff; color: #111; }
@@ -94,7 +94,7 @@ export function HtmlPreview({
 }
 
 /**
- * Script block — include once per page that uses HtmlPreview.
+ * Script block: include once per page that uses HtmlPreview.
  * Observes the root <html> element for dark mode class changes
  * and propagates theme to all preview iframes.
  */
@@ -154,21 +154,21 @@ export function HtmlPreviewScript() {
 interface LiveHtmlPreviewProps {
   /** `id` of the `<textarea>` whose value drives this preview. */
   textareaId: string;
-  /** Initial HTML to seed the first (pre-JS) paint — e.g. a saved template body. */
+  /** Initial HTML to seed the first (pre-JS) paint: e.g. a saved template body. */
   initialHtml?: string | null;
   title?: string;
   minHeight?: string;
 }
 
 /**
- * LiveHtmlPreview — a sandboxed iframe that mirrors a `<textarea>` as the user
+ * LiveHtmlPreview: a sandboxed iframe that mirrors a `<textarea>` as the user
  * types, with `{{variable}}` placeholders rendered as sample values.
  *
  * The first paint is server-rendered from `initialHtml` (so the saved template
  * shows immediately and degrades gracefully without JS); thereafter
  * `LiveHtmlPreviewScript` updates the iframe's `srcdoc` on every keystroke.
  * Stays `sandbox="allow-same-origin"` (no `allow-scripts`) so embedded scripts
- * never execute — same posture as the static {@link HtmlPreview}.
+ * never execute: same posture as the static {@link HtmlPreview}.
  */
 export function LiveHtmlPreview({
   textareaId,
@@ -191,7 +191,7 @@ export function LiveHtmlPreview({
 }
 
 /**
- * Script block — include once per page that uses LiveHtmlPreview.
+ * Script block: include once per page that uses LiveHtmlPreview.
  * Binds each live preview iframe to its source textarea, re-rendering the
  * sample-substituted HTML (debounced) on input, and keeps dark mode +
  * auto-resize in sync. Targets the `live-html-preview-frame` class only, so it

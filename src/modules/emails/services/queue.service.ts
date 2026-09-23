@@ -32,15 +32,15 @@ export interface DomainLookupRow {
  * `List-Unsubscribe` overrides for an outbound email.
  *
  * Lookup order:
- *   1. **By `domainId` (canonical)** — the FK stamped on the email row
+ *   1. **By `domainId` (canonical)**: the FK stamped on the email row
  *      at create-time. Survives sender renames and is the right answer
  *      even if a future schema allows non-unique names per API key.
- *   2. **By sender domain name (legacy fallback)** — only used when
+ *   2. **By sender domain name (legacy fallback)**, only used when
  *      `domainId` is null, which only happens for rows created before
  *      the FK existed (schema 0001). New rows always carry `domainId`
  *      when the domain is registered.
  *
- * Exported for unit testing — see test/unit/resolve-domain-for-email.test.ts.
+ * Exported for unit testing, see test/unit/resolve-domain-for-email.test.ts.
  */
 export async function resolveDomainForEmail(
   email: { domainId: string | null; fromAddress: string },
@@ -49,12 +49,12 @@ export async function resolveDomainForEmail(
     byName: (name: string) => Promise<DomainLookupRow | undefined>;
   },
 ): Promise<DomainLookupRow | undefined> {
-  /** Primary path — FK is the canonical pointer. */
+  /** Primary path: FK is the canonical pointer. */
   if (email.domainId !== null) {
     return queries.byId(email.domainId);
   }
 
-  /** Legacy fallback — pre-FK rows. Skip if `fromAddress` is malformed. */
+  /** Legacy fallback: pre-FK rows. Skip if `fromAddress` is malformed. */
   const senderDomain = email.fromAddress.split("@")[1];
   if (!senderDomain) return undefined;
   return queries.byName(senderDomain);
@@ -64,17 +64,17 @@ export async function resolveDomainForEmail(
  * Decrypts a stored DKIM private key for use with nodemailer's signer.
  *
  * Three input shapes are tolerated:
- *   - `null` — no key on file; returned unchanged so the caller falls
+ *   - `null`: no key on file; returned unchanged so the caller falls
  *     back to unsigned mail.
- *   - encrypted (`v1:...`) — the normal post-migration path; AES-256-GCM
+ *   - encrypted (`v1:...`): the normal post-migration path; AES-256-GCM
  *     decrypted with `config.dkimEncryptionKey`.
- *   - plaintext PEM — possible during the upgrade window before the
+ *   - plaintext PEM: possible during the upgrade window before the
  *     boot-time encrypter runs, or if an operator inserted a row by
  *     hand. Logged as a warning so it shows up in incident review,
  *     then returned as-is so the email still signs.
  *
  * On decrypt failure (wrong key, tampered ciphertext) we log and return
- * `null` — the mail is sent unsigned rather than failed outright. This
+ * `null`: the mail is sent unsigned rather than failed outright. This
  * is **fail-open** by design: a key-rotation accident shouldn't take
  * down outbound delivery.
  */
@@ -82,7 +82,7 @@ function decryptDkimPrivateKey(stored: string | null, domainName: string): strin
   if (stored === null) return null;
 
   if (!isEncryptedSecret(stored)) {
-    logger.warn("DKIM private key stored as plaintext — boot encrypter has not run", {
+    logger.warn("DKIM private key stored as plaintext: boot encrypter has not run", {
       domain: domainName,
     });
     return stored;
@@ -91,7 +91,7 @@ function decryptDkimPrivateKey(stored: string | null, domainName: string): strin
   try {
     return decryptSecret(stored, config.dkimEncryptionKey);
   } catch (err) {
-    logger.error("Failed to decrypt DKIM private key — sending unsigned", {
+    logger.error("Failed to decrypt DKIM private key: sending unsigned", {
       domain: domainName,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -140,7 +140,7 @@ const BATCH_SIZE = 5;
 /** Max send attempts before marking an email as permanently failed */
 const MAX_ATTEMPTS = 3;
 
-/** Reference to the setInterval timer — used to stop the queue */
+/** Reference to the setInterval timer: used to stop the queue */
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -213,11 +213,11 @@ async function recoverInterrupted(): Promise<void> {
  * inner SELECT. That gives us two guarantees no separate select+update
  * pair could:
  *
- *   1. **Atomicity** — by the time the row appears in `RETURNING *`, it
+ *   1. **Atomicity**: by the time the row appears in `RETURNING *`, it
  *      is already in `sending` state. There is no window where a row
  *      is "selected but not yet marked", which is the window the old
  *      code raced through (#20).
- *   2. **Concurrency-safety** — `SKIP LOCKED` makes a concurrent caller
+ *   2. **Concurrency-safety**: `SKIP LOCKED` makes a concurrent caller
  *      *skip past* any row another transaction has locked rather than
  *      blocking on it or grabbing the same id. So two workers running
  *      this query at the same time get **disjoint** result sets, never
@@ -254,12 +254,12 @@ export async function claimNextEmails(
 }
 
 /**
- * Single poll cycle — claims a batch of queued emails and processes them.
+ * Single poll cycle: claims a batch of queued emails and processes them.
  *
  * Steps:
  * 1. Atomically claim up to BATCH_SIZE rows (queued → sending in one
  *    statement, with `FOR UPDATE SKIP LOCKED` so concurrent workers
- *    can't claim the same row — see {@link claimNextEmails}).
+ *    can't claim the same row, see {@link claimNextEmails}).
  * 2. For each claimed row (concurrently):
  *    a. Try SMTP delivery via the mailer service.
  *    b. On success: mark "sent" with timestamp.
@@ -270,7 +270,7 @@ export async function claimNextEmails(
 async function processQueue(): Promise<void> {
   const batch = await claimNextEmails(BATCH_SIZE);
 
-  /** Nothing to process — skip silently */
+  /** Nothing to process: skip silently */
   if (batch.length === 0) return;
 
   logger.debug("Processing email batch", { count: batch.length });
@@ -280,7 +280,7 @@ async function processQueue(): Promise<void> {
 }
 
 /**
- * Processes a single email — marks it as sending, attempts SMTP delivery,
+ * Processes a single email: marks it as sending, attempts SMTP delivery,
  * and updates the status based on the outcome.
  *
  * @param email - The queued email row to process
@@ -288,8 +288,8 @@ async function processQueue(): Promise<void> {
 async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   const emailId = email.id;
   /**
-   * The row arrives already in `sending` state with `attempts` incremented
-   * — `claimNextEmails` did both atomically (#20). So `email.attempts` is
+   * The row arrives already in `sending` state with `attempts` incremented:
+   * `claimNextEmails` did both atomically (#20). So `email.attempts` is
    * the count for *this* attempt, not the previous one.
    */
   const attempt = email.attempts;
@@ -335,7 +335,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     /**
      * Canonical Message-ID: locked in on first attempt, reused on
      * retries. Stable identifier is what bounce / complaint feedback
-     * loops join on — minting a new one per attempt would break
+     * loops join on: minting a new one per attempt would break
      * correlation entirely. (#97)
      */
     const messageId =
@@ -397,7 +397,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
           suppressionId: suppression.id,
           source: "inline",
         });
-        logger.warn("Multi-MX recipient hard-bounced — auto-suppressed", {
+        logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {
           emailId,
           apiKeyId: email.apiKeyId,
           recipient: redactEmail(rcpt),
@@ -440,7 +440,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
         remainingAttempts: MAX_ATTEMPTS - attempt,
       });
       /** If this attempt landed at least one group, fire `email.sent`
-       *  once — checked against priorStatuses so we don't double-fire
+       *  once: checked against priorStatuses so we don't double-fire
        *  on a future attempt where the same group is already sent. */
       if (anySent && !anySentBefore(priorStatuses)) {
         dispatchEvent("email.sent", {
@@ -511,7 +511,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     }
 
     if (!finalAnySent && finalStatus === "failed") {
-      /** Pure failure (no group ever delivered + no hard 5xx) — keep
+      /** Pure failure (no group ever delivered + no hard 5xx): keep
        *  the `email.failed` webhook fired by the legacy path so
        *  consumers that watch this event still see it. */
       dispatchEvent("email.failed", {
@@ -525,7 +525,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
   } catch (error) {
     /**
      * `sendMail` only throws for fundamental input errors now (no
-     * valid recipients after parsing) — never for transport / SMTP
+     * valid recipients after parsing): never for transport / SMTP
      * failures, which return as `failed`/`retry` groups in state.
      * So this catch is a one-shot terminal: mark `failed`, no retry.
      */
@@ -583,7 +583,7 @@ function summariseFailures(state: DeliveryState): string {
 
 /**
  * Returns true when the row had at least one group already in `sent`
- * state before this attempt — used to skip duplicate `email.sent`
+ * state before this attempt: used to skip duplicate `email.sent`
  * webhook dispatches across retry passes.
  */
 function anySentBefore(priorStatuses: Map<string, DeliveryGroup["status"]>): boolean {

@@ -34,7 +34,7 @@ import { recordOutcome, getAcceptedToday } from "./usage.service.ts";
  */
 
 /**
- * Maximum size (bytes) of a submitted message — advertised via the SIZE
+ * Maximum size (bytes) of a submitted message: advertised via the SIZE
  * ESMTP extension and enforced inside `onData`. Matches the inbound cap.
  */
 const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
@@ -196,7 +196,7 @@ export function start(portOverride?: number): void {
   server = new SMTPServer({
     ...tlsOptions,
     secure: false,
-    /** AUTH is mandatory — this is the open-relay guard for submission. */
+    /** AUTH is mandatory: this is the open-relay guard for submission. */
     authOptional: false,
     /** Only password-based mechanisms; the password carries the API key. */
     authMethods: ["PLAIN", "LOGIN"],
@@ -264,10 +264,10 @@ export function start(portOverride?: number): void {
         .then((apiKey) => {
           if (!apiKey || !apiKey.isActive) {
             if (authRateLimit.enabled) recordAuthFailure(ip);
-            logger.warn("SMTP submission AUTH failed — invalid or inactive key", { ip });
+            logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
             return callback(smtpError("Invalid API key", 535));
           }
-          /** Success — clear the failure counter and stash the key id. */
+          /** Success: clear the failure counter and stash the key id. */
           authFailureMap.delete(ip);
           logger.info("SMTP submission client authenticated", {
             ip,
@@ -287,7 +287,7 @@ export function start(portOverride?: number): void {
 
     /**
      * Cap recipients per transaction (open-relay-fanout defence). Unlike
-     * the inbound receiver we do NOT validate the recipient domain —
+     * the inbound receiver we do NOT validate the recipient domain:
      * submission legitimately sends to arbitrary external recipients; AUTH
      * is what prevents abuse.
      */
@@ -298,7 +298,7 @@ export function start(portOverride?: number): void {
     ) {
       const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
       if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
-        logger.warn("SMTP submission RCPT TO rejected — too many recipients", {
+        logger.warn("SMTP submission RCPT TO rejected: too many recipients", {
           acceptedSoFar,
           ip: session.remoteAddress,
         });
@@ -330,7 +330,7 @@ export function start(portOverride?: number): void {
         totalBytes += chunk.length;
         if (totalBytes > MAX_MESSAGE_BYTES) {
           aborted = true;
-          logger.warn("SMTP submission DATA rejected — message exceeds size cap", {
+          logger.warn("SMTP submission DATA rejected: message exceeds size cap", {
             ip: session.remoteAddress,
             totalBytes,
             cap: MAX_MESSAGE_BYTES,
@@ -362,7 +362,7 @@ export function start(portOverride?: number): void {
           try {
             /**
              * Per-key daily quota (#123). Checked before the send so an
-             * over-quota key never queues. `452` is temporary — the quota
+             * over-quota key never queues. `452` is temporary: the quota
              * window resets at the next UTC day, so the client should retry
              * later rather than treat it as a permanent failure.
              */
@@ -370,7 +370,7 @@ export function start(portOverride?: number): void {
             if (dailyQuota > 0) {
               const usedToday = await getAcceptedToday(apiKeyId);
               if (usedToday >= dailyQuota) {
-                logger.warn("SMTP submission rejected — daily quota exceeded", {
+                logger.warn("SMTP submission rejected: daily quota exceeded", {
                   apiKeyId,
                   usedToday,
                   dailyQuota,
@@ -410,7 +410,7 @@ export function start(portOverride?: number): void {
             const email = await createEmail(input, apiKeyId, "smtp");
             await recordOutcome(apiKeyId, "accepted");
 
-            logger.info("SMTP submission accepted — email queued", {
+            logger.info("SMTP submission accepted: email queued", {
               id: email.id,
               apiKeyId,
               from: redactEmail(input.from),
@@ -419,10 +419,10 @@ export function start(portOverride?: number): void {
 
             callback();
           } catch (error) {
-            /** Post-auth rejection — count it against the key's daily usage. */
+            /** Post-auth rejection: count it against the key's daily usage. */
             await recordOutcome(apiKeyId, "rejected").catch(() => {});
             if (error instanceof SuppressedRecipientError) {
-              logger.warn("SMTP submission rejected — recipient suppressed", {
+              logger.warn("SMTP submission rejected: recipient suppressed", {
                 apiKeyId,
                 suppressionId: error.suppressionId,
               });

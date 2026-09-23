@@ -16,7 +16,7 @@
 #     write access on PRs from forks), which is required to push back
 #     to the PR branch. Dependabot is a trusted internal actor on this
 #     repo so the extra permissions are acceptable.
-#   - `bun install --ignore-scripts` matches the Dockerfile's flag —
+#   - `bun install --ignore-scripts` matches the Dockerfile's flag:
 #     prevents Dependabot's bumped package from running arbitrary
 #     postinstall code during the lockfile generation.
 #   - The job gates on `github.actor == 'dependabot[bot]'`, so no
@@ -56,13 +56,13 @@ jobs:
           bun-version: 1.3.14
 
       - name: Run bun install to regenerate lockfile
-        # `--ignore-scripts` matches the Dockerfile's flag — no
+        # `--ignore-scripts` matches the Dockerfile's flag: no
         # arbitrary postinstall execution from the bumped package.
         run: bun install --ignore-scripts
 
       - name: Commit + push lockfile if it changed
         # The PR title is passed via `env` (a shell variable), NOT
-        # interpolated as `${{ }}` into the script — a `${{ }}` expansion
+        # interpolated as `${{ }}` into the script: a `${{ }}` expansion
         # would splice an attacker-controllable PR title straight into the
         # shell (code injection). As a plain env var it's inert data.
         # zizmor: template-injection.
@@ -70,7 +70,7 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           if git diff --quiet bun.lock; then
-            echo "bun.lock is already in sync — nothing to do."
+            echo "bun.lock is already in sync: nothing to do."
             exit 0
           fi
           git config user.name "github-actions[bot]"

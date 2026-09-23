@@ -16,7 +16,7 @@ interface WebhookPayload {
  * The signature input is `<unix-seconds-timestamp>.<json-body>`, sent
  * alongside the timestamp in `X-BunMail-Timestamp`. This binds the
  * signature to a specific dispatch time so a captured payload cannot
- * be replayed indefinitely against the receiver — consumers should
+ * be replayed indefinitely against the receiver: consumers should
  * reject any request whose timestamp drifts beyond a tolerance window
  * (5 minutes is the recommended default; see `docs/webhooks.md`).
  *
@@ -33,7 +33,7 @@ export function signPayload(timestamp: string, body: string, secret: string): st
 /**
  * Dispatches an event to all subscribed webhooks.
  *
- * As of #30, this is a synchronous **enqueue** — for each subscribed
+ * As of #30, this is a synchronous **enqueue**: for each subscribed
  * webhook, one row is INSERTed into `webhook_deliveries` at
  * `status='pending'`. The actual HTTP POST is performed by the
  * delivery worker poll loop in `webhook-delivery-worker.service.ts`.
@@ -47,7 +47,7 @@ export function signPayload(timestamp: string, body: string, secret: string): st
  *
  * Still **fire-and-forget** from the caller's perspective: callers
  * (queue.service.ts on `email.sent`, bounce-handler on `email.bounced`,
- * etc.) don't await this — errors are logged, never thrown.
+ * etc.) don't await this: errors are logged, never thrown.
  */
 export function dispatchEvent(
   event: WebhookEventType,
@@ -69,7 +69,7 @@ export function dispatchEvent(
       });
 
       /** Enqueue one row per subscribed webhook. Errors at the row
-       *  level shouldn't abort the others — log and continue. */
+       *  level shouldn't abort the others: log and continue. */
       await Promise.allSettled(
         hooks.map(async (hook) => {
           try {

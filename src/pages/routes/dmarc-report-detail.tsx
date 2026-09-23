@@ -11,13 +11,13 @@ interface DmarcReportDetailPageProps {
 }
 
 /**
- * DMARC report detail — summary header + per-source-IP records table +
+ * DMARC report detail: summary header + per-source-IP records table +
  * computed alignment totals. The table is the most useful artefact here:
  * misaligned source IPs are how operators discover spoofing attempts or
  * unauthorised third-party senders claiming to be their domain.
  */
 export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPageProps) {
-  /** Pre-compute totals — same shape the API serializer emits. */
+  /** Pre-compute totals: same shape the API serializer emits. */
   const totals = records.reduce(
     (acc, r) => {
       acc.messages += r.count;
@@ -29,7 +29,8 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
     { messages: 0, dkimAligned: 0, spfAligned: 0, bothAligned: 0 },
   );
 
-  const pct = (n: number, d: number) => (d === 0 ? "—" : `${Math.round((n / d) * 100)}%`);
+  const pct = (n: number, d: number) =>
+    d === 0 ? "n/a" : `${Math.round((n / d) * 100)}%`;
 
   return (
     <BaseLayout title={`DMARC: ${report.domain}`} activeNav="dmarc-reports">
@@ -163,7 +164,7 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
                         </span>
                       </>
                     ) : (
-                      <span class="text-gray-400">—</span>
+                      <span class="text-gray-400">n/a</span>
                     )}
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-400">
@@ -177,7 +178,7 @@ export function DmarcReportDetailPage({ report, records }: DmarcReportDetailPage
                         </span>
                       </>
                     ) : (
-                      <span class="text-gray-400">—</span>
+                      <span class="text-gray-400">n/a</span>
                     )}
                   </td>
                 </tr>

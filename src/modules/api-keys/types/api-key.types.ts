@@ -9,7 +9,7 @@ export type ApiKey = InferSelectModel<typeof apiKeys>;
 
 /**
  * Input required to create a new API key.
- * Only a human-readable name is needed — the key itself is auto-generated.
+ * Only a human-readable name is needed: the key itself is auto-generated.
  */
 export interface CreateApiKeyInput {
   /** Human-readable label for the key (e.g. "Production Key") */
@@ -24,7 +24,7 @@ export interface CreateApiKeyInput {
 
   /**
    * Whether the key is an admin key (#130). Defaults to `false`
-   * (restricted / send-only). **Operator-only** — the REST create DTO does
+   * (restricted / send-only). **Operator-only**: the REST create DTO does
    * NOT expose this; it's set solely by the dashboard and the seed script,
    * so an API caller can never mint an admin key.
    */
@@ -32,7 +32,7 @@ export interface CreateApiKeyInput {
 }
 
 /**
- * Fields that can be updated on an existing API key (#126). All optional —
+ * Fields that can be updated on an existing API key (#126). All optional,
  * only the provided fields change. `allowedSenders` uses replace semantics
  * (the full desired list); add = include an address, remove = omit it.
  */

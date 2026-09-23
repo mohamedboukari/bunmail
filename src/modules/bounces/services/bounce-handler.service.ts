@@ -7,7 +7,7 @@
  * The orchestration is split into a pure-ish core (`handleBounce`)
  * that takes its dependencies as callbacks, and a thin public wrapper
  * (`handleParsedBounce`) that wires the real implementations. Tests
- * exercise the core with fake callbacks — no DB needed.
+ * exercise the core with fake callbacks: no DB needed.
  */
 
 import { eq } from "drizzle-orm";
@@ -31,7 +31,7 @@ const STATUS_BOUNCED = "bounced";
 export interface BounceHandlerDeps {
   /**
    * Look up the original email row this bounce refers to. Returns
-   * `undefined` when no row matches — the handler then drops the
+   * `undefined` when no row matches: the handler then drops the
    * bounce (we never suppress under an unknown tenant).
    */
   findEmailByMessageId: (
@@ -48,7 +48,7 @@ export interface BounceHandlerDeps {
   ) => Promise<{ id: string; bounceType: string | null } | undefined>;
 
   /**
-   * Persist the suppression. Idempotent upsert in production — see
+   * Persist the suppression. Idempotent upsert in production, see
    * `suppressionService.addFromBounce`.
    */
   addFromBounce: (
@@ -66,7 +66,7 @@ export interface BounceHandlerDeps {
   markEmailBounced: (emailId: string) => Promise<void>;
 
   /**
-   * Fire `email.bounced` to subscribed webhooks. Fire-and-forget — the
+   * Fire `email.bounced` to subscribed webhooks. Fire-and-forget: the
    * handler doesn't await it (matches `dispatchEvent`'s contract).
    */
   dispatchEvent: (event: "email.bounced", data: Record<string, unknown>) => void;
@@ -82,8 +82,8 @@ export interface HandleBounceResult {
 
 /**
  * Decide whether this bounce should escalate. A second soft bounce
- * while a previous soft suppression is still active escalates to hard
- * — repeated transient failures are effectively permanent for IP
+ * while a previous soft suppression is still active escalates to hard:
+ * repeated transient failures are effectively permanent for IP
  * reputation purposes.
  */
 function escalateIfRepeat(
@@ -106,7 +106,7 @@ export async function handleBounce(
   const original = await deps.findEmailByMessageId(parsed.originalMessageId);
 
   if (!original) {
-    logger.warn("Bounce dropped — no original email matches Message-ID", {
+    logger.warn("Bounce dropped: no original email matches Message-ID", {
       originalMessageId: parsed.originalMessageId,
       recipient: redactEmail(parsed.recipient),
       status: parsed.status,
@@ -116,7 +116,7 @@ export async function handleBounce(
   }
 
   /**
-   * Cross-check the recipient — defensive. The original `to` should
+   * Cross-check the recipient: defensive. The original `to` should
    * match the bounce's recipient. A mismatch usually means the message
    * was a multi-recipient send and this bounce only concerns one of
    * them; we trust the parsed recipient over the original toAddress.
@@ -195,7 +195,7 @@ export async function handleParsedBounce(
        * When BunMail sends, nodemailer fills `messageId` like
        * `<id@host>` and we persist it on `emails.message_id`. The
        * bounce's `Original-Message-ID` arrives with or without angle
-       * brackets — the parser already stripped them, but we look up
+       * brackets: the parser already stripped them, but we look up
        * with both shapes to be safe across SMTP-flavour quirks.
        */
       const wrapped = `<${messageId}>`;

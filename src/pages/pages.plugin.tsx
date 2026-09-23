@@ -150,7 +150,7 @@ function sessionCookieAttributes(): string {
 function isSameOrigin(request: Request): boolean {
   /**
    * The target host is taken from the request URL (always present) and
-   * cross-checked against the `Host` header when it exists — behind a proxy
+   * cross-checked against the `Host` header when it exists: behind a proxy
    * the URL host may be the internal bind address while `Host` carries the
    * public name, so a match on *either* is same-origin.
    */
@@ -158,7 +158,7 @@ function isSameOrigin(request: Request): boolean {
   try {
     targets.add(new URL(request.url).host);
   } catch {
-    /** malformed request URL — fall through to Host header only */
+    /** malformed request URL: fall through to Host header only */
   }
   const hostHeader = request.headers.get("host");
   if (hostHeader) targets.add(hostHeader);
@@ -190,8 +190,8 @@ function getSessionCookie(request: Request): string | undefined {
 /* ─── One-Time Secret Reveal (#132) ─── */
 
 /**
- * Newly-created secrets — the raw `bm_live_…` API key and the webhook HMAC
- * secret — are shown to the operator exactly once. They MUST NOT travel in a
+ * Newly-created secrets (the raw `bm_live_…` API key and the webhook HMAC
+ * secret) are shown to the operator exactly once. They MUST NOT travel in a
  * URL: query strings leak into browser history, reverse-proxy / CDN / access
  * logs, and the `Referer` header of any sub-resource the page loads, which
  * would defeat the "shown once, stored hashed" model (#132).
@@ -268,7 +268,7 @@ function consumeRevealSecret(token: string | undefined): string | undefined {
  * lightweight per-domain sliding window: at most `DNS_VERIFY_MAX` verifies
  * per `DNS_VERIFY_WINDOW_MS` per domain id. In-memory/per-process (same
  * caveat as the other dashboard limiters). Keyed by domain id, not IP, since
- * the dashboard is a single shared operator — the resource we're protecting
+ * the dashboard is a single shared operator: the resource we're protecting
  * is the DNS lookup for that domain.
  */
 const DNS_VERIFY_MAX = 5;
@@ -303,7 +303,7 @@ function validatePassword(input: string): boolean {
 /* ─── Dashboard Plugin ─── */
 
 /**
- * Pages plugin — server-rendered dashboard under /dashboard.
+ * Pages plugin: server-rendered dashboard under /dashboard.
  *
  * Routes:
  * - GET  /dashboard/login           → login form
@@ -326,7 +326,7 @@ function validatePassword(input: string): boolean {
 /**
  * Builds the flash-banner prop from the `flash` / `flashType` query
  * params. Both are attacker-controllable, so `flashType` is narrowed to
- * the two values the banner actually renders rather than asserted — an
+ * the two values the banner actually renders rather than asserted: an
  * `as "success" | "error"` cast would let an arbitrary string through
  * wearing the union's type.
  */
@@ -406,7 +406,7 @@ export const pagesPlugin = new Elysia({
           windowMs,
         );
         if (limited) {
-          logger.warn("Dashboard login blocked — too many attempts", {
+          logger.warn("Dashboard login blocked: too many attempts", {
             ip,
             retryAfterSec,
           });
@@ -430,11 +430,11 @@ export const pagesPlugin = new Elysia({
         return "";
       }
 
-      /** Success — wipe any accumulated failures for this IP. */
+      /** Success: wipe any accumulated failures for this IP. */
       if (loginRateLimit.enabled) clearLoginAttempts(ip);
       logger.info("Dashboard login successful", { ip });
 
-      /** Set session cookie — HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
+      /** Set session cookie: HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
       const sessionValue = createSessionCookie();
       set.headers["set-cookie"] =
         `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
@@ -474,7 +474,7 @@ export const pagesPlugin = new Elysia({
       return;
     }
 
-    /** Dashboard disabled — redirect to login page (shows disabled message) */
+    /** Dashboard disabled: redirect to login page (shows disabled message) */
     if (!config.dashboard.password) {
       set.status = 302;
       set.headers["location"] = "/dashboard/login";
@@ -511,7 +511,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard
-   * Dashboard home — shows stat cards with overview counts.
+   * Dashboard home: shows stat cards with overview counts.
    */
   .get("/", async () => {
     const stats = await statsService.getDashboardStats();
@@ -520,7 +520,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/send
-   * Send email page — compose form with flash message support. Includes
+   * Send email page: compose form with flash message support. Includes
    * an explicit "Sending as" api-key picker (#89) so the operator
    * always knows which key is charged with the send and any resulting
    * auto-suppressions.
@@ -529,7 +529,7 @@ export const pagesPlugin = new Elysia({
     "/send",
     async ({ query }) => {
       const keys = await apiKeyService.listApiKeys();
-      /** Only active keys are eligible — disabled keys are filtered out
+      /** Only active keys are eligible: disabled keys are filtered out
        *  so the dropdown reflects what's actually usable. */
       const activeKeys = keys.filter((k) => k.isActive);
       const defaultApiKeyId = activeKeys[0]?.id;
@@ -563,7 +563,7 @@ export const pagesPlugin = new Elysia({
     "/send",
     async ({ body, set }) => {
       const keys = await apiKeyService.listApiKeys();
-      /** Match exactly what the form submitted — no implicit fallback. */
+      /** Match exactly what the form submitted: no implicit fallback. */
       const chosenKey = keys.find((k) => k.id === body.apiKeyId);
 
       if (!chosenKey || !chosenKey.isActive) {
@@ -621,7 +621,7 @@ export const pagesPlugin = new Elysia({
   /**
    * GET /dashboard/emails
    * Email list with status filter tabs, bulk-select checkboxes, and pagination.
-   * Trashed rows are hidden — view them at /dashboard/emails/trash.
+   * Trashed rows are hidden: view them at /dashboard/emails/trash.
    */
   .get(
     "/emails",
@@ -676,7 +676,7 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
-   * GET /dashboard/emails/tombstones (#34) — post-purge audit trail.
+   * GET /dashboard/emails/tombstones (#34): post-purge audit trail.
    * Defined before `/:id` so the literal segment doesn't get eaten by
    * the param route. Optional `?messageId=` for the bounce-trace flow.
    */
@@ -717,7 +717,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/emails/trash
-   * Trashed emails view — defined before /:id so the segment doesn't match.
+   * Trashed emails view: defined before /:id so the segment doesn't match.
    */
   .get(
     "/emails/trash",
@@ -840,7 +840,7 @@ export const pagesPlugin = new Elysia({
 
     set.status = 302;
     set.headers["location"] =
-      `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied — ${deleted} email(s) permanently deleted`)}`;
+      `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
     return "";
   })
 
@@ -871,7 +871,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * POST /dashboard/emails/:id/restore
-   * Restore a single trashed email — redirects back to trash view.
+   * Restore a single trashed email: redirects back to trash view.
    */
   .post(
     "/emails/:id/restore",
@@ -957,7 +957,7 @@ export const pagesPlugin = new Elysia({
 
       /**
        * The raw key is delivered via a one-time server-side reveal token
-       * (#132) — never in the URL. `consumeRevealSecret` returns it once,
+       * (#132): never in the URL. `consumeRevealSecret` returns it once,
        * then it's gone.
        */
       const rawKey = consumeRevealSecret(query.reveal);
@@ -996,7 +996,7 @@ export const pagesPlugin = new Elysia({
         });
 
         /**
-         * Redirect with only a one-time reveal TOKEN in the query (#132) —
+         * Redirect with only a one-time reveal TOKEN in the query (#132):
          * never the raw key itself. The GET consumes the token and shows
          * the key once. Keeps secrets out of history / access logs / Referer.
          */
@@ -1025,7 +1025,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * POST /dashboard/api-keys/:id/admin
-   * Promotes/demotes a key's admin flag (#130). Operator-only — this route
+   * Promotes/demotes a key's admin flag (#130). Operator-only: this route
    * lives on the dashboard (session auth), and `setApiKeyAdmin` is not
    * reachable from any REST DTO, so an API key can never grant itself admin.
    */
@@ -1203,7 +1203,7 @@ export const pagesPlugin = new Elysia({
         logger.warn("Domain DNS verification throttled", { id: params.id });
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Too many verification attempts — wait a minute and try again")}&flashType=error`;
+          `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Too many verification attempts: wait a minute and try again")}&flashType=error`;
         return "";
       }
 
@@ -1466,7 +1466,7 @@ export const pagesPlugin = new Elysia({
     async ({ query }) => {
       const hooks = await webhookService.listAllWebhooks();
       const flash = toFlash(query.flash, query.flashType);
-      /** One-time reveal of the webhook HMAC secret (#132) — never in URL. */
+      /** One-time reveal of the webhook HMAC secret (#132): never in URL. */
       const secret = consumeRevealSecret(query.reveal);
 
       return <WebhooksPage webhooks={hooks} flash={flash} secret={secret} />;
@@ -1499,7 +1499,7 @@ export const pagesPlugin = new Elysia({
           { url: body.url, events },
           activeKey.id,
         );
-        /** One-time reveal token in the URL (#132) — never the secret. */
+        /** One-time reveal token in the URL (#132): never the secret. */
         const reveal = stashRevealSecret(secret);
         set.status = 302;
         set.headers["location"] =
@@ -1548,13 +1548,13 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
-   * GET /dashboard/webhooks/:id/deliveries — paginated history of every
+   * GET /dashboard/webhooks/:id/deliveries, paginated history of every
    * delivery attempt for one webhook (#30). Operators land here from
    * the webhooks list to answer "did event X actually deliver?".
    *
    * The dashboard is admin-scoped (sees every api key's data), so we
    * resolve the webhook first to learn its `apiKeyId` and pass that to
-   * the service — the service's per-api-key gate is for the REST path,
+   * the service: the service's per-api-key gate is for the REST path,
    * not the dashboard.
    */
   .get(
@@ -1607,13 +1607,13 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** GET /dashboard/webhooks/deliveries/:deliveryId — full delivery
+  /** GET /dashboard/webhooks/deliveries/:deliveryId, full delivery
    *  detail with payload + attempt history + replay button. */
   .get(
     "/webhooks/deliveries/:deliveryId",
     async ({ params, query, set }) => {
       const hooks = await webhookService.listAllWebhooks();
-      /** Iterate to find the delivery's parent webhook — there's no
+      /** Iterate to find the delivery's parent webhook: there's no
        *  `findWebhookForDelivery` helper, but the list is small (one
        *  row per registered hook) so a single fetch is fine. */
       let foundDelivery: Awaited<
@@ -1657,7 +1657,7 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** POST /dashboard/webhooks/deliveries/:deliveryId/replay — flip a
+  /** POST /dashboard/webhooks/deliveries/:deliveryId/replay, flip a
    *  failed/pending delivery back to pending so the worker re-tries it
    *  on the next poll. Redirects to the detail page with a flash. */
   .post(
@@ -1678,7 +1678,7 @@ export const pagesPlugin = new Elysia({
       set.status = 302;
       set.headers["location"] = replayed
         ? `/dashboard/webhooks/deliveries/${params.deliveryId}?flash=${encodeURIComponent(
-            "Replay queued — worker will re-attempt on next poll",
+            "Replay queued: worker will re-attempt on next poll",
           )}`
         : `/dashboard/webhooks?flash=${encodeURIComponent("Delivery not found")}&flashType=error`;
       return "";
@@ -1722,7 +1722,7 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/inbound/trash
-   * Trashed inbound emails — defined before /:id.
+   * Trashed inbound emails: defined before /:id.
    */
   .get(
     "/inbound/trash",
@@ -1758,7 +1758,7 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** POST /dashboard/inbound/bulk-trash — bulk soft-delete from list page. */
+  /** POST /dashboard/inbound/bulk-trash: bulk soft-delete from list page. */
   .post(
     "/inbound/bulk-trash",
     async ({ body, set }) => {
@@ -1778,7 +1778,7 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** POST /dashboard/inbound/trash/bulk-restore — bulk restore from trash page. */
+  /** POST /dashboard/inbound/trash/bulk-restore: bulk restore from trash page. */
   .post(
     "/inbound/trash/bulk-restore",
     async ({ body, set }) => {
@@ -1802,7 +1802,7 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** POST /dashboard/inbound/trash/bulk-permanent — bulk hard-delete from trash page. */
+  /** POST /dashboard/inbound/trash/bulk-permanent: bulk hard-delete from trash page. */
   .post(
     "/inbound/trash/bulk-permanent",
     async ({ body, set }) => {
@@ -1826,18 +1826,18 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** POST /dashboard/inbound/trash/empty — empty inbound trash entirely. */
+  /** POST /dashboard/inbound/trash/empty: empty inbound trash entirely. */
   .post("/inbound/trash/empty", async ({ set }) => {
     const deleted = await inboundService.emptyInboundTrash();
     logger.info("Emptied inbound trash via dashboard", { deleted });
 
     set.status = 302;
     set.headers["location"] =
-      `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied — ${deleted} email(s) permanently deleted`)}`;
+      `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
     return "";
   })
 
-  /** POST /dashboard/inbound/:id/trash — move single inbound to trash. */
+  /** POST /dashboard/inbound/:id/trash, move single inbound to trash. */
   .post(
     "/inbound/:id/trash",
     async ({ params, set }) => {
@@ -1859,7 +1859,7 @@ export const pagesPlugin = new Elysia({
     { params: t.Object({ id: t.String() }) },
   )
 
-  /** POST /dashboard/inbound/:id/restore — restore single trashed inbound. */
+  /** POST /dashboard/inbound/:id/restore, restore single trashed inbound. */
   .post(
     "/inbound/:id/restore",
     async ({ params, set }) => {
@@ -1876,7 +1876,7 @@ export const pagesPlugin = new Elysia({
     { params: t.Object({ id: t.String() }) },
   )
 
-  /** POST /dashboard/inbound/:id/permanent — hard-delete single trashed inbound. */
+  /** POST /dashboard/inbound/:id/permanent, hard-delete single trashed inbound. */
   .post(
     "/inbound/:id/permanent",
     async ({ params, set }) => {
@@ -1922,11 +1922,11 @@ export const pagesPlugin = new Elysia({
    *   - `to` = the original sender.
    *   - `subject` = the original subject prefixed with "Re: " when not
    *     already prefixed (case-insensitive to avoid double "Re:" loops).
-   *   - body = the original message quoted — HTML wrapped in a
+   *   - body = the original message quoted: HTML wrapped in a
    *     `<blockquote>` with an attribution line, plain text with the
    *     classic `>` line prefix.
    *
-   * This is a GET — operator may navigate to it, see what's pre-filled,
+   * This is a GET: operator may navigate to it, see what's pre-filled,
    * back out without sending. No side effects until they hit Send.
    *
    * Trash status is not consulted: replying to a trashed message is
@@ -1951,13 +1951,13 @@ export const pagesPlugin = new Elysia({
       /**
        * Quote construction. Attribution line uses the original sender +
        * received date. HTML and plain-text variants are constructed
-       * independently — we don't auto-derive one from the other so the
+       * independently: we don't auto-derive one from the other so the
        * quote matches whatever the original message actually had.
        */
       const receivedIso = inbound.receivedAt.toISOString();
       const attribution = `On ${receivedIso}, ${inbound.fromAddress} wrote:`;
 
-      /** Defensive HTML escape — the attribution components (ISO date,
+      /** Defensive HTML escape: the attribution components (ISO date,
        *  email address) shouldn't contain `<>&"'` in practice, but a
        *  hostile sender shouldn't be able to inject anything either. */
       const escapeHtml = (s: string): string =>
@@ -2007,7 +2007,7 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
-   * GET /dashboard/dmarc-reports — list page with optional `?domain=`
+   * GET /dashboard/dmarc-reports: list page with optional `?domain=`
    * filter. The filter dropdown is driven by the distinct set of
    * domains we have reports for.
    */
@@ -2046,7 +2046,7 @@ export const pagesPlugin = new Elysia({
     },
   )
 
-  /** GET /dashboard/dmarc-reports/:id — detail with per-source-IP records. */
+  /** GET /dashboard/dmarc-reports/:id, detail with per-source-IP records. */
   .get(
     "/dmarc-reports/:id",
     async ({ params, set }) => {
@@ -2128,7 +2128,7 @@ export const pagesPlugin = new Elysia({
   /**
    * POST /dashboard/suppressions/:id/delete (#89)
    *
-   * Unscoped delete — the dashboard session already authenticated; we
+   * Unscoped delete: the dashboard session already authenticated; we
    * trust the operator to clear any suppression they can see. Redirect
    * back to the list (preserving the filter context that brought them
    * here would be nicer; deferred to keep this PR tight).

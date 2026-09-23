@@ -12,7 +12,7 @@ export interface CreateWebhookInput {
 
 /**
  * All webhook event types BunMail can fire. When adding a new value here,
- * also extend the literal union in `dtos/create-webhook.dto.ts` — the DTO
+ * also extend the literal union in `dtos/create-webhook.dto.ts`: the DTO
  * uses hardcoded literals (TypeBox can't introspect a TypeScript union),
  * so the two locations have to be kept in sync manually.
  */

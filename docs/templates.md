@@ -57,7 +57,7 @@ The subject, HTML, and text bodies are all rendered with the provided variables.
 
 The template create and edit pages (`/dashboard/templates` and `/dashboard/templates/:id`) render a **live HTML preview** beside the HTML editor. As you type, the markup is rendered into a sandboxed iframe so you can see what the email will look like without saving or sending.
 
-- **Sample values:** `{{variable}}` placeholders are substituted with sample values for the preview (common names like `{{name}}`, `{{company}}`, `{{link}}` get realistic samples; any other variable falls back to its own name). This mirrors the `{{\w+}}` grammar of `renderTemplate()` but always fills placeholders so the preview resembles a delivered email. The saved template stores the raw `{{...}}` markup unchanged — substitution is preview-only.
+- **Sample values:** `{{variable}}` placeholders are substituted with sample values for the preview (common names like `{{name}}`, `{{company}}`, `{{link}}` get realistic samples; any other variable falls back to its own name). This mirrors the `{{\w+}}` grammar of `renderTemplate()` but always fills placeholders so the preview resembles a delivered email. The saved template stores the raw `{{...}}` markup unchanged: substitution is preview-only.
 - **Sandboxed:** the preview iframe uses `sandbox="allow-same-origin"` with **no** `allow-scripts`, so any `<script>` in the template HTML never executes. It is dark-mode aware and auto-resizes to its content.
 
 ## Service Methods

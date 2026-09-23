@@ -16,7 +16,7 @@ export interface SerializedWebhookDelivery {
 /**
  * Trims the response shape to what the dashboard / API consumer
  * actually needs. The signed body bytes (`payload`) and the response
- * preview (`lastResponseBody`) are NOT included by default — they're
+ * preview (`lastResponseBody`) are NOT included by default: they're
  * fat and contain customer data; expose them only on the per-id
  * detail view via {@link serializeWebhookDeliveryDetail}.
  */

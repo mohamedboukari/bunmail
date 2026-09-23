@@ -13,7 +13,7 @@ export interface CreateTemplateInput {
   variables?: string[];
 }
 
-/** Input for updating a template — all fields optional (partial update). */
+/** Input for updating a template: all fields optional (partial update). */
 export interface UpdateTemplateInput {
   name?: string;
   subject?: string;

@@ -1,7 +1,7 @@
 /**
  * Central schema re-export file.
  *
- * Each module defines its own Drizzle pgTable in models/ — this file
+ * Each module defines its own Drizzle pgTable in models/: this file
  * collects them into a single entry point so that:
  * 1. drizzle-kit can discover all tables for migrations
  * 2. The Drizzle client gets full schema for relational queries

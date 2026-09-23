@@ -3,7 +3,7 @@ import { t } from "elysia";
 /**
  * Validation schema for `PATCH /api/v1/api-keys/:id` (#126).
  *
- * All fields optional — only what's provided changes. `allowedSenders`
+ * All fields optional, only what's provided changes. `allowedSenders`
  * uses replace semantics (send the full desired list; add = include,
  * remove = omit).
  */

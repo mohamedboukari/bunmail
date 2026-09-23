@@ -226,7 +226,7 @@ export function BackArrowIcon() {
   );
 }
 
-/** Sun icon — visible in dark mode for the theme toggle on standalone pages */
+/** Sun icon: visible in dark mode for the theme toggle on standalone pages */
 export function SunIcon() {
   return (
     <svg
@@ -242,7 +242,7 @@ export function SunIcon() {
   );
 }
 
-/** Moon icon — visible in light mode for the theme toggle on standalone pages */
+/** Moon icon: visible in light mode for the theme toggle on standalone pages */
 export function MoonIcon() {
   return (
     <svg
@@ -257,7 +257,7 @@ export function MoonIcon() {
   );
 }
 
-/** "Do not enter" / block icon — used for the Suppressions nav entry (#89) */
+/** "Do not enter" / block icon: used for the Suppressions nav entry (#89) */
 export function NoEntryIcon() {
   return (
     <svg

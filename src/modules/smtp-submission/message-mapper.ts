@@ -2,7 +2,7 @@
  * Pure message-mapping helpers for the SMTP submission server (#120).
  *
  * Kept dependency-free (type-only import of `SendEmailInput`) so it can be
- * unit-tested without pulling in the SMTPServer / config / db stack — the
+ * unit-tested without pulling in the SMTPServer / config / db stack: the
  * server code in `services/smtp-submission.service.ts` extracts raw
  * addresses from the parsed message + SMTP envelope and delegates the
  * shaping decisions (sender resolution, BCC preservation, To fallback) to
@@ -60,7 +60,7 @@ export interface SubmissionMessageParts {
  *   put everything in the envelope), the non-BCC envelope recipients become
  *   the `to` field so the send still has a visible recipient.
  *
- * Throws if there is no resolvable sender or no recipients at all — the
+ * Throws if there is no resolvable sender or no recipients at all: the
  * caller maps these to an SMTP 550.
  */
 export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailInput {
@@ -89,7 +89,7 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
   if (hasVisibleHeader) {
     /**
      * With visible To/Cc headers, any envelope recipient NOT shown in them
-     * is a blind recipient (BCC) — delivered but never rendered.
+     * is a blind recipient (BCC): delivered but never rendered.
      */
     const bccAddrs = parts.envelopeRecipients.filter(
       (addr) => addr && !visible.has(addr.trim().toLowerCase()),
@@ -100,7 +100,7 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     toField = to || dedupeJoin(nonBcc);
   } else {
     /**
-     * No visible headers at all — we can't tell To from BCC, so treat every
+     * No visible headers at all: we can't tell To from BCC, so treat every
      * envelope recipient as a (visible) To recipient rather than silently
      * turning them all into BCC.
      */

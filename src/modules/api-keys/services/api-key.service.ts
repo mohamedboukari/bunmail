@@ -30,7 +30,7 @@ function normaliseAllowedSenders(list: string[] | undefined): string[] {
  *
  * Generates a cryptographically random key (`bm_live_<hex>`), hashes it
  * with SHA-256, and stores only the hash. The raw key is returned once
- * in the response — it cannot be retrieved again.
+ * in the response: it cannot be retrieved again.
  *
  * @param input - Contains the human-readable name for the key
  * @returns The created API key row AND the raw key (shown once)
@@ -70,7 +70,7 @@ export async function createApiKey(
 }
 
 /**
- * Updates mutable fields on an API key (#126) — `name` and/or the
+ * Updates mutable fields on an API key (#126): `name` and/or the
  * `allowedSenders` allowlist. Only provided fields change; `allowedSenders`
  * replaces the whole list (add = include, remove = omit), normalised.
  *
@@ -88,7 +88,7 @@ export async function updateApiKey(
     set.allowedSenders = normaliseAllowedSenders(input.allowedSenders);
   }
 
-  /** Nothing to change — return the current row (or undefined if missing). */
+  /** Nothing to change: return the current row (or undefined if missing). */
   if (Object.keys(set).length === 0) {
     return findById(id);
   }
@@ -112,7 +112,7 @@ export async function updateApiKey(
 /**
  * Lists all API keys (without hashes).
  *
- * Returns every key in the database — active and revoked. The serializer
+ * Returns every key in the database: active and revoked. The serializer
  * strips keyHash from the response so no secrets are leaked.
  *
  * @returns Array of all API key rows
@@ -184,7 +184,7 @@ export async function findById(id: string): Promise<ApiKey | undefined> {
 }
 
 /**
- * Promotes/demotes a key's admin flag (#130). **Operator-only** — this is a
+ * Promotes/demotes a key's admin flag (#130). **Operator-only**: this is a
  * privilege boundary, so it is deliberately NOT reachable from any REST DTO;
  * only the dashboard (operator session) and the seed script call it. Keeping
  * it off `updateApiKey` (which the REST `PATCH` uses) guarantees an API key

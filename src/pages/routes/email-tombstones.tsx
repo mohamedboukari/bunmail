@@ -15,13 +15,13 @@ interface EmailTombstonesPageProps {
 }
 
 /**
- * Email tombstones (#34) — post-purge audit trail.
+ * Email tombstones (#34): post-purge audit trail.
  *
  * Operators land here to answer "did we ever send the message that
  * just bounced / generated this complaint?". Each row is a snapshot
  * of an email after it was hard-deleted (either by the trash purge
  * sweep or by an explicit `permanent` action). The body is gone but
- * identifiers — id, Message-ID, recipient, subject, status — survive
+ * identifiers (id, Message-ID, recipient, subject, status) survive
  * for 90 days by default.
  */
 export function EmailTombstonesPage({
@@ -48,7 +48,7 @@ export function EmailTombstonesPage({
         complaints and bounces back to a sent message after the original row is gone.
       </p>
 
-      {/* Search by Message-ID — the canonical "did we send this?" query */}
+      {/* Search by Message-ID: the canonical "did we send this?" query */}
       <form
         method="GET"
         action="/dashboard/emails/tombstones"
@@ -121,7 +121,7 @@ export function EmailTombstonesPage({
                     {t.messageId != null ? (
                       Html.escapeHtml(t.messageId)
                     ) : (
-                      <span class="text-gray-400">—</span>
+                      <span class="text-gray-400">n/a</span>
                     )}
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300" safe>
@@ -131,7 +131,7 @@ export function EmailTombstonesPage({
                     {t.subject != null ? (
                       Html.escapeHtml(t.subject)
                     ) : (
-                      <span class="text-gray-400">—</span>
+                      <span class="text-gray-400">n/a</span>
                     )}
                   </td>
                   <td class="px-4 py-3">

@@ -7,10 +7,10 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "crypt
  */
 const SECRET_VERSION_PREFIX = "v1";
 
-/** AES-256-GCM IV length in bytes — NIST SP 800-38D recommendation. */
+/** AES-256-GCM IV length in bytes: NIST SP 800-38D recommendation. */
 const GCM_IV_BYTES = 12;
 
-/** AES-256-GCM auth tag length — default for `crypto`'s GCM mode. */
+/** AES-256-GCM auth tag length: default for `crypto`'s GCM mode. */
 const GCM_TAG_BYTES = 16;
 
 /** Required key length for AES-256. */
@@ -20,7 +20,7 @@ const AES_256_KEY_BYTES = 32;
  * Heuristic check that a stored secret has been run through `encryptSecret`.
  * Used by the boot-time migrator to skip rows that are already encrypted
  * and by the read path to detect legacy plaintext rows during the upgrade
- * window. The check is structural — values matching the
+ * window. The check is structural: values matching the
  * `<version>:<iv>:<ct>:<tag>` shape are treated as encrypted.
  */
 export function isEncryptedSecret(value: string): boolean {
@@ -68,7 +68,7 @@ export function encryptSecret(plaintext: string, key: Buffer): string {
  *   - tampered ciphertext (also a tag failure)
  *
  * Callers should treat any thrown error as "this secret is unrecoverable
- * with the current key" — for DKIM that means falling back to unsigned
+ * with the current key": for DKIM that means falling back to unsigned
  * mail rather than silently failing the send.
  */
 export function decryptSecret(encrypted: string, key: Buffer): string {
@@ -122,9 +122,9 @@ export function hashApiKey(raw: string): string {
  * Generates a new API key with the format `bm_live_<32 hex chars>`.
  *
  * Returns three values:
- * - `raw`    — The full plaintext key (shown to the user once, never stored)
- * - `hash`   — SHA-256 of the raw key (stored in `api_keys.key_hash`)
- * - `prefix` — First 12 chars of the raw key (stored for identification)
+ * - `raw`: The full plaintext key (shown to the user once, never stored)
+ * - `hash`: SHA-256 of the raw key (stored in `api_keys.key_hash`)
+ * - `prefix`: First 12 chars of the raw key (stored for identification)
  *
  * 16 random bytes = 32 hex chars = ~128 bits of entropy.
  */
@@ -135,10 +135,10 @@ export function generateApiKey(): { raw: string; hash: string; prefix: string } 
   /** Full raw key: bm_live_ prefix + random hex */
   const raw = `bm_live_${random}`;
 
-  /** SHA-256 hash of the raw key — this is what we store in the DB */
+  /** SHA-256 hash of the raw key: this is what we store in the DB */
   const hash = hashApiKey(raw);
 
-  /** First 12 chars of the raw key — helps users identify which key is which */
+  /** First 12 chars of the raw key: helps users identify which key is which */
   const prefix = raw.slice(0, 12);
 
   return { raw, hash, prefix };

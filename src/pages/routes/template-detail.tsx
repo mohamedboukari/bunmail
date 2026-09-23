@@ -10,7 +10,7 @@ interface TemplateDetailPageProps {
 }
 
 /**
- * Template detail page — view and edit a single email template.
+ * Template detail page: view and edit a single email template.
  */
 export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps) {
   const variablesValue =
@@ -102,7 +102,7 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
               </div>
             </div>
             <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-              Live preview — variables are shown with sample values.
+              Live preview: variables are shown with sample values.
             </p>
           </div>
           <div>

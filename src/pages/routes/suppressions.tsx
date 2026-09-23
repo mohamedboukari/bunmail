@@ -33,7 +33,7 @@ interface SuppressionsPageProps {
 }
 
 /**
- * Suppressions page (#89) — admin-scoped list across all API keys.
+ * Suppressions page (#89): admin-scoped list across all API keys.
  *
  * Why unscoped: auto-suppressions get filed under whichever API key
  * happened to be sending when the bounce came in, which usually isn't
@@ -57,7 +57,7 @@ export function SuppressionsPage({
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
-      {/* Filter form — email substring + api key drilldown */}
+      {/* Filter form: email substring + api key drilldown */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
         <form
           method="GET"
@@ -96,7 +96,7 @@ export function SuppressionsPage({
               {apiKeys.map((k) => (
                 <option value={k.id} selected={k.id === filters.apiKeyId} safe>
                   {/* Name first, then id suffix in muted form for disambiguation. */}
-                  {`${k.name} — ${k.id.slice(0, 12)}…`}
+                  {`${k.name}: ${k.id.slice(0, 12)}…`}
                 </option>
               ))}
             </select>
@@ -185,7 +185,7 @@ export function SuppressionsPage({
                             {sup.bounceType}
                           </span>
                         ) : (
-                          <span class="text-gray-400 dark:text-gray-600">—</span>
+                          <span class="text-gray-400 dark:text-gray-600">n/a</span>
                         )}
                       </td>
                       <td class="px-4 py-3 text-gray-700 dark:text-gray-300" safe>
@@ -201,7 +201,7 @@ export function SuppressionsPage({
                             {sup.sourceEmailId.slice(0, 14) + "…"}
                           </a>
                         ) : (
-                          <span class="text-gray-400 dark:text-gray-600">—</span>
+                          <span class="text-gray-400 dark:text-gray-600">n/a</span>
                         )}
                       </td>
                       <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap text-xs">

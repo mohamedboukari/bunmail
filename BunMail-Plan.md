@@ -6,22 +6,22 @@
 
 > ⚠️ **Historical planning document.** This is the original scope/plan from before the project was built. Kept for reference. For the **current** state of the project, read these instead:
 >
-> - [README.md](README.md) — current features, endpoints, getting started
-> - [ARCHITECTURE.md](ARCHITECTURE.md) — current architecture, schema, request flow
-> - [CHANGELOG.md](CHANGELOG.md) — what shipped in each release
-> - [docs/](docs/) — per-module reference docs
+> - [README.md](README.md): current features, endpoints, getting started
+> - [ARCHITECTURE.md](ARCHITECTURE.md): current architecture, schema, request flow
+> - [CHANGELOG.md](CHANGELOG.md): what shipped in each release
+> - [docs/](docs/): per-module reference docs
 
 ---
 
 ## The Problem
 
-Every developer needs to send emails — auth codes, notifications, alerts, invoices. The options today:
+Every developer needs to send emails: auth codes, notifications, alerts, invoices. The options today:
 
-- **SendGrid** — free tier is 100 emails/day, then you pay
-- **Resend** — 3,000 emails/month free, then $20/mo
-- **AWS SES** — cheap but complex setup, vendor lock-in
-- **Gmail SMTP** — 500/day limit, Google can block you anytime
-- **Mailgun** — no more free tier
+- **SendGrid**: free tier is 100 emails/day, then you pay
+- **Resend**: 3,000 emails/month free, then $20/mo
+- **AWS SES**: cheap but complex setup, vendor lock-in
+- **Gmail SMTP**: 500/day limit, Google can block you anytime
+- **Mailgun**: no more free tier
 
 You're always dependent on someone else's API, limits, and pricing.
 
@@ -37,11 +37,11 @@ One `docker compose up` and you have your own email infrastructure. No API keys,
 
 ## Why Developers Will Love It
 
-1. **Free forever** — you own the server, you own the emails
-2. **No third-party dependency** — direct SMTP, no middleman
-3. **Simple REST API** — `POST /send` and done, just like Resend/SendGrid
-4. **Self-hosted** — your data stays on your server
-5. **Built on Bun + Elysia** — fast, modern, lightweight
+1. **Free forever**: you own the server, you own the emails
+2. **No third-party dependency**: direct SMTP, no middleman
+3. **Simple REST API**: `POST /send` and done, just like Resend/SendGrid
+4. **Self-hosted**: your data stays on your server
+5. **Built on Bun + Elysia**: fast, modern, lightweight
 
 ---
 
@@ -60,10 +60,10 @@ One `docker compose up` and you have your own email infrastructure. No API keys,
 - **DKIM/SPF/DMARC** signing built-in (so emails don't land in spam)
 - **Email queue** with automatic retries on failure
 - **Templates** with variable injection
-- **Logs & Analytics** — track sent, delivered, bounced, failed
-- **Dashboard** — web UI to manage everything
+- **Logs & Analytics**: track sent, delivered, bounced, failed
+- **Dashboard**: web UI to manage everything
 - **Multi-domain** support
-- **Webhooks** — get notified on bounce/delivery
+- **Webhooks**, get notified on bounce/delivery
 - **Attachments** support
 - **Rate limiting** to protect your IP reputation
 
@@ -134,17 +134,17 @@ Authorization: Bearer <API_KEY>
 ### Other Endpoints
 
 ```
-GET    /api/v1/emails              — list sent emails
-GET    /api/v1/emails/:id          — get email status
-POST   /api/v1/templates           — create email template
-GET    /api/v1/templates           — list templates
-POST   /api/v1/send-template       — send using template
-GET    /api/v1/analytics           — send/bounce/fail stats
-POST   /api/v1/domains             — add a domain
-GET    /api/v1/domains/:id/verify  — check DNS setup
-POST   /api/v1/api-keys            — generate API key
-GET    /api/v1/webhooks            — list webhooks
-POST   /api/v1/webhooks            — register webhook
+GET    /api/v1/emails              ← list sent emails
+GET    /api/v1/emails/:id          ← get email status
+POST   /api/v1/templates           ← create email template
+GET    /api/v1/templates           ← list templates
+POST   /api/v1/send-template       ← send using template
+GET    /api/v1/analytics           ← send/bounce/fail stats
+POST   /api/v1/domains             ← add a domain
+GET    /api/v1/domains/:id/verify  ← check DNS setup
+POST   /api/v1/api-keys            ← generate API key
+GET    /api/v1/webhooks            ← list webhooks
+POST   /api/v1/webhooks            ← register webhook
 ```
 
 ---
@@ -158,41 +158,41 @@ bunmail/
 ├── package.json
 ├── bunfig.toml
 ├── src/
-│   ├── index.ts                  — Elysia app entry
-│   ├── config.ts                 — env + config
+│   ├── index.ts                  ← Elysia app entry
+│   ├── config.ts                 ← env + config
 │   ├── routes/
-│   │   ├── send.ts               — POST /send
-│   │   ├── emails.ts             — email logs
-│   │   ├── templates.ts          — template CRUD
-│   │   ├── domains.ts            — domain management
-│   │   ├── analytics.ts          — stats
-│   │   ├── webhooks.ts           — webhook management
-│   │   └── api-keys.ts           — API key management
+│   │   ├── send.ts               ← POST /send
+│   │   ├── emails.ts             ← email logs
+│   │   ├── templates.ts          ← template CRUD
+│   │   ├── domains.ts            ← domain management
+│   │   ├── analytics.ts          ← stats
+│   │   ├── webhooks.ts           ← webhook management
+│   │   └── api-keys.ts           ← API key management
 │   ├── services/
-│   │   ├── mailer.ts             — Nodemailer direct send
-│   │   ├── dkim.ts               — DKIM signing
-│   │   ├── queue.ts              — email queue + retries
-│   │   ├── dns-checker.ts        — verify SPF/DKIM/DMARC
-│   │   └── webhook.ts            — fire webhooks on events
+│   │   ├── mailer.ts             ← Nodemailer direct send
+│   │   ├── dkim.ts               ← DKIM signing
+│   │   ├── queue.ts              ← email queue + retries
+│   │   ├── dns-checker.ts        ← verify SPF/DKIM/DMARC
+│   │   └── webhook.ts            ← fire webhooks on events
 │   ├── db/
-│   │   ├── schema.ts             — database schema
-│   │   ├── migrations/           — DB migrations
-│   │   └── index.ts              — DB connection
+│   │   ├── schema.ts             ← database schema
+│   │   ├── migrations/           ← DB migrations
+│   │   └── index.ts              ← DB connection
 │   ├── middleware/
-│   │   ├── auth.ts               — API key auth
-│   │   └── rate-limit.ts         — rate limiting
+│   │   ├── auth.ts               ← API key auth
+│   │   └── rate-limit.ts         ← rate limiting
 │   └── utils/
-│       ├── logger.ts             — logging
-│       └── crypto.ts             — key generation
-├── dashboard/                    — frontend app
+│       ├── logger.ts             ← logging
+│       └── crypto.ts             ← key generation
+├── dashboard/                    ← frontend app
 │   ├── src/
 │   │   ├── pages/
-│   │   │   ├── Dashboard.tsx     — overview + stats
-│   │   │   ├── Emails.tsx        — email logs
-│   │   │   ├── Templates.tsx     — manage templates
-│   │   │   ├── Domains.tsx       — domain setup wizard
-│   │   │   ├── ApiKeys.tsx       — manage API keys
-│   │   │   └── Settings.tsx      — config
+│   │   │   ├── Dashboard.tsx     ← overview + stats
+│   │   │   ├── Emails.tsx        ← email logs
+│   │   │   ├── Templates.tsx     ← manage templates
+│   │   │   ├── Domains.tsx       ← domain setup wizard
+│   │   │   ├── ApiKeys.tsx       ← manage API keys
+│   │   │   └── Settings.tsx      ← config
 │   │   └── components/
 │   └── package.json
 └── README.md
@@ -314,7 +314,7 @@ curl -X POST http://localhost:3000/api/v1/send \
 
 ## One-Liner Pitch
 
-> **BunMail — Self-hosted email API for developers. No SendGrid. No limits. No cost. Just deploy and send.**
+> **BunMail: Self-hosted email API for developers. No SendGrid. No limits. No cost. Just deploy and send.**
 
 ---
 

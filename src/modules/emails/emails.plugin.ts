@@ -11,7 +11,7 @@ import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
 
 /**
- * Emails plugin — registers all email-related routes under /api/v1/emails.
+ * Emails plugin: registers all email-related routes under /api/v1/emails.
  *
  * Routes:
  * - POST /send                  → Queue a new email for delivery
@@ -28,12 +28,12 @@ import { redactEmail } from "../../utils/redact.ts";
  */
 export const emailsPlugin = new Elysia({
   prefix: "/api/v1/emails",
-  /** Normalize URLs — /api/v1/emails and /api/v1/emails/ both work */
+  /** Normalize URLs: /api/v1/emails and /api/v1/emails/ both work */
   normalize: true,
 })
-  /** Apply auth middleware — all routes in this plugin require a valid Bearer token */
+  /** Apply auth middleware: all routes in this plugin require a valid Bearer token */
   .use(authMiddleware)
-  /** Apply rate limiting — 100 requests per 60 seconds per API key */
+  /** Apply rate limiting: 100 requests per 60 seconds per API key */
   .use(rateLimitMiddleware)
 
   /**
@@ -49,7 +49,7 @@ export const emailsPlugin = new Elysia({
     async ({ body, apiKeyId }) => {
       logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
 
-      /** Create the email record — it starts in "queued" status */
+      /** Create the email record: it starts in "queued" status */
       const email = await emailService.createEmail(body, apiKeyId);
 
       return {
@@ -146,7 +146,7 @@ export const emailsPlugin = new Elysia({
   )
 
   /**
-   * GET /api/v1/emails/tombstones — paginated list of post-purge audit
+   * GET /api/v1/emails/tombstones: paginated list of post-purge audit
    * snapshots (#34). Operators use this to trace late complaints and
    * bounces back to a sent message after the original email row has
    * been hard-deleted by the trash purge sweep.
@@ -351,7 +351,7 @@ export const emailsPlugin = new Elysia({
    * DELETE /api/v1/emails/:id/permanent
    *
    * Permanently deletes a trashed email. Only operates on rows already
-   * in trash — protects against bypassing the soft-delete workflow.
+   * in trash: protects against bypassing the soft-delete workflow.
    */
   .delete(
     "/:id/permanent",
@@ -368,7 +368,7 @@ export const emailsPlugin = new Elysia({
         return { success: false, error: "Trashed email not found" };
       }
 
-      /** As of #34, hard-delete returns just the id — the row is gone
+      /** As of #34, hard-delete returns just the id: the row is gone
        *  but a tombstone is at `GET /api/v1/emails/tombstones/:id`. */
       return { success: true, data: { id: result.id } };
     },

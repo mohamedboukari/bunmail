@@ -7,17 +7,17 @@ import { pgTable, varchar, timestamp, index } from "drizzle-orm/pg-core";
  * used to `DELETE FROM emails` and lose the row forever. When a
  * complaint, late bounce, or compliance audit arrived weeks later
  * referring to a Message-ID, operators had no way to answer "did we
- * send this?" — the row was gone.
+ * send this?": the row was gone.
  *
  * Tombstones are a forensic-only snapshot taken **immediately before**
  * each hard-delete. They preserve identifiers (id, message_id, to,
- * subject, status) but **deliberately drop body content** — that's
+ * subject, status) but **deliberately drop body content**: that's
  * exactly what we're trying not to retain past the trash retention
  * window. A tombstone is enough to confirm "yes we sent msg_abc to X
  * on Y date with subject Z and it was bounced" without keeping the
  * sensitive payload.
  *
- * Snapshot semantics — NO foreign keys:
+ * Snapshot semantics: NO foreign keys:
  *
  *   - `apiKeyId` is a denormalised snapshot, not a FK. If the api key
  *     is later revoked + cascade-deleted, the tombstone must SURVIVE
@@ -27,10 +27,10 @@ import { pgTable, varchar, timestamp, index } from "drizzle-orm/pg-core";
  *
  * Retention: kept for `TOMBSTONE_RETENTION_DAYS` days (default 90),
  * then the trash purge loop sweeps them out. `failed` / `bounced`
- * tombstones are kept on the same schedule as `sent` ones — the
+ * tombstones are kept on the same schedule as `sent` ones: the
  * forensic value is the same.
  *
- * Tombstones use the **original** email id (`msg_…`) — that's how
+ * Tombstones use the **original** email id (`msg_…`): that's how
  * operators look them up. There is no separate `tomb_` prefix.
  */
 export const emailTombstones = pgTable(
@@ -41,7 +41,7 @@ export const emailTombstones = pgTable(
      *  the still-live emails table. */
     id: varchar("id", { length: 36 }).primaryKey(),
 
-    /** Snapshot of the api key that owned the email — used for the
+    /** Snapshot of the api key that owned the email: used for the
      *  per-tenant read API. NOT a FK; snapshot survives api key delete. */
     apiKeyId: varchar("api_key_id", { length: 36 }).notNull(),
 
@@ -54,7 +54,7 @@ export const emailTombstones = pgTable(
     fromAddress: varchar("from_address", { length: 255 }).notNull(),
     toAddress: varchar("to_address", { length: 255 }).notNull(),
 
-    /** Subject line — null when the original was somehow null at delete
+    /** Subject line: null when the original was somehow null at delete
      *  time, otherwise the human-readable handle for "I'm looking for
      *  the welcome email I sent on Tuesday". */
     subject: varchar("subject", { length: 500 }),
@@ -71,18 +71,18 @@ export const emailTombstones = pgTable(
      *  hard-deleted directly without going through trash first). */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
 
-    /** When this tombstone was created — i.e. when the original was
+    /** When this tombstone was created: i.e. when the original was
      *  hard-deleted. The `TOMBSTONE_RETENTION_DAYS` retention window
      *  starts from this timestamp. */
     purgedAt: timestamp("purged_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    /** Bounce / complaint trace hot path — operators paste a
+    /** Bounce / complaint trace hot path: operators paste a
      *  `Message-ID` from an inbound DSN or FBL report and need an
      *  immediate answer. */
     index("idx_email_tombstones_message_id").on(table.messageId),
 
-    /** Dashboard list hot path — "show me the last week of tombstones
+    /** Dashboard list hot path: "show me the last week of tombstones
      *  for this api key", newest first. */
     index("idx_email_tombstones_api_key_purged").on(table.apiKeyId, table.purgedAt),
   ],

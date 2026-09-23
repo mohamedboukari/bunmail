@@ -28,12 +28,12 @@ Table: `domains`
 |-------------------|----------------|------------------------------|
 | id                | varchar(36)    | PK, prefixed `dom_`          |
 | name              | varchar(255)   | NOT NULL, UNIQUE             |
-| dkim_private_key  | text           | nullable (auto-generated, **AES-256-GCM encrypted at rest** — `v1:<iv>:<ct>:<tag>` format, see #23) |
-| dkim_public_key   | text           | nullable (auto-generated, plaintext — published in DNS) |
+| dkim_private_key  | text           | nullable (auto-generated, **AES-256-GCM encrypted at rest**: `v1:<iv>:<ct>:<tag>` format, see #23) |
+| dkim_public_key   | text           | nullable (auto-generated, plaintext: published in DNS) |
 | dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
-| unsubscribe_email | varchar(255)   | nullable — overrides the default `unsubscribe@<from-domain>` mailto in the `List-Unsubscribe` header (#40) |
-| unsubscribe_url   | text           | nullable — adds an `https` URL form to `List-Unsubscribe` and enables `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (#40) |
-| notify_email      | varchar(255)   | nullable — when set, inbound mail received for this domain triggers a summary notification email to this address (#106). Use an external mailbox. |
+| unsubscribe_email | varchar(255)   | nullable: overrides the default `unsubscribe@<from-domain>` mailto in the `List-Unsubscribe` header (#40) |
+| unsubscribe_url   | text           | nullable: adds an `https` URL form to `List-Unsubscribe` and enables `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (#40) |
+| notify_email      | varchar(255)   | nullable, when set, inbound mail received for this domain triggers a summary notification email to this address (#106). Use an external mailbox. |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -45,8 +45,8 @@ Table: `domains`
 
 When a domain is created, BunMail automatically generates a 2048-bit RSA keypair:
 
-- **Private key** — generated as PEM, then encrypted with AES-256-GCM using `DKIM_ENCRYPTION_KEY` from `.env` before insert (#23). The plaintext PEM only lives in memory inside `createDomain()` and is never logged. Decrypted on read by the queue's domain lookup; decrypt failure logs and falls through to unsigned mail (fail-open).
-- **Public key** — stored plaintext in `dkim_public_key`, provided as a DNS TXT record value
+- **Private key**: generated as PEM, then encrypted with AES-256-GCM using `DKIM_ENCRYPTION_KEY` from `.env` before insert (#23). The plaintext PEM only lives in memory inside `createDomain()` and is never logged. Decrypted on read by the queue's domain lookup; decrypt failure logs and falls through to unsigned mail (fail-open).
+- **Public key**: stored plaintext in `dkim_public_key`, provided as a DNS TXT record value
 
 The DKIM DNS record the user needs to add is returned in the API response as `dkimDnsRecord`.
 
@@ -96,7 +96,7 @@ Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns 
 
 The `serializeDomain()` function:
 - **Strips** `dkimPrivateKey` and `dkimPublicKey` (never exposed in API responses)
-- **Exposes** `dkimDnsRecord` — the TXT record value users need to add to their DNS
+- **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS
 
 ## API Endpoints
 
@@ -117,8 +117,8 @@ inbound-notification address at create time (see below).
 
 Each domain can carry a `notify_email`. When BunMail's inbound SMTP receiver
 accepts a message for a recipient on that domain, it sends a short "you have
-new mail" summary email (sender, subject, preview, and — when `APP_BASE_URL`
-is configured — a dashboard link) to the notify address. The notification is
+new mail" summary email (sender, subject, preview, and, when `APP_BASE_URL`
+is configured: a dashboard link) to the notify address. The notification is
 sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default
 `notifications@<domain>`) and DKIM-signed with the domain's own key, so it
 passes the same SPF/DKIM you already set up for outbound.
@@ -131,5 +131,5 @@ passes the same SPF/DKIM you already set up for outbound.
   is a registered BunMail domain) are skipped by the sender-domain loop guard.
 - **Disable globally** with `INBOUND_NOTIFY_ENABLED=false` (operator kill
   switch); per-domain, just leave `notify_email` empty.
-- Bounces (DSNs) and DMARC aggregate reports never trigger a notification —
+- Bounces (DSNs) and DMARC aggregate reports never trigger a notification:
   they are routed away before the inbound store.

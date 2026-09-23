@@ -1,4 +1,4 @@
-# .trivyignore — suppressions for the Trivy fs and image scans.
+# .trivyignore: suppressions for the Trivy fs and image scans.
 #
 # Format: one CVE ID per line. Include a comment block above each
 # group with the *why*, the *what's-the-real-mitigation*, and a
@@ -7,7 +7,7 @@
 # DO NOT add a CRITICAL CVE here without explicit security review.
 
 # ─────────────────────────────────────────────────────────────────
-# esbuild bundled Go stdlib CVEs — known false positives for our use
+# esbuild bundled Go stdlib CVEs: known false positives for our use
 # ─────────────────────────────────────────────────────────────────
 #
 # These are vulnerabilities in the Go stdlib (crypto/tls, net/url,
@@ -17,7 +17,7 @@
 #
 # Why these aren't reachable in BunMail:
 #
-#   * esbuild is a *build-time* tool — it reads `.ts`/`.js` files
+#   * esbuild is a *build-time* tool: it reads `.ts`/`.js` files
 #     from disk and writes `.js` files to disk. It does not parse
 #     URLs from untrusted input, doesn't terminate TLS, doesn't
 #     read tar/zip archives from the network.
@@ -27,7 +27,7 @@
 #     during `bun run db:push`, against our own schema files, and
 #     exits before the API listener accepts any traffic.
 #
-#   * Real fix tracked in #56 — move drizzle-kit out of the runtime
+#   * Real fix tracked in #56: move drizzle-kit out of the runtime
 #     image into a build/migrate stage so esbuild never ships in
 #     the published artifact. Once #56 lands these entries can be
 #     removed and the scan stays green without suppression.
@@ -46,7 +46,7 @@ CVE-2026-32281
 CVE-2026-32283
 #
 # From the older esbuild@0.18.20 nested under @esbuild-kit/core-utils
-# (drizzle-kit dependency tree); same justification as above — esbuild
+# (drizzle-kit dependency tree); same justification as above: esbuild
 # is build-time only, the embedded Go stdlib vectors aren't reachable.
 # Also goes away once #56 removes drizzle-kit from the runtime image.
 CVE-2024-24790

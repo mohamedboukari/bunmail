@@ -8,17 +8,17 @@ Inbound email detail pages have a **Reply** button that opens the compose form w
 
 - **From** = the address that received the inbound (the user's own address), so SPF / DKIM / DMARC alignment is preserved.
 - **To** = the original sender.
-- **Subject** = original subject prefixed with `Re: ` (idempotent — already-`Re:`-prefixed subjects aren't double-prefixed).
+- **Subject** = original subject prefixed with `Re: ` (idempotent: already-`Re:`-prefixed subjects aren't double-prefixed).
 - **HTML body** = original HTML wrapped in a `<blockquote>` with an `On <date>, <sender> wrote:` attribution line.
 - **Text body** = original text quoted with `> ` line prefixes + the same attribution.
 
-The reply route is `GET /dashboard/inbound/:id/reply` — a normal navigation, no side effects until the operator clicks Send. The operator can edit any field before sending, including swapping the From domain or rewriting the quoted body.
+The reply route is `GET /dashboard/inbound/:id/reply`: a normal navigation, no side effects until the operator clicks Send. The operator can edit any field before sending, including swapping the From domain or rewriting the quoted body.
 
 **Out of scope (Phase 2):** RFC 5322 threading headers (`In-Reply-To`, `References`). Phase 1 ships the compose UX; proper threading needs new columns on `emails` and is deferred.
 
 ## Bounce branching
 
-Before any inbound message hits `inbound_emails`, the receiver runs it through the bounce parser. If the message is a Delivery Status Notification (DSN) — i.e. a bounce for one of our outbound sends — we route it to the bounce handler instead of generic inbound storage. See [docs/bounces.md](bounces.md) for the bounce flow.
+Before any inbound message hits `inbound_emails`, the receiver runs it through the bounce parser. If the message is a Delivery Status Notification (DSN): i.e. a bounce for one of our outbound sends: we route it to the bounce handler instead of generic inbound storage. See [docs/bounces.md](bounces.md) for the bounce flow.
 
 Why this matters: bounces shouldn't pollute the inbound list (operators get noise about delivery failures from `mailer-daemon@gmail` every time someone mistypes an address), and the suppression-list auto-update only happens when bounces are processed as bounces.
 
@@ -54,7 +54,7 @@ Table: `inbound_emails`
 | received_at  | timestamp      | NOT NULL, default `now()`  |
 | deleted_at   | timestamp      | nullable                   |
 
-`deleted_at` is the soft-delete marker — set when an inbound email is moved to trash. Auto-purged after `TRASH_RETENTION_DAYS`.
+`deleted_at` is the soft-delete marker: set when an inbound email is moved to trash. Auto-purged after `TRASH_RETENTION_DAYS`.
 
 **Indexes:** `idx_inbound_received_at`, `idx_inbound_deleted_at`
 
@@ -69,19 +69,19 @@ In production, set `SMTP_PORT=25` and configure your domain's MX record to point
 
 ### First-boot checklist (Docker Compose)
 
-Inbound is **off by default** — sending-only is the common use case, and an open SMTP receiver is a footgun if it isn't configured deliberately. To turn it on with Docker Compose, three things have to agree:
+Inbound is **off by default**: sending-only is the common use case, and an open SMTP receiver is a footgun if it isn't configured deliberately. To turn it on with Docker Compose, three things have to agree:
 
 1. **`.env`**: set `SMTP_ENABLED=true` and `SMTP_PORT=25`.
 2. **`docker-compose.yml`**: uncomment the inbound SMTP port line under `services.app.ports`. It's commented out by default so a fresh checkout doesn't try to bind host port 25 unexpectedly.
 3. **DNS**: add an `MX` record for your domain pointing at the host running BunMail.
 
-Then `docker compose up -d --build`. From outside the host, verify with `nc -zv <your-host> 25` — the connection should be accepted. If it isn't, check `docker compose logs app` for the line `Inbound SMTP receiver disabled` — that means step 1 wasn't picked up.
+Then `docker compose up -d --build`. From outside the host, verify with `nc -zv <your-host> 25`: the connection should be accepted. If it isn't, check `docker compose logs app` for the line `Inbound SMTP receiver disabled`: that means step 1 wasn't picked up.
 
 ## Spam Protection
 
 Three layers of protection run before any email is processed. All are enabled by default.
 
-### Layer 1 — DNSBL IP Check
+### Layer 1: DNSBL IP Check
 
 Checks the connecting IP against a DNS blackhole list (default: [Spamhaus ZEN](https://www.spamhaus.org/zen/)). Blacklisted IPs are rejected with SMTP 554 before they can send data.
 
@@ -92,7 +92,7 @@ Checks the connecting IP against a DNS blackhole list (default: [Spamhaus ZEN](h
 
 Private/loopback IPs and IPv6 addresses skip the DNSBL check.
 
-### Layer 2 — Connection Rate Limiting
+### Layer 2: Connection Rate Limiting
 
 Per-IP sliding window rate limit on SMTP connections. Exceeding the limit returns SMTP 421 (temporary rejection).
 
@@ -102,7 +102,7 @@ Per-IP sliding window rate limit on SMTP connections. Exceeding the limit return
 | `SMTP_RATE_LIMIT_MAX`    | `10`   | Max connections per IP per window |
 | `SMTP_RATE_LIMIT_WINDOW` | `60`   | Window size in seconds           |
 
-### Layer 3 — Recipient Domain Validation
+### Layer 3: Recipient Domain Validation
 
 Rejects mail addressed to domains not registered in BunMail's Domains table. This prevents your server from being used as an open relay.
 
@@ -110,11 +110,11 @@ Rejects mail addressed to domains not registered in BunMail's Domains table. Thi
 |-----------------------------|---------|-----------------------------------------|
 | `SMTP_RECIPIENT_VALIDATION` | `true`  | Enable/disable recipient domain checks  |
 
-### Layer 4 — Envelope and Stream Hardening
+### Layer 4: Envelope and Stream Hardening
 
 Always-on protections (no env toggles):
 
-- **Message size cap:** 10 MB. Advertised via the `SIZE` ESMTP extension and enforced inside the data stream — oversize messages are rejected with SMTP 552 and the buffered chunks are dropped immediately.
+- **Message size cap:** 10 MB. Advertised via the `SIZE` ESMTP extension and enforced inside the data stream: oversize messages are rejected with SMTP 552 and the buffered chunks are dropped immediately.
 - **Recipient cap:** 50 RCPT TO commands per transaction. Beyond that the server replies SMTP 452 (too many recipients) so the connection can't be used as a fan-out relay.
 - **MAIL FROM validation:** rejects addresses that don't match a basic email shape with SMTP 553. The empty envelope sender (`<>`) is allowed because it's how DSN bounces address themselves per RFC 3464.
 
@@ -129,21 +129,21 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 3. DATA command → message parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, and raw message stored in `inbound_emails`
 5. `email.received` webhook event fired to all subscribed webhooks
-6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget) — see below
+6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget), see below
 
-Bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5–6.
+Bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
 ## Inbound Notifications (#106)
 
 A domain can opt in to email notifications by setting its `notify_email`
-(per domain — from the dashboard's domain detail page, or the `notifyEmail`
+(per domain: from the dashboard's domain detail page, or the `notifyEmail`
 field on `POST /api/v1/domains`). When mail is received for that domain,
 BunMail sends a short "you have new mail" summary (sender, subject, a ~200-char
 preview, and a dashboard link when `APP_BASE_URL` is set) to the notify address.
 
 - The notification is sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<recipient
   domain>` (default `notifications@<domain>`) and DKIM-signed with that
-  domain's own key — same SPF/DKIM as outbound.
+  domain's own key: same SPF/DKIM as outbound.
 - It is sent fire-and-forget after the inbound row is stored, so it never
   delays the SMTP acknowledgement.
 - **Loop guard:** mail whose sender domain is itself a registered BunMail
@@ -154,11 +154,11 @@ preview, and a dashboard link when `APP_BASE_URL` is set) to the notify address.
 
 > **Limitations (v1).** The inbound path does **not** verify SPF/DKIM/DMARC
 > on received mail today, so a notification relays the (unauthenticated)
-> sender, subject, and body preview of whatever was accepted — treat the
+> sender, subject, and body preview of whatever was accepted: treat the
 > notification's contents as untrusted, exactly like the inbox itself. The
 > HTML part is escaped (no script injection), and the From/Subject are set
 > via Nodemailer (no header injection). Notification volume is bounded only
-> by the SMTP per-IP connection rate limit — there is no per-`notify_email`
+> by the SMTP per-IP connection rate limit: there is no per-`notify_email`
 > throttle/digest yet. Inbound sender authentication and a per-address rate
 > cap are tracked as follow-ups on #106.
 

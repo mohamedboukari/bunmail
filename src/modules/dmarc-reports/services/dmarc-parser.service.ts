@@ -1,6 +1,6 @@
 /**
  * Pure DMARC aggregate (rua) report parser. Takes a binary attachment
- * (zip or gzip; both formats appear in the wild — Microsoft uses zip,
+ * (zip or gzip; both formats appear in the wild: Microsoft uses zip,
  * Google / Yahoo use gzip) and returns a structured `ParsedDmarcReport`
  * or `null` when the bytes don't match the expected shape.
  *
@@ -8,11 +8,11 @@
  * assert on the parsed shape.
  *
  * Two stages:
- *   1. **Decompression** — sniff the first bytes; gzip starts with
+ *   1. **Decompression**: sniff the first bytes; gzip starts with
  *      `1f 8b`, zip with `50 4b 03 04` (`PK\x03\x04`). gzip yields the
  *      XML directly; zip is unpacked and we take the first XML entry
  *      (RFC 7489 reports always contain a single XML file).
- *   2. **XML → ParsedDmarcReport** — `fast-xml-parser` produces a JS
+ *   2. **XML → ParsedDmarcReport**: `fast-xml-parser` produces a JS
  *      object tree; we walk the canonical RFC 7489 path
  *      (`feedback > report_metadata`, `policy_published`, `record[]`).
  *
@@ -43,7 +43,7 @@ const MAX_DECOMPRESSED_BYTES = 25 * 1024 * 1024;
 /**
  * Feed size per streaming `push()` (#129). We drive fflate's streaming
  * decompressors with small input slices so the output-size check runs
- * between slices and we abort *early* on a bomb — pushing the whole buffer
+ * between slices and we abort *early* on a bomb: pushing the whole buffer
  * at once would let the decompressor inflate everything in one synchronous
  * call before we could react.
  */
@@ -131,7 +131,7 @@ function unzipFirstXmlCapped(bytes: Uint8Array): Uint8Array | null {
 
 /**
  * Detects compression format by file-magic-number. We don't trust the
- * Content-Type / filename — receivers' headers are inconsistent, but
+ * Content-Type / filename: receivers' headers are inconsistent, but
  * the first 4 bytes are reliable.
  */
 function detectFormat(bytes: Uint8Array): "gzip" | "zip" | "raw" {
@@ -149,7 +149,7 @@ function detectFormat(bytes: Uint8Array): "gzip" | "zip" | "raw" {
 
 /**
  * Decompress (or pass through) the attachment buffer to a UTF-8 XML
- * string. Returns `null` if the format is unrecognised — the handler
+ * string. Returns `null` if the format is unrecognised: the handler
  * uses that signal to skip the message and let normal inbound storage
  * take over.
  */
@@ -157,7 +157,7 @@ function decompressToXml(bytes: Uint8Array): string | null {
   const format = detectFormat(bytes);
   try {
     if (format === "gzip") {
-      /** Capped streaming inflate — aborts on a decompression bomb (#129). */
+      /** Capped streaming inflate: aborts on a decompression bomb (#129). */
       return strFromU8(gunzipCapped(bytes));
     }
     if (format === "zip") {
@@ -201,7 +201,7 @@ function toArray<T>(v: T | T[] | undefined): T[] {
 /**
  * Type predicate for a parsed XML element. Report bodies arrive over the
  * **unauthenticated** inbound path (#129), so every nested node is
- * narrowed rather than asserted — an `as Record<string, unknown>` cast
+ * narrowed rather than asserted: an `as Record<string, unknown>` cast
  * would let a scalar or array through wearing an object's type.
  */
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -224,7 +224,7 @@ function asString(v: unknown): string {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "bigint") {
     return String(v);
   }
-  /** Anything else is a nested element, not a leaf — "[object Object]" would
+  /** Anything else is a nested element, not a leaf: "[object Object]" would
    *  be meaningless (and attacker-influenced) in a report field. */
   return "";
 }
@@ -326,7 +326,7 @@ function readRecord(record: Record<string, unknown>): ParsedDmarcRecord | null {
 
 /**
  * Public entry point. Returns `null` when the input isn't a parseable
- * DMARC aggregate report — caller falls back to normal inbound storage.
+ * DMARC aggregate report: caller falls back to normal inbound storage.
  */
 export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | null {
   const xml = decompressToXml(bytes);
@@ -395,14 +395,14 @@ export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | nul
  * non-RFC bounces.
  */
 export function looksLikeDmarcReport(raw: string): boolean {
-  /** Subject pattern — every major receiver mentions "Report Domain" or "DMARC". */
+  /** Subject pattern: every major receiver mentions "Report Domain" or "DMARC". */
   const subjectMatch = raw.match(/^Subject:\s*([^\r\n]+)/im);
   if (subjectMatch) {
     const subject = subjectMatch[1]!;
     if (/dmarc|report\s+domain/i.test(subject)) return true;
   }
 
-  /** Sender pattern — known DMARC reporters. */
+  /** Sender pattern: known DMARC reporters. */
   const fromMatch = raw.match(/^From:\s*([^\r\n]+)/im);
   if (fromMatch) {
     const from = fromMatch[1]!;
@@ -417,10 +417,10 @@ export function looksLikeDmarcReport(raw: string): boolean {
     }
   }
 
-  /** Content-Type pattern — XML directly attached. */
+  /** Content-Type pattern: XML directly attached. */
   if (/Content-Type:\s*application\/(?:x-)?(?:zip|gzip|x-gzip)/i.test(raw)) {
     /** Combined with a hint in the subject or body that this is DMARC.
-     *  Don't classify as DMARC purely on a zip attachment — could be
+     *  Don't classify as DMARC purely on a zip attachment, could be
      *  unrelated mail with a zip. */
     if (/dmarc|aggregate report/i.test(raw)) return true;
   }
