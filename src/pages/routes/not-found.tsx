@@ -1,7 +1,7 @@
 import { SunIcon, MoonIcon } from "../assets/icons.tsx";
 
 /**
- * 404 Not Found page — standalone (no sidebar navigation).
+ * 404 Not Found page: standalone (no sidebar navigation).
  * Matches the landing page aesthetic with a centered message,
  * a subtle illustration, and navigation links back to safety.
  */
@@ -12,7 +12,7 @@ export function NotFoundPage() {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <title>404 — BunMail</title>
+        <title>404 | BunMail</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
           {`

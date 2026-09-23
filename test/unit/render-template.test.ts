@@ -4,7 +4,7 @@ import { renderTemplate } from "../../src/modules/templates/services/template.se
 /**
  * Unit tests for renderTemplate.
  *
- * Tests Mustache-style variable substitution — a pure function
+ * Tests Mustache-style variable substitution: a pure function
  * with no dependencies, so no mocking needed.
  */
 

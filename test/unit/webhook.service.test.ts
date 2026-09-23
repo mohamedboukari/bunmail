@@ -20,17 +20,19 @@ function chainable<T>(result: T): T {
     },
   };
   const proxy = new Proxy({}, handler);
+  /** The Proxy answers any property chain the service builds, so it stands in for T by design. */
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
   return proxy as T;
 }
 
 /**
  * Own the config mock (complete enough) so a leaked partial stub from an
- * earlier unit file can't shadow `config.webhookDelivery` — `createWebhook`
+ * earlier unit file can't shadow `config.webhookDelivery`: `createWebhook`
  * reads `config.webhookDelivery.allowInsecureHttp` for the SSRF guard (#128).
  * Bun's `mock.module` leaks across files; registering ours here (before the
  * import below) makes it the active one for this file. See the #121 fix.
  */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     env: "test",
     database: { url: "postgres://test:test@localhost:5432/test" },
@@ -43,7 +45,7 @@ mock.module("../../src/config.ts", () => ({
   },
 }));
 
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {
     select: mock(() => chainable(selectResult)),
     insert: mock(() => chainable(insertResult)),
@@ -118,7 +120,7 @@ describe("deleteWebhook", () => {
 describe("findWebhooksForEvent", () => {
   test("returns only hooks whose events array includes the requested event", async () => {
     /** The service does the JSON-array filter in JS after the DB returns
-     *  every active hook — we mimic that by feeding a varied list. */
+     *  every active hook: we mimic that by feeding a varied list. */
     selectResult = [
       { ...baseHook, id: "w1", events: ["email.sent", "email.failed"] },
       { ...baseHook, id: "w2", events: ["email.bounced"] },

@@ -11,12 +11,12 @@ import type { DeliveryGroup, DeliveryState } from "../models/email.schema.ts";
 
 /**
  * Result of a `sendMail` call. The `messageId` is the canonical
- * `Message-ID:` header — set by the caller (queue), pinned to every
+ * `Message-ID:` header: set by the caller (queue), pinned to every
  * MX group's submission, and preserved across retries so feedback
  * loops join on a single identifier.
  *
  * `deliveryState` is the per-group outcome map (#97). The mailer
- * doesn't decide whether to schedule another retry — that's the
+ * doesn't decide whether to schedule another retry: that's the
  * queue's call. The mailer just reports what each group's status is
  * **after this attempt** so the queue can apply its retry policy.
  */
@@ -33,7 +33,7 @@ export interface DkimOptions {
 }
 
 /**
- * Inputs for the `List-Unsubscribe` header. Both fields optional —
+ * Inputs for the `List-Unsubscribe` header. Both fields optional:
  * the mailer always emits at least the mailto form (defaulting to
  * `unsubscribe@<from-domain>` when `mailto` is omitted), and adds
  * the HTTPS / `List-Unsubscribe-Post: One-Click` form whenever a
@@ -62,7 +62,7 @@ async function resolveMxForDomain(domain: string): Promise<string> {
  *
  * **Stateful retry (#97):** the mailer reads `existingState` when
  * provided (set by the queue on retry passes) and **skips every group
- * already in `sent` status** — so a Gmail group that succeeded on
+ * already in `sent` status**, so a Gmail group that succeeded on
  * attempt 1 never gets a duplicate on attempt 2 when an Outlook group
  * 4xx-retries. Returns a fresh `DeliveryState` reflecting every
  * group's outcome **after this attempt**. The queue decides whether
@@ -70,21 +70,21 @@ async function resolveMxForDomain(domain: string): Promise<string> {
  * retry policy.
  *
  * **Status semantics:**
- *   - `sent`   — accepted by the receiving MX this attempt. Won't be retried.
- *   - `retry`  — transient failure (4xx, transport timeout, …). Queue may retry.
- *   - `failed` — hard 5xx rejection. Terminal; auto-suppress fires in queue.
+ *   - `sent`: accepted by the receiving MX this attempt. Won't be retried.
+ *   - `retry`: transient failure (4xx, transport timeout, …). Queue may retry.
+ *   - `failed`: hard 5xx rejection. Terminal; auto-suppress fires in queue.
  *
  * **First-send vs retry:** on first send (`existingState` undefined),
  * the mailer parses `to/cc/bcc`, groups by destination MX, and starts
  * every group in `retry` before attempting. DNS resolution failures
- * become synthetic-key (`<dns:domain>`) entries in `failed` state —
+ * become synthetic-key (`<dns:domain>`) entries in `failed` state:
  * a missing MX is an unrecoverable address problem, not a transient
  * one worth retrying.
  *
  * **Identity:** the caller passes `messageId` so the canonical
  * `Message-ID:` header is pinned across retries. Previously the
  * mailer minted it itself, which would have produced fresh ids per
- * retry — bounce / complaint correlation breaks down without a
+ * retry: bounce / complaint correlation breaks down without a
  * stable identifier.
  */
 export async function sendMail(options: {
@@ -102,7 +102,7 @@ export async function sendMail(options: {
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
 }): Promise<SendMailResult> {
-  /** Build the starting state — either a fresh one from the inputs
+  /** Build the starting state: either a fresh one from the inputs
    *  or a deep clone of the row's prior state. We always clone so the
    *  caller can compare `before` vs `after` for change detection. */
   let state: DeliveryState;
@@ -114,7 +114,7 @@ export async function sendMail(options: {
 
   if (Object.keys(state).length === 0) {
     /** No groups at all (no valid recipients after parsing). Treat as
-     *  programmer error — the caller shouldn't have reached this code
+     *  programmer error: the caller shouldn't have reached this code
      *  path. The queue's full-failure path catches the throw. */
     throw new Error("No valid recipients after parsing to/cc/bcc");
   }
@@ -135,7 +135,7 @@ export async function sendMail(options: {
   for (const [mxHost, group] of Object.entries(state)) {
     if (group.status !== "retry") continue;
     if (mxHost.startsWith("<dns:"))
-      continue; /** DNS failures don't retry — marked failed at parse time. */
+      continue; /** DNS failures don't retry: marked failed at parse time. */
 
     try {
       await sendToMxGroup({
@@ -195,7 +195,7 @@ export async function sendMail(options: {
  * `to/cc/bcc`, groups recipients by destination MX, and seeds every
  * group at `status: "retry"` so the attempt loop above picks them up.
  * DNS-resolution failures (no MX records, lookup error) become
- * synthetic-key (`<dns:domain>`) entries already in `failed` state —
+ * synthetic-key (`<dns:domain>`) entries already in `failed` state:
  * those addresses can't be delivered to in principle, so there's
  * nothing to retry.
  */
@@ -222,7 +222,7 @@ async function buildInitialState(
   }
   for (const f of dnsFailures) {
     /** Synthetic mxHost key so DNS-failed groups still show up in the
-     *  delivery state for operator visibility — but they're already
+     *  delivery state for operator visibility, but they're already
      *  terminal so the retry loop above skips them. */
     state[`<dns:${f.domain}>`] = {
       status: "failed",
@@ -238,7 +238,7 @@ async function buildInitialState(
  * Submits the message to a single destination MX. The transport is
  * built per-call (we always want the right MX for the right group)
  * and the `envelope.to` override pins RCPT TO to *only* the
- * recipients on this MX — even when `mailOptions.to` lists the full
+ * recipients on this MX, even when `mailOptions.to` lists the full
  * original set. That's the trick that makes cross-domain CC visible
  * to all recipients without delivering to the wrong server.
  */
@@ -284,7 +284,7 @@ async function sendToMxGroup(args: {
   };
 
   /** `List-Unsubscribe` (+ optional `One-Click` POST). Same content
-   *  across groups — the header is about the message, not the
+   *  across groups: the header is about the message, not the
    *  recipient set. */
   const senderDomain = args.from.split("@")[1];
   if (senderDomain) {

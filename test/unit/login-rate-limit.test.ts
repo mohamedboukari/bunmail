@@ -62,7 +62,7 @@ describe("resolveClientIp", () => {
 
     test("ignores a spoofed leftmost entry (single trusted hop)", () => {
       /** Attacker sends a forged XFF; the trusted proxy appends the real
-       *  client, so the rightmost — not the spoofed leftmost — is used. */
+       *  client, so the rightmost, not the spoofed leftmost, is used. */
       const ip = resolveClientIp({
         socketIp: "10.0.0.1",
         forwardedFor: "6.6.6.6, 203.0.113.9",

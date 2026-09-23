@@ -26,7 +26,7 @@ const STATUS_FILTERS: Array<{
 ];
 
 /**
- * Webhook delivery history (#30) — paginated table of every dispatch
+ * Webhook delivery history (#30): paginated table of every dispatch
  * attempt for one webhook. Operators land here from `/dashboard/webhooks`
  * to check whether events actually delivered, and click into a row to
  * see the full payload + replay a failed delivery.
@@ -129,7 +129,7 @@ export function WebhookDeliveriesPage({
                         {d.lastError.slice(0, 60)}
                       </span>
                     ) : (
-                      <span class="text-gray-400">—</span>
+                      <span class="text-gray-400">n/a</span>
                     )}
                   </td>
                   <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">

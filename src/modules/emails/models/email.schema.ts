@@ -12,10 +12,10 @@ import { domains } from "../../domains/models/domain.schema.ts";
 
 /**
  * Status of a single MX-group's delivery attempt within an email row.
- *   - `sent`   — accepted by the receiving MX. Won't be retried.
- *   - `retry`  — transient failure, eligible for the next queue pass
+ *   - `sent`: accepted by the receiving MX. Won't be retried.
+ *   - `retry`: transient failure, eligible for the next queue pass
  *                provided the row's overall `attempts` is under cap.
- *   - `failed` — terminal failure. Either a hard 5xx (the per-recipient
+ *   - `failed`: terminal failure. Either a hard 5xx (the per-recipient
  *                auto-suppress fired) or the row hit its retry cap
  *                while this group was still pending.
  */
@@ -34,14 +34,14 @@ export interface DeliveryGroup {
   attempts: number;
   /** ISO timestamp set when the group lands in `sent`. */
   deliveredAt?: string;
-  /** Last raw error message for this group — diagnostic only. */
+  /** Last raw error message for this group: diagnostic only. */
   lastError?: string;
   /** Per-message-id is canonical across the row, but kept here for symmetry. */
   messageId?: string;
 }
 
 /**
- * Shape of `emails.delivery_state` — a map keyed by destination MX
+ * Shape of `emails.delivery_state`: a map keyed by destination MX
  * hostname. Nullable on the column because legacy rows (created
  * before the Phase-2 migration shipped, or rows where `sendMail` has
  * not yet been called) carry `null` and are treated as "no prior
@@ -50,7 +50,7 @@ export interface DeliveryGroup {
 export type DeliveryState = Record<string, DeliveryGroup>;
 
 /**
- * Emails table — every email sent through BunMail gets a row here.
+ * Emails table: every email sent through BunMail gets a row here.
  *
  * Lifecycle: an email is inserted with status `queued`, picked up by the
  * queue processor which sets it to `sending`, and finally marked `sent`
@@ -65,15 +65,15 @@ export const emails = pgTable(
     /** Unique identifier, prefixed with `msg_` (e.g. msg_a1b2c3...) */
     id: varchar("id", { length: 36 }).primaryKey(),
 
-    /** Which API key was used to send this email — FK to api_keys */
+    /** Which API key was used to send this email: FK to api_keys */
     apiKeyId: varchar("api_key_id", { length: 36 })
       .notNull()
       .references(() => apiKeys.id),
 
     /**
-     * Optional sender domain — FK to domains. Used for DKIM signing lookup.
+     * Optional sender domain: FK to domains. Used for DKIM signing lookup.
      * `onDelete: "set null"` lets us delete a domain without first detaching
-     * its emails — preserving the email audit log while removing the domain.
+     * its emails: preserving the email audit log while removing the domain.
      */
     domainId: varchar("domain_id", { length: 36 }).references(() => domains.id, {
       onDelete: "set null",
@@ -94,17 +94,17 @@ export const emails = pgTable(
     /** Email subject line */
     subject: varchar("subject", { length: 500 }).notNull(),
 
-    /** HTML body of the email (nullable — at least one of html/text required) */
+    /** HTML body of the email (nullable: at least one of html/text required) */
     html: text("html"),
 
-    /** Plain text body of the email (nullable — fallback for non-HTML clients) */
+    /** Plain text body of the email (nullable: fallback for non-HTML clients) */
     textContent: text("text_content"),
 
     /**
      * Current delivery status:
      * - queued:   waiting to be picked up by the queue processor
      * - sending:  currently being sent via SMTP
-     * - sent:     SMTP transaction succeeded — handed off to recipient's MX
+     * - sent:     SMTP transaction succeeded, handed off to recipient's MX
      * - failed:   all retry attempts exhausted (we never reached an MX)
      * - bounced:  the recipient's MX accepted the message but later
      *             returned a DSN; set by `bounce-handler.service` (#24)
@@ -114,10 +114,10 @@ export const emails = pgTable(
 
     /**
      * Ingress channel this email arrived through (#137):
-     *   - `api`  — REST `POST /api/v1/emails/send`
-     *   - `smtp` — the SMTP submission server (#120)
+     *   - `api`: REST `POST /api/v1/emails/send`
+     *   - `smtp`: the SMTP submission server (#120)
      * Both funnel through `createEmail()`; this column is what lets the
-     * dashboard tell them apart. Defaults to `api` — the submission server
+     * dashboard tell them apart. Defaults to `api`: the submission server
      * is newer than every pre-existing row, so backfilled rows are all API.
      */
     source: varchar("source", { length: 10 }).notNull().default("api"),
@@ -140,7 +140,7 @@ export const emails = pgTable(
      * (`sent` / `retry` / `failed`), the recipient addresses on that
      * group, the per-group attempt count, the last error, and the
      * canonical `Message-ID` once accepted. Null on legacy rows that
-     * predate this column — the mailer treats null as "no prior
+     * predate this column: the mailer treats null as "no prior
      * state" and submits to every group from scratch.
      *
      * The whole point of this column is the retry path: when a mixed-
@@ -158,7 +158,7 @@ export const emails = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
 
     /**
-     * Soft-delete marker — when set, the email is in "trash".
+     * Soft-delete marker, when set, the email is in "trash".
      * The trash purge service permanently removes rows where
      * `deleted_at < NOW() - TRASH_RETENTION_DAYS`. Normal list/get queries
      * filter `deleted_at IS NULL` to hide trashed rows.
@@ -166,7 +166,7 @@ export const emails = pgTable(
     deletedAt: timestamp("deleted_at"),
   },
   (table) => [
-    /** Composite index — the queue processor queries by status + created_at */
+    /** Composite index: the queue processor queries by status + created_at */
     index("idx_emails_status_created").on(table.status, table.createdAt),
 
     /** Index for filtering emails by API key (list emails endpoint) */

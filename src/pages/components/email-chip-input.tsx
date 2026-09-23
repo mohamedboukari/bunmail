@@ -1,11 +1,11 @@
 /**
- * Email chip input — Gmail-style multi-recipient field. Users type an
+ * Email chip input: Gmail-style multi-recipient field. Users type an
  * address and press comma / space / Enter / Tab; the address validates,
  * turns into a removable chip, and the underlying hidden input is
  * updated with the comma-joined value so the parent form submits the
  * right thing. (#85)
  *
- * Markup-only on its own — the behaviour lives in {@link EmailChipInputScript}
+ * Markup-only on its own: the behaviour lives in {@link EmailChipInputScript}
  * which a parent page renders **once** alongside any number of inputs.
  * Multiple inputs on the same page (CC + BCC) reuse the single script.
  *
@@ -19,7 +19,7 @@
  */
 
 interface EmailChipInputProps {
-  /** Form field name — what the backend reads (`cc` / `bcc`). */
+  /** Form field name: what the backend reads (`cc` / `bcc`). */
   name: string;
   /** DOM id used by an associated `<label for="…">`. */
   id?: string;
@@ -44,7 +44,7 @@ export function EmailChipInput({ name, id, placeholder, initial }: EmailChipInpu
       class="w-full px-2 py-1 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 focus-within:ring-2 focus-within:ring-gray-400 dark:focus-within:ring-gray-500 flex flex-wrap gap-1.5 items-center min-h-[38px] cursor-text"
     >
       {/**
-       * Visible text input. No `name=` — the hidden input below is what
+       * Visible text input. No `name=`: the hidden input below is what
        * the form actually submits. JS prepends chip spans before this
        * input as the user adds addresses.
        */}
@@ -56,7 +56,7 @@ export function EmailChipInput({ name, id, placeholder, initial }: EmailChipInpu
         class="flex-1 min-w-[120px] px-1 py-0.5 bg-transparent text-sm text-gray-900 dark:text-gray-100 focus:outline-none"
       />
       {/**
-       * The hidden form field — its `value` is the comma-joined list of
+       * The hidden form field: its `value` is the comma-joined list of
        * chip addresses, kept in sync by the script on every chip add /
        * remove. Backend reads `body[name]` and parses comma-separated.
        */}
@@ -66,7 +66,7 @@ export function EmailChipInput({ name, id, placeholder, initial }: EmailChipInpu
 }
 
 /**
- * Single shared script block — wires up all `[data-chip-input]` widgets
+ * Single shared script block: wires up all `[data-chip-input]` widgets
  * on the page. Render once per page (e.g. just before `</form>`).
  *
  * Behaviour summary:
@@ -81,7 +81,7 @@ export function EmailChipInput({ name, id, placeholder, initial }: EmailChipInpu
  *   than silently dropping it on form submit.
  * - Invalid email syntax → input border turns red briefly; the chip
  *   isn't added. The regex here is intentionally loose (matches the
- *   shape `local@host.tld`, not the full RFC 5322 grammar) — anything
+ *   shape `local@host.tld`, not the full RFC 5322 grammar): anything
  *   that gets through here will still be re-validated by the server
  *   and nodemailer before going on the wire.
  */
@@ -119,7 +119,7 @@ export function EmailChipInputScript() {
             }
 
             function render() {
-              /** Wipe existing chip elements (rebuild on every change —
+              /** Wipe existing chip elements (rebuild on every change:
                *  cheap, keeps the click-to-remove handlers fresh). */
               wrapper.querySelectorAll('.chip').forEach(function(c) { c.remove(); });
               chips.forEach(function(addr, idx) {
@@ -166,7 +166,7 @@ export function EmailChipInputScript() {
                   tryAddCurrent();
                 }
               } else if (e.key === 'Backspace' && textInput.value === '' && chips.length > 0) {
-                /** Pop the last chip back into the input — feels like
+                /** Pop the last chip back into the input: feels like
                  *  editing the trailing token, not deleting it outright. */
                 e.preventDefault();
                 textInput.value = chips.pop();
@@ -185,13 +185,13 @@ export function EmailChipInputScript() {
               }
             });
 
-            /** Commit any in-flight token on blur — otherwise a user who
+            /** Commit any in-flight token on blur, otherwise a user who
              *  types an address then clicks Send would lose it. */
             textInput.addEventListener('blur', function() {
               if (textInput.value.trim()) tryAddCurrent();
             });
 
-            /** Clicking anywhere in the wrapper focuses the input —
+            /** Clicking anywhere in the wrapper focuses the input:
              *  the chip "field" should feel like a single tappable area. */
             wrapper.addEventListener('click', function(e) {
               if (e.target === wrapper) textInput.focus();

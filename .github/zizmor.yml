@@ -1,4 +1,4 @@
-# zizmor configuration — workflow security audit (#145).
+# zizmor configuration: workflow security audit (#145).
 #
 # Every entry here is a DELIBERATE, justified exception. zizmor's default
 # findings are fixed in the workflows themselves wherever fixing is correct;
@@ -45,7 +45,7 @@ rules:
       - security.yml
 
   # softprops/action-gh-release is a deliberate choice over a hand-rolled
-  # `gh release` script step — it generates release notes and handles the
+  # `gh release` script step: it generates release notes and handles the
   # upload in one SHA-pinned action. Informational only.
   superfluous-actions:
     ignore:

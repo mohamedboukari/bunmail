@@ -46,7 +46,7 @@ function makeQueries(opts: {
   };
 }
 
-describe("resolveDomainForEmail — FK path", () => {
+describe("resolveDomainForEmail: FK path", () => {
   test("looks up by domainId when set, never falls back to name", async () => {
     const { queries, calls } = makeQueries({ byIdResult: sampleRow });
 
@@ -64,7 +64,7 @@ describe("resolveDomainForEmail — FK path", () => {
     /**
      * `ON DELETE SET NULL` means a missing domainId becomes null on the
      * email row, not an orphan FK. So if byId returns undefined, the
-     * domain genuinely no longer exists — falling back to a name lookup
+     * domain genuinely no longer exists: falling back to a name lookup
      * would re-attach a different (potentially stale) domain row, which
      * is the bug the strict-FK path is meant to prevent.
      */
@@ -81,7 +81,7 @@ describe("resolveDomainForEmail — FK path", () => {
   });
 });
 
-describe("resolveDomainForEmail — legacy name fallback", () => {
+describe("resolveDomainForEmail: legacy name fallback", () => {
   test("looks up by sender domain when domainId is null", async () => {
     const { queries, calls } = makeQueries({ byNameResult: sampleRow });
 

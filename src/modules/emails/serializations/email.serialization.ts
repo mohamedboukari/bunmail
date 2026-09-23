@@ -15,7 +15,7 @@ export interface SerializedEmail {
   html: string | null;
   text: string | null;
   status: string;
-  /** Ingress channel: "api" (REST) or "smtp" (submission server) — #137 */
+  /** Ingress channel: "api" (REST) or "smtp" (submission server) (#137) */
   source: string;
   attempts: number;
   lastError: string | null;

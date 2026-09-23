@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the Emails API (/api/v1/emails).
@@ -46,7 +47,7 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -57,7 +58,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -67,7 +68,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -101,7 +102,7 @@ const mockTrashedEmail = {
 };
 
 /* ─── Mock email service ─── */
-mock.module("../../src/modules/emails/services/email.service.ts", () => ({
+void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   createEmail: mock(() => Promise.resolve(mockEmail)),
   listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   listAllEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
@@ -143,7 +144,7 @@ mock.module("../../src/modules/emails/services/email.service.ts", () => ({
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -151,7 +152,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -182,7 +183,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailResponse;
+      const body = await readJson<EmailResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("msg_test123");
       expect(body.data.from).toBe("hello@example.com");
@@ -207,7 +208,7 @@ describe("Emails API E2E", () => {
     });
 
     test("returns 422 when html body exceeds the 5MB cap", async () => {
-      /** 6 MB of "a" — comfortably over the 5 MB DTO limit */
+      /** 6 MB of "a": comfortably over the 5 MB DTO limit */
       const oversizeHtml = "a".repeat(6 * 1024 * 1024);
 
       const response = await app.handle(
@@ -239,7 +240,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailListResponse;
+      const body = await readJson<EmailListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.id).toBe("msg_test123");
@@ -256,7 +257,7 @@ describe("Emails API E2E", () => {
       );
       /** DTO accepts the value; handler passes it to the service. */
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailListResponse;
+      const body = await readJson<EmailListResponse>(response);
       expect(body.success).toBe(true);
     });
 
@@ -280,7 +281,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailResponse;
+      const body = await readJson<EmailResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("msg_test123");
     });
@@ -293,7 +294,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Email not found");
     });
@@ -309,7 +310,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailResponse;
+      const body = await readJson<EmailResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("msg_trashed");
     });
@@ -338,7 +339,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as { success: boolean; deleted: number };
+      const body = await readJson<{ success: boolean; deleted: number }>(response);
       expect(body.success).toBe(true);
       expect(body.deleted).toBe(3);
     });
@@ -351,7 +352,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailListResponse;
+      const body = await readJson<EmailListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.id).toBe("msg_trashed");
@@ -366,7 +367,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailResponse;
+      const body = await readJson<EmailResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("msg_test123");
     });
@@ -391,7 +392,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as EmailResponse;
+      const body = await readJson<EmailResponse>(response);
       expect(body.success).toBe(true);
     });
 
@@ -404,7 +405,7 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as { success: boolean; deleted: number };
+      const body = await readJson<{ success: boolean; deleted: number }>(response);
       expect(body.success).toBe(true);
       expect(body.deleted).toBe(3);
     });

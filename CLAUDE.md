@@ -5,24 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Communication Style
 
 - **Always plan before coding**: Use EnterPlanMode for any non-trivial task. Present the plan, explain trade-offs, and get approval before writing code.
-- **Explain the "why" before each edit**: Before making any code change, state the goal — what problem it solves and why this approach. The user is a senior JS/TS developer (5+ years) who wants to collaborate and co-decide.
+- **Explain the "why" before each edit**: Before making any code change, state the goal: what problem it solves and why this approach. The user is a senior JS/TS developer (5+ years) who wants to collaborate and co-decide.
 - **Keep the user in the loop**: Share potential impacts, edge cases, and alternatives. Don't make silent assumptions.
-- **No `any` types**: Use proper TypeScript types. Avoid unsafe casts (`as SomeType`) — prefer type narrowing, generics, or extending interfaces.
+- **No em dashes.** Never use `—` (or `–`) in any output: prose, code comments, commit messages, PR descriptions, docs, or chat. Remove it and keep the sentence grammatical with a comma, colon, or full stop. Do not swap in a hyphen as a substitute.
+- **No `any` types**: Use proper TypeScript types. Avoid unsafe casts (`as SomeType`). Prefer type narrowing, generics, or extending interfaces.
 
 ## Project Overview
 
-BunMail is a self-hosted email API for developers — a free alternative to SendGrid/Resend. REST API for sending transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, email queue with retries, templates, and a web dashboard.
+BunMail is a self-hosted email API for developers, a free alternative to SendGrid/Resend. REST API for sending transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, email queue with retries, templates, and a web dashboard.
 
 ## Tech Stack
 
 - **Runtime:** Bun
 - **Backend:** Elysia
-- **SMTP Sending:** Nodemailer (direct mode, no provider)
+- **SMTP Sending:** Nodemailer, building a transport per recipient MX on port 25, no provider
 - **SMTP Receiving:** smtp-server
 - **Email Auth:** DKIM signing, SPF/DMARC DNS verification
-- **Database:** SQLite (default) or PostgreSQL
-- **Queue:** Custom with retries (3 attempts)
-- **Dashboard:** React or Svelte frontend
+- **Database:** PostgreSQL only, via Drizzle ORM (`drizzle-orm/bun-sql`)
+- **Queue:** Postgres-backed poll loop, 3 retries, claimed with `FOR UPDATE SKIP LOCKED`
+- **Dashboard:** Server-rendered Elysia JSX (`@elysiajs/html` + `@kitajs/html`), same process as the API
 - **Deploy:** Docker
 
 ## Development Commands
@@ -40,18 +41,20 @@ docker compose up          # run full stack with Docker
 ## Architecture
 
 ```
-Elysia API (routes/) → Services (services/) → Database (db/)
-                            ↓
-                       Queue (retries) → SMTP Send (Nodemailer + DKIM)
-                                             ↓
-                                       Webhooks fired on delivery/bounce
+Elysia plugins (src/modules/<feature>/<feature>.plugin.ts)
+        ↓
+Services (src/modules/<feature>/services/) → PostgreSQL (src/db/, Drizzle)
+        ↓
+Queue (poll loop, 3 retries) → SMTP Send (Nodemailer per-MX + DKIM)
+        ↓
+Webhooks fired on delivery/bounce
 ```
 
-- **Routes** (`src/routes/`) — REST API endpoints under `/api/v1/`. Auth via Bearer API key.
-- **Services** (`src/services/`) — Core business logic: mailer, DKIM signing, email queue, DNS verification, webhook dispatch.
-- **Middleware** (`src/middleware/`) — API key authentication and rate limiting.
-- **Database** (`src/db/`) — Schema, migrations, and connection setup.
-- **Dashboard** (`dashboard/`) — Separate frontend app for managing emails, templates, domains, and API keys.
+- **Modules** (`src/modules/<feature>/`): one Elysia plugin per feature. `<feature>.plugin.ts` exposes the REST endpoints under `/api/v1/` (auth via Bearer API key); business logic sits beside it in `services/`. See Module Layout below.
+- **Middleware** (`src/middleware/`): API key authentication and rate limiting.
+- **Database** (`src/db/`): Drizzle schema, migrations, and connection setup.
+- **Pages** (`src/pages/`): server-rendered JSX dashboard for emails, templates, domains, and API keys. Not a separate app; it runs in the same process.
+- **Utils** (`src/utils/`): shared helpers only (see Boundaries).
 
 ## Code Conventions
 
@@ -61,8 +64,8 @@ Elysia API (routes/) → Services (services/) → Database (db/)
 - Keep route handlers thin; put business logic in services.
 - Use kebab-case for filenames; PascalCase for classes; camelCase for methods/variables.
 - Prefer editing existing files over creating new ones.
-- Follow existing patterns in the codebase — match the style of surrounding code.
-- Keep changes minimal and focused — don't refactor unrelated code.
+- Follow existing patterns in the codebase. Match the style of surrounding code.
+- Keep changes minimal and focused. Don't refactor unrelated code.
 
 ### Module Layout
 
@@ -77,11 +80,11 @@ src/modules/<feature>/
   └── types/                  ← Shared types for this module only
 ```
 
-- Never introduce new top-level folders under `src/` except: `modules/`, `db/`, `utils/`, `email-templates/`.
+- Never introduce new top-level folders under `src/` except: `modules/`, `db/`, `pages/`, `middleware/`, `utils/`.
 
 ### Elysia Specifics
 
-- Define route groups as Elysia plugins (`.use()` pattern) — one plugin per feature module.
+- Define route groups as Elysia plugins (`.use()` pattern), one plugin per feature module.
 - Use Elysia's built-in validation with `t.Object()` schemas for request body/params/query.
 - Use Elysia's `onBeforeHandle` for guards and middleware (auth, rate limiting).
 - Route handlers call services. No DB or cross-cutting logic in route handlers.
@@ -96,7 +99,7 @@ src/modules/<feature>/
 ### Database
 
 - Define schemas in `models/` with file name: `<entity>.schema.ts`.
-- Only services may access the database — never from route handlers directly.
+- Only services may access the database, never from route handlers directly.
 
 ### Error Handling
 
@@ -105,7 +108,7 @@ src/modules/<feature>/
 
 ### Email
 
-- Email templates live under `src/email-templates/`. Place email send logic in `src/services/mailer.ts`. Do not send mail from route handlers directly.
+- Email templates are database-backed via the `templates` module (`src/modules/templates/`). Email send logic lives in `src/modules/emails/services/mailer.service.ts`. Do not send mail from route handlers directly.
 
 ### Tests
 
@@ -135,7 +138,7 @@ When adding a data model:
 
 ## Workflow
 
-- Read files before editing — understand existing code first.
+- Read files before editing. Understand existing code first.
 - Run `bunx tsc --noEmit` after changes to catch type errors.
 - Run tests after implementation to verify nothing breaks.
 - When exploring the codebase, use the Explore agent for broad searches.
@@ -147,16 +150,16 @@ When adding a data model:
 - Keep docs concise: update only what changed.
 - Every module should have its own `docs/<module-name>.md` documenting schema, types, service methods, and module layout.
 - Every module's endpoints must be listed in `docs/api.md`.
-- **Every PR must update the relevant `.md` docs in the same commit** — `CHANGELOG.md` (always, under `[Unreleased]`), and any of `README.md` / `ARCHITECTURE.md` / `docs/api.md` / `docs/<module>.md` whose content the PR makes outdated. Mention the doc updates in the PR description's "Changes" section. Don't merge a PR that adds/removes/changes a public API surface or env var without the matching doc edit.
-- **Before every commit, audit every `.md` file the change touches.** Don't assume "I only changed code, the docs are fine" — sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and everything under `docs/`. Specific things to re-check on every PR:
-  - **Schema tables** in `ARCHITECTURE.md` and per-module docs — new columns, dropped columns, new indexes, FK-on-delete behaviour.
-  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md` — added/removed routes, changed status codes, new error body fields.
+- **Every PR must update the relevant `.md` docs in the same commit**: `CHANGELOG.md` (always, under `[Unreleased]`), and any of `README.md` / `ARCHITECTURE.md` / `docs/api.md` / `docs/<module>.md` whose content the PR makes outdated. Mention the doc updates in the PR description's "Changes" section. Don't merge a PR that adds/removes/changes a public API surface or env var without the matching doc edit.
+- **Before every commit, audit every `.md` file the change touches.** Don't assume "I only changed code, the docs are fine". Sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and everything under `docs/`. Specific things to re-check on every PR:
+  - **Schema tables** in `ARCHITECTURE.md` and per-module docs: new columns, dropped columns, new indexes, FK-on-delete behaviour.
+  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md`: added/removed routes, changed status codes, new error body fields.
   - **Env var lists** in `.env.example`, `docs/self-hosting.md`, `ARCHITECTURE.md` (Deployment), `SECURITY.md`.
-  - **Webhook events** — `docs/webhooks.md` event list and the `README.md` features bullet.
+  - **Webhook events**: `docs/webhooks.md` event list and the `README.md` features bullet.
   - **Status enums** (`EmailStatus`, suppression `reason`, etc.) referenced in any doc.
-  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md` — once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
-  - **"Future / roadmap" / "v2+" sections** — drop items as they ship.
-  - **Historical / planning docs** (e.g. `BunMail-Plan.md`) — should carry a "historical, see X for current state" header so readers don't mistake them for current.
+  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md`: once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
+  - **"Future / roadmap" / "v2+" sections**: drop items as they ship.
+  - **Historical / planning docs** (e.g. `BunMail-Plan.md`): should carry a "historical, see X for current state" header so readers don't mistake them for current.
 - **Update `CHANGELOG.md` on every release.** When `bumpp` cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
 
 ## Collaboration

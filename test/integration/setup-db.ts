@@ -2,14 +2,14 @@
  * One-shot setup for the integration test tier. Run via:
  *   `bun run test:integration:setup`
  *
- * Idempotent — safe to re-run after a schema change. Steps:
+ * Idempotent: safe to re-run after a schema change. Steps:
  *   1. Connect to the `postgres` admin database as the configured user
  *      (read from `.env`'s `POSTGRES_USER` / `POSTGRES_PASSWORD`).
  *   2. Create `bunmail_test` if it doesn't already exist.
  *   3. Apply every migration via the Bun-native runner (#56) so the
  *      test DB schema matches the application's exact expectation.
  *
- * CI doesn't need this script — the workflow's `services.postgres`
+ * CI doesn't need this script: the workflow's `services.postgres`
  * already provisions `bunmail_test` and the integration-tests step
  * runs `bun run db:migrate` directly. This script exists for local
  * dev convenience.
@@ -18,7 +18,7 @@
 /**
  * `config.ts` (loaded transitively by `runMigrations` and the project
  * logger) requires `DKIM_ENCRYPTION_KEY` at module load. The setup
- * script doesn't actually encrypt anything — it just runs DDL — but
+ * script doesn't actually encrypt anything, it just runs DDL, but
  * we need to satisfy the config check. Set defaults BEFORE any other
  * module loads. Dynamic imports below keep this assignment effective
  * even though ESM imports are hoisted.
@@ -55,7 +55,7 @@ if (existing.length === 0) {
    *  is auto-commit by default, so this works as-is. */
   await admin.unsafe("CREATE DATABASE bunmail_test");
 } else {
-  logger.info("Setup: database bunmail_test already exists — leaving in place");
+  logger.info("Setup: database bunmail_test already exists, leaving in place");
 }
 
 await admin.close();
@@ -71,7 +71,7 @@ logger.info("Setup: done", {
 });
 process.exit(0);
 
-/** Top-level await requires the file be a module. No static imports/
- *  exports exist (we use dynamic import everywhere to control eval
- *  order), so add an empty export to satisfy the TS module check. */
-export {};
+/** Top-level await requires the file be a module. It has no static
+ *  imports/exports (dynamic import everywhere controls eval order), so
+ *  it relies on `"moduleDetection": "force"` in tsconfig.json rather than
+ *  an empty `export {}`. */

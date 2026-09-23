@@ -10,7 +10,7 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 
 /**
- * Suppression list — addresses we refuse to send to. Checked at the
+ * Suppression list: addresses we refuse to send to. Checked at the
  * `createEmail` gate before queuing; sends to suppressed recipients
  * are rejected with 422 and never reach the queue or the SMTP path.
  *
@@ -31,7 +31,7 @@ export const suppressions = pgTable(
     id: varchar("id", { length: 36 }).primaryKey(),
 
     /**
-     * Owning API key. Suppressions are per-tenant — see file header.
+     * Owning API key. Suppressions are per-tenant, see file header.
      * `ON DELETE CASCADE` so revoked keys also drop their suppression
      * lists; an inactive key shouldn't keep a suppression alive that
      * a different key has to step around.
@@ -45,7 +45,7 @@ export const suppressions = pgTable(
 
     /**
      * Why the address is suppressed. Lower-cased free text for forward
-     * compatibility — using a Postgres enum would force a migration on
+     * compatibility: using a Postgres enum would force a migration on
      * every new reason. Validated to one of the known values via the
      * DTO at the API boundary; the DB stays open.
      *
@@ -93,14 +93,14 @@ export const suppressions = pgTable(
   },
   (table) => [
     /**
-     * One suppression per (api_key, email) — re-suppressing an address
+     * One suppression per (api_key, email): re-suppressing an address
      * upserts the existing row rather than piling up duplicates. The
      * service layer relies on this constraint for `ON CONFLICT DO UPDATE`.
      */
     uniqueIndex("suppressions_api_key_email_unique").on(table.apiKeyId, table.email),
 
     /**
-     * Hot path — the `createEmail` gate runs `WHERE api_key_id = $1
+     * Hot path: the `createEmail` gate runs `WHERE api_key_id = $1
      * AND email = $2` on every send. The unique index above also serves
      * this query, but Postgres composite uniques use a btree under the
      * hood so this is effectively the same shape; the explicit index is

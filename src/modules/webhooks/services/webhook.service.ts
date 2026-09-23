@@ -58,7 +58,7 @@ export async function listWebhooks(apiKeyId: string): Promise<Webhook[]> {
 }
 
 /**
- * Lists all webhooks (unscoped) — used by the dashboard.
+ * Lists all webhooks (unscoped): used by the dashboard.
  */
 export async function listAllWebhooks(): Promise<Webhook[]> {
   return db.select().from(webhooks);

@@ -17,7 +17,7 @@ const base = {
   subject: "Hello",
 };
 
-describe("sendEmailDto — CRLF header-injection guard (#133)", () => {
+describe("sendEmailDto: CRLF header-injection guard (#133)", () => {
   test("accepts a clean body", () => {
     expect(check.Check(base)).toBe(true);
   });

@@ -19,7 +19,7 @@
  *
  * Design rule: every rendered string carries BOTH date and time
  * (relative phrasings like "5m ago" inherently encode both). There
- * is intentionally no date-only format — the dashboard never shows
+ * is intentionally no date-only format: the dashboard never shows
  * a bare date.
  *
  * Usage:
@@ -31,7 +31,7 @@
 interface TimeDisplayProps {
   /** Timestamp to render. Null/undefined → fallback string. */
   value: Date | null | undefined;
-  /** Text to show when value is null/undefined. Defaults to `—`. */
+  /** Text to show when value is null/undefined. Defaults to `n/a`. */
   fallback?: string;
   /** Optional Tailwind classes piped to the `<time>` element. */
   class?: string;
@@ -39,12 +39,12 @@ interface TimeDisplayProps {
 
 export function TimeDisplay({
   value,
-  fallback = "—",
+  fallback = "n/a",
   class: className,
 }: TimeDisplayProps) {
   if (!value) return fallback;
   const iso = value.toISOString();
-  /** Pre-hydration fallback — full UTC date + time, unambiguous. */
+  /** Pre-hydration fallback: full UTC date + time, unambiguous. */
   const utcFallback = `${iso.slice(0, 16).replace("T", " ")} UTC`;
   return (
     <time datetime={iso} data-bm-time="" title={iso} class={className} safe>
@@ -54,7 +54,7 @@ export function TimeDisplay({
 }
 
 /**
- * Hydration script — emitted ONCE per page (via BaseLayout). Walks
+ * Hydration script: emitted ONCE per page (via BaseLayout). Walks
  * every `<time data-bm-time>` element after parse and rewrites its
  * textContent to a relative-time phrase ("5m ago", "Yesterday 14:32",
  * "Jan 5, 14:32") in the viewer's locale + timezone, while the
@@ -130,7 +130,7 @@ export function TimeDisplayScript() {
               try {
                 el.textContent = relative(d, now);
                 el.setAttribute('title', fmtTooltip(d));
-              } catch (e) { /** Locale failure — leave server fallback. */ }
+              } catch (e) { /** Locale failure: leave server fallback. */ }
             });
           }
           window.bmHydrateTimes = hydrate;

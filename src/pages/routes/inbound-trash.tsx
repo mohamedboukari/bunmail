@@ -16,7 +16,7 @@ interface InboundTrashPageProps {
 }
 
 /**
- * Trashed inbound emails page — bulk-select Restore / Delete-forever / Empty.
+ * Trashed inbound emails page: bulk-select Restore / Delete-forever / Empty.
  */
 export function InboundTrashPage({
   emails,

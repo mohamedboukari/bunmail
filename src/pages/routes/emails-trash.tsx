@@ -17,7 +17,7 @@ interface EmailsTrashPageProps {
 }
 
 /**
- * Trashed emails page — shows soft-deleted emails with bulk-select Restore /
+ * Trashed emails page: shows soft-deleted emails with bulk-select Restore /
  * Delete-forever / Empty-trash actions.
  *
  * The same form wraps the table; two submit buttons inside the bulk bar use

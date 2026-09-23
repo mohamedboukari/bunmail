@@ -4,7 +4,7 @@
  * The SMTP receiver, when a DSN arrives, calls
  * `parseBounce(rawMessage)` → `handleParsedBounce(parsed)`. Both are
  * exported, so we exercise the full chain here against real Postgres
- * + a captured `fetch` for webhook dispatch — the same pattern used
+ * + a captured `fetch` for webhook dispatch: the same pattern used
  * by `webhook-dispatch.integration.test.ts`. The closure in
  * `smtp-receiver.service.ts` adds nothing extra; this test covers the
  * DB + webhook side effects identically.
@@ -26,7 +26,7 @@
  *     library's SIZE extension (already trusted upstream) and as a
  *     belt-and-suspenders chunk guard in the closure (would require
  *     either a real SMTPServer boot on an ephemeral port or extracting
- *     the buffer logic — deferred). Documented in #35's PR.
+ *     the buffer logic: deferred). Documented in #35's PR.
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
@@ -49,25 +49,28 @@ const originalFetch = globalThis.fetch;
 beforeEach(async () => {
   await truncateAll();
   captured.length = 0;
-  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
-    const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
-    const headers: Record<string, string> = {};
-    new Headers(init?.headers).forEach((value, key) => {
-      headers[key] = value;
-    });
-    captured.push({
-      url,
-      method: init?.method ?? "GET",
-      headers,
-      body: typeof init?.body === "string" ? init.body : "",
-    });
-    return new Response("ok", { status: 200 });
-  }) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(
+    mock(async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+      const headers: Record<string, string> = {};
+      new Headers(init?.headers).forEach((value, key) => {
+        headers[key] = value;
+      });
+      captured.push({
+        url,
+        method: init?.method ?? "GET",
+        headers,
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      return new Response("ok", { status: 200 });
+    }),
+    { preconnect: originalFetch.preconnect },
+  );
 });
 
 afterEach(() => {
@@ -78,10 +81,10 @@ afterEach(() => {
  * Wait for `dispatchEvent`'s enqueue chain to drain, then drive one
  * worker poll so the captured-fetch mock actually fires. As of #30,
  * `dispatchEvent` is an INSERT into `webhook_deliveries`, not a direct
- * POST — the worker is what hits the consumer.
+ * POST: the worker is what hits the consumer.
  */
 async function waitForDispatch(ms = 100): Promise<void> {
-  await new Promise((r) => setTimeout(r, ms));
+  await new Promise((resolve) => setTimeout(resolve, ms));
   await runPollCycle();
 }
 
@@ -139,7 +142,7 @@ Original-Message-ID: <${originalMessageId}>
 ----bnd--`;
 }
 
-describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", () => {
+describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () => {
   test("hard bounce: suppression created, email marked bounced, email.bounced webhook fired", async () => {
     /** Seed: an api key, an email row that was previously sent, and a
      *  webhook subscribed to email.bounced. */
@@ -251,7 +254,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
   });
 
   test("soft bounce escalates to hard when an active soft suppression already exists", async () => {
-    /** Repeat soft bounces are effectively permanent for IP-rep purposes — #24's escalation rule. */
+    /** Repeat soft bounces are effectively permanent for IP-rep purposes: #24's escalation rule. */
     const { id: apiKeyId } = await seed.apiKey();
     const messageId = "test-soft-escalate-001@example.com";
     const recipient = "repeat@example.com";
@@ -301,7 +304,7 @@ describe("inbound DSN → bounce handler — end-to-end (#35 bullets 4 + 5)", ()
   test("DSN that doesn't link to any emails row is dropped: no DB writes, no webhook", async () => {
     /** The DSN claims an Original-Message-ID we've never sent. The
      *  handler refuses to act under "we don't know which tenant this
-     *  belongs to" — better than risking suppressing under the wrong key. */
+     *  belongs to": better than risking suppressing under the wrong key. */
     const { id: apiKeyId } = await seed.apiKey();
     await seed.webhook({
       apiKeyId,

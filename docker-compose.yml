@@ -1,4 +1,4 @@
-# BunMail — Docker Compose
+# BunMail: Docker Compose
 #
 # Starts the BunMail API server and a PostgreSQL database.
 # Usage: docker compose up -d

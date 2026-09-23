@@ -9,7 +9,7 @@ export interface SerializedWebhook {
 }
 
 /**
- * Strips the signing secret — never expose it in list/get responses.
+ * Strips the signing secret: never expose it in list/get responses.
  * The secret is only shown once at creation time.
  */
 export function serializeWebhook(webhook: Webhook): SerializedWebhook {

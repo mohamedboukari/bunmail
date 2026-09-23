@@ -1,5 +1,5 @@
 ---
-description: Bun + Elysia + Drizzle + Postgres conventions — module-per-feature architecture, no any types, plan before coding
+description: Bun + Elysia + Drizzle + Postgres conventions, module-per-feature architecture, no any types, plan before coding
 globs:
   - "**/*.ts"
   - "**/*.tsx"
@@ -29,7 +29,7 @@ src/
   utils/                   ← Tiny pure helpers shared by 3+ modules
   modules/<feature>/
     <feature>.plugin.ts    ← Elysia plugin (route group)
-    services/              ← Business logic — sole DB access point
+    services/              ← Business logic: sole DB access point
     dtos/                  ← Elysia t.Object validation
     models/                ← Drizzle pgTable schemas
     serializations/        ← Response mappers
@@ -85,17 +85,17 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 ## Logging rules
 
 - Use the structured logger in `src/utils/logger.ts`. **Never `console.log` in committed code.**
-- `LOG_LEVEL` must be validated against the union (`"debug" | "info" | "warn" | "error"`) at config load — fail loud on bad input.
-- Logs are JSON. Don't log full request/response bodies — log identifiers only. Be careful with PII in `to`/`from` fields (consider an `LOG_REDACT_PII` env flag in production).
+- `LOG_LEVEL` must be validated against the union (`"debug" | "info" | "warn" | "error"`) at config load: fail loud on bad input.
+- Logs are JSON. Don't log full request/response bodies: log identifiers only. Be careful with PII in `to`/`from` fields (consider an `LOG_REDACT_PII` env flag in production).
 
 ## Test rules
 
-- `test/unit/` — pure functions. No DB, no framework. Bun test runner: `import { describe, test, expect } from "bun:test"`.
-- `test/e2e/` — Elysia plugin-level. Mock services at the module boundary with `mock.module(...)`.
+- `test/unit/`: pure functions. No DB, no framework. Bun test runner: `import { describe, test, expect } from "bun:test"`.
+- `test/e2e/`: Elysia plugin-level. Mock services at the module boundary with `mock.module(...)`.
 - **Mock leakage is real.** When you `mock.module()` a service file, that mock can persist into the next test file when run as a single process. Two defenses:
   1. CI runs unit and e2e as **separate** Bun processes: `bun test test/unit && bun test test/e2e`.
-  2. When mocking a shared service module, include **all** of its exports as `mock(() => ...)` even if your test doesn't use them — otherwise downstream tests in the suite lose those exports.
-- Don't pin Bun to `latest` in CI — pin a specific version (e.g. `1.3.10`) so test ordering stays deterministic.
+  2. When mocking a shared service module, include **all** of its exports as `mock(() => ...)` even if your test doesn't use them, otherwise downstream tests in the suite lose those exports.
+- Don't pin Bun to `latest` in CI: pin a specific version (e.g. `1.3.10`) so test ordering stays deterministic.
 
 ## Error handling
 
@@ -107,15 +107,15 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 - **Every PR updates `.md` docs.** Required: `CHANGELOG.md` under `[Unreleased]`. Conditional: `README.md`, `ARCHITECTURE.md`, `docs/api.md`, `docs/<module>.md` if their content is now stale.
 - Each feature module has its own `docs/<module>.md` covering schema, indexes, service methods, and the API surface.
 - API surface changes (new endpoint, env var, response shape) **must** include the doc update in the same commit.
-- **Before every commit, audit every `.md` file the change touches.** Run a sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and every file under `docs/` — don't assume "I only changed code, the docs are fine." Doc drift compounds: a stale claim in `THREAT_MODEL.md` or `README.md` is worse than a missing one. Specific things to re-check on every PR:
-  - **Schema tables** in `ARCHITECTURE.md` and per-module docs — new columns, dropped columns, new indexes, FK-on-delete behaviour.
-  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md` — added/removed routes, changed status codes, new error body fields.
+- **Before every commit, audit every `.md` file the change touches.** Run a sweep across `README.md`, `ARCHITECTURE.md`, `THREAT_MODEL.md`, `SECURITY.md`, `CHANGELOG.md`, and every file under `docs/`: don't assume "I only changed code, the docs are fine." Doc drift compounds: a stale claim in `THREAT_MODEL.md` or `README.md` is worse than a missing one. Specific things to re-check on every PR:
+  - **Schema tables** in `ARCHITECTURE.md` and per-module docs: new columns, dropped columns, new indexes, FK-on-delete behaviour.
+  - **API endpoints** in `docs/api.md` and the table in `ARCHITECTURE.md`: added/removed routes, changed status codes, new error body fields.
   - **Env var lists** in `.env.example`, `docs/self-hosting.md`, `ARCHITECTURE.md` (Deployment section), `SECURITY.md`.
-  - **Webhook events** — `docs/webhooks.md` event list and `README.md` features bullet.
+  - **Webhook events**: `docs/webhooks.md` event list and `README.md` features bullet.
   - **Status enums** (`EmailStatus`, suppression `reason`, etc.) referenced in any doc.
-  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md` — once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
-  - **"Future / roadmap" / "v2+" sections** — drop items as they ship.
-  - **`BunMail-Plan.md` and other historical docs** — should carry a "historical, see X for current state" header so readers don't mistake them for current.
+  - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md`: once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
+  - **"Future / roadmap" / "v2+" sections**: drop items as they ship.
+  - **`BunMail-Plan.md` and other historical docs**: should carry a "historical, see X for current state" header so readers don't mistake them for current.
 
 ## Git workflow
 
@@ -129,19 +129,19 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 
 For any non-trivial change (schema, new module, refactor across multiple files), draft a plan first:
 
-1. **Context** — why this change.
-2. **Approach** — what files change, what stays.
-3. **Verification** — typecheck, tests, manual smoke.
-4. **Out of scope** — what this PR explicitly defers.
+1. **Context**: why this change.
+2. **Approach**: what files change, what stays.
+3. **Verification**: typecheck, tests, manual smoke.
+4. **Out of scope**: what this PR explicitly defers.
 
 Get the user's approval on the plan before writing code.
 
 ## What NOT to do
 
 - Don't create global helpers unless the logic is repeated in **3+ modules**.
-- Don't bring in new frameworks (Hono, Express, Fastify) — Elysia is the choice.
+- Don't bring in new frameworks (Hono, Express, Fastify): Elysia is the choice.
 - Don't add ORMs alongside Drizzle (Prisma, Kysely, raw SQL).
 - Don't introduce new top-level folders without justification.
-- Don't mix dashboard JSX into API plugins or vice versa — dashboard lives in `src/pages/`.
+- Don't mix dashboard JSX into API plugins or vice versa: dashboard lives in `src/pages/`.
 - Don't bypass the service layer to query the DB from a route handler.
 - Don't skip the `docs/`/`CHANGELOG.md` update on a PR that touches public surface area.

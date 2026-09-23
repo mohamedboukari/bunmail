@@ -25,8 +25,8 @@ import type {
  * Creates a new email record in the database with status `queued`.
  *
  * Supports two modes:
- * 1. Direct content — subject, html, text provided inline.
- * 2. Template — templateId + variables resolved from the templates table.
+ * 1. Direct content: subject, html, text provided inline.
+ * 2. Template: templateId + variables resolved from the templates table.
  *
  * Also links the sender's domain for DKIM signing.
  */
@@ -49,15 +49,15 @@ export async function createEmail(
 
   /**
    * Suppression gate (#25). Reject sends to addresses on the per-API-key
-   * suppression list before any other work — no template lookup, no
+   * suppression list before any other work: no template lookup, no
    * domain check, no INSERT into `emails`. The error class is mapped to
    * HTTP 422 by the global `onError` handler in `src/index.ts`, with the
    * `suppressionId` surfaced in the body so callers can pivot directly
    * to `DELETE /api/v1/suppressions/:id` when they want to undo.
    *
    * **Covers `to`, `cc`, and `bcc`** (#87). Pre-multi-MX, suppressed
-   * CC/BCC addresses were silently dropped by the single-MX send anyway
-   * — the suppression list was effective by accident. Now that
+   * CC/BCC addresses were silently dropped by the single-MX send anyway:
+   * the suppression list was effective by accident. Now that
    * multi-MX delivery actually reaches CC/BCC, unchecked CC/BCC would
    * let suppressed addresses receive mail. We iterate the parsed
    * recipient list and reject on the first match.
@@ -83,7 +83,7 @@ export async function createEmail(
   /**
    * Sender-authorization gate (#126). If the calling key carries a
    * non-empty `allowedSenders` allowlist, the message's `From` must be on
-   * it — otherwise a key could spoof any identity on any registered domain
+   * it, otherwise a key could spoof any identity on any registered domain
    * (DKIM-signed, so it passes auth). Empty list = unrestricted (the
    * default), so this is a no-op for keys that haven't opted in. Runs for
    * both the REST send API and the SMTP submission server, since both call
@@ -123,7 +123,7 @@ export async function createEmail(
   }
 
   if (!subject) {
-    throw new Error("Subject is required — provide it inline or via a template.");
+    throw new Error("Subject is required: provide it inline or via a template.");
   }
 
   let domainId: string | null = null;
@@ -172,7 +172,7 @@ export async function createEmail(
 /**
  * Retrieves a single email by its ID, scoped to the requesting API key.
  *
- * The apiKeyId filter ensures users can only access emails they created —
+ * The apiKeyId filter ensures users can only access emails they created:
  * prevents cross-tenant data leakage.
  *
  * @param id - The email ID (e.g. "msg_a1b2c3...")
@@ -185,7 +185,7 @@ export async function getEmailById(
 ): Promise<Email | undefined> {
   logger.debug("Fetching email by ID", { id, apiKeyId });
 
-  /** Excludes trashed rows — they're only accessible via the trash endpoints */
+  /** Excludes trashed rows: they're only accessible via the trash endpoints */
   const [email] = await db
     .select()
     .from(emails)
@@ -220,7 +220,7 @@ export async function listEmails(
   logger.debug("Listing emails", { apiKeyId, ...filters, offset });
 
   /**
-   * Build the WHERE clause — always filter by API key + exclude trashed,
+   * Build the WHERE clause: always filter by API key + exclude trashed,
    * optionally by status and/or source (#137). The `apiKeyId` *filter*
    * doesn't apply here: this list is already scoped to the calling key.
    */
@@ -253,7 +253,7 @@ export async function listEmails(
 }
 
 /**
- * Lists all emails without API key scoping — used by the dashboard.
+ * Lists all emails without API key scoping: used by the dashboard.
  *
  * Same as `listEmails` but doesn't filter by apiKeyId, giving a global
  * view of all emails across all API keys.
@@ -269,7 +269,7 @@ export async function listAllEmails(
   logger.debug("Listing all emails (unscoped)", { ...filters, offset });
 
   /**
-   * Build WHERE clause — exclude trashed; optionally filter by status,
+   * Build WHERE clause: exclude trashed; optionally filter by status,
    * source, and (dashboard-only) the sending API key (#137).
    */
   const clauses = [isNull(emails.deletedAt)];
@@ -301,7 +301,7 @@ export async function listAllEmails(
 }
 
 /**
- * Retrieves a single email by its ID without API key scoping — used by the dashboard.
+ * Retrieves a single email by its ID without API key scoping: used by the dashboard.
  *
  * Unlike `getEmailById`, this doesn't check ownership, giving dashboard
  * admins access to any email regardless of which API key sent it.
@@ -312,7 +312,7 @@ export async function listAllEmails(
 export async function getEmailByIdUnscoped(id: string): Promise<Email | undefined> {
   logger.debug("Fetching email by ID (unscoped)", { id });
 
-  /** Excludes trashed rows — dashboard hits separate trash endpoints */
+  /** Excludes trashed rows: dashboard hits separate trash endpoints */
   const [email] = await db
     .select()
     .from(emails)
@@ -329,7 +329,7 @@ export async function getEmailByIdUnscoped(id: string): Promise<Email | undefine
 
 /**
  * Moves an email to trash by setting `deletedAt = NOW()`. Scoped to apiKeyId
- * so users can only trash their own emails. Idempotent — calling twice is
+ * so users can only trash their own emails. Idempotent: calling twice is
  * harmless (deleted_at is just overwritten with NOW()).
  *
  * @returns The updated email row, or undefined if not found / wrong owner.
@@ -352,7 +352,7 @@ export async function trashEmail(
 }
 
 /**
- * Bulk-trash variant — moves many emails to trash in one query.
+ * Bulk-trash variant: moves many emails to trash in one query.
  * Returns the count of rows actually trashed (already-trashed and
  * not-owned rows are silently ignored).
  */
@@ -405,7 +405,7 @@ export async function listTrashedEmails(
 }
 
 /**
- * Restores a trashed email — clears `deletedAt`. Scoped to apiKeyId.
+ * Restores a trashed email: clears `deletedAt`. Scoped to apiKeyId.
  */
 export async function restoreEmail(
   id: string,
@@ -426,12 +426,12 @@ export async function restoreEmail(
 
 /**
  * Permanently deletes a trashed email. Only works on rows that are already
- * in trash — protects against accidentally bypassing the trash workflow.
+ * in trash: protects against accidentally bypassing the trash workflow.
  *
  * Routes through {@link deleteEmailsWithTombstones} (#34) so a snapshot
  * of identifiers + status is preserved past the hard-delete for late
  * complaint / bounce trace-back. Returns the deleted email's `id` only;
- * the rest of the row is gone, exactly as before — but `id` matches the
+ * the rest of the row is gone, exactly as before, but `id` matches the
  * tombstone's id so callers can immediately fetch the snapshot if they
  * want to.
  */
@@ -449,7 +449,7 @@ export async function permanentDeleteEmail(
 }
 
 /**
- * Empties the trash for a given API key — permanently deletes all
+ * Empties the trash for a given API key: permanently deletes all
  * trashed emails for that key. Returns the count purged. Tombstones
  * are written for every deleted row (#34).
  */
@@ -466,7 +466,7 @@ export async function emptyEmailsTrash(apiKeyId: string): Promise<number> {
 /* ─── Unscoped variants for the dashboard ─── */
 
 /**
- * Lists trashed emails across all API keys — used by the dashboard trash view.
+ * Lists trashed emails across all API keys: used by the dashboard trash view.
  */
 export async function listTrashedEmailsUnscoped(
   filters: ListEmailsFilters,
@@ -493,7 +493,7 @@ export async function listTrashedEmailsUnscoped(
 
 /**
  * Dashboard variant of getEmailByIdUnscoped that explicitly returns
- * trashed rows — used to render the trashed email's detail view.
+ * trashed rows: used to render the trashed email's detail view.
  */
 export async function getTrashedEmailByIdUnscoped(
   id: string,

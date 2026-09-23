@@ -1,6 +1,6 @@
 # API Keys Module
 
-Manages API key lifecycle — creation, listing, and revocation. API keys authenticate all REST API requests via Bearer tokens.
+Manages API key lifecycle: creation, listing, and revocation. API keys authenticate all REST API requests via Bearer tokens.
 
 ## Auth Flow
 
@@ -9,7 +9,7 @@ Client                     Server
   |                          |
   |  Authorization: Bearer   |
   |  bm_live_abc123...       |
-  | ———————————————————————> |
+  |:, > |
   |                          | 1. Extract token from header
   |                          | 2. SHA-256 hash the token
   |                          | 3. SELECT from api_keys WHERE key_hash = <hash>
@@ -17,10 +17,10 @@ Client                     Server
   |                          | 5. Update last_used_at (fire-and-forget)
   |                          | 6. Inject apiKeyId into request context
   |  200 OK (or 401)         |
-  | <——————————————————————— |
+  | <:, |
 ```
 
-- The raw key is **never stored** — only its SHA-256 hash lives in the database.
+- The raw key is **never stored**, only its SHA-256 hash lives in the database.
 - The key prefix (first 12 chars) is stored for identification (e.g. `bm_live_a1b2`).
 - The first API key is created via the seed script: `bun run src/db/seed.ts`.
 
@@ -72,7 +72,7 @@ Creates a new API key. Generates `bm_live_<32 hex>`, hashes with SHA-256, stores
 
 ### `updateApiKey(id, input: UpdateApiKeyInput): Promise<ApiKey | undefined>`
 
-Updates a key's `name` and/or `allowedSenders` (#126). `allowedSenders` uses **replace** semantics — the caller sends the full desired list (add = include an address, remove = omit it). Returns the updated row, or `undefined` if the key doesn't exist.
+Updates a key's `name` and/or `allowedSenders` (#126). `allowedSenders` uses **replace** semantics: the caller sends the full desired list (add = include an address, remove = omit it). Returns the updated row, or `undefined` if the key doesn't exist.
 
 ### `listApiKeys(): Promise<ApiKey[]>`
 
@@ -94,12 +94,12 @@ Looks up an API key by ID. Used by the `createEmail` allowed-senders gate (#126)
 
 API keys come in two tiers:
 
-- **Admin** — may call the **management plane**: `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`. Full operator-level API access.
-- **Restricted** (the default for API-created keys) — **send-only + own data**: send email, and read/manage its own emails, suppressions, templates, webhooks, and submission stats. Calling a management-plane endpoint returns **HTTP 403** with `{ code: "ADMIN_REQUIRED" }`.
+- **Admin**, may call the **management plane**: `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`. Full operator-level API access.
+- **Restricted** (the default for API-created keys) is **send-only + own data**: send email, and read/manage its own emails, suppressions, templates, webhooks, and submission stats. Calling a management-plane endpoint returns **HTTP 403** with `{ code: "ADMIN_REQUIRED" }`.
 
 This is what makes the allowed-senders allowlist (#126) actually enforceable: without it, a "restricted" key could simply `PATCH` its own `allowedSenders` back to empty (re-enabling spoofing), read all inbound mail, or mint new keys. Restricting the management plane closes that.
 
-**`is_admin` is operator-only.** It is settable **only from the dashboard** — a checkbox on the create form and a per-key **Make admin / Make restricted** toggle — plus the seed script. It appears in **no REST request body** (neither `POST` nor `PATCH /api/v1/api-keys/:id`), so an API caller (even an admin key) can never grant admin. `setApiKeyAdmin()` is the only mutation path and is dashboard-only.
+**`is_admin` is operator-only.** It is settable **only from the dashboard**, a checkbox on the create form and a per-key **Make admin / Make restricted** toggle, plus the seed script. It appears in **no REST request body** (neither `POST` nor `PATCH /api/v1/api-keys/:id`), so an API caller (even an admin key) can never grant admin. `setApiKeyAdmin()` is the only mutation path and is dashboard-only.
 
 **Migration note:** existing keys were backfilled to **admin** (`is_admin = true`) so nothing breaks on upgrade. After deploying, **demote any key you hand to an app or developer** to restricted from the dashboard. New API-created keys default to restricted. The seed/bootstrap key is admin.
 
@@ -108,14 +108,14 @@ This is what makes the allowed-senders allowlist (#126) actually enforceable: wi
 By default a key can send `From:` any address on any registered domain. Because BunMail DKIM-signs outbound mail, that means a key handed to a developer could send convincingly as `ceo@company.com`. To prevent this, give the key an **allowed-senders** allowlist:
 
 - Set `allowedSenders: ["noreply@company.com", "orders@company.com"]` on `POST /api/v1/api-keys`, or in the dashboard's chip editor.
-- When non-empty, any send whose `From` isn't on the list is rejected — **HTTP 403 `UNAUTHORIZED_SENDER`** (REST) or **SMTP 550** (submission) — before anything is queued. Matching is case-insensitive.
+- When non-empty, any send whose `From` isn't on the list is rejected, **HTTP 403 `UNAUTHORIZED_SENDER`** (REST) or **SMTP 550** (submission), before anything is queued. Matching is case-insensitive.
 - Empty list = unrestricted (default; existing keys unchanged).
 - Enforced at the `createEmail` gate, so it applies to both the REST send API and the SMTP submission server.
 - Edit the list any time with `PATCH /api/v1/api-keys/:id` or the dashboard editor.
 
 ## Related Files
 
-- `src/utils/crypto.ts` — `hashApiKey()` and `generateApiKey()` functions
-- `src/middleware/auth.ts` — Bearer token validation middleware
-- `src/middleware/rate-limit.ts` — Per-key rate limiting middleware
-- `src/db/seed.ts` — Creates the initial development API key
+- `src/utils/crypto.ts`: `hashApiKey()` and `generateApiKey()` functions
+- `src/middleware/auth.ts`: Bearer token validation middleware
+- `src/middleware/rate-limit.ts`: Per-key rate limiting middleware
+- `src/db/seed.ts`: Creates the initial development API key

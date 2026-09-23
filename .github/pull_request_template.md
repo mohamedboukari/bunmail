@@ -19,7 +19,7 @@
 - [ ] Types check (`bunx tsc --noEmit`)
 - [ ] Linter passes (`bun run lint`)
 - [ ] Formatting passes (`bun run format:check`)
-- [ ] Tested on Docker (`docker compose up`) — if applicable
+- [ ] Tested on Docker (`docker compose up`), if applicable
 
 ## Related Issues
 

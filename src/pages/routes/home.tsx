@@ -3,17 +3,17 @@ import { StatsCard } from "../components/stats-card.tsx";
 import type { DashboardStats } from "../../modules/emails/services/stats.service.ts";
 
 /**
- * Dashboard home page — shows an overview grid of stat cards.
+ * Dashboard home page: shows an overview grid of stat cards.
  *
  * Stats are grouped into three sections:
- *   1. Outbound — totals + per-status, last-24h activity, success rate.
- *   2. Inbound — total received, last 24h, trash counts.
- *   3. Configuration — API keys, domains, templates, webhooks.
+ *   1. Outbound: totals + per-status, last-24h activity, success rate.
+ *   2. Inbound: total received, last 24h, trash counts.
+ *   3. Configuration: API keys, domains, templates, webhooks.
  */
 export function HomePage({ stats }: { stats: DashboardStats }) {
-  /** Format the success rate as a percentage with one decimal — null = no data yet */
+  /** Format the success rate as a percentage with one decimal: null = no data yet */
   const successRateDisplay =
-    stats.successRate === null ? "—" : `${(stats.successRate * 100).toFixed(1)}%`;
+    stats.successRate === null ? "n/a" : `${(stats.successRate * 100).toFixed(1)}%`;
 
   return (
     <BaseLayout title="Dashboard" activeNav="home">

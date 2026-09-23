@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
+import { readJson } from "../read-json.ts";
 
 /**
  * E2E tests for the Templates API (/api/v1/templates).
@@ -38,7 +39,7 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
-mock.module("../../src/config.ts", () => ({
+void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -49,7 +50,7 @@ mock.module("../../src/config.ts", () => ({
 }));
 
 /* ─── Mock logger ─── */
-mock.module("../../src/utils/logger.ts", () => ({
+void mock.module("../../src/utils/logger.ts", () => ({
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -59,7 +60,7 @@ mock.module("../../src/utils/logger.ts", () => ({
 }));
 
 /* ─── Mock DB ─── */
-mock.module("../../src/db/index.ts", () => ({
+void mock.module("../../src/db/index.ts", () => ({
   db: {},
 }));
 
@@ -83,7 +84,7 @@ const updatedTemplate = {
 };
 
 /* ─── Mock template service ─── */
-mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+void mock.module("../../src/modules/templates/services/template.service.ts", () => ({
   renderTemplate: mock(() => ""),
   createTemplate: mock(() => Promise.resolve(mockTemplate)),
   listTemplates: mock(() => Promise.resolve([mockTemplate])),
@@ -103,7 +104,7 @@ mock.module("../../src/modules/templates/services/template.service.ts", () => ({
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
-mock.module("../../src/middleware/auth.ts", () => ({
+void mock.module("../../src/middleware/auth.ts", () => ({
   authMiddleware: new Elysia({ name: "auth-middleware" }).derive(() => ({
     apiKeyId: "key_test",
     apiKeyName: "Test Key",
@@ -111,7 +112,7 @@ mock.module("../../src/middleware/auth.ts", () => ({
   adminMiddleware: new Elysia({ name: "admin-middleware" }),
 }));
 
-mock.module("../../src/middleware/rate-limit.ts", () => ({
+void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
 }));
 
@@ -144,7 +145,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as TemplateResponse;
+      const body = await readJson<TemplateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("tpl_test123");
       expect(body.data.name).toBe("Welcome");
@@ -177,7 +178,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as TemplateListResponse;
+      const body = await readJson<TemplateListResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.name).toBe("Welcome");
@@ -193,7 +194,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as TemplateResponse;
+      const body = await readJson<TemplateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("tpl_test123");
     });
@@ -206,7 +207,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Template not found");
     });
@@ -229,7 +230,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as TemplateResponse;
+      const body = await readJson<TemplateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("tpl_test123");
       expect(body.data.name).toBe("Updated Welcome");
@@ -248,7 +249,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Template not found");
     });
@@ -264,7 +265,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(200);
-      const body = (await response.json()) as TemplateResponse;
+      const body = await readJson<TemplateResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("tpl_test123");
     });
@@ -278,7 +279,7 @@ describe("Templates API E2E", () => {
       );
 
       expect(response.status).toBe(404);
-      const body = (await response.json()) as ErrorResponse;
+      const body = await readJson<ErrorResponse>(response);
       expect(body.success).toBe(false);
       expect(body.error).toBe("Template not found");
     });

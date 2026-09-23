@@ -2,18 +2,18 @@
  * Classifies an outbound SMTP error message into the same `kind` /
  * `code` shape the bounce module emits for async DSNs (#24). The queue's
  * failure path uses this to decide whether a send failure is a hard
- * bounce we should auto-suppress on (5xx — recipient permanently
- * unreachable), a soft bounce we should keep retrying (4xx — transient),
+ * bounce we should auto-suppress on (5xx: recipient permanently
+ * unreachable), a soft bounce we should keep retrying (4xx: transient),
  * or an infrastructure error we should not act on (DNS, network).
  *
- * Pure on purpose — no I/O, no logger — so unit tests can feed in
+ * Pure on purpose (no I/O, no logger) so unit tests can feed in
  * fixture strings and assert deterministic output.
  *
  * Why this exists:
  *   Modern Gmail / Outlook / Yahoo reject obviously-bad recipients
  *   **inline during the SMTP transaction** with `550 5.1.1 The email
  *   account that you tried to reach does not exist`. They never send
- *   an async DSN — the sending MTA already knows. Our async-DSN-only
+ *   an async DSN: the sending MTA already knows. Our async-DSN-only
  *   bounce handler missed these (#68); without classifying the error
  *   here, every send to a known-bad address burns three retry attempts
  *   on the same MX, which is exactly what tanks IP reputation.
@@ -43,7 +43,7 @@ export interface ParsedSmtpError {
 /**
  * Returns a classification when the error message carries a recognisable
  * SMTP status code, or `null` when it doesn't (DNS resolution failures,
- * socket timeouts, TLS handshake errors, unparseable nodemailer output —
+ * socket timeouts, TLS handshake errors, unparseable nodemailer output:
  * all "infrastructure" errors that warrant the existing retry loop).
  */
 export function parseSmtpError(message: string): ParsedSmtpError | null {

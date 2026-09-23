@@ -1,7 +1,7 @@
 import { pgTable, varchar, text, timestamp, index } from "drizzle-orm/pg-core";
 
 /**
- * Inbound emails table — stores emails received by the SMTP server.
+ * Inbound emails table: stores emails received by the SMTP server.
  *
  * When BunMail's built-in SMTP server receives a message, it parses it
  * with `mailparser` and inserts a row here. Registered webhooks are then
@@ -35,7 +35,7 @@ export const inboundEmails = pgTable(
     receivedAt: timestamp("received_at").notNull().defaultNow(),
 
     /**
-     * Soft-delete marker — when set, the inbound email is in "trash".
+     * Soft-delete marker, when set, the inbound email is in "trash".
      * The trash purge service permanently removes rows where
      * `deleted_at < NOW() - TRASH_RETENTION_DAYS`.
      */

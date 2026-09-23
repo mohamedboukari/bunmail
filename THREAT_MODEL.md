@@ -1,8 +1,8 @@
-# BunMail — Threat Model
+# BunMail: Threat Model
 
 > Last reviewed: 2026-05-01
 
-A self-hosted email service has a different threat surface than a SaaS one — there is no provider firewall in front of you, and you own the IP reputation, the database, the keys, and the abuse-response. This document walks the assets, the attackers we model against, the controls already in place, and the responsibilities that **stay with the operator**.
+A self-hosted email service has a different threat surface than a SaaS one: there is no provider firewall in front of you, and you own the IP reputation, the database, the keys, and the abuse-response. This document walks the assets, the attackers we model against, the controls already in place, and the responsibilities that **stay with the operator**.
 
 If you self-host BunMail, read the **Operator responsibilities** section. Some controls are not in the code and never will be.
 
@@ -13,7 +13,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **API keys** (`api_keys.key_hash`) | Authenticate every API request. Compromise = full mail-send abuse. |
 | **DKIM private keys** (`domains.dkim_private_key`) | Sign outbound mail as a verified sender. Compromise = an attacker can forge mail from your domain that passes DKIM. |
 | **Email queue + history** (`emails`, `inbound_emails`) | Contains every recipient address, subject, and body that has flowed through the system. PII / commercial intelligence. |
-| **Email tombstones** (`email_tombstones`, #34) | Post-purge audit snapshots — recipient address, Message-ID, subject (NOT body) for `TOMBSTONE_RETENTION_DAYS` days after the original was hard-deleted. Lower sensitivity than `emails` (no body) but higher *retention* (90d default vs 7d for trash). Set `TOMBSTONE_RETENTION_DAYS=1` to keep the bounce/complaint trace flow only for the freshest day of late feedback while minimising PII retention; the tombstone sweep runs every 6h. |
+| **Email tombstones** (`email_tombstones`, #34) | Post-purge audit snapshots: recipient address, Message-ID, subject (NOT body) for `TOMBSTONE_RETENTION_DAYS` days after the original was hard-deleted. Lower sensitivity than `emails` (no body) but higher *retention* (90d default vs 7d for trash). Set `TOMBSTONE_RETENTION_DAYS=1` to keep the bounce/complaint trace flow only for the freshest day of late feedback while minimising PII retention; the tombstone sweep runs every 6h. |
 | **Sending IP reputation** | Earned over weeks. A few hours of abuse can take it months to recover. |
 | **Webhook secrets** (`webhooks.secret`) | HMAC keys shared with the consumer. Compromise = forged webhook deliveries. |
 | **Dashboard session secret** (`SESSION_SECRET`) | HMAC key for browser sessions. Compromise = arbitrary dashboard access without password. |
@@ -22,15 +22,15 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 
 | Attacker | Goal | Realistic? |
 |---|---|---|
-| **Spam operator on the public internet** | Use BunMail as an open relay (inbound SMTP) or to send mail through stolen API keys. | Constant — assume always present. |
+| **Spam operator on the public internet** | Use BunMail as an open relay (inbound SMTP) or to send mail through stolen API keys. | Constant: assume always present. |
 | **Internet scanner** | Find exposed dashboards, leaked `.env` files, vulnerable endpoints. | Constant. |
 | **Compromised API consumer** | A leaked key sends mail from real domains. | Likely over time. |
-| **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23) — useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
+| **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23): useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
 | **Privileged insider with DB write** | Forge mail history, grant their own API keys, exfiltrate. | Lower likelihood; full DB write effectively bypasses the app. |
 | **Network adversary on egress path** | Strip TLS on outbound to recipients (downgrade attack). | Realistic on hostile networks; mostly irrelevant on cloud egress. |
-| **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape) — every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate is tracked in #150. |
+| **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape): every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate is tracked in #150. |
 
-We **do not** model nation-state attackers with side-channel access to the host — if they're on the box, the game is already over.
+We **do not** model nation-state attackers with side-channel access to the host, if they're on the box, the game is already over.
 
 ## 3. Trust boundaries
 
@@ -65,9 +65,9 @@ The trust boundaries are: **public internet ↔ host** and **app process ↔ dat
 
 ### Authentication
 
-- **API keys** are stored only as SHA-256 hashes (`api_keys.key_hash` is `UNIQUE`); the raw `bm_live_…` value is shown once at creation and never persisted. Bearer tokens are validated on every authenticated request via `src/middleware/auth.ts` — the lookup is cached on the `Request` (`WeakMap`) so we hash + query once per request.
-- **One-time secret reveal (#132).** When the dashboard creates an API key or a webhook, the raw key / HMAC secret is **never placed in a URL** — URL query strings leak into browser history, reverse-proxy / CDN / access logs, and the `Referer` header. Instead the secret is stashed under an opaque 32-byte random token (`stashRevealSecret` in `src/pages/pages.plugin.tsx`), and only that token rides in the post-create redirect; the follow-up GET consumes it **once** (single-read, 60s TTL) and renders the secret. The reveal store is in-memory and per-process — on a multi-replica deploy a create on one replica and the GET on another would miss the token (operator revokes + recreates); a shared store is a separate concern (same caveat as the in-memory rate-limiter, #133).
-- **Dashboard sessions** use HMAC-SHA256 over a Unix timestamp (`createSessionCookie` in `src/pages/pages.plugin.tsx`). Cookies are `HttpOnly` + `SameSite=Lax`, plus **`Secure` in production** (#133) so the cookie never rides plaintext HTTP. Validation uses `crypto.timingSafeEqual` to defeat timing oracles. `SESSION_SECRET` is **required in production** (#133) — no silent random-per-process default (see Authentication note above / `readSessionSecret`).
+- **API keys** are stored only as SHA-256 hashes (`api_keys.key_hash` is `UNIQUE`); the raw `bm_live_…` value is shown once at creation and never persisted. Bearer tokens are validated on every authenticated request via `src/middleware/auth.ts`: the lookup is cached on the `Request` (`WeakMap`) so we hash + query once per request.
+- **One-time secret reveal (#132).** When the dashboard creates an API key or a webhook, the raw key / HMAC secret is **never placed in a URL**: URL query strings leak into browser history, reverse-proxy / CDN / access logs, and the `Referer` header. Instead the secret is stashed under an opaque 32-byte random token (`stashRevealSecret` in `src/pages/pages.plugin.tsx`), and only that token rides in the post-create redirect; the follow-up GET consumes it **once** (single-read, 60s TTL) and renders the secret. The reveal store is in-memory and per-process: on a multi-replica deploy a create on one replica and the GET on another would miss the token (operator revokes + recreates); a shared store is a separate concern (same caveat as the in-memory rate-limiter, #133).
+- **Dashboard sessions** use HMAC-SHA256 over a Unix timestamp (`createSessionCookie` in `src/pages/pages.plugin.tsx`). Cookies are `HttpOnly` + `SameSite=Lax`, plus **`Secure` in production** (#133) so the cookie never rides plaintext HTTP. Validation uses `crypto.timingSafeEqual` to defeat timing oracles. `SESSION_SECRET` is **required in production** (#133): no silent random-per-process default (see Authentication note above / `readSessionSecret`).
 - **Dashboard CSRF (#133).** Every state-mutating dashboard action is a POST behind the session guard; the guard rejects any POST whose `Origin`/`Referer` host isn't same-origin (**403**), a second layer beyond `SameSite=Lax`. A cross-site form-POST riding the operator's cookie carries the attacker's Origin and is refused.
 - **Production guard:** the app refuses to start when `BUNMAIL_ENV=production` and `DASHBOARD_PASSWORD` is empty (`src/config.ts`). The dashboard exposes unscoped read/write across all keys; an unprotected production deployment would leak everyone's mail.
 
@@ -75,9 +75,9 @@ The trust boundaries are: **public internet ↔ host** and **app process ↔ dat
 
 Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver.service.ts`):
 
-1. **Per-IP connection rate limiting** — sliding window, 10 connections / 60 s by default.
-2. **DNSBL check** — Spamhaus ZEN by default. Listed IPs get SMTP 554 before they can issue `MAIL FROM`.
-3. **Recipient domain validation** — RCPT TO is rejected with SMTP 550 unless the recipient's domain is registered in BunMail's `domains` table. This is the primary anti-relay control.
+1. **Per-IP connection rate limiting**: sliding window, 10 connections / 60 s by default.
+2. **DNSBL check**: Spamhaus ZEN by default. Listed IPs get SMTP 554 before they can issue `MAIL FROM`.
+3. **Recipient domain validation**: RCPT TO is rejected with SMTP 550 unless the recipient's domain is registered in BunMail's `domains` table. This is the primary anti-relay control.
 4. **Envelope + stream hardening** (#18):
    - SMTP `SIZE` extension caps messages at 10 MB; the `onData` stream re-counts bytes and aborts with SMTP 552 if a non-conforming client tries to overflow.
    - `RCPT TO` is rejected with SMTP 452 once 50 recipients are accepted in one transaction.
@@ -89,55 +89,55 @@ All four layers **fail open** on internal errors (DNS timeout, DB unreachable) s
 
 ### SMTP submission (authenticated relay, #120)
 
-The submission server (`src/modules/smtp-submission/services/smtp-submission.service.ts`, opt-in via `SMTP_SUBMISSION_ENABLED`) is a **deliberate relay** for authenticated clients — apps send *through* BunMail to arbitrary recipients. It is a different trust model from the inbound receiver, so its anti-abuse controls differ:
+The submission server (`src/modules/smtp-submission/services/smtp-submission.service.ts`, opt-in via `SMTP_SUBMISSION_ENABLED`) is a **deliberate relay** for authenticated clients: apps send *through* BunMail to arbitrary recipients. It is a different trust model from the inbound receiver, so its anti-abuse controls differ:
 
-1. **AUTH is the anti-relay control.** `AUTH` is mandatory (`authOptional: false`); the password is treated as a BunMail API key (SHA-256 hashed → `findByHash`, must be active). Unauthenticated clients can't send at all — so, unlike the inbound receiver, recipient domains are intentionally *not* restricted.
-2. **Per-IP failed-AUTH throttle.** Because the password is an API key, failed AUTHs are counted per IP (default 10 / 900 s) and locked out with SMTP `454` before the key is checked — blunts online key brute-forcing. A success clears the counter.
-3. **Per-IP connection rate limiting** — sliding window (default 30 / 60 s).
-4. **Envelope hardening** — 10 MB `SIZE` cap (SMTP 552 on overflow) and a 50-recipient-per-transaction cap (SMTP 452).
+1. **AUTH is the anti-relay control.** `AUTH` is mandatory (`authOptional: false`); the password is treated as a BunMail API key (SHA-256 hashed → `findByHash`, must be active). Unauthenticated clients can't send at all, so, unlike the inbound receiver, recipient domains are intentionally *not* restricted.
+2. **Per-IP failed-AUTH throttle.** Because the password is an API key, failed AUTHs are counted per IP (default 10 / 900 s) and locked out with SMTP `454` before the key is checked: blunts online key brute-forcing. A success clears the counter.
+3. **Per-IP connection rate limiting**: sliding window (default 30 / 60 s).
+4. **Envelope hardening**: 10 MB `SIZE` cap (SMTP 552 on overflow) and a 50-recipient-per-transaction cap (SMTP 452).
 5. **Reuses the outbound gates.** Submitted messages go through `createEmail`, so the per-API-key **suppression** gate and the production **registered-sender-domain** requirement apply exactly as they do for REST sends (rejections surface as SMTP `550`).
 
-**Credential-in-transit risk.** With no TLS configured, `allowInsecureAuth` permits the API key to travel in plaintext — acceptable only on a trusted network (same host / private Docker network). Operators exposing submission more broadly must set `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to known clients. This is called out as an operator responsibility in §5.
+**Credential-in-transit risk.** With no TLS configured, `allowInsecureAuth` permits the API key to travel in plaintext: acceptable only on a trusted network (same host / private Docker network). Operators exposing submission more broadly must set `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to known clients. This is called out as an operator responsibility in §5.
 
 ### Sender authorization / anti-spoofing (#126)
 
-Because outbound mail is DKIM-signed by its sender domain, an API key that can set an arbitrary `From` can send a **fully-authenticated impersonation** (e.g. a dev key sending as `ceo@company.com`). Mitigation: each key has an **allowed-senders allowlist** (`api_keys.allowed_senders`). When non-empty, the `createEmail` gate rejects any send whose `From` isn't on the list — **403 `UNAUTHORIZED_SENDER`** (REST) / **SMTP 550** (submission), before anything is queued. Enforced once in `createEmail`, so it covers the REST API and the SMTP submission server identically. Editable via `PATCH /api/v1/api-keys/:id` or the dashboard.
+Because outbound mail is DKIM-signed by its sender domain, an API key that can set an arbitrary `From` can send a **fully-authenticated impersonation** (e.g. a dev key sending as `ceo@company.com`). Mitigation: each key has an **allowed-senders allowlist** (`api_keys.allowed_senders`). When non-empty, the `createEmail` gate rejects any send whose `From` isn't on the list: **403 `UNAUTHORIZED_SENDER`** (REST) / **SMTP 550** (submission), before anything is queued. Enforced once in `createEmail`, so it covers the REST API and the SMTP submission server identically. Editable via `PATCH /api/v1/api-keys/:id` or the dashboard.
 
-**Key trust model (#130).** API keys are **admin** or **restricted** (`api_keys.is_admin`). Restricted keys are send-only + own-data; the **management plane** (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) is admin-only (`adminMiddleware` → `403 ADMIN_REQUIRED`). This is what makes the allowed-senders boundary real: a restricted key can no longer clear its own `allowedSenders`, read others' inbound, delete domains, or mint keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO, so an API key can't self-escalate. Existing keys migrated to admin on upgrade — **demote any key handed to a less-trusted party.**
+**Key trust model (#130).** API keys are **admin** or **restricted** (`api_keys.is_admin`). Restricted keys are send-only + own-data; the **management plane** (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) is admin-only (`adminMiddleware` → `403 ADMIN_REQUIRED`). This is what makes the allowed-senders boundary real: a restricted key can no longer clear its own `allowedSenders`, read others' inbound, delete domains, or mint keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO, so an API key can't self-escalate. Existing keys migrated to admin on upgrade: **demote any key handed to a less-trusted party.**
 
-**Residual (operator responsibility):** the allowlist is **opt-in** — a restricted key with an *empty* list can still send as any address on any *registered* domain (BunMail has no per-key domain ownership; that's a deliberate deferral, since one domain is often shared by several keys). So: set `allowedSenders` on any restricted key you hand out. An **admin** key is a full operator credential — treat it like the dashboard password.
+**Residual (operator responsibility):** the allowlist is **opt-in**: a restricted key with an *empty* list can still send as any address on any *registered* domain (BunMail has no per-key domain ownership; that's a deliberate deferral, since one domain is often shared by several keys). So: set `allowedSenders` on any restricted key you hand out. An **admin** key is a full operator credential: treat it like the dashboard password.
 
 ### Outbound delivery
 
-- **DKIM signing** uses per-domain RSA-2048 keys generated at registration time. The private half is **encrypted at rest with AES-256-GCM** using `DKIM_ENCRYPTION_KEY` (#23) — see `SECURITY.md` for format, generation, and rotation. The public half stays plaintext (it's published in DNS).
+- **DKIM signing** uses per-domain RSA-2048 keys generated at registration time. The private half is **encrypted at rest with AES-256-GCM** using `DKIM_ENCRYPTION_KEY` (#23), see `SECURITY.md` for format, generation, and rotation. The public half stays plaintext (it's published in DNS).
 - **Opportunistic STARTTLS** (#21): every recipient MX that advertises STARTTLS is upgraded to TLS. Only legacy receivers without STARTTLS support stay in plaintext.
-- **Body size cap** (#26): `html` and `text` are validated at the DTO layer at 5 MB each — oversize bodies return `422` instead of pushing into the queue and crashing the transport on retry.
+- **Body size cap** (#26): `html` and `text` are validated at the DTO layer at 5 MB each: oversize bodies return `422` instead of pushing into the queue and crashing the transport on retry.
 - **Queue isolation:** trashed and soft-deleted rows are excluded from the queue selector (`src/modules/emails/services/queue.service.ts`) so a deletion mid-flight cancels the send.
 - **Suppression list** (#25): a per-API-key gate runs at `createEmail` before any insert / queue / SMTP work. Suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` and never reach the wire. Address normalisation (case-fold, trim) prevents trivial bypasses.
-- **Bounce → suppression chain** (#24): when the inbound SMTP receives a Delivery Status Notification, the bounce module parses it (RFC 3464 + heuristic-gated regex fallback), links it back to the original outbound `emails` row by `Original-Message-ID`, and persists a per-API-key suppression. Hard bounces (5.x.x) become permanent suppressions; soft bounces (4.x.x) become 24-hour windowed suppressions and escalate to permanent on a second soft bounce within the window. DSNs without a verifiable Original-Message-ID are dropped — never suppress under an unknown tenant.
+- **Bounce → suppression chain** (#24): when the inbound SMTP receives a Delivery Status Notification, the bounce module parses it (RFC 3464 + heuristic-gated regex fallback), links it back to the original outbound `emails` row by `Original-Message-ID`, and persists a per-API-key suppression. Hard bounces (5.x.x) become permanent suppressions; soft bounces (4.x.x) become 24-hour windowed suppressions and escalate to permanent on a second soft bounce within the window. DSNs without a verifiable Original-Message-ID are dropped: never suppress under an unknown tenant.
 
 ### HTTP API hygiene
 
 - **Per-API-key rate limiting** (`src/middleware/rate-limit.ts`): 100 requests / 60 s, sliding window.
-- **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed passwords **per client IP** (sliding window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit; a successful login clears the counter. Since the dashboard is a single shared password with no username, this is what stops online guessing. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For` — the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
+- **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed passwords **per client IP** (sliding window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit; a successful login clears the counter. Since the dashboard is a single shared password with no username, this is what stops online guessing. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`: the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
 - **Cleanup interval** (#22): the in-memory rate-limit maps (per-API-key and per-IP login) are pruned every 5 minutes so distinct keys / IPs can't grow them unbounded.
-- **CORS:** none configured by default — the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.
+- **CORS:** none configured by default: the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.
 
 ### Webhooks
 
 - Outgoing webhook payloads are HMAC-SHA256 signed using the per-webhook secret. The signature covers `<unix-timestamp>.<raw-body>`; the timestamp is shipped in the `X-BunMail-Timestamp` header and the signature in `X-BunMail-Signature` (#43). Each retry attempt is signed with a fresh timestamp, so a replayed delivery from yesterday fails the freshness check on the receiver. Recommended consumer check: `|now - timestamp| < 5 min`.
-- **SSRF guard (#128).** Webhook URLs are tenant-supplied and fetched server-side, and the response is read back through the delivery API — so an unvalidated URL is an *exfiltrating* SSRF. `src/utils/ssrf-guard.ts` validates every URL **at creation and again before each delivery attempt** (DNS can rebind): scheme must be `https` (or `http` only if `WEBHOOK_ALLOW_INSECURE_HTTP=true`), and the host is resolved and rejected if any address is private/loopback/link-local/ULA/CGNAT/metadata (incl. `169.254.169.254` and v4-mapped v6). Delivery uses `redirect: "manual"` so a 3xx into an internal address can't bypass the check. **Residual:** the guard resolves DNS then fetches (a small TOCTOU window remains against a sub-second rebind); an egress firewall / proxy is the belt-and-suspenders control for hostile multi-tenant use.
+- **SSRF guard (#128).** Webhook URLs are tenant-supplied and fetched server-side, and the response is read back through the delivery API, so an unvalidated URL is an *exfiltrating* SSRF. `src/utils/ssrf-guard.ts` validates every URL **at creation and again before each delivery attempt** (DNS can rebind): scheme must be `https` (or `http` only if `WEBHOOK_ALLOW_INSECURE_HTTP=true`), and the host is resolved and rejected if any address is private/loopback/link-local/ULA/CGNAT/metadata (incl. `169.254.169.254` and v4-mapped v6). Delivery uses `redirect: "manual"` so a 3xx into an internal address can't bypass the check. **Residual:** the guard resolves DNS then fetches (a small TOCTOU window remains against a sub-second rebind); an egress firewall / proxy is the belt-and-suspenders control for hostile multi-tenant use.
 
 ### Dashboard XSS
 
-- `@kitajs/html` does **not** auto-escape interpolated children — escaping requires the `safe` attribute on the enclosing element. Every interpolation of stored/user data must carry `safe`; missing it is a stored/reflected XSS.
-- **DMARC pages (#131):** aggregate-report fields (`orgName`, `domain`, `sourceIp`, `disposition`, auth domains/results, raw XML) arrive over the unauthenticated inbound path and were rendered without `safe` — an emailed report with `<img onerror>` would execute in the admin origin. Now all such fields (both DMARC pages) carry `safe`, covered by a render-level regression test (`test/unit/dmarc-xss.test.ts`).
+- `@kitajs/html` does **not** auto-escape interpolated children: escaping requires the `safe` attribute on the enclosing element. Every interpolation of stored/user data must carry `safe`; missing it is a stored/reflected XSS.
+- **DMARC pages (#131):** aggregate-report fields (`orgName`, `domain`, `sourceIp`, `disposition`, auth domains/results, raw XML) arrive over the unauthenticated inbound path and were rendered without `safe`: an emailed report with `<img onerror>` would execute in the admin origin. Now all such fields (both DMARC pages) carry `safe`, covered by a render-level regression test (`test/unit/dmarc-xss.test.ts`).
 - **Tooling:** `@kitajs/ts-html-plugin`'s `xss-scan` CLI finds unescaped children. Adopting it as a CI gate + auditing the remaining flagged interpolations is tracked in #150. Inbound **email body** HTML is separately rendered in a sandboxed iframe (`html-preview.tsx`, `sandbox` without `allow-scripts`).
 
 ### Logging
 
-- The structured logger doesn't emit secrets — `key_hash`, `dkim_private_key`, and `SESSION_SECRET` are never logged.
-- Recipient PII in log records is redacted (`a***@example.com`) when `LOG_REDACT_PII=true` (#33). Default is `true` in production and `false` in development so dev logs stay debuggable. Webhook payloads still carry full addresses — consumers depend on them; only logs are masked.
+- The structured logger doesn't emit secrets: `key_hash`, `dkim_private_key`, and `SESSION_SECRET` are never logged.
+- Recipient PII in log records is redacted (`a***@example.com`) when `LOG_REDACT_PII=true` (#33). Default is `true` in production and `false` in development so dev logs stay debuggable. Webhook payloads still carry full addresses: consumers depend on them; only logs are masked.
 
 ## 5. What's NOT mitigated in code (operator responsibilities)
 
@@ -145,10 +145,10 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 
 | Control | What you must do |
 |---|---|
-| **Disk encryption / DB volume** | DKIM private keys are encrypted at rest (#23) so a DB dump alone leaks no signing material. The dashboard password, session secret, recipient lists, and inbound mail bodies are **not** encrypted — treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage; keep `.env` (which holds the DKIM key) on a different rotation/storage tier than the DB dump. |
-| **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. Set `DASHBOARD_TRUSTED_PROXY_HOPS` to the number of trusted hops (`1` for a single proxy) so the login throttle (#109) keys off the real client IP — and because that only holds if the origin is unreachable directly, the "never expose `:3000`" rule is what keeps `X-Forwarded-For` trustworthy. |
+| **Disk encryption / DB volume** | DKIM private keys are encrypted at rest (#23) so a DB dump alone leaks no signing material. The dashboard password, session secret, recipient lists, and inbound mail bodies are **not** encrypted: treat the Postgres volume and any backups as secret-bearing. Encrypt the disk; lock down backup storage; keep `.env` (which holds the DKIM key) on a different rotation/storage tier than the DB dump. |
+| **Reverse proxy + TLS termination** | The dashboard ships HTTP-only on port 3000. Put it behind nginx/Caddy/Cloudflare with a real cert. Never expose `:3000` directly. Set `DASHBOARD_TRUSTED_PROXY_HOPS` to the number of trusted hops (`1` for a single proxy) so the login throttle (#109) keys off the real client IP, and because that only holds if the origin is unreachable directly, the "never expose `:3000`" rule is what keeps `X-Forwarded-For` trustworthy. |
 | **Firewall / port hygiene** | Inbound SMTP listens on port 25 (or 2525 if `SMTP_PORT=2525`). Block every other port from the public internet. Specifically block `:5432` so the database isn't reachable from anywhere except the app process. |
-| **SMTP submission exposure (#120)** | The submission server (port 587, opt-in) authenticates with an API key. With no TLS configured it allows plaintext AUTH (`allowInsecureAuth`), so the key travels in the clear — only run it that way on a trusted network (same host / private Docker network). To expose it more broadly, configure `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to the specific apps that use it. Rotate any API key used for SMTP submission like any other secret. |
+| **SMTP submission exposure (#120)** | The submission server (port 587, opt-in) authenticates with an API key. With no TLS configured it allows plaintext AUTH (`allowInsecureAuth`), so the key travels in the clear, only run it that way on a trusted network (same host / private Docker network). To expose it more broadly, configure `SMTP_SUBMISSION_TLS_CERT`/`_KEY` (STARTTLS) and firewall port 587 to the specific apps that use it. Rotate any API key used for SMTP submission like any other secret. |
 | **`.env` secrecy** | `DATABASE_URL`, `DASHBOARD_PASSWORD`, `SESSION_SECRET`, and `POSTGRES_PASSWORD` live in `.env`. Don't commit it. Don't paste it into chat tools. Rotate if it leaks. |
 | **PTR / reverse DNS** | Set the rDNS record for your sending IP to match `MAIL_HOSTNAME`. Without this, mail goes to spam regardless of code-side hardening. |
 | **SPF / DKIM / DMARC publishing** | BunMail tells you what records to publish; you have to actually publish them and keep them current. |
@@ -156,8 +156,8 @@ These are the controls the codebase cannot apply for you. If you skip them, the 
 | **OS / runtime patches** | `bun upgrade`, `apt upgrade`, container image rebuilds. The codebase can't keep itself current. |
 | **API key rotation** | Treat `bm_live_…` keys like any other secret. Revoke (set `is_active = false`) and rotate periodically. |
 | **Backup integrity** | Test restores. A backup you can't restore is not a backup. |
-| **Dashboard access scope** | The dashboard is admin-only — anyone who logs in sees every email across every API key. Don't share the password. |
-| **Scaling caveats** | Rate limit state is in-memory — multiple replicas would each have their own counters. This applies to both the per-API-key limiter and the per-IP dashboard login throttle (#109): across N replicas an attacker effectively gets N× the login attempts before any one replica locks them out. The queue's `queued → sending` transition is now atomic via `FOR UPDATE SKIP LOCKED` (#20), so multiple replicas no longer double-send the same row, but the in-memory rate limits are still per-replica. Use a sticky load-balancer (or consolidate to a single rate-limit Redis) if you scale out. |
+| **Dashboard access scope** | The dashboard is admin-only: anyone who logs in sees every email across every API key. Don't share the password. |
+| **Scaling caveats** | Rate limit state is in-memory: multiple replicas would each have their own counters. This applies to both the per-API-key limiter and the per-IP dashboard login throttle (#109): across N replicas an attacker effectively gets N× the login attempts before any one replica locks them out. The queue's `queued → sending` transition is now atomic via `FOR UPDATE SKIP LOCKED` (#20), so multiple replicas no longer double-send the same row, but the in-memory rate limits are still per-replica. Use a sticky load-balancer (or consolidate to a single rate-limit Redis) if you scale out. |
 
 ## 6. Known residual risks
 
@@ -167,4 +167,4 @@ These are real but accepted (or pending) trade-offs.
 
 ## 7. Reporting a vulnerability
 
-See [SECURITY.md](SECURITY.md). Use GitHub's private vulnerability reporting — don't open a public issue.
+See [SECURITY.md](SECURITY.md). Use GitHub's private vulnerability reporting: don't open a public issue.

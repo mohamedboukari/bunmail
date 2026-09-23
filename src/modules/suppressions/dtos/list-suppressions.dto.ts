@@ -3,7 +3,7 @@ import { t } from "elysia";
 /**
  * Query parameters for `GET /api/v1/suppressions`.
  *
- * `email` is an exact-match filter (typed lookup) — useful when a
+ * `email` is an exact-match filter (typed lookup): useful when a
  * dashboard wants to show "is this address suppressed?" without paging
  * through the entire list. Wildcard / substring search is intentionally
  * not supported: it would force a non-indexed scan, and the existing

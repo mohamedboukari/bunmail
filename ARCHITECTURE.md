@@ -283,10 +283,10 @@ src/modules/<feature>/
 └── types/                  ← TypeScript types local to this module
 ```
 
-The `src/pages/` folder is separate from modules — it's a presentation layer that consumes module services to render server-side JSX pages. It has no DTOs, models, or business logic of its own.
+The `src/pages/` folder is separate from modules: it's a presentation layer that consumes module services to render server-side JSX pages. It has no DTOs, models, or business logic of its own.
 
 **Rules:**
-- Route handlers are thin — they call services and return serialized responses
+- Route handlers are thin: they call services and return serialized responses
 - Only services access the database
 - DTOs and serializers are feature-local (no cross-module imports)
 - Types stay local unless used in 3+ modules
@@ -372,7 +372,7 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-`FOR UPDATE SKIP LOCKED` makes the claim safe under concurrency: two workers running the same statement at the same time get **disjoint** result sets — never the same row twice. Single-instance today, but the queue is no longer the blocker for horizontal scaling. (#20)
+`FOR UPDATE SKIP LOCKED` makes the claim safe under concurrency: two workers running the same statement at the same time get **disjoint** result sets: never the same row twice. Single-instance today, but the queue is no longer the blocker for horizontal scaling. (#20)
 
 **Email Status Flow:**
 
@@ -384,7 +384,7 @@ queued → sending → sent → bounced  ← async DSN arrives later (#24)
          ↘ queued (retry on soft 4xx or infrastructure error, attempts < 3)
 ```
 
-`sent` = recipient's MX accepted the SMTP transaction. `bounced` = recipient confirmed permanently unreachable, either inline (`550 5.1.1 ...` during the send, #68) or via a DSN that came back later (#24). Both paths auto-suppress and fire `email.bounced` with `source: "inline"` vs `"rfc3464"` / `"fallback"`. `failed` = soft 4xx or infrastructure error exhausted retries — we never confirmed reachability either way.
+`sent` = recipient's MX accepted the SMTP transaction. `bounced` = recipient confirmed permanently unreachable, either inline (`550 5.1.1 ...` during the send, #68) or via a DSN that came back later (#24). Both paths auto-suppress and fire `email.bounced` with `source: "inline"` vs `"rfc3464"` / `"fallback"`. `failed` = soft 4xx or infrastructure error exhausted retries: we never confirmed reachability either way.
 
 The queue selector also filters `deleted_at IS NULL` so rows trashed while still queued are skipped instead of being sent.
 
@@ -451,8 +451,8 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | key_hash     | varchar(255)   | NOT NULL, UNIQUE                |
 | key_prefix   | varchar(12)    | NOT NULL                        |
 | is_active    | boolean        | NOT NULL, default `true`        |
-| is_admin     | boolean        | NOT NULL, default `false` — admin (management plane) vs restricted / send-only (#130); operator-set only |
-| allowed_senders | jsonb       | NOT NULL, default `[]` — `From` allowlist (#126); empty = unrestricted |
+| is_admin     | boolean        | NOT NULL, default `false`: admin (management plane) vs restricted / send-only (#130); operator-set only |
+| allowed_senders | jsonb       | NOT NULL, default `[]`: `From` allowlist (#126); empty = unrestricted |
 | last_used_at | timestamp      | nullable                        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 
@@ -490,24 +490,24 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 
 ### `email_tombstones` (#34)
 
-Post-purge audit trail. Every hard-delete of an `emails` row first writes a snapshot here so operators can trace late complaints / bounces back to a sent message after the body has been purged. Body / html / text are deliberately NOT preserved. **No foreign keys** — snapshots survive their parent api_key / domain being deleted. See [docs/emails.md](docs/emails.md#tombstones).
+Post-purge audit trail. Every hard-delete of an `emails` row first writes a snapshot here so operators can trace late complaints / bounces back to a sent message after the body has been purged. Body / html / text are deliberately NOT preserved. **No foreign keys**: snapshots survive their parent api_key / domain being deleted. See [docs/emails.md](docs/emails.md#tombstones).
 
 | Column         | Type           | Constraints                                   |
 |----------------|----------------|-----------------------------------------------|
-| id             | varchar(36)    | PK — matches the original email's id (`msg_…`)|
-| api_key_id     | varchar(36)    | NOT NULL — snapshot, NOT a FK                 |
-| message_id     | varchar(255)   | nullable — SMTP `Message-ID`, indexed         |
+| id             | varchar(36)    | PK: matches the original email's id (`msg_…`)|
+| api_key_id     | varchar(36)    | NOT NULL: snapshot, NOT a FK                 |
+| message_id     | varchar(255)   | nullable: SMTP `Message-ID`, indexed         |
 | from_address   | varchar(255)   | NOT NULL                                      |
 | to_address     | varchar(255)   | NOT NULL                                      |
 | subject        | varchar(500)   | nullable                                      |
-| status         | varchar(20)    | NOT NULL — sent / bounced / failed at delete time |
+| status         | varchar(20)    | NOT NULL: sent / bounced / failed at delete time |
 | sent_at        | timestamptz    | nullable                                      |
-| deleted_at     | timestamptz    | nullable — when the original was soft-deleted to trash |
-| purged_at      | timestamptz    | NOT NULL, default `now()` — retention starts here |
+| deleted_at     | timestamptz    | nullable, when the original was soft-deleted to trash |
+| purged_at      | timestamptz    | NOT NULL, default `now()`: retention starts here |
 
 Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list).
 
-Retention: `TOMBSTONE_RETENTION_DAYS` (default 90) — the existing 6h trash purge loop also runs `runTombstoneRetention` on the same cadence.
+Retention: `TOMBSTONE_RETENTION_DAYS` (default 90): the existing 6h trash purge loop also runs `runTombstoneRetention` on the same cadence.
 
 ### `webhook_deliveries` (#30)
 
@@ -518,7 +518,7 @@ Persisted retry queue. Every dispatch enqueues one row per subscribed webhook; t
 | id                    | varchar(36)    | PK, prefixed `wdl_`                           |
 | webhook_id            | varchar(36)    | FK → webhooks.id, NOT NULL, `ON DELETE CASCADE` |
 | event                 | varchar(50)    | NOT NULL                                      |
-| payload               | text           | NOT NULL — JSON body bytes (re-signed per attempt) |
+| payload               | text           | NOT NULL: JSON body bytes (re-signed per attempt) |
 | status                | varchar(20)    | NOT NULL, default `pending` (pending\|delivered\|failed) |
 | attempts              | integer        | NOT NULL, default 0                           |
 | last_error            | text           | nullable                                      |
@@ -579,7 +579,7 @@ Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` u
 
 ### `smtp_submission_usage`
 
-Per-`(api_key, UTC day)` counters for the SMTP submission server (#123) — backs the per-key daily quota and the `/api/v1/smtp-submission/stats` endpoint. One row per key per day (not a per-message log). Auth *failures* are not recorded here (no key to attribute to).
+Per-`(api_key, UTC day)` counters for the SMTP submission server (#123): backs the per-key daily quota and the `/api/v1/smtp-submission/stats` endpoint. One row per key per day (not a per-message log). Auth *failures* are not recorded here (no key to attribute to).
 
 | Column       | Type        | Constraints                                     |
 |--------------|-------------|-------------------------------------------------|
@@ -595,7 +595,7 @@ Indexes: `UNIQUE (api_key_id, day)` (quota read + `ON CONFLICT DO UPDATE` upsert
 
 ### `dmarc_reports` / `dmarc_records`
 
-DMARC aggregate (`rua`) reports parsed from inbound XML attachments (#41). Operator-level data — not tenant-scoped, no FK to `domains` or `api_keys`. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
+DMARC aggregate (`rua`) reports parsed from inbound XML attachments (#41). Operator-level data, not tenant-scoped, no FK to `domains` or `api_keys`. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
 
 `dmarc_reports` (one row per received report):
 
@@ -698,7 +698,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | DELETE | /api/v1/webhooks/:id          | Delete webhook (cascades to deliveries) | Yes  |
 | GET    | /api/v1/webhooks/:id/deliveries | List delivery attempts (filter by `?status=`) | Yes |
 | GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
-| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery — flips to `pending` | Yes |
+| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` | Yes |
 
 ### Templates
 
@@ -787,7 +787,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
 
-Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109) — see [Rate Limiting](#rate-limiting).
+Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting).
 
 ### Health
 
@@ -803,7 +803,7 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 - **Key format:** `bm_live_<random>` (e.g., `bm_live_a1b2c3d4e5f6g7h8`)
 - **Storage:** Only SHA-256 hash stored in DB; raw key shown once at creation
 - **Lookup:** Hash incoming token → match against `key_hash` column
-- **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane — `/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound` — returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
+- **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
 - **Bootstrap:** Run `bun run seed` to create the first API key (admin)
 
 ---
@@ -819,7 +819,7 @@ Two independent in-memory sliding-window limiters:
 
 **Dashboard login** (`src/middleware/login-rate-limit.ts`, #109)
 - **Default limit:** 5 failed password attempts per 15 minutes, per client IP
-- **Scope:** Per client IP — resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
+- **Scope:** Per client IP: resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
 - **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login clears the counter
 - **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
 
@@ -829,7 +829,7 @@ Both maps reset on server restart and are per-replica (single-instance only; Red
 
 ## Email Delivery
 
-BunMail sends emails directly to recipient MX servers using Nodemailer's `direct: true` mode — no SMTP relay or third-party provider.
+BunMail sends emails directly to recipient MX servers using Nodemailer's `direct: true` mode: no SMTP relay or third-party provider.
 
 **What this means:**
 - The server's IP reputation directly affects deliverability
@@ -845,7 +845,7 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
-- Soft bounces (4.x.x) — async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path preserves the existing retry-up-to-MAX_ATTEMPTS behaviour (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
+- Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path preserves the existing retry-up-to-MAX_ATTEMPTS behaviour (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 
 ---
@@ -860,7 +860,7 @@ services:
     ports: ["${PORT:-3000}:${PORT:-3000}"]
     environment:
       DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
-      DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23) — `openssl rand -base64 32`
+      DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23), `openssl rand -base64 32`
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}      # Required in production (#19)
     depends_on:
       db: { condition: service_healthy }
@@ -902,7 +902,7 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - Elysia's global `onError` handler in [src/index.ts](src/index.ts) maps known error classes to structured JSON responses:
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
-  - `UnauthorizedSenderError` → 403 with `{ code: "UNAUTHORIZED_SENDER", sender }` — `From` not in the key's allowed-senders list (#126)
+  - `UnauthorizedSenderError` → 403 with `{ code: "UNAUTHORIZED_SENDER", sender }`: `From` not in the key's allowed-senders list (#126)
   - Unhandled errors → 500 with the error message (stack traces hidden in production)
 - Email queue failures are logged and stored in the `last_error` column
 
@@ -920,5 +920,5 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
 - DMARC `rua` aggregate report ingest (#41)
 - Webhook delivery persistence + replay (#30)
-- Bun-native SMTP client (subsumes #37, #42 — see #60)
+- Bun-native SMTP client (subsumes #37, #42, see #60)
 - Redis-backed rate limiting + queue for multi-instance deploys (#20)

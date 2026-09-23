@@ -1,4 +1,4 @@
-# Dependabot — automated dependency updates
+# Dependabot: automated dependency updates
 # Checks npm packages and GitHub Actions for security patches and updates.
 #
 # All third-party GitHub Actions in `.github/workflows/` are pinned to a
@@ -25,7 +25,7 @@ updates:
     commit-message:
       prefix: "chore(deps):"
 
-  # GitHub Actions versions (SHA-pinned — see header above)
+  # GitHub Actions versions (SHA-pinned, see header above)
   - package-ecosystem: github-actions
     directory: /
     schedule:

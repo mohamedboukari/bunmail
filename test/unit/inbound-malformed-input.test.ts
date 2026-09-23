@@ -5,11 +5,11 @@
  * `simpleParser` (mailparser) → `parseBounce` (RFC 3464) →
  * `persistDmarcReportFromInbound`, all wrapped in a single try/catch
  * that returns SMTP 452 on throw. None of those callees should crash
- * the worker on garbage input — at worst they should return null /
+ * the worker on garbage input: at worst they should return null /
  * throw a catchable Error.
  *
  * This file is the regression net for "malformed RFC 822 doesn't crash
- * the receiver" — exercises the pure-function half of the chain
+ * the receiver": exercises the pure-function half of the chain
  * (`parseBounce` and `simpleParser`) on adversarial inputs without
  * needing a live SMTP server. The end-to-end side (the try/catch in
  * `onData`) is the receiver test in `test/integration/`.
@@ -28,7 +28,7 @@ import { describe, test, expect } from "bun:test";
 import { simpleParser } from "mailparser";
 import { parseBounce } from "../../src/modules/bounces/services/bounce-parser.service.ts";
 
-describe("parseBounce — adversarial inputs return null, never throw", () => {
+describe("parseBounce: adversarial inputs return null, never throw", () => {
   test("random binary garbage returns null", () => {
     const garbage = Buffer.from([
       0xff, 0xfe, 0x00, 0x01, 0x7f, 0x80, 0x81, 0x82, 0x83, 0xff, 0x00, 0x00,
@@ -56,7 +56,7 @@ describe("parseBounce — adversarial inputs return null, never throw", () => {
 To: hello@example.com
 Subject: re: my account
 
-Hi — I think I got error 5.1.1 yesterday but it's working now.`;
+Hi: I think I got error 5.1.1 yesterday but it's working now.`;
     expect(parseBounce(ordinary)).toBeNull();
   });
 
@@ -87,7 +87,7 @@ Subject: Delivery Status Notification (Failure)`;
   });
 
   test("very long single-line input doesn't blow the regex / loop", () => {
-    /** 500KB single line — pathological for naive regex backtracking. */
+    /** 500KB single line: pathological for naive regex backtracking. */
     const huge = "A".repeat(500_000);
     expect(() => parseBounce(huge)).not.toThrow();
     expect(parseBounce(huge)).toBeNull();
@@ -100,7 +100,7 @@ Subject: Delivery Status Notification (Failure)`;
   });
 
   test("conflicting / duplicated headers don't crash the parser", () => {
-    /** Two Content-Type headers, two Content-Transfer-Encoding — RFC says
+    /** Two Content-Type headers, two Content-Transfer-Encoding: RFC says
      *  one of each, but real mail in the wild violates this. */
     const dup = `From: x@example.com
 To: y@example.com
@@ -114,19 +114,19 @@ body`;
   });
 });
 
-describe("simpleParser (mailparser) — adversarial inputs throw catchable, never crash", () => {
+describe("simpleParser (mailparser): adversarial inputs throw catchable, never crash", () => {
   /**
    * The real receiver wraps `simpleParser` in a try/catch that returns
    * SMTP 452 on throw. We verify here that adversarial inputs either
    * resolve (yielding a possibly-empty parsed object) or reject with a
-   * catchable Error — never crash the worker process.
+   * catchable Error: never crash the worker process.
    */
 
-  test("random binary noise — resolves or rejects but doesn't crash", async () => {
+  test("random binary noise: resolves or rejects but doesn't crash", async () => {
     const garbage = Buffer.from([
       0xff, 0xfe, 0x00, 0x01, 0x7f, 0x80, 0x81, 0x82, 0x83, 0xff,
     ]).toString("latin1");
-    /** No assertion on shape — only that the promise doesn't reject with
+    /** No assertion on shape, only that the promise doesn't reject with
      *  an uncatchable error and the runtime survives. */
     await Promise.resolve(simpleParser(garbage)).catch(() => null);
   });
@@ -148,7 +148,7 @@ incomplete...`;
     const parsed = await Promise.resolve(simpleParser(truncated)).catch(
       (e) => e instanceof Error,
     );
-    /** Either we got back a parsed shape or an Error — both are non-crash. */
+    /** Either we got back a parsed shape or an Error: both are non-crash. */
     expect(parsed === null || parsed === true || typeof parsed === "object").toBe(true);
   });
 

@@ -32,7 +32,7 @@ import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
 
 /**
  * Encrypt any DKIM private keys still stored as plaintext PEM (legacy
- * rows from before #23). Idempotent — already-encrypted rows are
+ * rows from before #23). Idempotent: already-encrypted rows are
  * skipped. Runs before the queue starts so the first send after a
  * restart can never read a plaintext row.
  */
@@ -56,7 +56,7 @@ const app = new Elysia()
           title: "BunMail API",
           version: "0.1.0",
           description:
-            "Self-hosted email API for developers — free alternative to SendGrid/Resend. " +
+            "Self-hosted email API for developers: free alternative to SendGrid/Resend. " +
             "Send transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, " +
             "email queue with retries, templates, and webhooks.",
           license: {
@@ -84,7 +84,7 @@ const app = new Elysia()
           {
             name: "Suppressions",
             description:
-              "Manage the per-API-key suppression list — addresses that should never receive mail",
+              "Manage the per-API-key suppression list: addresses that should never receive mail",
           },
           {
             name: "DMARC Reports",
@@ -107,7 +107,7 @@ const app = new Elysia()
     }),
   )
   /**
-   * Global error handler — catches unhandled errors from all routes
+   * Global error handler: catches unhandled errors from all routes
    * and returns a consistent JSON response. Prevents stack traces
    * from leaking in production.
    */
@@ -188,11 +188,11 @@ const app = new Elysia()
       error: config.env === "production" ? "Internal server error" : message,
     };
   })
-  /** Favicon — SVG served at /favicon.svg */
+  /** Favicon: SVG served at /favicon.svg */
   .use(faviconPlugin)
-  /** Root — developer-focused landing page */
+  /** Root: developer-focused landing page */
   .use(landingPlugin)
-  /** Health check — used by Docker, load balancers, and uptime monitors */
+  /** Health check: used by Docker, load balancers, and uptime monitors */
   .get(
     "/health",
     () => ({
@@ -204,29 +204,29 @@ const app = new Elysia()
         tags: ["Health"],
         summary: "Health check",
         description:
-          "Returns server health status — used by Docker, load balancers, and uptime monitors.",
+          "Returns server health status: used by Docker, load balancers, and uptime monitors.",
       },
     },
   )
-  /** Emails module — POST /send, GET /, GET /:id */
+  /** Emails module: POST /send, GET /, GET /:id */
   .use(emailsPlugin)
-  /** API Keys module — POST /, GET /, DELETE /:id */
+  /** API Keys module: POST /, GET /, DELETE /:id */
   .use(apiKeysPlugin)
-  /** Domains module — POST /, GET /, GET /:id, DELETE /:id, POST /:id/verify */
+  /** Domains module: POST /, GET /, GET /:id, DELETE /:id, POST /:id/verify */
   .use(domainsPlugin)
-  /** Webhooks module — POST /, GET /, DELETE /:id */
+  /** Webhooks module: POST /, GET /, DELETE /:id */
   .use(webhooksPlugin)
-  /** Templates module — POST /, GET /, GET /:id, PUT /:id, DELETE /:id */
+  /** Templates module: POST /, GET /, GET /:id, PUT /:id, DELETE /:id */
   .use(templatesPlugin)
-  /** Inbound module — GET / (list), GET /:id */
+  /** Inbound module, GET / (list), GET /:id */
   .use(inboundPlugin)
-  /** Suppressions module — POST /, GET /, GET /:id, DELETE /:id */
+  /** Suppressions module: POST /, GET /, GET /:id, DELETE /:id */
   .use(suppressionsPlugin)
-  /** SMTP submission stats — GET /stats (usage + quota for the calling key) */
+  /** SMTP submission stats, GET /stats (usage + quota for the calling key) */
   .use(smtpSubmissionPlugin)
-  /** DMARC reports module — GET /, GET /:id */
+  /** DMARC reports module, GET /, GET /:id */
   .use(dmarcReportsPlugin)
-  /** Dashboard — server-rendered UI under /dashboard */
+  /** Dashboard: server-rendered UI under /dashboard */
   .use(pagesPlugin)
   .listen({
     port: config.server.port,
@@ -252,15 +252,15 @@ queueService.start().catch((error: unknown) => {
  * Start the inbound SMTP server (if enabled).
  *
  * Inbound is opt-in (`SMTP_ENABLED=true`). When it's off we log an
- * explicit info line so the silent-fail mode — "I set up MX records
- * but nothing arrives" — is one `grep` away from a diagnosis instead
+ * explicit info line so the silent-fail mode ("I set up MX records
+ * but nothing arrives") is one `grep` away from a diagnosis instead
  * of a head-scratch. (#93)
  */
 if (config.smtp.enabled) {
   smtpReceiver.start();
 } else {
   logger.info(
-    "Inbound SMTP receiver disabled — set SMTP_ENABLED=true (and uncomment the SMTP port line in docker-compose.yml) to enable",
+    "Inbound SMTP receiver disabled: set SMTP_ENABLED=true (and uncomment the SMTP port line in docker-compose.yml) to enable",
   );
 }
 
@@ -268,24 +268,24 @@ if (config.smtp.enabled) {
  * Start the SMTP submission server (#120) if enabled. This is the
  * AUTH-required endpoint that lets SMTP-capable apps (Infisical, Netbird,
  * Dify, a Nodemailer backend, …) send *through* BunMail. Opt-in and
- * separate from the inbound receiver above — see docs/smtp-submission.md.
+ * separate from the inbound receiver above, see docs/smtp-submission.md.
  */
 if (config.smtpSubmission.enabled) {
   smtpSubmission.start();
 } else {
   logger.info(
-    "SMTP submission server disabled — set SMTP_SUBMISSION_ENABLED=true (and uncomment the submission port line in docker-compose.yml) to let apps send via SMTP",
+    "SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true (and uncomment the submission port line in docker-compose.yml) to let apps send via SMTP",
   );
 }
 
 /**
- * Start the trash purge — periodically removes soft-deleted emails
+ * Start the trash purge: periodically removes soft-deleted emails
  * older than TRASH_RETENTION_DAYS.
  */
 trashPurge.start();
 
 /**
- * Start the webhook delivery worker — drains the persisted
+ * Start the webhook delivery worker: drains the persisted
  * `webhook_deliveries` queue, retries on a schedule of 1m / 5m / 15m /
  * 1h / 6h, and prunes delivered rows older than the retention cutoff.
  */
@@ -299,7 +299,7 @@ startRateLimitCleanup();
 
 /**
  * Start the periodic sweep for the dashboard login brute-force limiter
- * (#109) — prunes expired per-IP failed-attempt entries so a long-lived
+ * (#109): prunes expired per-IP failed-attempt entries so a long-lived
  * server doesn't accumulate them unbounded under attacker IP rotation.
  */
 startLoginRateLimitCleanup(config.dashboard.loginRateLimit.windowSec * 1000);

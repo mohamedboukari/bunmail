@@ -7,7 +7,7 @@ export const createWebhookDto = t.Object({
 
   /**
    * Event types to subscribe to. Must mirror the `WebhookEventType` union
-   * in `types/webhook.types.ts` — TypeBox literals can't be derived from
+   * in `types/webhook.types.ts`: TypeBox literals can't be derived from
    * a TypeScript type, so the two are kept in sync manually.
    */
   events: t.Array(

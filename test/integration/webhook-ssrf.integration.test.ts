@@ -17,7 +17,7 @@ beforeEach(async () => {
   await truncateAll();
 });
 
-describe("createWebhook — SSRF guard", () => {
+describe("createWebhook: SSRF guard", () => {
   test("rejects cloud-metadata / private / loopback URLs (nothing stored)", async () => {
     const { id: apiKeyId } = await seed.apiKey({ isAdmin: true });
 
@@ -26,7 +26,7 @@ describe("createWebhook — SSRF guard", () => {
       "https://10.0.0.5/hook",
       "https://127.0.0.1/hook",
     ]) {
-      await expect(
+      expect(
         createWebhook({ url, events: ["email.sent"] }, apiKeyId),
       ).rejects.toBeInstanceOf(BlockedUrlError);
     }
@@ -37,7 +37,7 @@ describe("createWebhook — SSRF guard", () => {
 
   test("rejects http when insecure http isn't opted in (default)", async () => {
     const { id: apiKeyId } = await seed.apiKey({ isAdmin: true });
-    await expect(
+    expect(
       createWebhook({ url: "http://1.1.1.1/hook", events: ["email.sent"] }, apiKeyId),
     ).rejects.toThrow(/https/);
   });
@@ -52,15 +52,18 @@ describe("createWebhook — SSRF guard", () => {
   });
 });
 
-describe("performHttpAttempt — delivery-time re-validation", () => {
+describe("performHttpAttempt: delivery-time re-validation", () => {
   const base = { secret: "s", body: "{}", event: "email.sent" };
 
   test("does NOT fetch a blocked URL; returns a failed outcome", async () => {
     let fetchCalled = false;
-    const spyFetch = (() => {
-      fetchCalled = true;
-      throw new Error("fetch must not be called for a blocked URL");
-    }) as unknown as typeof fetch;
+    const spyFetch = Object.assign(
+      () => {
+        fetchCalled = true;
+        throw new Error("fetch must not be called for a blocked URL");
+      },
+      { preconnect: fetch.preconnect },
+    );
 
     const outcome = await performHttpAttempt({
       ...base,
@@ -75,12 +78,15 @@ describe("performHttpAttempt — delivery-time re-validation", () => {
 
   test("fetches an allowed URL with redirect:'manual'", async () => {
     let seenInit: RequestInit | undefined;
-    const stubFetch = ((_url: string, init: RequestInit) => {
-      seenInit = init;
-      return Promise.resolve(
-        new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }),
-      );
-    }) as unknown as typeof fetch;
+    const stubFetch = Object.assign(
+      (_url: string | URL | Request, init?: RequestInit) => {
+        seenInit = init;
+        return Promise.resolve(
+          new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }),
+        );
+      },
+      { preconnect: fetch.preconnect },
+    );
 
     const outcome = await performHttpAttempt({
       ...base,

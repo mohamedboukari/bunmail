@@ -1,5 +1,5 @@
 /**
- * Test preload — runs before any test file imports the app code.
+ * Test preload: runs before any test file imports the app code.
  *
  * Sets the small handful of required env vars to deterministic values
  * so config evaluation succeeds in any environment (CI, fresh checkout,
@@ -10,7 +10,7 @@
 
 /**
  * 32 base64-encoded zero bytes. Fine for tests because we never decrypt
- * real production secrets here — the unit tests for `encryptSecret`
+ * real production secrets here: the unit tests for `encryptSecret`
  * generate their own ephemeral keys, and the e2e tests don't touch the
  * encrypted-DKIM read path.
  */

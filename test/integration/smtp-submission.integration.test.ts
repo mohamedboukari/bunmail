@@ -4,7 +4,7 @@
  *
  * This is the faithful end-to-end path: a client authenticates with an
  * API key over SMTP, submits a message, and we assert a real `emails` row
- * was queued and attributed to that key — exercising `onAuth`
+ * was queued and attributed to that key: exercising `onAuth`
  * (findByHash), the message mapper, and `createEmail` together. Runs on an
  * isolated high port so it never collides with a locally-running instance.
  */
@@ -24,7 +24,7 @@ function transport(pass: string, user = "apikey") {
     host: "127.0.0.1",
     port: TEST_PORT,
     secure: false,
-    /** Force plaintext AUTH — don't attempt STARTTLS against the test server. */
+    /** Force plaintext AUTH: don't attempt STARTTLS against the test server. */
     ignoreTLS: true,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
@@ -43,7 +43,7 @@ beforeEach(async () => {
   await truncateAll();
 });
 
-describe("SMTP submission — authentication", () => {
+describe("SMTP submission: authentication", () => {
   test("a valid API key authenticates and queues the message", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
@@ -65,7 +65,7 @@ describe("SMTP submission — authentication", () => {
   });
 
   test("an invalid API key is rejected and queues nothing", async () => {
-    await expect(
+    expect(
       transport("bm_live_totally_invalid_key").sendMail({
         from: "hello@unregistered.test",
         to: "user@example.org",
@@ -85,7 +85,7 @@ describe("SMTP submission — authentication", () => {
       await import("../../src/modules/api-keys/models/api-key.schema.ts");
     await db.update(apiKeys).set({ isActive: false }).where(eq(apiKeys.id, id));
 
-    await expect(
+    expect(
       transport(rawKey).sendMail({
         from: "hello@unregistered.test",
         to: "user@example.org",
@@ -96,7 +96,7 @@ describe("SMTP submission — authentication", () => {
   });
 });
 
-describe("SMTP submission — recipient handling", () => {
+describe("SMTP submission: recipient handling", () => {
   test("BCC recipients are delivered but kept out of the visible headers", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 

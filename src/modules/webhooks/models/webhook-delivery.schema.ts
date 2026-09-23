@@ -13,7 +13,7 @@ import { webhooks } from "./webhook.schema.ts";
 /**
  * Persisted record of every webhook delivery attempt (#30).
  *
- * The dispatcher used to retry in-memory (1s/2s/4s) — a server restart
+ * The dispatcher used to retry in-memory (1s/2s/4s): a server restart
  * mid-retry would lose the event silently and a consumer outage longer
  * than ~7s would burn through all retries before the consumer came
  * back. This table durably queues every dispatch so the worker can
@@ -33,7 +33,7 @@ import { webhooks } from "./webhook.schema.ts";
  *
  * `payload` stores the body BYTES (the JSON.stringify output that's
  * actually POSTed), not the deserialised event data. The signature is
- * NOT stored — re-signed per attempt with a fresh timestamp so a long
+ * NOT stored: re-signed per attempt with a fresh timestamp so a long
  * retry chain doesn't ship a 6-hour-old signature that the consumer's
  * freshness window (typically 5 min) would reject.
  */
@@ -84,7 +84,7 @@ export const webhookDeliveries = pgTable(
     /** Set when status flips to `delivered`. Used by retention cleanup. */
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
 
-    /** Optional response shape — small JSON capturing useful detail
+    /** Optional response shape: small JSON capturing useful detail
      *  from the last attempt (truncated body preview, headers we care
      *  about). Kept so operators can debug without re-running the
      *  request. Null when the attempt didn't yield a structured response. */
@@ -97,14 +97,14 @@ export const webhookDeliveries = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    /** Worker hot path — partial index on the only rows the poll loop
+    /** Worker hot path: partial index on the only rows the poll loop
      *  will ever scan. Keeps it tiny even when `delivered` rows
      *  accumulate. */
     duePendingIdx: index("webhook_deliveries_due_pending_idx")
       .on(table.nextAttemptAt)
       .where(sql`status = 'pending'`),
 
-    /** Inspection page hot path — "show me the latest deliveries for
+    /** Inspection page hot path: "show me the latest deliveries for
      *  webhook X" sorted newest first. */
     perWebhookIdx: index("webhook_deliveries_per_webhook_idx").on(
       table.webhookId,

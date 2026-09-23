@@ -2,7 +2,7 @@
  * Integration tests for `domain.service.ts` against a real Postgres.
  * Catches:
  *
- *   - `createDomain` actually encrypts the DKIM private key (#23) — the
+ *   - `createDomain` actually encrypts the DKIM private key (#23): the
  *     stored bytes are `v1:...` ciphertext, not the raw PEM
  *   - DKIM keypair generation produces a valid 2048-bit RSA key
  *   - `domainExistsByName` does exact-match (case-sensitive per RFC 5321)
@@ -38,7 +38,7 @@ describe("createDomain", () => {
     expect(created.dkimSelector).toBe("bunmail");
 
     /** The returned row carries the **encrypted** ciphertext (the
-     *  service doesn't decrypt before returning — that's the queue's
+     *  service doesn't decrypt before returning: that's the queue's
      *  job at send time). Confirm via the format check. */
     expect(created.dkimPrivateKey).not.toBeNull();
     expect(isEncryptedSecret(created.dkimPrivateKey!)).toBe(true);
@@ -148,7 +148,7 @@ describe("listDomains / getDomainById", () => {
   });
 });
 
-describe("deleteDomain — ON DELETE SET NULL", () => {
+describe("deleteDomain: ON DELETE SET NULL", () => {
   test("deleting a domain detaches its emails (sets emails.domain_id to NULL) without deleting them", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const created = await createDomain({ name: "example.com" });

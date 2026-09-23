@@ -4,7 +4,7 @@
  * for the handler, or `null` when the message isn't actionable as a
  * bounce.
  *
- * The function is pure on purpose — no I/O, no mailparser dependency —
+ * The function is pure on purpose: no I/O, no mailparser dependency,
  * so unit tests can feed in fixture strings and assert the parsed shape
  * deterministically.
  *
@@ -22,7 +22,7 @@
  *      recipient `<user@host>`, and an `In-Reply-To` / `Message-ID` to
  *      link back to the original send.
  *
- * In either case, we **require** an `originalMessageId` — without it
+ * In either case, we **require** an `originalMessageId`, without it
  * the bounce can't be safely linked to a specific tenant (per #25's
  * per-API-key scoping), and we'd rather drop a real bounce than
  * suppress under the wrong key.
@@ -59,7 +59,7 @@ function cleanMessageId(raw: string): string {
  * RFC 3464 path. Looks at the raw text for the canonical `Status:` /
  * `Final-Recipient:` / `Original-Message-ID:` headers that appear
  * inside the `message/delivery-status` MIME part. We don't strictly
- * walk the MIME tree — these headers live on their own lines in the
+ * walk the MIME tree: these headers live on their own lines in the
  * delivery-status part, and a line-anchored regex finds them reliably.
  */
 function parseRfc3464(raw: string): ParsedBounce | null {
@@ -76,7 +76,7 @@ function parseRfc3464(raw: string): ParsedBounce | null {
 
   const status = statusLine[1]!;
   const kind = status.startsWith("5") ? "hard" : status.startsWith("4") ? "soft" : null;
-  /** 2.x.x is "delivered" — not a bounce. */
+  /** 2.x.x is "delivered", not a bounce. */
   if (!kind) return null;
 
   const recipient = cleanAddress(recipientLine[1]!);
@@ -99,7 +99,7 @@ function parseRfc3464(raw: string): ParsedBounce | null {
  *   - the first `<user@host>` that isn't ours (heuristic: not from MAILER-DAEMON),
  *   - any `Message-ID`/`In-Reply-To` reference back to the original.
  *
- * Less reliable than RFC 3464 — old MTAs vary wildly. We only return a
+ * Less reliable than RFC 3464: old MTAs vary wildly. We only return a
  * result when all three pieces are present, so a noisy match doesn't
  * become a wrong suppression.
  */
@@ -122,7 +122,7 @@ function parseFallback(raw: string): ParsedBounce | null {
   if (!kind) return null;
 
   /**
-   * Search for the recipient in the **body**, not the headers — `<msg-id@host>`
+   * Search for the recipient in the **body**, not the headers: `<msg-id@host>`
    * has the same `<x@y>` shape as `<addr@host>`, so an `In-Reply-To` /
    * `Message-ID` / `References` header would otherwise win document order.
    *
@@ -139,17 +139,17 @@ function parseFallback(raw: string): ParsedBounce | null {
   /**
    * Skip postmaster/mailer-daemon (the From: of the bounce itself) and
    * skip anything sitting on a `Message-ID:` / `In-Reply-To:` / `References:`
-   * line in the embedded original — those are message identifiers, not
+   * line in the embedded original: those are message identifiers, not
    * recipient addresses.
    */
   const recipient = recipientCandidates.find((addr) => {
     if (/^(?:mailer-daemon|postmaster)@/i.test(addr)) return false;
     /**
-     * Escape every regex metacharacter — local-part of an email address
+     * Escape every regex metacharacter: local-part of an email address
      * can technically contain backslash and other special characters
      * (RFC 5321 quoted-local-part), so escaping only `.+-` would leave
      * a regex-injection hole. CodeQL flagged this as "incomplete string
-     * escaping or encoding" — applying the full escape set fixes it.
+     * escaping or encoding": applying the full escape set fixes it.
      */
     const escaped = addr.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
     const headerLineRe = new RegExp(
@@ -173,7 +173,7 @@ function parseFallback(raw: string): ParsedBounce | null {
   if (!originalMessageId) return null;
 
   /**
-   * Pull the line containing the status code as the diagnostic — gives
+   * Pull the line containing the status code as the diagnostic: gives
    * operators something readable when triaging in the dashboard.
    */
   const diagnostic = raw
@@ -194,7 +194,7 @@ function parseFallback(raw: string): ParsedBounce | null {
 /**
  * Heuristic gate for the fallback parser. We only scrape status codes
  * out of message bodies when there's reason to believe the message is
- * a bounce in the first place — sender is the canonical DSN robot,
+ * a bounce in the first place: sender is the canonical DSN robot,
  * subject mentions delivery failure, or the content-type is
  * `multipart/report` even without an explicit `report-type=delivery-status`.
  *
@@ -226,12 +226,12 @@ function looksLikeBounce(raw: string): boolean {
 
 /**
  * Public entry point. Returns `null` when the message isn't a bounce
- * we can act on — the inbound path then falls through to normal
+ * we can act on: the inbound path then falls through to normal
  * `inbound_emails` storage.
  */
 export function parseBounce(raw: string): ParsedBounce | null {
   /**
-   * Detect DSN content-type — only attempt RFC 3464 parsing when the
+   * Detect DSN content-type, only attempt RFC 3464 parsing when the
    * sender explicitly advertised it. Saves work on regular inbound mail
    * and avoids false positives from messages that happen to mention a
    * status code in their body.
@@ -248,7 +248,7 @@ export function parseBounce(raw: string): ParsedBounce | null {
 
   /**
    * Fallback path runs only when the message has obvious bounce markers.
-   * Otherwise inbound is left to normal handling — better to miss a bounce
+   * Otherwise inbound is left to normal handling: better to miss a bounce
    * from a non-RFC sender than to mis-classify regular customer reply mail.
    */
   if (!looksLikeBounce(raw)) return null;

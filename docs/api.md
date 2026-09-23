@@ -19,7 +19,7 @@ Authorization: Bearer bm_live_<your-api-key>
 
 API keys are managed via the `/api/v1/api-keys` endpoints. The first key is created using the seed script (`bun run src/db/seed.ts`).
 
-> **Sending over SMTP instead of REST?** Besides this HTTP API, BunMail can run an SMTP **submission** server (#120) so apps that only speak SMTP send *through* BunMail — the same `bm_live_…` key is used as the SMTP password. It has no REST endpoints of its own; see [docs/smtp-submission.md](smtp-submission.md).
+> **Sending over SMTP instead of REST?** Besides this HTTP API, BunMail can run an SMTP **submission** server (#120) so apps that only speak SMTP send *through* BunMail: the same `bm_live_…` key is used as the SMTP password. It has no REST endpoints of its own; see [docs/smtp-submission.md](smtp-submission.md).
 
 ## Rate Limiting
 
@@ -104,14 +104,14 @@ List emails for the authenticated API key with pagination.
 |----------|--------|---------|----------------------------------------------|
 | `page`   | number | 1       | Page number (1-based)                        |
 | `limit`  | number | 20      | Items per page (1-100)                       |
-| `status` | string | —       | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
-| `source` | string | —       | Filter by ingress channel: `api` or `smtp` (#137) |
+| `status` | string | none    | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
+| `source` | string | none    | Filter by ingress channel: `api` or `smtp` (#137) |
 
 ---
 
 #### `GET /api/v1/emails/:id`
 
-Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded — fetch them via `GET /api/v1/emails/trash`.
+Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded: fetch them via `GET /api/v1/emails/trash`.
 
 ---
 
@@ -143,7 +143,7 @@ List emails currently in trash (newest-trashed first), scoped to the authenticat
 
 #### `POST /api/v1/emails/:id/restore`
 
-Restore a trashed email — clears the deletion marker so it reappears in normal lists. `404` if the email isn't currently in trash.
+Restore a trashed email: clears the deletion marker so it reappears in normal lists. `404` if the email isn't currently in trash.
 
 ---
 
@@ -300,7 +300,7 @@ Register a new webhook endpoint.
 
 Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`
 
-**Response includes `secret`** — shown once, used for HMAC signature verification.
+**Response includes `secret`**: shown once, used for HMAC signature verification.
 
 ---
 
@@ -335,7 +335,7 @@ List received emails (paginated, newest first).
 
 #### `GET /api/v1/inbound/:id`
 
-Get a received email by ID. Trashed inbound emails are excluded — fetch them via `GET /api/v1/inbound/trash`.
+Get a received email by ID. Trashed inbound emails are excluded: fetch them via `GET /api/v1/inbound/trash`.
 
 ---
 
@@ -389,7 +389,7 @@ List parsed reports (paginated, newest report-end-date first).
 |----------|--------|---------|-----------------------------------|
 | `page`   | number | 1       | Page number                       |
 | `limit`  | number | 20      | Items per page (1-100)            |
-| `domain` | string | —       | Filter by reporting policy domain |
+| `domain` | string | none    | Filter by reporting policy domain |
 
 Each row carries the report-level metadata (`orgName`, `orgEmail`, `domain`, `dateBegin`, `dateEnd`, `policyP`, `policyPct`, `receivedAt`). Per-source-IP records are returned only by the detail endpoint.
 
@@ -405,11 +405,11 @@ Get a single report with its per-source-IP records and computed alignment totals
 
 All API key endpoints are prefixed with `/api/v1/api-keys`.
 
-> **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains` and `/api/v1/inbound`. `is_admin` is shown in responses but is **not settable via the API** — only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
+> **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains` and `/api/v1/inbound`. `is_admin` is shown in responses but is **not settable via the API**, only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
 
 #### `POST /api/v1/api-keys`
 
-Create a new API key. The raw key is returned **once** — store it securely.
+Create a new API key. The raw key is returned **once**: store it securely.
 
 **Request Body:**
 
@@ -430,7 +430,7 @@ List all API keys (active and revoked). Key hashes are never exposed.
 
 #### `PATCH /api/v1/api-keys/:id`
 
-Update a key's `name` and/or `allowedSenders` (#126). Both optional — only provided fields change. `allowedSenders` **replaces** the whole list (add an address by including it, remove one by omitting it; `[]` clears it back to unrestricted). Returns the serialized key, or `404` if not found.
+Update a key's `name` and/or `allowedSenders` (#126). Both optional, only provided fields change. `allowedSenders` **replaces** the whole list (add an address by including it, remove one by omitting it; `[]` clears it back to unrestricted). Returns the serialized key, or `404` if not found.
 
 **Request Body:**
 
@@ -449,13 +449,13 @@ Revoke an API key (soft delete).
 
 ### Suppressions
 
-Per-API-key suppression list — addresses we refuse to send to. See [`docs/suppressions.md`](suppressions.md) for scoping rules, the bounce-handling roadmap, and the schema.
+Per-API-key suppression list: addresses we refuse to send to. See [`docs/suppressions.md`](suppressions.md) for scoping rules, the bounce-handling roadmap, and the schema.
 
 All endpoints are prefixed with `/api/v1/suppressions`.
 
 #### `POST /api/v1/suppressions`
 
-Manually add an address. Idempotent — re-suppressing an existing `(api_key, email)` upserts the row.
+Manually add an address. Idempotent: re-suppressing an existing `(api_key, email)` upserts the row.
 
 **Body:**
 
@@ -508,7 +508,7 @@ No row is inserted into `emails`, no queue entry is created.
 
 ### SMTP Submission
 
-Usage stats + quota status for the SMTP **submission** server (#120/#123) — the AUTH-required SMTP listener that lets apps send *through* BunMail. The server itself has no HTTP routes; this is the one read-only REST surface. Full setup: [`docs/smtp-submission.md`](smtp-submission.md).
+Usage stats + quota status for the SMTP **submission** server (#120/#123): the AUTH-required SMTP listener that lets apps send *through* BunMail. The server itself has no HTTP routes; this is the one read-only REST surface. Full setup: [`docs/smtp-submission.md`](smtp-submission.md).
 
 #### `GET /api/v1/smtp-submission/stats`
 
@@ -518,7 +518,7 @@ Per-day accepted/rejected counts for messages the calling API key sent via SMTP 
 
 | Param  | Type   | Default | Description                                      |
 |--------|--------|---------|--------------------------------------------------|
-| `days` | number | 30      | Trailing UTC-day window (inclusive of today), 1–365 |
+| `days` | number | 30      | Trailing UTC-day window (inclusive of today), 1 to 365 |
 
 **Response:**
 
@@ -547,12 +547,12 @@ All error responses follow this shape:
 }
 ```
 
-Some responses carry additional structured fields — e.g. suppression-list rejection is `422` with `code: "RECIPIENT_SUPPRESSED"` + `suppressionId` (pivot to `DELETE /api/v1/suppressions/:id`); a sender-authorization rejection (#126) is `403` with `code: "UNAUTHORIZED_SENDER"` + `sender` (the `From` that was rejected — add it to the key's `allowedSenders` via `PATCH /api/v1/api-keys/:id` if intended).
+Some responses carry additional structured fields: e.g. suppression-list rejection is `422` with `code: "RECIPIENT_SUPPRESSED"` + `suppressionId` (pivot to `DELETE /api/v1/suppressions/:id`); a sender-authorization rejection (#126) is `403` with `code: "UNAUTHORIZED_SENDER"` + `sender` (the `From` that was rejected: add it to the key's `allowedSenders` via `PATCH /api/v1/api-keys/:id` if intended).
 
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|
 | 401    | Missing or invalid token                        |
-| 403    | Authenticated but not permitted — `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130) |
+| 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130) |
 | 404    | Resource not found                              |
-| 422    | Validation error — includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
+| 422    | Validation error: includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
 | 429    | Rate limit exceeded                             |

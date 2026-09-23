@@ -21,7 +21,7 @@ Most cloud providers (AWS, GCP, Azure, Fly.io, Railway) **block port 25 by defau
 | **DigitalOcean** | $6/mo | Request needed | Usually approved same day |
 | **Vultr** | $6/mo | Request needed | Usually approved same day |
 
-> **Tip:** RackNerd offers ~$11/year VPS deals with port 25 open — check [racknerd.com/NewYear](https://www.racknerd.com/NewYear/) for current promotions.
+> **Tip:** RackNerd offers ~$11/year VPS deals with port 25 open: check [racknerd.com/NewYear](https://www.racknerd.com/NewYear/) for current promotions.
 
 ## 1. Server Setup
 
@@ -45,14 +45,14 @@ docker --version && docker compose version
 
 ### Get the code
 
-**Option A — Public repo (git clone):**
+**Option A: Public repo (git clone):**
 
 ```bash
 git clone https://github.com/your-username/bunmail.git
 cd bunmail
 ```
 
-**Option B — Private repo (rsync from your machine):**
+**Option B: Private repo (rsync from your machine):**
 
 ```bash
 # Run this from YOUR MACHINE, not the server
@@ -81,28 +81,28 @@ SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
-# Number of trusted reverse-proxy hops — set to 1 when BunMail runs behind a
+# Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 4) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
 DASHBOARD_TRUSTED_PROXY_HOPS=1
-# Optional — public base URL, used for the dashboard link in inbound notifications
+# Optional: public base URL, used for the dashboard link in inbound notifications
 APP_BASE_URL=https://mail.yourdomain.com
-# Optional — inbound notifications (per-domain notify_email is the opt-in)
+# Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
 ```
 
 > Generate a session secret: `openssl rand -hex 32`
 >
-> Generate a DKIM encryption key: `openssl rand -base64 32`. **Required** — boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
+> Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
-> `TRASH_RETENTION_DAYS` — how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
+> `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
-> `APP_BASE_URL` — public base URL of this instance (no trailing slash). Used only to build the "view in dashboard" link in inbound notification emails; leave unset to omit the link.
+> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used only to build the "view in dashboard" link in inbound notification emails; leave unset to omit the link.
 
-> `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL` — inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
+> `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
-> `DASHBOARD_TRUSTED_PROXY_HOPS` — the dashboard login throttle (#109) rate-limits failed passwords per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare) — BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
+> `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed passwords per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
 
 ## 2. DNS Records
 
@@ -132,7 +132,7 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 |------|----------|----------------------------------------------------------------|
 | TXT  | `_dmarc` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com` |
 
-### DKIM Record (added after registering your domain in BunMail — see step 4)
+### DKIM Record (added after registering your domain in BunMail, see step 4)
 
 | Type | Host                 | Value                    |
 |------|----------------------|--------------------------|
@@ -140,7 +140,7 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 
 ### PTR Record (Reverse DNS)
 
-Contact your VPS provider to set the PTR record for your server IP to `mail.yourdomain.com`. This is critical for deliverability — without it, many mail servers will reject your emails.
+Contact your VPS provider to set the PTR record for your server IP to `mail.yourdomain.com`. This is critical for deliverability, without it, many mail servers will reject your emails.
 
 ## 3. Start BunMail
 
@@ -152,9 +152,9 @@ docker compose up -d --build
 This starts:
 - **BunMail** on port `$PORT` (HTTP API + Dashboard, default 3000)
 - **PostgreSQL** on port 5432 (internal only)
-- **Inbound SMTP** on port `$SMTP_PORT` (default 2525; use 25 in production — requires `SMTP_ENABLED=true`)
+- **Inbound SMTP** on port `$SMTP_PORT` (default 2525; use 25 in production: requires `SMTP_ENABLED=true`)
 
-Port mappings in `docker-compose.yml` read `PORT` and `SMTP_PORT` from `.env` automatically — if you change them in `.env`, you don't need to edit anything else.
+Port mappings in `docker-compose.yml` read `PORT` and `SMTP_PORT` from `.env` automatically, if you change them in `.env`, you don't need to edit anything else.
 
 Migrations run automatically on boot. Verify with:
 
@@ -177,7 +177,7 @@ curl http://localhost:${PORT:-3000}/health
 docker compose exec app bun run src/db/seed.ts
 ```
 
-**Save the key from the output — it's shown once!**
+**Save the key from the output: it's shown once!**
 
 ### Register your domain (generates DKIM keys)
 
@@ -188,7 +188,7 @@ curl -X POST http://localhost:3000/api/v1/domains \
   -d '{"name": "yourdomain.com"}'
 ```
 
-The response includes `dkimDnsRecord` — add it as a TXT record in your DNS:
+The response includes `dkimDnsRecord`: add it as a TXT record in your DNS:
 
 | Type | Host                 | Value (from response)    |
 |------|----------------------|--------------------------|
@@ -277,7 +277,7 @@ nginx -t && systemctl restart nginx
 certbot --nginx -d mail.yourdomain.com
 ```
 
-> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP — so lockouts are per-attacker, not shared. Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy; otherwise a direct request could forge `X-Forwarded-For`.
+> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy; otherwise a direct request could forge `X-Forwarded-For`.
 
 ## Firewall Rules
 
@@ -285,7 +285,7 @@ certbot --nginx -d mail.yourdomain.com
 |------|----------|-----------|----------------------------|
 | 25   | TCP      | Outbound  | Send emails to MX servers  |
 | 25   | TCP      | Inbound   | Receive inbound emails     |
-| 587  | TCP      | Inbound   | SMTP submission — apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true`; restrict to the networks your apps live on) |
+| 587  | TCP      | Inbound   | SMTP submission: apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true`; restrict to the networks your apps live on) |
 | 443  | TCP      | Inbound   | HTTPS (reverse proxy)      |
 | 3000 | TCP      | Inbound   | HTTP API (or via proxy)    |
 
@@ -305,7 +305,7 @@ docker compose down && docker compose up -d --build
 
 ## Preventing Spam (Deliverability Guide)
 
-If your emails land in spam, follow this checklist. Each step contributes to your sender reputation — skip none of them.
+If your emails land in spam, follow this checklist. Each step contributes to your sender reputation: skip none of them.
 
 ### 1. DNS Authentication (Required)
 
@@ -372,10 +372,10 @@ This ensures the SMTP EHLO/HELO greeting matches the PTR, which is verified by r
 
 New IPs have no reputation, which is treated as suspicious. Build it gradually:
 
-- **Start slow** — send 10-20 emails per day for the first week
-- **Increase gradually** — double volume each week
-- **Send to engaged recipients** — avoid sending to lists that haven't opted in
-- **Monitor bounces** — high bounce rates destroy reputation fast
+- **Start slow**: send 10-20 emails per day for the first week
+- **Increase gradually**: double volume each week
+- **Send to engaged recipients**: avoid sending to lists that haven't opted in
+- **Monitor bounces**: high bounce rates destroy reputation fast
 
 Check if your IP is blacklisted:
 
@@ -389,12 +389,12 @@ Check if your IP is blacklisted:
 
 Even with perfect DNS, bad content triggers spam filters:
 
-- **Always include a plain text version** — use both `html` and `text` fields in the API
-- **Avoid spam trigger words** — "free", "limited time", "act now", excessive caps/exclamation marks
-- **Include an unsubscribe link** — required by most email providers for bulk mail
-- **Use a real From address** — `hello@yourdomain.com` is better than `noreply@yourdomain.com`
-- **Don't send HTML-only** — always include a text fallback
-- **Keep image-to-text ratio reasonable** — don't send an email that's just one big image
+- **Always include a plain text version**: use both `html` and `text` fields in the API
+- **Avoid spam trigger words**: "free", "limited time", "act now", excessive caps/exclamation marks
+- **Include an unsubscribe link**: required by most email providers for bulk mail
+- **Use a real From address**: `hello@yourdomain.com` is better than `noreply@yourdomain.com`
+- **Don't send HTML-only**: always include a text fallback
+- **Keep image-to-text ratio reasonable**: don't send an email that's just one big image
 
 ### 7. Verify Your Setup
 
@@ -443,8 +443,8 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 - Common cause: missing env vars or database connection issues
 
 **"Failed to connect" errors:**
-- Outbound port 25 is blocked — contact your VPS provider or choose one from the recommended list
-- DNS resolution issues — check with `dig MX example.com`
+- Outbound port 25 is blocked: contact your VPS provider or choose one from the recommended list
+- DNS resolution issues: check with `dig MX example.com`
 
 **Dashboard not loading:**
 - Check `DASHBOARD_PASSWORD` is set in `.env`
@@ -453,8 +453,8 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 
 **Migration errors:**
 - Check logs: `docker compose logs app`
-- Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56) — drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table.
+- Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56): drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table.
 - Ensure `DATABASE_URL` is correct and PostgreSQL is healthy: `docker compose ps`
 
 **Boot fails with `[config] Missing required environment variable: DKIM_ENCRYPTION_KEY`:**
-- Add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env`. Required since v0.4.x — the key encrypts DKIM private keys at rest. Boot fails loudly rather than silently storing plaintext.
+- Add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env`. Required since v0.4.x: the key encrypts DKIM private keys at rest. Boot fails loudly rather than silently storing plaintext.

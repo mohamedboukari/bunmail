@@ -1,6 +1,6 @@
 /**
  * Boot-time pass that encrypts any `domains.dkim_private_key` values
- * still stored as plaintext PEM. Idempotent — rows whose key matches the
+ * still stored as plaintext PEM. Idempotent: rows whose key matches the
  * `v1:...` encrypted-secret format are skipped.
  *
  * Why a TS hook rather than a SQL migration:
@@ -9,12 +9,12 @@
  *   it. Running this at startup (before the queue picks up traffic)
  *   means an operator who upgrades to this version with a fresh
  *   `DKIM_ENCRYPTION_KEY` set sees their existing rows re-keyed
- *   automatically — no separate command, no manual step.
+ *   automatically: no separate command, no manual step.
  *
  * Safety:
  *   Each row is wrapped in its own UPDATE; a failure on one row logs
  *   and continues, so a single corrupt row can't block the whole boot.
- *   Encryption is in-place — the plaintext PEM is overwritten with the
+ *   Encryption is in-place: the plaintext PEM is overwritten with the
  *   `v1:` ciphertext.
  */
 
@@ -66,7 +66,7 @@ export async function encryptDomainKeys(): Promise<{
       });
     } catch (err) {
       /**
-       * Log and continue rather than throw — one row's failure shouldn't
+       * Log and continue rather than throw: one row's failure shouldn't
        * block the rest of the boot. The next start will retry it.
        */
       logger.error("Failed to encrypt DKIM private key", {
@@ -87,7 +87,7 @@ export async function encryptDomainKeys(): Promise<{
 }
 
 /**
- * Direct entry-point: `bun run src/db/encrypt-domain-keys.ts` — useful
+ * Direct entry-point: `bun run src/db/encrypt-domain-keys.ts`: useful
  * for manual re-runs (e.g. after a key rotation when re-encrypting in
  * place from a known plaintext snapshot, or for verification).
  */

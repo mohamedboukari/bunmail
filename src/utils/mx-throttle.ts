@@ -1,14 +1,14 @@
 /**
  * Per-MX concurrency throttle for outbound SMTP delivery.
  *
- * Direct-to-MX delivery means BunMail is the sender's MTA — and strict
+ * Direct-to-MX delivery means BunMail is the sender's MTA, and strict
  * receivers (Outlook, Yahoo) will reject parallel sessions from the
  * same source IP with `421 Too many concurrent SMTP connections`. ESPs
  * hide this from their customers by pooling at the IP level; a
  * self-hosted MTA has to do its own throttling.
  *
  * The throttle is a counting semaphore keyed by MX hostname, kept in
- * module-level state. It holds **across poll cycles** — back-to-back
+ * module-level state. It holds **across poll cycles**: back-to-back
  * batches that both hit the same MX still serialize, which is the
  * whole point. Sends to different MXs use disjoint semaphores and
  * proceed in parallel. (#91)
@@ -37,7 +37,7 @@ const locks = new Map<string, MxLock>();
  * acquisition when all `max` slots are already held; the wait is FIFO.
  *
  * The lock is released in a `finally`, so a thrown error still wakes
- * the next waiter — a hung MX won't deadlock the queue forever, since
+ * the next waiter: a hung MX won't deadlock the queue forever, since
  * the transport's own socket timeout kicks in inside `fn`.
  *
  * **Slot accounting (subtle).** Releases hand off the slot directly to
@@ -63,7 +63,7 @@ export async function withMxLock<T>(
   if (lock.active < max) {
     lock.active++;
   } else {
-    /** All slots taken — wait FIFO. The resolver is "handed" a slot
+    /** All slots taken: wait FIFO. The resolver is "handed" a slot
      *  by a releasing caller; we don't increment `active` here because
      *  the releaser left it unchanged when it handed off. */
     await new Promise<void>((resolve) => {
@@ -76,7 +76,7 @@ export async function withMxLock<T>(
   } finally {
     const next = lock.queue.shift();
     if (next) {
-      /** Pass the slot to the next waiter — `active` stays the same. */
+      /** Pass the slot to the next waiter: `active` stays the same. */
       next();
     } else {
       lock.active--;

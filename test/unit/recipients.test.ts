@@ -8,7 +8,7 @@ import {
 /**
  * Unit tests for the recipient parser + MX grouper (#87 phase 1).
  *
- * No network involved — the MX resolver is a plain function the
+ * No network involved: the MX resolver is a plain function the
  * caller injects, so tests can drive any topology (success, partial
  * failure, multiple domains sharing an MX) without touching DNS.
  */
@@ -63,7 +63,7 @@ describe("parseRecipients", () => {
       "alice@example.com, bob@example.com",
       null,
     );
-    /** Only one Alice — and she stays `to` (first occurrence wins),
+    /** Only one Alice, and she stays `to` (first occurrence wins),
      *  with the original case preserved on the address. */
     expect(result).toEqual([
       { kind: "to", address: "Alice@Example.COM", domain: "example.com" },

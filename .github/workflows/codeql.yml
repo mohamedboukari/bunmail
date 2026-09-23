@@ -1,4 +1,4 @@
-# CodeQL — GitHub's semantic code analysis
+# CodeQL: GitHub's semantic code analysis
 # Scans for security vulnerabilities and coding errors on every push/PR.
 
 name: CodeQL

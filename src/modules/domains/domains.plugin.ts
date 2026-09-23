@@ -8,7 +8,7 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * Domains plugin — registers all domain management routes under /api/v1/domains.
+ * Domains plugin: registers all domain management routes under /api/v1/domains.
  *
  * Routes:
  * - POST /        → Register a new sender domain
@@ -20,19 +20,19 @@ import { logger } from "../../utils/logger.ts";
  */
 export const domainsPlugin = new Elysia({
   prefix: "/api/v1/domains",
-  /** Normalize URLs — /api/v1/domains and /api/v1/domains/ both work */
+  /** Normalize URLs: /api/v1/domains and /api/v1/domains/ both work */
   normalize: true,
 })
-  /** Apply auth middleware — all routes in this plugin require a valid Bearer token */
+  /** Apply auth middleware: all routes in this plugin require a valid Bearer token */
   .use(authMiddleware)
   /**
    * Domain management (register / verify / delete / list) is operator-level,
-   * so admin-only (#130). Restricted keys get 403. Sending is unaffected —
+   * so admin-only (#130). Restricted keys get 403. Sending is unaffected:
    * `createEmail` resolves the sender domain internally, and a restricted key's
    * allowed `From` addresses are governed by its allowed-senders list (#126).
    */
   .use(adminMiddleware)
-  /** Apply rate limiting — 100 requests per 60 seconds per API key */
+  /** Apply rate limiting: 100 requests per 60 seconds per API key */
   .use(rateLimitMiddleware)
 
   /**

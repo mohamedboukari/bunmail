@@ -6,7 +6,7 @@ Repeatedly sending to bouncing addresses is the **single fastest way to kill IP 
 
 ## What is a bounce?
 
-When BunMail's outbound SMTP delivers a message, the recipient's MX server **accepts the SMTP transaction** at handoff — that's why the email row's `status` becomes `sent`. The recipient's mail system then tries to land the message in the actual mailbox. If that fails (mailbox doesn't exist, full, blocked, etc.), the receiver sends a **Delivery Status Notification** back to the envelope sender.
+When BunMail's outbound SMTP delivers a message, the recipient's MX server **accepts the SMTP transaction** at handoff: that's why the email row's `status` becomes `sent`. The recipient's mail system then tries to land the message in the actual mailbox. If that fails (mailbox doesn't exist, full, blocked, etc.), the receiver sends a **Delivery Status Notification** back to the envelope sender.
 
 The DSN arrives at our **inbound** SMTP server, which is why this module lives next to `smtp-receiver`.
 
@@ -16,10 +16,10 @@ Receivers handle "address doesn't exist" / "address rejects mail" in **two disti
 
 | Flavour | When the receiver does this | Caught by |
 |---|---|---|
-| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent — the sending MTA already knows. | The queue's send-failure path: [queue.service.ts → `handleSendFailure`](../src/modules/emails/services/queue.service.ts) (#68) |
+| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's send-failure path: [queue.service.ts → `handleSendFailure`](../src/modules/emails/services/queue.service.ts) (#68) |
 | **Async DSN** | The MX accepts at 250, tries to deliver later, fails, sends a Delivery Status Notification back to the envelope sender. | The bounce module: [bounce-parser](../src/modules/bounces/services/bounce-parser.service.ts) + [bounce-handler](../src/modules/bounces/services/bounce-handler.service.ts) (#24) |
 
-Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook. From the consumer's perspective the signal is uniform — the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
+Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook. From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
 
 Modern Gmail / Outlook / Yahoo prefer **inline 5xx** for obvious-nonexistence cases. Async DSNs are more common for "address used to exist" / "mailbox full" / "domain temporarily unreachable" cases.
 
@@ -35,7 +35,7 @@ Triggered when the message's `Content-Type` is `multipart/report; report-type=de
 |---|---|
 | `Final-Recipient` | The recipient address that bounced |
 | `Status` | Enhanced SMTP status code (`5.x.x` = hard, `4.x.x` = soft, `2.x.x` = ignored) |
-| `Diagnostic-Code` | Human-readable reason — persisted on the suppression row |
+| `Diagnostic-Code` | Human-readable reason: persisted on the suppression row |
 | `Original-Message-ID` | Links the bounce back to the outbound `emails` row |
 
 Modern Gmail / Outlook / Yahoo bounces all hit this path.
@@ -45,16 +45,16 @@ Modern Gmail / Outlook / Yahoo bounces all hit this path.
 Older MTAs (qmail, Exim with old configs, custom mail servers) sometimes send plain-text bounce notices that don't follow RFC 3464. The fallback scrapes:
 
 - Any enhanced (`5.1.1`) or basic (`550`) SMTP status code from the body
-- The first `<user@host>` recipient in the **body** (not in headers — `Message-ID:` and `In-Reply-To:` headers also carry `<x@y>` and would otherwise win document order)
+- The first `<user@host>` recipient in the **body** (not in headers: `Message-ID:` and `In-Reply-To:` headers also carry `<x@y>` and would otherwise win document order)
 - An `In-Reply-To:` or embedded `Message-ID:` header to link back to the original
 
-The fallback only runs when the message has obvious bounce markers — sender is `MAILER-DAEMON` or `postmaster`, subject mentions delivery failure, or content-type is `multipart/report`. This **`looksLikeBounce` gate** prevents normal customer reply mail that happens to contain a status-code-shaped string from being mis-classified.
+The fallback only runs when the message has obvious bounce markers: sender is `MAILER-DAEMON` or `postmaster`, subject mentions delivery failure, or content-type is `multipart/report`. This **`looksLikeBounce` gate** prevents normal customer reply mail that happens to contain a status-code-shaped string from being mis-classified.
 
 ## Linking back to the original email
 
-We **require** an `originalMessageId` from the parser. Without it, we can't safely link the bounce to a specific tenant — and per #25's per-API-key suppression scoping, suppressing under the wrong key would be worse than dropping the bounce. The parser refuses to return a `ParsedBounce` without one, and the handler refuses to act if the lookup misses.
+We **require** an `originalMessageId` from the parser. Without it, we can't safely link the bounce to a specific tenant, and per #25's per-API-key suppression scoping, suppressing under the wrong key would be worse than dropping the bounce. The parser refuses to return a `ParsedBounce` without one, and the handler refuses to act if the lookup misses.
 
-The lookup uses the `messageId` column on `emails`, set by nodemailer at send time. Both the wrapped (`<id@host>`) and unwrapped form are tried — different SMTP flavours include or strip the angle brackets.
+The lookup uses the `messageId` column on `emails`, set by nodemailer at send time. Both the wrapped (`<id@host>`) and unwrapped form are tried: different SMTP flavours include or strip the angle brackets.
 
 ## Inline 5xx flow (#68)
 
@@ -62,11 +62,11 @@ When `processEmail`'s SMTP send throws an error, the catch block parses the erro
 
 | Classification | What happens |
 |---|---|
-| **Hard (5xx)** — `550 5.1.1`, `5.7.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits — exactly what tanks IP reputation. |
-| **Soft (4xx)** — `452 4.2.2 mailbox full`, `421 greylist`, etc. | Existing retry behaviour. Repeated soft bounces are still handled by the async-DSN path's escalation rule — the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
-| **Non-SMTP error** — DNS resolution failure, socket timeout, TLS handshake error | Existing retry behaviour. Infrastructure problems don't tell us anything about the recipient. |
+| **Hard (5xx)**: `550 5.1.1`, `5.7.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits: exactly what tanks IP reputation. |
+| **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Existing retry behaviour. Repeated soft bounces are still handled by the async-DSN path's escalation rule: the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
+| **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error | Existing retry behaviour. Infrastructure problems don't tell us anything about the recipient. |
 
-Auto-suppression on inline 5xx fires on **attempt 1** — no point waiting for `MAX_ATTEMPTS` to confirm what the receiver already told us authoritatively.
+Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for `MAX_ATTEMPTS` to confirm what the receiver already told us authoritatively.
 
 ## Async DSN → suppression flow
 
@@ -77,8 +77,8 @@ When a DSN parses cleanly and links to an `emails` row, the bounce handler does 
    - Parsed kind `hard` → always `hard`.
    - Parsed kind `soft`, no existing suppression → `soft` (24h expiry).
    - Parsed kind `soft`, **existing soft suppression still active** → escalate to `hard` (permanent). Repeated transient failures are effectively permanent for IP-reputation purposes.
-3. **Persist via `suppressionService.addFromBounce`**. Idempotent upsert — a re-bounce of the same recipient updates the existing row.
-4. **Mark the original email row** — `status = 'bounced'`. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
+3. **Persist via `suppressionService.addFromBounce`**. Idempotent upsert: a re-bounce of the same recipient updates the existing row.
+4. **Mark the original email row**: `status = 'bounced'`. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
 5. **Fire `email.bounced` webhook** with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the auto-created suppression).
 
 ## Webhook payload
@@ -122,10 +122,10 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 
 ## What we do **not** do
 
-- **No `2.x.x` "delivered" reports** — those are positive confirmations and don't need handling.
-- **No fuzzy linking when `Original-Message-ID` is missing** — would risk suppressing under the wrong API key. We log a warning and drop.
-- **No retry of the original email** — by definition the recipient's MX accepted the SMTP transaction; retrying would just bounce again and double-tank reputation.
-- **No DMARC `rua` / FBL complaint processing** — those are separate parsers (#41 and a future ticket).
+- **No `2.x.x` "delivered" reports**: those are positive confirmations and don't need handling.
+- **No fuzzy linking when `Original-Message-ID` is missing**: it would risk suppressing under the wrong API key. We log a warning and drop.
+- **No retry of the original email**: by definition the recipient's MX accepted the SMTP transaction; retrying would just bounce again and double-tank reputation.
+- **No DMARC `rua` / FBL complaint processing**: those are separate parsers (#41 and a future ticket).
 
 ## Status column mapping
 
@@ -139,9 +139,9 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 
 ## Testing
 
-The parser is fully unit-testable in [test/unit/bounce-parser.test.ts](../test/unit/bounce-parser.test.ts) — 6 cases covering RFC 3464 hard / soft, 2.x.x delivered, missing Original-Message-ID, qmail-style fallback, and the negative case where normal customer reply mail mentions a status code.
+The parser is fully unit-testable in [test/unit/bounce-parser.test.ts](../test/unit/bounce-parser.test.ts): 6 cases covering RFC 3464 hard / soft, 2.x.x delivered, missing Original-Message-ID, qmail-style fallback, and the negative case where normal customer reply mail mentions a status code.
 
-The handler's orchestration is unit-testable via injected callbacks in [test/unit/bounce-handler.test.ts](../test/unit/bounce-handler.test.ts) — 5 cases covering hard, first soft, escalation on second soft, no double-escalation on already-hard, and drop-when-no-original.
+The handler's orchestration is unit-testable via injected callbacks in [test/unit/bounce-handler.test.ts](../test/unit/bounce-handler.test.ts): 5 cases covering hard, first soft, escalation on second soft, no double-escalation on already-hard, and drop-when-no-original.
 
 ## Manual smoke test (when staging)
 

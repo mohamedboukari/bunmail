@@ -1,4 +1,4 @@
-# BunMail — CI Pipeline
+# BunMail: CI Pipeline
 #
 # Runs on every push and pull request to main.
 # Steps: install → typecheck → lint → test
@@ -94,7 +94,7 @@ jobs:
         run: bun run lint
 
       - name: XSS scan (dashboard JSX)
-        # `@kitajs/html` does NOT auto-escape interpolated children — every
+        # `@kitajs/html` does NOT auto-escape interpolated children: every
         # render of stored/user data needs the `safe` attribute. xss-scan
         # (@kitajs/ts-html-plugin) fails the build on any unescaped child,
         # so a new XSS sink can't merge silently (#131, #150).
@@ -119,5 +119,5 @@ jobs:
         # tracks applied tags in `__bunmail_migrations`.
         run: bun run db:migrate
 
-      - name: Test (integration — real Postgres)
+      - name: Test (integration, real Postgres)
         run: bun run test:integration

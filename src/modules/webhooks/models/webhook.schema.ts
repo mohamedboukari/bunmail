@@ -2,7 +2,7 @@ import { pgTable, varchar, boolean, timestamp, text, jsonb } from "drizzle-orm/p
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 
 /**
- * Webhooks table — stores endpoint URLs that receive event notifications.
+ * Webhooks table: stores endpoint URLs that receive event notifications.
  *
  * Each webhook is scoped to an API key and subscribes to specific event types.
  * Payloads are signed with HMAC-SHA256 using the webhook's secret so the
@@ -22,7 +22,7 @@ export const webhooks = pgTable("webhooks", {
   /** Event types this webhook subscribes to (e.g. ["email.sent", "email.failed"]) */
   events: jsonb("events").$type<string[]>().notNull().default([]),
 
-  /** HMAC-SHA256 signing secret — included in X-BunMail-Signature header */
+  /** HMAC-SHA256 signing secret: included in X-BunMail-Signature header */
   secret: varchar("secret", { length: 64 }).notNull(),
 
   /** Soft-disable flag */

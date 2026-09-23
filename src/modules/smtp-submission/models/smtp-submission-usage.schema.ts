@@ -12,15 +12,15 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
  * Per-(API key, UTC day) submission usage counters (#123).
  *
  * Powers two features of the SMTP submission server (#120):
- * 1. **Per-key daily quota** — `getAcceptedToday` reads today's `accepted`
+ * 1. **Per-key daily quota**: `getAcceptedToday` reads today's `accepted`
  *    count and the submission path rejects once it reaches the configured
  *    `SMTP_SUBMISSION_DAILY_QUOTA`.
- * 2. **Stats endpoint** — `GET /api/v1/smtp-submission/stats` aggregates
+ * 2. **Stats endpoint**: `GET /api/v1/smtp-submission/stats` aggregates
  *    these rows for the calling key.
  *
  * One row per key per day keeps the table tiny (no per-message event log)
  * and makes both the quota read and the stats query index-friendly.
- * Auth *failures* are deliberately NOT recorded here — a failed AUTH has
+ * Auth *failures* are deliberately NOT recorded here: a failed AUTH has
  * no known API key to attribute to, and is already throttled per-IP.
  */
 export const smtpSubmissionUsage = pgTable(
@@ -30,7 +30,7 @@ export const smtpSubmissionUsage = pgTable(
     id: varchar("id", { length: 36 }).primaryKey(),
 
     /**
-     * Owning API key. `ON DELETE CASCADE` — usage rows are meaningless
+     * Owning API key. `ON DELETE CASCADE`: usage rows are meaningless
      * once the key is gone (mirrors the suppressions table).
      */
     apiKeyId: varchar("api_key_id", { length: 36 })

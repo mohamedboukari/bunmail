@@ -7,12 +7,12 @@ import type { Email } from "../../modules/emails/types/email.types.ts";
 
 interface EmailDetailPageProps {
   email: Email;
-  /** When true, the email is in trash — show Restore + Delete forever instead of Trash. */
+  /** When true, the email is in trash: show Restore + Delete forever instead of Trash. */
   isTrashed: boolean;
 }
 
 /**
- * Email detail page — shows all fields of a single email.
+ * Email detail page: shows all fields of a single email.
  * Includes HTML preview, text content, full metadata, and a destructive
  * action button that varies based on whether the row is in trash.
  */
@@ -31,7 +31,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
         {backLabel}
       </a>
 
-      {/* Header — title + status + destructive actions on the right */}
+      {/* Header: title + status + destructive actions on the right */}
       <div class="flex items-center justify-between gap-3 mb-6">
         <div class="flex items-center gap-3 min-w-0">
           <h1 class="text-xl font-semibold truncate" safe>
@@ -161,7 +161,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
 }
 
 /**
- * Detail field — label + value pair used in the details grid.
+ * Detail field: label + value pair used in the details grid.
  */
 function DetailField({ label, value }: { label: string; value: string }) {
   return (

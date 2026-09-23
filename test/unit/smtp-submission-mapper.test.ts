@@ -28,7 +28,7 @@ describe("dedupeJoin", () => {
   });
 });
 
-describe("buildSubmissionInput — sender resolution", () => {
+describe("buildSubmissionInput: sender resolution", () => {
   test("prefers the From header over the envelope sender", () => {
     const input = buildSubmissionInput({
       fromHeader: "header@x.com",
@@ -61,7 +61,7 @@ describe("buildSubmissionInput — sender resolution", () => {
   });
 });
 
-describe("buildSubmissionInput — recipients & BCC preservation", () => {
+describe("buildSubmissionInput: recipients & BCC preservation", () => {
   test("maps visible To/Cc from headers", () => {
     const input = buildSubmissionInput({
       fromHeader: "s@x.com",
@@ -119,7 +119,7 @@ describe("buildSubmissionInput — recipients & BCC preservation", () => {
   });
 });
 
-describe("buildSubmissionInput — body & subject passthrough", () => {
+describe("buildSubmissionInput: body & subject passthrough", () => {
   test("passes subject/html/text through; empty subject defaults to ''", () => {
     const input = buildSubmissionInput({
       fromHeader: "s@x.com",

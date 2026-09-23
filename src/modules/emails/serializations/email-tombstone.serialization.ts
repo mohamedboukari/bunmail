@@ -14,7 +14,7 @@ export interface SerializedEmailTombstone {
 
 /**
  * Strips `apiKeyId` (the caller already authenticated as that key, so
- * echoing it is redundant noise). Everything else is kept — tombstones
+ * echoing it is redundant noise). Everything else is kept: tombstones
  * are forensic artefacts; once you can read one, you want all the
  * identifiers we kept.
  */

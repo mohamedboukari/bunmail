@@ -5,7 +5,7 @@ import { isIP } from "net";
  * SSRF guard for outbound webhook delivery (#128).
  *
  * Webhook URLs are tenant-supplied and fetched server-side, and the
- * response is read back through the API — so an unvalidated URL is a
+ * response is read back through the API, so an unvalidated URL is a
  * classic exfiltrating SSRF (cloud metadata at 169.254.169.254, internal
  * services on 127/10/172.16/192.168, etc.). This module validates a URL's
  * scheme and resolves its host, rejecting any that maps to a
@@ -64,7 +64,7 @@ function isBlockedIpv4(ip: string): boolean {
 function isBlockedIpv6(ip: string): boolean {
   const addr = ip.toLowerCase().split("%")[0]!; // strip zone id
   if (addr === "::1" || addr === "::") return true;
-  // IPv4-mapped (::ffff:1.2.3.4) or v4-in-v6 — extract the embedded v4.
+  // IPv4-mapped (::ffff:1.2.3.4) or v4-in-v6, extract the embedded v4.
   const v4 = addr.match(/(?:^|:)((?:\d{1,3}\.){3}\d{1,3})$/);
   if (v4) return isBlockedIpv4(v4[1]!);
   const first = parseInt(addr.split(":")[0] || "0", 16);
@@ -86,7 +86,7 @@ export function isBlockedIp(ip: string): boolean {
 /**
  * Validates a webhook URL and throws {@link BlockedUrlError} if it must not
  * be fetched. Checks the scheme, then **resolves the host via DNS** and
- * rejects if *any* resolved address is private/loopback/link-local/etc. —
+ * rejects if *any* resolved address is private/loopback/link-local/etc.,
  * so a public hostname that resolves (or later re-resolves, TOCTOU) to an
  * internal IP is caught too.
  *

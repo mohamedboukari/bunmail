@@ -3,19 +3,19 @@
  *
  * The poll loop that drains the `webhook_deliveries` queue. Lives next
  * to the email queue worker (`emails/services/queue.service.ts`) and
- * mirrors its shape — `start` / `stop`, `setInterval` poll, atomic
+ * mirrors its shape: `start` / `stop`, `setInterval` poll, atomic
  * claim under `FOR UPDATE SKIP LOCKED`, fire-and-forget per-row
  * processing inside the tick.
  *
  * Two periodic tasks:
- *   - **Poll** (every {@link POLL_INTERVAL_MS}) — claim the next batch
+ *   - **Poll** (every {@link POLL_INTERVAL_MS}): claim the next batch
  *     of due rows, attempt POST for each, persist outcome.
- *   - **Cleanup** (every {@link CLEANUP_INTERVAL_MS}) — delete
+ *   - **Cleanup** (every {@link CLEANUP_INTERVAL_MS}): delete
  *     `delivered` rows older than `config.webhookDelivery.retentionDays`.
  *     `failed` rows kept indefinitely for forensics.
  *
  * The worker is concurrency-safe (multiple replicas safe by
- * construction — same SKIP LOCKED pattern as #20). Single-instance
+ * construction: same SKIP LOCKED pattern as #20). Single-instance
  * today, but no race blocks horizontal scale.
  */
 
@@ -37,7 +37,7 @@ const POLL_INTERVAL_MS = 5_000;
 /** Max rows claimed per tick. Caps blast radius of a misbehaving
  *  consumer (a single hammered URL won't block the rest). With one
  *  attempt per row, 25 rows × 10s timeout = 4 minutes worst case
- *  before the next tick — still well inside the 5-min freshness
+ *  before the next tick: still well inside the 5-min freshness
  *  window because most attempts return in milliseconds. */
 const BATCH_SIZE = 25;
 
@@ -49,7 +49,7 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Starts the worker. Idempotent — calling twice is a no-op.
+ * Starts the worker. Idempotent: calling twice is a no-op.
  * No `recoverInterrupted`-style boot recovery is needed: durably-
  * stored `pending` rows are picked up by the very next poll without
  * any special-cased "left over from before reboot" handling. That's
@@ -88,8 +88,8 @@ export function stop(): void {
 
 /**
  * One poll tick: claim a batch of due rows and process them in
- * parallel. Errors at the row level don't kill the tick — `recordAttempt`
- * captures them — so one bad URL can't gate the rest.
+ * parallel. Errors at the row level don't kill the tick: `recordAttempt`
+ * captures them, so one bad URL can't gate the rest.
  *
  * Exported for tests so they can drive a deterministic single-tick
  * loop without arming the setInterval.
@@ -124,7 +124,7 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
           priorAttempts: row.attempts,
         });
       } catch (err) {
-        /** A DB error here is bad — the row stays `pending` with the
+        /** A DB error here is bad: the row stays `pending` with the
          *  old `next_attempt_at`, so it'll be re-claimed on the next
          *  tick and we'll re-attempt. Log loud. */
         logger.error("Webhook worker: failed to persist attempt outcome", {

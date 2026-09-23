@@ -9,12 +9,12 @@ import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts"
  */
 interface InboundDetailPageProps {
   email: InboundEmail;
-  /** When true, the email is in trash — show Restore + Delete forever instead. */
+  /** When true, the email is in trash: show Restore + Delete forever instead. */
   isTrashed: boolean;
 }
 
 /**
- * Inbound email detail page — shows full metadata, HTML preview, text content,
+ * Inbound email detail page: shows full metadata, HTML preview, text content,
  * and a destructive action button that varies based on trash state.
  */
 export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) {
@@ -74,9 +74,9 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
             </>
           ) : (
             <>
-              {/* Reply (#86) — links to the send form pre-populated by the
+              {/* Reply (#86): links to the send form pre-populated by the
                   /dashboard/inbound/:id/reply route. Plain anchor, not a form,
-                  because the route is GET — no side effects to confirm. */}
+                  because the route is GET: no side effects to confirm. */}
               <a
                 href={`/dashboard/inbound/${email.id}/reply`}
                 class="px-3 py-1.5 rounded-md bg-gray-900 hover:bg-gray-800 text-white dark:bg-gray-100 dark:hover:bg-gray-200 dark:text-gray-900 text-sm font-medium inline-flex items-center"
@@ -154,7 +154,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
 }
 
 /**
- * Detail field — label + value pair used in the details grid.
+ * Detail field: label + value pair used in the details grid.
  */
 function DetailField({ label, value }: { label: string; value: string }) {
   return (

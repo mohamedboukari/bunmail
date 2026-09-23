@@ -21,7 +21,7 @@ const WEBHOOK_EVENTS = [
 ] as const;
 
 /**
- * Webhooks page — shows a create form and table of all webhooks.
+ * Webhooks page: shows a create form and table of all webhooks.
  * After creating a webhook, the signing secret is displayed once.
  */
 export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
@@ -36,7 +36,7 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
       {!!secret && (
         <div class="bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950 dark:text-emerald-200 dark:border-emerald-800 rounded-lg px-4 py-3 text-sm mb-4">
           <p class="font-medium mb-1">
-            Webhook created — copy the signing secret now, it won't be shown again:
+            Webhook created: copy the signing secret now, it won't be shown again:
           </p>
           <code
             class="block bg-emerald-100 dark:bg-emerald-900 px-3 py-2 rounded font-mono text-xs break-all select-all"

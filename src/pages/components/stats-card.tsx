@@ -7,10 +7,10 @@ interface StatsCardProps {
   /**
    * The numeric value to display. When `displayValue` is also provided,
    * it overrides the formatted number so callers can render percentages,
-   * "—" for null, etc. without losing the locale-formatted default.
+   * "n/a" for null, etc. without losing the locale-formatted default.
    */
   value: number;
-  /** Optional preformatted display string (e.g. "98.4%", "—"). */
+  /** Optional preformatted display string (e.g. "98.4%", "n/a"). */
   displayValue?: string;
   /** Optional small caption rendered under the value (e.g. "last 24h"). */
   hint?: string;
@@ -19,7 +19,7 @@ interface StatsCardProps {
 }
 
 /**
- * Stat card — displays a single metric on the dashboard home page.
+ * Stat card: displays a single metric on the dashboard home page.
  * Used in a grid to show overview stats (total emails, sent, failed, etc.)
  */
 export function StatsCard({

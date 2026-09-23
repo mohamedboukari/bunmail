@@ -6,7 +6,7 @@ import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
 /**
- * Inbound emails plugin — API for received emails under /api/v1/inbound.
+ * Inbound emails plugin: API for received emails under /api/v1/inbound.
  *
  * Routes:
  * - GET    /                  → List inbound emails (excludes trashed)
@@ -68,7 +68,7 @@ export const inboundPlugin = new Elysia({
 
   /**
    * GET /api/v1/inbound/trash
-   * Trashed inbound emails — auto-purged after TRASH_RETENTION_DAYS days.
+   * Trashed inbound emails: auto-purged after TRASH_RETENTION_DAYS days.
    * Defined before /:id so the segment doesn't match it.
    */
   .get(

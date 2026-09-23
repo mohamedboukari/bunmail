@@ -1,5 +1,5 @@
 /**
- * Status badge — colored pill for email status.
+ * Status badge: colored pill for email status.
  * Uses muted colors that work well in both light and dark mode.
  */
 export function StatusBadge({ status }: { status: string }) {
@@ -26,7 +26,7 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 /**
- * Verification badge — shows verified/not verified status for DNS records.
+ * Verification badge: shows verified/not verified status for DNS records.
  * Used on the domains page and domain detail view.
  */
 export function VerificationBadge({

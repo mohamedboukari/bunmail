@@ -20,11 +20,11 @@ interface EmailsPageProps {
   limit: number;
   /** Currently active status filter (undefined = "all") */
   status?: string;
-  /** Currently active source filter — "api" | "smtp" (undefined = "all") — #137 */
+  /** Currently active source filter: "api" | "smtp" (undefined = "all") (#137) */
   source?: string;
-  /** Currently active API-key filter (undefined = "all keys") — #137 */
+  /** Currently active API-key filter (undefined = "all keys") (#137) */
   apiKeyId?: string;
-  /** API keys for the filter dropdown (operator/cross-key view) — #137 */
+  /** API keys for the filter dropdown (operator/cross-key view) (#137) */
   apiKeys?: { id: string; name: string; keyPrefix: string }[];
   /** Optional flash message shown after redirect (e.g. "Email moved to trash") */
   flash?: { message: string; type: "success" | "error" };
@@ -65,7 +65,7 @@ function SourceBadge({ source }: { source: string }) {
 }
 
 /**
- * Emails list page — shows a filterable, bulk-selectable table of emails.
+ * Emails list page: shows a filterable, bulk-selectable table of emails.
  * Includes status filter tabs, a Trash link, per-row checkboxes, a bulk
  * "Move to trash" action bar, and pagination.
  */
@@ -90,7 +90,7 @@ export function EmailsPage({
     { label: "Bounced", value: "bounced" },
   ];
 
-  /** Current filter state — used to build filter-preserving links. */
+  /** Current filter state: used to build filter-preserving links. */
   const activeFilters = { status, source, apiKeyId };
 
   return (
@@ -107,7 +107,7 @@ export function EmailsPage({
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
-      {/* Filter bar — status tabs (primary axis) + Source / API-key
+      {/* Filter bar: status tabs (primary axis) + Source / API-key
           dropdowns (#137). All three compose: each control preserves the
           others via emailsUrl(). */}
       <div class="flex flex-wrap items-center gap-3 mb-4">
@@ -132,7 +132,7 @@ export function EmailsPage({
         </div>
 
         <div class="flex items-center gap-3 ml-auto">
-          {/* Source dropdown — navigates on change, preserving other filters. */}
+          {/* Source dropdown: navigates on change, preserving other filters. */}
           <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
             Source
             <select
@@ -160,7 +160,7 @@ export function EmailsPage({
             </select>
           </label>
 
-          {/* API-key dropdown — operator/cross-key view (#137). */}
+          {/* API-key dropdown: operator/cross-key view (#137). */}
           <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
             API key
             <select
@@ -193,7 +193,7 @@ export function EmailsPage({
         <>
           {/* Form wraps the table so the action bar can submit selected ids */}
           <form method="POST" action="/dashboard/emails/bulk-trash" id="emails-bulk-form">
-            {/* Bulk action bar — visible only when at least one row is checked */}
+            {/* Bulk action bar: visible only when at least one row is checked */}
             <div
               id="emails-bulk-bar"
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
@@ -316,7 +316,7 @@ export function EmailsPage({
             />
           ))}
 
-          {/* Pagination — carry all active filters across pages (#137). */}
+          {/* Pagination: carry all active filters across pages (#137). */}
           <Pagination
             page={page}
             limit={limit}
@@ -333,7 +333,7 @@ export function EmailsPage({
             }
           />
 
-          {/* Selection-tracking script — toggles bulk bar and select-all checkbox */}
+          {/* Selection-tracking script: toggles bulk bar and select-all checkbox */}
           <script>
             {`
               (function() {

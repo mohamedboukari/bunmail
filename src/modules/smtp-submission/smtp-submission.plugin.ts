@@ -10,7 +10,7 @@ import { logger } from "../../utils/logger.ts";
 /**
  * SMTP submission REST surface (#123).
  *
- * The submission *server* itself (the SMTP listener) has no HTTP routes —
+ * The submission *server* itself (the SMTP listener) has no HTTP routes:
  * this plugin exposes read-only usage stats + quota status for the SMTP
  * submission path, scoped to the calling API key (consistent with the
  * rest of `/api/v1`). Cross-key / instance-wide views belong in the

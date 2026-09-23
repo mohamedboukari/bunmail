@@ -16,7 +16,7 @@ export interface SerializedInboundEmail {
 
 /**
  * Transforms a raw database inbound email row into the API response shape.
- * Strips the raw RFC 822 source — consumers can fetch it via GET /:id/raw
+ * Strips the raw RFC 822 source: consumers can fetch it via GET /:id/raw
  * if they need it in the future.
  */
 export function serializeInboundEmail(email: InboundEmail): SerializedInboundEmail {

@@ -7,7 +7,7 @@
  * 0% unit coverage because it's pure DB work.
  *
  * `recoverInterrupted` is not exported from queue.service.ts (private),
- * so we exercise it through `start()` — but that also kicks off the
+ * so we exercise it through `start()`, but that also kicks off the
  * setInterval poll loop, which we need to stop immediately to avoid
  * the loop trying to actually send mail in the test process. Calling
  * `stop()` right after `start()` clears the timer.
@@ -82,7 +82,7 @@ describe("recoverInterrupted (via queueService.start)", () => {
     )[0];
 
     expect(live?.status).toBe("queued");
-    /** Trashed row stays in `sending` — recovery filter excluded it. The
+    /** Trashed row stays in `sending`: recovery filter excluded it. The
      *  queue selector also excludes trashed rows, so this is consistent
      *  with not re-sending something the user explicitly trashed. */
     expect(trashed?.status).toBe("sending");

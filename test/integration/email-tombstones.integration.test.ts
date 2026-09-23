@@ -2,19 +2,19 @@
  * Integration tests for the email tombstone audit trail (#34).
  *
  * Five hard-delete code paths in the codebase write a tombstone
- * before they DELETE — this file exercises all of them and confirms:
+ * before they DELETE: this file exercises all of them and confirms:
  *
  *   1. Every hard-delete leaves exactly one tombstone with the right
  *      identifiers (id, messageId, to, subject, status, sentAt) and
  *      drops the body bytes (html / text not retained).
  *   2. The tombstone survives the parent api key being deleted (no
- *      FK cascade — the snapshot must outlive the api_key row, which
+ *      FK cascade: the snapshot must outlive the api_key row, which
  *      is exactly the audit-trail use case).
  *   3. Read API filters by messageId, with-and-without angle-bracket
  *      wrapping (operators paste from logs / DSNs that vary).
  *   4. Retention sweep deletes tombstones older than the cutoff,
  *      keeping fresh ones.
- *   5. Atomicity — recording + deleting is one transaction.
+ *   5. Atomicity: recording + deleting is one transaction.
  *
  * Outbound-only by design (#34 acceptance criteria); inbound
  * tombstones are not modelled.
@@ -100,7 +100,7 @@ describe("permanentDeleteEmail (per-row API path)", () => {
     expect(tombstone?.subject).toBe("Welcome");
     expect(tombstone?.status).toBe("sent");
     expect(tombstone?.deletedAt).not.toBeNull();
-    /** Body bytes are NOT preserved — by design. The tombstone schema
+    /** Body bytes are NOT preserved: by design. The tombstone schema
      *  has no `html` / `text_content` columns; if it did, this test
      *  would catch the regression. */
     expect("html" in (tombstone ?? {})).toBe(false);
@@ -109,20 +109,20 @@ describe("permanentDeleteEmail (per-row API path)", () => {
   test("returns undefined when the row is not in trash (no tombstone)", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: emailId } = await seed.email({ apiKeyId, status: "sent" });
-    /** NOT trashed — the gate refuses. */
+    /** NOT trashed: the gate refuses. */
     const result = await permanentDeleteEmail(emailId, apiKeyId);
     expect(result).toBeUndefined();
     const tomb = await db.select().from(emailTombstones);
     expect(tomb).toHaveLength(0);
   });
 
-  test("scoped per api_key — wrong key, no delete, no tombstone", async () => {
+  test("scoped per api_key: wrong key, no delete, no tombstone", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
     const { id: emailId } = await seed.email({ apiKeyId: keyA, status: "sent" });
     await trashEmail(emailId, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
-    /** Wrong key — no-op. */
+    /** Wrong key: no-op. */
     const result = await permanentDeleteEmail(emailId, keyB);
     expect(result).toBeUndefined();
     const [stillThere] = await db.select().from(emails).where(eq(emails.id, emailId));
@@ -137,7 +137,7 @@ describe("emptyEmailsTrash (bulk per-tenant)", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: e1 } = await seed.email({ apiKeyId, toAddress: "a@example.com" });
     const { id: e2 } = await seed.email({ apiKeyId, toAddress: "b@example.com" });
-    /** Untrashed control row — should NOT be touched. */
+    /** Untrashed control row, should NOT be touched. */
     const { id: e3 } = await seed.email({ apiKeyId, toAddress: "c@example.com" });
 
     await trashEmail(e1, new Date(Date.now() - 24 * 60 * 60 * 1000));
@@ -155,7 +155,7 @@ describe("emptyEmailsTrash (bulk per-tenant)", () => {
     expect(survivor).toBeDefined();
   });
 
-  test("scopes to api_key — another tenant's trashed rows are untouched", async () => {
+  test("scopes to api_key: another tenant's trashed rows are untouched", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
     const { id: aTrashed } = await seed.email({ apiKeyId: keyA });
@@ -163,7 +163,7 @@ describe("emptyEmailsTrash (bulk per-tenant)", () => {
     await trashEmail(aTrashed, new Date(Date.now() - 24 * 60 * 60 * 1000));
     await trashEmail(bTrashed, new Date(Date.now() - 24 * 60 * 60 * 1000));
 
-    /** A empties their trash — B's rows untouched. */
+    /** A empties their trash: B's rows untouched. */
     const deleted = await emptyEmailsTrash(keyA);
     expect(deleted).toBe(1);
 
@@ -271,7 +271,7 @@ describe("tombstone snapshots survive api_key deletion", () => {
       .where(eq(emailTombstones.id, emailId));
     expect(before).toBeDefined();
 
-    /** Delete the api_key — emails CASCADE-deletes (no rows there
+    /** Delete the api_key: emails CASCADE-deletes (no rows there
      *  anyway; the email was already hard-deleted), but tombstones
      *  must NOT cascade. The whole point is the audit trail outliving
      *  the parent. */
@@ -288,7 +288,7 @@ describe("tombstone snapshots survive api_key deletion", () => {
   });
 });
 
-describe("listTombstones / getTombstoneById — read API", () => {
+describe("listTombstones / getTombstoneById: read API", () => {
   test("filters by messageId, accepts both wrapped and unwrapped forms", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: e1 } = await seed.email({ apiKeyId });
@@ -315,7 +315,7 @@ describe("listTombstones / getTombstoneById — read API", () => {
     });
     expect(unwrappedHit.total).toBe(1);
 
-    /** Unrelated id — no match. */
+    /** Unrelated id: no match. */
     const miss = await listTombstones({
       apiKeyId,
       messageId: "nope@example.com",
@@ -325,7 +325,7 @@ describe("listTombstones / getTombstoneById — read API", () => {
     expect(miss.total).toBe(0);
   });
 
-  test("scopes per api_key — strangers see nothing", async () => {
+  test("scopes per api_key: strangers see nothing", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
     const { id: emailId } = await seed.email({ apiKeyId: keyA });
@@ -360,7 +360,7 @@ describe("listTombstones / getTombstoneById — read API", () => {
   });
 });
 
-describe("retention cleanup — purgeOldTombstones / runTombstoneRetention", () => {
+describe("retention cleanup: purgeOldTombstones / runTombstoneRetention", () => {
   test("purges tombstones older than the cutoff, keeps fresh ones", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: oldId } = await seed.email({ apiKeyId });
@@ -405,7 +405,7 @@ describe("retention cleanup — purgeOldTombstones / runTombstoneRetention", () 
   });
 });
 
-describe("atomicity — tombstone INSERT + emails DELETE in one transaction", () => {
+describe("atomicity: tombstone INSERT + emails DELETE in one transaction", () => {
   test("the row count of tombstones matches the row count of deletes for the same WHERE", async () => {
     /** Indirect check: there's no easy way to inject a mid-transaction
      *  failure into Drizzle, but we can at least verify that for a

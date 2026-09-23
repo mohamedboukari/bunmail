@@ -9,7 +9,7 @@ import { inboundEmails } from "../../inbound/models/inbound-email.schema.ts";
 import { logger } from "../../../utils/logger.ts";
 
 /**
- * Dashboard stats — aggregated counts for the home page.
+ * Dashboard stats: aggregated counts for the home page.
  *
  * All "live" counts exclude soft-deleted (trashed) rows. The trash counts
  * are explicitly trashed-only so the home page can surface them as their
@@ -63,7 +63,7 @@ export interface DashboardStats {
 export async function getDashboardStats(): Promise<DashboardStats> {
   logger.debug("Fetching dashboard stats");
 
-  /** Cutoff for "last 24h" metrics — computed once for consistency */
+  /** Cutoff for "last 24h" metrics: computed once for consistency */
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   /**
@@ -83,7 +83,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     .from(emails)
     .where(isNull(emails.deletedAt));
 
-  /** Trash counts — single query, both tables */
+  /** Trash counts: single query, both tables */
   const emailsTrashQuery = db
     .select({ count: sql<number>`count(*)::int` })
     .from(emails)
@@ -144,7 +144,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   const failed = emailStats[0]?.failed ?? 0;
   const terminalCount = sent + failed;
 
-  /** Avoid divide-by-zero — surface as null when nothing terminal yet */
+  /** Avoid divide-by-zero: surface as null when nothing terminal yet */
   const successRate = terminalCount > 0 ? sent / terminalCount : null;
 
   const stats: DashboardStats = {

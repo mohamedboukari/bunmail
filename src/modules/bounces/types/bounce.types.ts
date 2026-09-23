@@ -21,7 +21,7 @@ export interface ParsedBounce {
   /**
    * Original Message-ID header of the email that bounced. The handler
    * uses this to look up the `emails` row and derive the owning API key.
-   * Required — bounces without an Original-Message-ID can't be linked
+   * Required: bounces without an Original-Message-ID can't be linked
    * back to a specific tenant safely (per #25's per-key scoping), so the
    * parser refuses to return them.
    */
@@ -37,12 +37,12 @@ export interface ParsedBounce {
   /**
    * Free-text diagnostic from the receiving MTA, e.g.
    * "550 5.1.1 The email account that you tried to reach does not exist."
-   * Optional — some non-RFC bounces only carry a code.
+   * Optional: some non-RFC bounces only carry a code.
    */
   diagnostic?: string;
 
   /**
-   * Which parser branch produced this result — "rfc3464" for the
+   * Which parser branch produced this result: "rfc3464" for the
    * structured `message/delivery-status` MIME part, "fallback" for the
    * regex scrape of the body. Logged for operator visibility; doesn't
    * change handler behaviour.

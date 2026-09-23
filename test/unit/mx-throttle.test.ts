@@ -15,12 +15,12 @@ import { withMxLock, _inspectLock, _resetLocks } from "../../src/utils/mx-thrott
  *     the map doesn't grow unbounded under churn.
  *
  * Ordering is asserted by recording event timestamps rather than
- * faking timers — keeps the tests resilient to the exact resolution
+ * faking timers: keeps the tests resilient to the exact resolution
  * of `setTimeout` while still proving "second call started AFTER
  * first call finished" (or didn't).
  */
 
-/** Resolves after `ms` real ms — used to make ordering observable. */
+/** Resolves after `ms` real ms: used to make ordering observable. */
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -47,7 +47,7 @@ describe("withMxLock", () => {
 
     await Promise.all([a, b]);
 
-    /** `b-start` must come after `a-end` — i.e. b waited for a to
+    /** `b-start` must come after `a-end`: i.e. b waited for a to
      *  finish, even though b's own `fn` is much faster. */
     expect(events).toEqual(["a-start", "a-end", "b-start", "b-end"]);
   });
@@ -69,7 +69,7 @@ describe("withMxLock", () => {
 
     await Promise.all([a, b]);
 
-    /** b finishes before a — only possible if they ran concurrently. */
+    /** b finishes before a, only possible if they ran concurrently. */
     expect(events).toEqual(["a-start", "b-start", "b-end", "a-end"]);
   });
 
@@ -104,7 +104,7 @@ describe("withMxLock", () => {
     const idx2End = events.indexOf("2-end");
     expect(idx3Start).toBeGreaterThan(Math.min(idx1End, idx2End));
 
-    /** And 1 + 2 do start before either one ends — proving parallelism. */
+    /** And 1 + 2 do start before either one ends: proving parallelism. */
     expect(events.indexOf("1-start")).toBeLessThan(idx1End);
     expect(events.indexOf("2-start")).toBeLessThan(idx2End);
     expect(events.indexOf("2-start")).toBeLessThan(idx1End);
@@ -123,11 +123,11 @@ describe("withMxLock", () => {
       events.push("b-start");
     });
 
-    /** a rejects but we still expect b to run — Promise.allSettled
+    /** a rejects but we still expect b to run: Promise.allSettled
      *  surfaces both outcomes without aborting on the rejection. */
     const results = await Promise.allSettled([a, b]);
-    expect(results[0]!.status).toBe("rejected");
-    expect(results[1]!.status).toBe("fulfilled");
+    expect(results[0].status).toBe("rejected");
+    expect(results[1].status).toBe("fulfilled");
     expect(events).toEqual(["a-start", "b-start"]);
   });
 

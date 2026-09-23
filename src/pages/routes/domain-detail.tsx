@@ -12,7 +12,7 @@ interface DomainDetailPageProps {
 }
 
 /**
- * Domain detail page — shows DNS verification status, required DNS records,
+ * Domain detail page: shows DNS verification status, required DNS records,
  * and a verify button for a single domain.
  */
 export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
@@ -148,7 +148,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
 }
 
 /**
- * Verification card — shows a single DNS record's verification status.
+ * Verification card: shows a single DNS record's verification status.
  * Displayed in a 3-column grid on the domain detail page.
  */
 function VerificationCard({ label, verified }: { label: string; verified: boolean }) {
@@ -165,7 +165,7 @@ function VerificationCard({ label, verified }: { label: string; verified: boolea
 }
 
 /**
- * DNS record entry — shows host, type, and value for a DNS record the user must add.
+ * DNS record entry: shows host, type, and value for a DNS record the user must add.
  */
 function DnsRecordEntry({
   type,
@@ -208,7 +208,7 @@ function DnsRecordEntry({
 }
 
 /**
- * Detail field — label + value pair used in the details grid.
+ * Detail field: label + value pair used in the details grid.
  */
 function DetailField({ label, value }: { label: string; value: string }) {
   return (

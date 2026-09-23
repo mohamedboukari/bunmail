@@ -11,12 +11,12 @@ interface DmarcReportsPageProps {
   limit: number;
   /** Active domain filter, or undefined for "all". */
   domainFilter?: string;
-  /** All distinct domains we have reports for — drives the filter dropdown. */
+  /** All distinct domains we have reports for: drives the filter dropdown. */
   domains: string[];
 }
 
 /**
- * DMARC reports list — table of received aggregate reports from
+ * DMARC reports list: table of received aggregate reports from
  * remote receivers. Each row links to the detail view with full
  * per-source-IP breakdown.
  */
@@ -40,7 +40,7 @@ export function DmarcReportsPage({
         domain.
       </p>
 
-      {/* Domain filter — links rather than a form so server stays stateless */}
+      {/* Domain filter: links rather than a form so server stays stateless */}
       {domains.length > 1 && (
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">

@@ -57,46 +57,40 @@ describe("isBlockedIp", () => {
   });
 });
 
-describe("assertPublicWebhookUrl — scheme & literal-IP checks", () => {
+describe("assertPublicWebhookUrl: scheme & literal-IP checks", () => {
   test("rejects a literal metadata IP", async () => {
-    await expect(
+    expect(
       assertPublicWebhookUrl("http://169.254.169.254/latest/meta-data/", true),
     ).rejects.toBeInstanceOf(BlockedUrlError);
   });
 
   test("rejects loopback and private literals", async () => {
-    await expect(
-      assertPublicWebhookUrl("http://127.0.0.1:5432/", true),
-    ).rejects.toThrow();
-    await expect(assertPublicWebhookUrl("https://10.0.0.5/hook", true)).rejects.toThrow();
-    await expect(assertPublicWebhookUrl("http://[::1]/x", true)).rejects.toThrow();
+    expect(assertPublicWebhookUrl("http://127.0.0.1:5432/", true)).rejects.toThrow();
+    expect(assertPublicWebhookUrl("https://10.0.0.5/hook", true)).rejects.toThrow();
+    expect(assertPublicWebhookUrl("http://[::1]/x", true)).rejects.toThrow();
   });
 
   test("rejects http when not allowed; message points at the opt-in", async () => {
-    await expect(assertPublicWebhookUrl("http://8.8.8.8/hook", false)).rejects.toThrow(
-      /https/,
-    );
+    expect(assertPublicWebhookUrl("http://8.8.8.8/hook", false)).rejects.toThrow(/https/);
   });
 
   test("allows http to a public literal IP when opted in", async () => {
-    await expect(
-      assertPublicWebhookUrl("http://8.8.8.8/hook", true),
-    ).resolves.toBeUndefined();
+    expect(assertPublicWebhookUrl("http://8.8.8.8/hook", true)).resolves.toBeUndefined();
   });
 
   test("rejects non-http(s) schemes", async () => {
-    await expect(assertPublicWebhookUrl("file:///etc/passwd", true)).rejects.toThrow();
-    await expect(assertPublicWebhookUrl("gopher://127.0.0.1/", true)).rejects.toThrow();
+    expect(assertPublicWebhookUrl("file:///etc/passwd", true)).rejects.toThrow();
+    expect(assertPublicWebhookUrl("gopher://127.0.0.1/", true)).rejects.toThrow();
   });
 
   test("rejects a non-URL", async () => {
-    await expect(assertPublicWebhookUrl("not a url", true)).rejects.toBeInstanceOf(
+    expect(assertPublicWebhookUrl("not a url", true)).rejects.toBeInstanceOf(
       BlockedUrlError,
     );
   });
 
   test("allows a public https literal IP", async () => {
-    await expect(
+    expect(
       assertPublicWebhookUrl("https://1.1.1.1/hook", false),
     ).resolves.toBeUndefined();
   });

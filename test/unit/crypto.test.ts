@@ -11,7 +11,7 @@ import {
 /**
  * Unit tests for crypto utilities.
  *
- * Tests API key generation and hashing — these are pure functions
+ * Tests API key generation and hashing: these are pure functions
  * with no dependencies, so no mocking needed.
  */
 
@@ -22,7 +22,7 @@ describe("hashApiKey", () => {
     expect(hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  test("is deterministic — same input always produces same hash", () => {
+  test("is deterministic: same input always produces same hash", () => {
     const hash1 = hashApiKey("bm_live_test123");
     const hash2 = hashApiKey("bm_live_test123");
     expect(hash1).toBe(hash2);
@@ -72,14 +72,14 @@ describe("generateApiKey", () => {
 describe("encryptSecret / decryptSecret", () => {
   const key = randomBytes(32);
   /**
-   * Synthetic plaintext fixture. Encryption is byte-agnostic — the
+   * Synthetic plaintext fixture. Encryption is byte-agnostic: the
    * helpers don't care whether the input is PEM, JSON, or arbitrary
-   * UTF-8 — so we deliberately avoid a PEM-shaped string here to keep
+   * UTF-8, so we deliberately avoid a PEM-shaped string here to keep
    * static-analysis scanners (gitleaks, etc.) from flagging the test
    * file as containing a literal key.
    */
   const samplePlaintext =
-    "DKIM-PRIVATE-KEY-FAKE-FIXTURE — encryption is byte-agnostic and this is not a real key.";
+    "DKIM-PRIVATE-KEY-FAKE-FIXTURE: encryption is byte-agnostic and this is not a real key.";
 
   test("round-trips a UTF-8 plaintext", () => {
     const ciphertext = encryptSecret(samplePlaintext, key);

@@ -2,7 +2,7 @@
 root = "."
 preload = ["./test/setup.ts"]
 
-# Coverage threshold — gates `bun test --coverage` invocations. If the
+# Coverage threshold: gates `bun test --coverage` invocations. If the
 # actual numbers drop below either, `bun test` exits non-zero.
 #
 # The threshold reflects the **unit + e2e** baseline (what the

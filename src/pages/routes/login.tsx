@@ -1,5 +1,5 @@
 /**
- * Login page — standalone (no sidebar navigation).
+ * Login page: standalone (no sidebar navigation).
  * Shows a centered card with a password input and submit button.
  * Displays an error message if the password was wrong.
  *
@@ -15,7 +15,7 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <title>Login — BunMail</title>
+        <title>Login | BunMail</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
           {`
@@ -90,7 +90,7 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
 }
 
 /**
- * Dashboard disabled page — shown when DASHBOARD_PASSWORD is not set.
+ * Dashboard disabled page: shown when DASHBOARD_PASSWORD is not set.
  * Informs the user they need to configure the password to access the dashboard.
  */
 export function DashboardDisabledPage() {
@@ -100,7 +100,7 @@ export function DashboardDisabledPage() {
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <title>Dashboard Disabled — BunMail</title>
+        <title>Dashboard Disabled | BunMail</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script>
           {`

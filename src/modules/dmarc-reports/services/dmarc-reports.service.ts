@@ -37,7 +37,7 @@ export async function listDmarcReports(filters: {
 }
 
 /**
- * Distinct list of domains that have at least one stored report —
+ * Distinct list of domains that have at least one stored report:
  * drives the dashboard's filter dropdown.
  */
 export async function listReportDomains(): Promise<string[]> {

@@ -11,12 +11,12 @@ import { logger } from "../../../utils/logger.ts";
 
 /**
  * How often the purge runs once started, in milliseconds. We hit it
- * on boot and then every 6 hours — frequent enough to keep the table
+ * on boot and then every 6 hours: frequent enough to keep the table
  * pruned, infrequent enough not to thrash a busy DB.
  */
 const PURGE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-/** Reference to the setInterval timer — used to stop the purge loop. */
+/** Reference to the setInterval timer: used to stop the purge loop. */
 let purgeTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -26,7 +26,7 @@ let purgeTimer: ReturnType<typeof setInterval> | null = null;
  * Outbound emails route through `deleteEmailsWithTombstones` (#34) so
  * a forensic snapshot is preserved past the hard-delete. Tombstones
  * themselves are aged out separately by `runTombstoneRetention` on the
- * same poll cadence (different — much longer — retention window).
+ * same poll cadence (different, much longer, retention window).
  *
  * Exported so tests / one-off scripts can run a single pass without
  * starting the interval.
@@ -64,7 +64,7 @@ export async function runTrashPurge(): Promise<{
 
 /**
  * Sweeps tombstones older than `TOMBSTONE_RETENTION_DAYS` (#34).
- * Runs alongside `runTrashPurge` on the same 6h cadence — the cutoff
+ * Runs alongside `runTrashPurge` on the same 6h cadence: the cutoff
  * is much longer (90 days default) so most calls find nothing to do.
  */
 export async function runTombstoneRetention(): Promise<{ deleted: number }> {
@@ -83,7 +83,7 @@ export async function runTombstoneRetention(): Promise<{ deleted: number }> {
 }
 
 /**
- * Starts the trash purge loop — runs once immediately, then every 6 hours.
+ * Starts the trash purge loop: runs once immediately, then every 6 hours.
  * Safe to call multiple times: subsequent calls are no-ops if already running.
  */
 export function start(): void {
@@ -97,7 +97,7 @@ export function start(): void {
     intervalHours: PURGE_INTERVAL_MS / (60 * 60 * 1000),
   });
 
-  /** Initial run on boot — catches anything that aged out while server
+  /** Initial run on boot: catches anything that aged out while server
    *  was down. Runs both sweeps; tombstone retention is cheap when the
    *  cutoff is 90 days out and the table is small. */
   void Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
@@ -126,7 +126,7 @@ export function start(): void {
 }
 
 /**
- * Stops the trash purge loop — used during graceful shutdown.
+ * Stops the trash purge loop: used during graceful shutdown.
  */
 export function stop(): void {
   if (purgeTimer) {
