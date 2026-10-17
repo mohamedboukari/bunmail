@@ -7,18 +7,22 @@ preload = ["./test/setup.ts"]
 # Bun applies `coverageThreshold` per file (every file must clear it),
 # not to the overall total, and silently ignores singular keys
 # (`line` / `function`), which is how the old gate here never fired.
-# With a few files still at or near 0%, any meaningful per-file floor
-# fails, so the overall floor is enforced by `bun run coverage:check`
-# instead: it sums the LCOV totals below and fails under the floor.
+# The overall floor is enforced by `bun run coverage:check` instead.
 #
-# Line-weighted unit + e2e baseline as of #171: 70.53% lines /
-# 74.67% functions. Floor: 69% / 73% (see `coverage:check` in
-# package.json). Raise it as coverage grows. The text table's
-# "All files" row is a per-file average and reads higher (~86%).
+# Unit and e2e run in SEPARATE processes, each writing its own LCOV
+# (`test:unit:coverage` -> coverage/unit, `test:e2e:coverage` ->
+# coverage/e2e). Running them in one process lets Bun's `mock.module`
+# mocks leak between files, which breaks tests on Linux CI.
+# `coverage:check` merges the two: lines by union (exact), functions by
+# per-file max (Bun's LCOV has no per-function records, so this is a
+# conservative lower bound).
 #
-# The integration tier runs separately because Bun's `mock.module` from
-# unit/e2e tests shadows real modules in a combined run. Measure it with
+# Merged baseline as of #171: 65.27% lines / 74.67% functions.
+# Floor: 64% / 73% (in `coverage:check`). Raise it as coverage grows.
+# The text table's "All files" row is a per-file average and reads
+# higher; don't compare against it.
+#
+# The integration tier isn't gated: run it with
 # `bun test --preload ./test/integration/_preload.ts --coverage
 # test/integration`. See docs/testing.md.
 coverageReporter = ["text", "lcov"]
-coverageDir = "coverage"

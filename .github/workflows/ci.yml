@@ -116,18 +116,19 @@ jobs:
         # so a run only passes if it printed its success sentinel.
         run: bun run lint:xss
 
-      - name: Test (unit)
-        run: bun test test/unit
+      # Unit and e2e stay in separate processes: Bun's `mock.module` leaks
+      # across files in a combined run. Each writes its own LCOV.
+      - name: Test (unit, with coverage)
+        run: bun run test:unit:coverage
 
-      - name: Test (e2e)
-        run: bun test test/e2e
+      - name: Test (e2e, with coverage)
+        run: bun run test:e2e:coverage
 
-      - name: Coverage (unit + e2e)
-        # Re-runs unit + e2e in one process with coverage, then
-        # `coverage:check` fails if line-weighted totals drop below the
-        # floor (69% lines / 73% functions). Not Bun's native
-        # coverageThreshold, which is per file; see bunfig.toml (#171).
-        run: bun run test:coverage
+      - name: Coverage floor (unit + e2e merged)
+        # Merges both LCOVs and fails below 64% lines / 73% functions.
+        # Not Bun's native coverageThreshold, which is per file; see
+        # bunfig.toml (#171).
+        run: bun run coverage:check
 
       - name: Apply migrations to test DB
         # The integration tier runs against a real Postgres

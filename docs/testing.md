@@ -78,25 +78,26 @@ Total CI test time: ~2-3 seconds across all three tiers.
 
 ## Coverage
 
-`bun run test:coverage` runs the unit + e2e tiers in one process with coverage, prints the per-file table, writes `coverage/lcov.info`, then runs `bun run coverage:check`. **CI runs it and fails the build if coverage drops below the floor.**
+`bun run test:coverage` runs the unit and e2e tiers **in separate processes**, each with coverage (`test:unit:coverage` writes `coverage/unit/`, `test:e2e:coverage` writes `coverage/e2e/`), prints a per-file table for each, then runs `bun run coverage:check`. **CI runs the same scripts and fails the build if coverage drops below the floor.**
 
-| Measure | Baseline (#171) | Floor |
+| Measure (unit + e2e merged) | Baseline (#171) | Floor |
 |---|---|---|
-| Lines, weighted by line count | 70.53% (7,011 / 9,941) | **69%** |
+| Lines, weighted by line count | 65.27% (7,011 / 10,742) | **64%** |
 | Functions, weighted | 74.67% (395 / 529) | **73%** |
 
-Two things that are easy to get wrong:
+Things that are easy to get wrong:
 
-- **The table's `All files` row is a per-file average** (~86% lines today). Many small, fully-covered files inflate it, so the gate uses line-weighted LCOV totals instead.
+- **Why separate processes:** running unit + e2e in one `bun test` lets `mock.module` mocks leak between files. On Linux CI that breaks tests outright (file order differs from macOS), so each tier runs alone and `coverage:check` merges the two LCOV files: lines by union, exact; functions by per-file max, a conservative lower bound because Bun's LCOV has no per-function records. A missing or empty tier fails the check.
+- **The table's `All files` row is a per-file average** and reads much higher. Many small, fully-covered files inflate it, so the gate uses line-weighted LCOV totals instead.
 - **Bun's native `coverageThreshold` isn't used.** Bun applies it per file (every file must clear it), not to the total, and silently ignores singular keys like `line`. That combination meant the old `bunfig.toml` gate never fired. The floor lives in the `coverage:check` script in `package.json`; raise it there as coverage grows.
 
-**Integration tests run separately for coverage** because Bun's `mock.module` calls in unit/e2e tests shadow real modules when fused into one run, giving misleadingly low integration-tier coverage. That tier isn't gated:
+**The integration tier isn't gated**; measure it separately:
 
 ```bash
 # Unit + e2e, gated (what CI runs):
 bun run test:coverage
 
-# Integration tier (typically 80-100% on targeted services), not gated:
+# Integration tier (typically 80-100% on targeted services):
 bun test --preload ./test/integration/_preload.ts --coverage test/integration
 ```
 
