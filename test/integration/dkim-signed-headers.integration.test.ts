@@ -33,9 +33,9 @@ async function signedHeaderNames(headerFieldNames?: string): Promise<string[]> {
       headerFieldNames,
     },
   });
-  const raw = Buffer.isBuffer(info.message)
-    ? info.message.toString()
-    : String(info.message);
+  /** With `buffer: true` the stream transport returns the message as a Buffer. */
+  if (!Buffer.isBuffer(info.message)) throw new Error("expected a buffered message");
+  const raw = info.message.toString();
   const signature = /^DKIM-Signature:([\s\S]*?)\r?\n(?!\s)/im.exec(raw)?.[1] ?? "";
   const h = /\bh=([^;]+)/.exec(signature.replace(/\s+/g, ""))?.[1] ?? "";
   return h.toLowerCase().split(":");
