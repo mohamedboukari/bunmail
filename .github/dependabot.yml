@@ -19,6 +19,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    # Wait a week before proposing a new release (#231). Most malicious
+    # releases are detected and pulled within days; security updates are
+    # not delayed by this.
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 10
     labels:
       - dependencies
@@ -31,6 +36,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
     labels:
       - ci
