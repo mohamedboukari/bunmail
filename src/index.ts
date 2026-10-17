@@ -1,15 +1,8 @@
 import { Elysia, ValidationError } from "elysia";
+import { apiPlugins } from "./modules/api-plugins.ts";
 import { openapi } from "@elysiajs/openapi";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
-import { emailsPlugin } from "./modules/emails/emails.plugin.ts";
-import { apiKeysPlugin } from "./modules/api-keys/api-keys.plugin.ts";
-import { domainsPlugin } from "./modules/domains/domains.plugin.ts";
-import { webhooksPlugin } from "./modules/webhooks/webhooks.plugin.ts";
-import { templatesPlugin } from "./modules/templates/templates.plugin.ts";
-import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
-import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
-import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import {
   InactiveApiKeyError,
@@ -18,7 +11,6 @@ import {
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
-import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
@@ -270,24 +262,8 @@ const app = new Elysia()
       },
     },
   )
-  /** Emails module: POST /send, GET /, GET /:id */
-  .use(emailsPlugin)
-  /** API Keys module: POST /, GET /, DELETE /:id */
-  .use(apiKeysPlugin)
-  /** Domains module: POST /, GET /, GET /:id, DELETE /:id, POST /:id/verify */
-  .use(domainsPlugin)
-  /** Webhooks module: POST /, GET /, DELETE /:id */
-  .use(webhooksPlugin)
-  /** Templates module: POST /, GET /, GET /:id, PUT /:id, DELETE /:id */
-  .use(templatesPlugin)
-  /** Inbound module, GET / (list), GET /:id */
-  .use(inboundPlugin)
-  /** Suppressions module: POST /, GET /, GET /:id, DELETE /:id */
-  .use(suppressionsPlugin)
-  /** SMTP submission stats, GET /stats (usage + quota for the calling key) */
-  .use(smtpSubmissionPlugin)
-  /** DMARC reports module, GET /, GET /:id */
-  .use(dmarcReportsPlugin)
+  /** Every REST API module under /api/v1 (see src/modules/api-plugins.ts) */
+  .use(apiPlugins)
   /** Dashboard: server-rendered UI under /dashboard */
   .use(pagesPlugin)
   .listen({

@@ -57,6 +57,17 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 3. Each test file calls `await truncateAll()` in `beforeEach`. Tables are wiped in dependency order (`suppressions, emails, webhooks, templates, domains, api_keys`) with `CASCADE` and `RESTART IDENTITY`.
 4. Tests execute the real service functions against the real DB. No mocking unless we're stubbing **outbound HTTP** (the webhook-dispatch test stubs `globalThis.fetch`).
 
+### Authorization matrix (#228)
+
+`test/integration/authz-matrix.integration.test.ts` mounts exactly the API plugins production mounts (`apiPlugins` in `src/modules/api-plugins.ts`), with the real auth, admin and rate-limit middleware, and checks every route:
+
+- no key, an invalid key and a revoked key get `401`;
+- a restricted key gets `403` on admin-only routes;
+- another tenant's key gets `404` on tenant-owned resources (emails, tombstones, templates, webhooks, deliveries, suppressions), and those resources are left untouched;
+- an allowed key passes the auth layer.
+
+Every route needs an entry in the test's `ROUTES` table (access level, a minimal valid body for write routes, and the kind of owned resource in its path). A route without an entry, or an entry without a route, fails the test, so **a new endpoint must be added there**. Request bodies are validated before the auth hooks run, which is why write routes need a valid body to reach the auth checks.
+
 ### What the integration tier doesn't cover
 
 - **`mailer.service.ts`**: Nodemailer wrapper. Would need `mailcatcher` / `maildev` in compose. Skipped.

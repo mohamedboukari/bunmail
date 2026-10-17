@@ -97,6 +97,7 @@ bunmail/
 │   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
+│   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
 │   │   ├── emails/
 │   │   │   ├── emails.plugin.ts          ← POST /send, GET /emails
 │   │   │   ├── services/
