@@ -289,6 +289,31 @@ describe("looksLikeDmarcReport heuristic", () => {
     expect(looksLikeDmarcReport(raw)).toBe(true);
   });
 
+  test("matches a subdomain of a known reporter domain", () => {
+    const raw = `From: noreply@eu.enterprise.protection.outlook.com\nSubject: Daily\n\nbody`;
+    expect(looksLikeDmarcReport(raw)).toBe(true);
+  });
+
+  test("matches a known reporter given with a display name", () => {
+    const raw = `From: "Google DMARC" <noreply-dmarc-support@google.com>\nSubject: Daily\n\nbody`;
+    expect(looksLikeDmarcReport(raw)).toBe(true);
+  });
+
+  test("rejects a reporter domain used as a prefix of an attacker domain", () => {
+    const raw = `From: x@enterprise.protection.outlook.com.evil.example\nSubject: Daily\n\nbody`;
+    expect(looksLikeDmarcReport(raw)).toBe(false);
+  });
+
+  test("rejects a reporter address quoted in the display name only", () => {
+    const raw = `From: "noreply-dmarc-support@google.com" <attacker@evil.example>\nSubject: Daily\n\nbody`;
+    expect(looksLikeDmarcReport(raw)).toBe(false);
+  });
+
+  test("rejects a generic reporter name that is only part of the local part", () => {
+    const raw = `From: not-dmarc-support@evil.example\nSubject: Daily\n\nbody`;
+    expect(looksLikeDmarcReport(raw)).toBe(false);
+  });
+
   test("rejects regular customer mail", () => {
     const raw = `From: alice@gmail.com\nSubject: Question about the API\n\ncontent`;
     expect(looksLikeDmarcReport(raw)).toBe(false);

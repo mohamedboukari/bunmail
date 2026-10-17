@@ -386,6 +386,44 @@ export function parseAggregateReport(bytes: Uint8Array): ParsedDmarcReport | nul
   }
 }
 
+/** Reporter addresses that are matched exactly. */
+const DMARC_REPORTER_ADDRESSES = new Set([
+  "noreply-dmarc-support@google.com",
+  "dmarcreport@yahoo.com",
+]);
+
+/** Reporter domains, matched exactly or as a parent of the sender's domain. */
+const DMARC_REPORTER_DOMAINS = ["enterprise.protection.outlook.com"];
+
+/** Generic reporter mailbox names, matched against the whole local part. */
+const DMARC_REPORTER_LOCAL_PARTS = /^(?:dmarc-no-reply|dmarc[-_]?support)$/;
+
+/**
+ * The address in a `From:` header value, lower-cased: the `<...>` part
+ * when there is a display name, otherwise the value itself. `null` when
+ * there is no `@`.
+ */
+function parseSenderAddress(
+  headerValue: string,
+): { local: string; domain: string } | null {
+  const angle = headerValue.match(/<([^<>]+)>/);
+  const address = (angle ? angle[1]! : headerValue).trim().toLowerCase();
+  const at = address.lastIndexOf("@");
+  if (at <= 0 || at === address.length - 1) return null;
+  return { local: address.slice(0, at), domain: address.slice(at + 1) };
+}
+
+function isKnownDmarcReporter(sender: { local: string; domain: string }): boolean {
+  const address = `${sender.local}@${sender.domain}`;
+  return (
+    DMARC_REPORTER_ADDRESSES.has(address) ||
+    DMARC_REPORTER_DOMAINS.some(
+      (d) => sender.domain === d || sender.domain.endsWith(`.${d}`),
+    ) ||
+    DMARC_REPORTER_LOCAL_PARTS.test(sender.local)
+  );
+}
+
 /**
  * Heuristic check that an inbound message *looks* like a DMARC report
  * before we pay the cost of decompression + XML parsing. Used by the
@@ -402,19 +440,18 @@ export function looksLikeDmarcReport(raw: string): boolean {
     if (/dmarc|report\s+domain/i.test(subject)) return true;
   }
 
-  /** Sender pattern: known DMARC reporters. */
+  /**
+   * Sender pattern: known DMARC reporters, matched on the actual address
+   * (the `<...>` part when there is a display name), by exact address,
+   * exact domain or subdomain, and local part. Substring tests over the
+   * whole header were spoofable: `x@enterprise.protection.outlook.com.evil`
+   * or a display name quoting a reporter's address both matched
+   * (CodeQL js/regex/missing-regexp-anchor).
+   */
   const fromMatch = raw.match(/^From:\s*([^\r\n]+)/im);
   if (fromMatch) {
-    const from = fromMatch[1]!;
-    if (
-      /noreply-dmarc-support@google\.com/i.test(from) ||
-      /dmarcreport@yahoo\.com/i.test(from) ||
-      /enterprise\.protection\.outlook\.com/i.test(from) ||
-      /dmarc-no-reply@/i.test(from) ||
-      /dmarc[-_]?support@/i.test(from)
-    ) {
-      return true;
-    }
+    const sender = parseSenderAddress(fromMatch[1]!);
+    if (sender && isKnownDmarcReporter(sender)) return true;
   }
 
   /** Content-Type pattern: XML directly attached. */
