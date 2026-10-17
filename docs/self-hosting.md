@@ -151,10 +151,12 @@ docker compose up -d --build
 
 This starts:
 - **BunMail** on port `$PORT` (HTTP API + Dashboard, default 3000)
-- **PostgreSQL** on port 5432 (internal only)
+- **PostgreSQL**, published on `127.0.0.1:5432` only (loopback, from `docker-compose.override.yml`, for local development). To keep it on the compose network only, with nothing published, start with `docker compose -f docker-compose.yml up -d --build`, which skips the override file
 - **Inbound SMTP** on port `$SMTP_PORT` (default 2525; use 25 in production: requires `SMTP_ENABLED=true`)
 
 Port mappings in `docker-compose.yml` read `PORT` and `SMTP_PORT` from `.env` automatically, if you change them in `.env`, you don't need to edit anything else.
+
+> **Docker-published ports bypass UFW.** Docker inserts its own iptables rules ahead of UFW's, so a port published on `0.0.0.0` is reachable from the internet even with `ufw default deny incoming`. Only publish what must be public (25, 587) on all interfaces; bind everything else to `127.0.0.1`. Check with `ss -ltnp` (5432 must not show `0.0.0.0` or `*`). Before #209 the override published Postgres on `0.0.0.0:5432`.
 
 Migrations run automatically on boot. Verify with:
 

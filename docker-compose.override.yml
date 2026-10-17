@@ -1,16 +1,17 @@
 # Local-development overrides for docker-compose.yml.
 #
-# Compose automatically merges this file on top of `docker-compose.yml`
-# when you run `docker compose up`. It is git-ignored implicitly via the
-# convention that `*.override.yml` is a developer-local concern, but it is
-# checked in here because the default we want for `bun run dev` is the
-# same for everyone: publish the postgres port to the host so the app can
-# connect from outside the compose network.
+# Compose merges this file automatically on a plain `docker compose up`,
+# so it applies in production too unless skipped. It publishes Postgres so
+# `bun run dev` (running on the host) can reach it at localhost:5432.
 #
-# In production, run with `docker compose -f docker-compose.yml up`
-# (skipping this override) so the database stays internal.
+# Bound to 127.0.0.1 ONLY (#209). A bare "5432:5432" binds 0.0.0.0, and
+# Docker-published ports bypass UFW / host firewalls, so the database would
+# be reachable from the internet. Loopback keeps it on this machine.
+#
+# Production doesn't need it: run `docker compose -f docker-compose.yml up`
+# to skip this file, so the database stays on the compose network only.
 
 services:
   db:
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
