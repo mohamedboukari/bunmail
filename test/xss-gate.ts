@@ -24,7 +24,14 @@
 import { join } from "path";
 
 const TOOLCHAIN = join(import.meta.dir, "..", "node_modules", ".cache", "xss-toolchain");
-const SCANNER_UTIL = join(TOOLCHAIN, "node_modules", "@kitajs", "ts-html-plugin", "dist", "util.js");
+const SCANNER_UTIL = join(
+  TOOLCHAIN,
+  "node_modules",
+  "@kitajs",
+  "ts-html-plugin",
+  "dist",
+  "util.js",
+);
 const SCANNER_BIN = join(TOOLCHAIN, "node_modules", ".bin", "xss-scan");
 const PAGES_DIR = join(import.meta.dir, "..", "src", "pages");
 
@@ -77,7 +84,9 @@ async function sweepEventHandlers(): Promise<void> {
     });
   }
   for (const hit of hits) {
-    fail(`${hit}: dynamic event-handler attribute; attribute escaping does not cover quotes`);
+    fail(
+      `${hit}: dynamic event-handler attribute; attribute escaping does not cover quotes`,
+    );
   }
 }
 
