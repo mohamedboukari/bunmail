@@ -29,6 +29,7 @@ Plus **Dependabot** (out of CI but in the same security loop) opens grouped PRs 
     ```
     Don't ignore `CRITICAL` without explicit approval.
   - **False positive (e.g. unused code path)?** Same `.trivyignore` entry + explanation.
+  - **Remove entries once they're stale** (fix landed, or revisit date passed). A stale ID silently hides that CVE if it ever shows up in a real dependency. To check, run both scans without the file: `docker run --rm -v "$PWD":/src -w /src aquasec/trivy:0.74.0 fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs node_modules,test,docs,public .` and the same `image` scan against a locally built `bunmail:scan` (#170 found all 15 entries stale this way).
 - **Scanner version.** The Trivy CLI is pinned explicitly via the `version:` input on
   each `aquasecurity/trivy-action` step in `security.yml` (currently `v0.74.0`). The
   action's own default trails the current release, so without the pin the scan runs an
