@@ -480,7 +480,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 
 **Migration errors:**
 - Check logs: `docker compose logs app`
-- Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56): drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table.
+- Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56): drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table. Every app container runs it on start, under a Postgres advisory lock (#175), so several replicas (`--scale app=2`, rolling deploys) are safe: one migrates, the others wait and then find nothing to do.
 - Ensure `DATABASE_URL` is correct and PostgreSQL is healthy: `docker compose ps`
 
 **Boot fails with `[config] Missing required environment variable: DKIM_ENCRYPTION_KEY`:**
