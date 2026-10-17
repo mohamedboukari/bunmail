@@ -1242,6 +1242,51 @@ export const pagesPlugin = new Elysia({
   )
 
   /**
+   * POST /dashboard/domains/:id/unsubscribe
+   * Sets or clears the domain's `List-Unsubscribe` overrides (#243). An
+   * empty field clears that override.
+   */
+  .post(
+    "/domains/:id/unsubscribe",
+    async ({ params, body, set }) => {
+      const email = (body.unsubscribeEmail ?? "").trim() || null;
+      const url = (body.unsubscribeUrl ?? "").trim() || null;
+      const back = (message: string, type: "success" | "error"): string => {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${type}`;
+        return "";
+      };
+
+      if (email !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return back("Enter a valid unsubscribe email address", "error");
+      }
+      if (url !== null && (!URL.canParse(url) || !url.startsWith("https://"))) {
+        return back("The unsubscribe URL must be an https:// address", "error");
+      }
+
+      const updated = await domainService.updateDomainUnsubscribe(params.id, {
+        unsubscribeEmail: email,
+        unsubscribeUrl: url,
+      });
+      if (!updated) {
+        set.status = 302;
+        set.headers["location"] =
+          `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+        return "";
+      }
+      return back("Unsubscribe settings saved", "success");
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: t.Object({
+        unsubscribeEmail: t.Optional(t.String({ maxLength: 254 })),
+        unsubscribeUrl: t.Optional(t.String({ maxLength: 2048 })),
+      }),
+    },
+  )
+
+  /**
    * GET /dashboard/domains/:id
    * Single domain detail view with DNS verification status.
    */

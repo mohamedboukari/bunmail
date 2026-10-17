@@ -188,7 +188,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 |---------------------|--------|----------|--------------------------------------------------------------------------------------------------|
 | `name`              | string | Yes      | Domain name (e.g. "example.com")                                                                 |
 | `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
-| `unsubscribeUrl`    | string | No       | RFC 8058 one-click HTTPS endpoint. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. |
+| `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
 
 **Response:**
@@ -245,6 +245,19 @@ Trigger DNS verification for SPF, DKIM, and DMARC records.
   }
 }
 ```
+
+---
+
+#### `PATCH /api/v1/domains/:id`
+
+Edit the domain's `List-Unsubscribe` overrides (#243). Omitted fields stay unchanged; `null` clears one (back to `unsubscribe@<name>`, or no one-click URL).
+
+| Field              | Type           | Required | Description |
+|--------------------|----------------|----------|-------------|
+| `unsubscribeEmail` | string \| null | No       | Mailbox for `List-Unsubscribe: <mailto:...>` |
+| `unsubscribeUrl`   | string \| null | No       | One-click endpoint, `https://` only |
+
+Returns the updated domain, or `404` if it doesn't exist.
 
 ---
 

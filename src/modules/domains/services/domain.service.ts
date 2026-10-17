@@ -205,6 +205,37 @@ export async function updateDomainNotifyEmail(
 }
 
 /**
+ * Updates a domain's `List-Unsubscribe` overrides (#243). Only the fields
+ * present in `changes` are written; `null` clears one.
+ *
+ * @param id - The domain ID to update
+ * @param changes - New `unsubscribeEmail` and/or `unsubscribeUrl`
+ * @returns The updated domain row, or undefined if not found
+ */
+export async function updateDomainUnsubscribe(
+  id: string,
+  changes: { unsubscribeEmail?: string | null; unsubscribeUrl?: string | null },
+): Promise<Domain | undefined> {
+  logger.info("Updating domain unsubscribe settings", {
+    id,
+    fields: Object.keys(changes),
+  });
+
+  const [domain] = await db
+    .update(domains)
+    .set({ ...changes, updatedAt: new Date() })
+    .where(eq(domains.id, id))
+    .returning();
+
+  if (!domain) {
+    logger.warn("Domain not found for unsubscribe update", { id });
+    return undefined;
+  }
+
+  return domain;
+}
+
+/**
  * Deletes a domain by its ID (hard delete).
  *
  * Removes the domain row entirely from the database.
