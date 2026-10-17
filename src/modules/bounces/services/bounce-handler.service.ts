@@ -19,6 +19,7 @@ import {
 } from "../../suppressions/services/suppression.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { parseRecipients } from "../../../utils/recipients.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import type { ParsedBounce } from "../types/bounce.types.ts";
 
@@ -28,15 +29,22 @@ const SOFT_BOUNCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 /** Public-facing email status string for bounced rows. */
 const STATUS_BOUNCED = "bounced";
 
+/** The fields of the original `emails` row the handler needs. */
+export interface OriginalEmail {
+  id: string;
+  apiKeyId: string;
+  toAddress: string;
+  cc: string | null;
+  bcc: string | null;
+}
+
 export interface BounceHandlerDeps {
   /**
    * Look up the original email row this bounce refers to. Returns
    * `undefined` when no row matches: the handler then drops the
    * bounce (we never suppress under an unknown tenant).
    */
-  findEmailByMessageId: (
-    messageId: string,
-  ) => Promise<{ id: string; apiKeyId: string; toAddress: string } | undefined>;
+  findEmailByMessageId: (messageId: string) => Promise<OriginalEmail | undefined>;
 
   /**
    * Lookup of the existing suppression row (or undefined). Used to
@@ -77,7 +85,7 @@ export interface BounceHandlerDeps {
 }
 
 export interface HandleBounceResult {
-  outcome: "applied" | "dropped-no-original" | "escalated";
+  outcome: "applied" | "dropped-no-original" | "dropped-recipient-mismatch" | "escalated";
   emailId?: string;
   apiKeyId?: string;
   suppressionId?: string;
@@ -120,27 +128,39 @@ export async function handleBounce(
   }
 
   /**
-   * Cross-check the recipient: defensive. The original `to` should
-   * match the bounce's recipient. A mismatch usually means the message
-   * was a multi-recipient send and this bounce only concerns one of
-   * them; we trust the parsed recipient over the original toAddress.
+   * The bounced address must be one the email was actually sent to.
+   * Bounces arrive over unauthenticated inbound SMTP and are linked only
+   * by Message-ID, which every recipient can see, so without this check
+   * a forged DSN could suppress any address under the sender's key.
+   * `Original-Recipient` also counts (forwarding and aliases change
+   * `Final-Recipient`); the suppression is filed for the address we sent
+   * to, since that is what a later send would use.
    */
-  if (original.toAddress.toLowerCase() !== parsed.recipient) {
-    logger.debug("Bounce recipient differs from original toAddress", {
-      original: redactEmail(original.toAddress),
-      bounced: redactEmail(parsed.recipient),
+  const sentTo = new Set(
+    parseRecipients(original.toAddress, original.cc, original.bcc).map((r) =>
+      r.address.toLowerCase(),
+    ),
+  );
+  const recipient = [parsed.recipient, parsed.originalRecipient].find(
+    (address) => address !== undefined && sentTo.has(address),
+  );
+  if (!recipient) {
+    logger.warn("Bounce dropped: recipient was not a recipient of the original email", {
       emailId: original.id,
+      recipient: redactEmail(parsed.recipient),
+      source: parsed.source,
     });
+    return { outcome: "dropped-recipient-mismatch", emailId: original.id };
   }
 
-  const existing = await deps.isSuppressed(original.apiKeyId, parsed.recipient);
+  const existing = await deps.isSuppressed(original.apiKeyId, recipient);
   const finalKind = escalateIfRepeat(parsed.kind, existing);
 
   const expiresAt =
     finalKind === "hard" ? null : new Date(Date.now() + SOFT_BOUNCE_WINDOW_MS);
 
   const suppression = await deps.addFromBounce(original.apiKeyId, {
-    email: parsed.recipient,
+    email: recipient,
     bounceType: finalKind,
     diagnosticCode: parsed.diagnostic ?? parsed.status,
     sourceEmailId: original.id,
@@ -158,7 +178,7 @@ export async function handleBounce(
     "email.bounced",
     {
       emailId: original.id,
-      to: parsed.recipient,
+      to: recipient,
       bounceType: finalKind,
       status: parsed.status,
       diagnostic: parsed.diagnostic ?? null,
@@ -172,7 +192,7 @@ export async function handleBounce(
   logger.info("Bounce handled", {
     emailId: original.id,
     apiKeyId: original.apiKeyId,
-    to: redactEmail(parsed.recipient),
+    to: redactEmail(recipient),
     bounceType: finalKind,
     status: parsed.status,
     source: parsed.source,
@@ -212,6 +232,8 @@ export async function handleParsedBounce(
           id: emails.id,
           apiKeyId: emails.apiKeyId,
           toAddress: emails.toAddress,
+          cc: emails.cc,
+          bcc: emails.bcc,
         })
         .from(emails)
         .where(eq(emails.messageId, wrapped))
@@ -222,6 +244,8 @@ export async function handleParsedBounce(
           id: emails.id,
           apiKeyId: emails.apiKeyId,
           toAddress: emails.toAddress,
+          cc: emails.cc,
+          bcc: emails.bcc,
         })
         .from(emails)
         .where(eq(emails.messageId, messageId))

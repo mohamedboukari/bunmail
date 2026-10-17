@@ -19,6 +19,12 @@ export interface ParsedBounce {
   recipient: string;
 
   /**
+   * RFC 3464 `Original-Recipient`, when present: the address as first
+   * submitted, before forwarding or alias expansion. Lower-cased.
+   */
+  originalRecipient?: string;
+
+  /**
    * Original Message-ID header of the email that bounced. The handler
    * uses this to look up the `emails` row and derive the owning API key.
    * Required: bounces without an Original-Message-ID can't be linked

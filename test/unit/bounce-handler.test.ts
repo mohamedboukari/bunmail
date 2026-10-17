@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { handleBounce } from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import type { OriginalEmail } from "../../src/modules/bounces/services/bounce-handler.service.ts";
 import type { ParsedBounce } from "../../src/modules/bounces/types/bounce.types.ts";
 
 /**
@@ -24,7 +25,7 @@ interface CallLog {
 }
 
 function makeDeps(opts: {
-  email?: { id: string; apiKeyId: string; toAddress: string };
+  email?: OriginalEmail;
   existing?: { id: string; bounceType: string | null };
 }): {
   deps: Parameters<typeof handleBounce>[1];
@@ -90,6 +91,8 @@ const ORIGINAL = {
   id: "msg_orig123",
   apiKeyId: "key_abc",
   toAddress: "user@example.com",
+  cc: null,
+  bcc: null,
 };
 
 describe("handleBounce: happy paths", () => {
@@ -180,5 +183,59 @@ describe("handleBounce: drop paths", () => {
     expect(calls.addFromBounce).toEqual([]);
     expect(calls.markEmailBounced).toEqual([]);
     expect(calls.dispatchEvent).toEqual([]);
+  });
+
+  test("drops a bounce for an address the email was not sent to", async () => {
+    const { deps, calls } = makeDeps({ email: ORIGINAL });
+
+    const result = await handleBounce(
+      { ...HARD_BOUNCE, recipient: "someone-else@example.com" },
+      deps,
+    );
+
+    expect(result.outcome).toBe("dropped-recipient-mismatch");
+    /** Nothing is suppressed, marked or dispatched for a forged bounce. */
+    expect(calls.isSuppressed).toEqual([]);
+    expect(calls.addFromBounce).toEqual([]);
+    expect(calls.markEmailBounced).toEqual([]);
+    expect(calls.dispatchEvent).toEqual([]);
+  });
+});
+
+describe("handleBounce: recipient matching", () => {
+  test("accepts a cc or bcc recipient of the original email", async () => {
+    const { deps, calls } = makeDeps({
+      email: { ...ORIGINAL, cc: "copy@example.com", bcc: "Hidden@Example.com" },
+    });
+
+    expect(
+      (await handleBounce({ ...HARD_BOUNCE, recipient: "copy@example.com" }, deps))
+        .outcome,
+    ).toBe("applied");
+    expect(
+      (await handleBounce({ ...HARD_BOUNCE, recipient: "hidden@example.com" }, deps))
+        .outcome,
+    ).toBe("applied");
+    expect(calls.addFromBounce.map((c) => c.email)).toEqual([
+      "copy@example.com",
+      "hidden@example.com",
+    ]);
+  });
+
+  test("accepts Original-Recipient and suppresses the address we sent to", async () => {
+    const { deps, calls } = makeDeps({ email: ORIGINAL });
+
+    const result = await handleBounce(
+      {
+        ...HARD_BOUNCE,
+        recipient: "forwarded-target@example.net",
+        originalRecipient: "user@example.com",
+      },
+      deps,
+    );
+
+    expect(result.outcome).toBe("applied");
+    expect(calls.addFromBounce[0]!.email).toBe("user@example.com");
+    expect(calls.dispatchEvent[0]!.data.to).toBe("user@example.com");
   });
 });

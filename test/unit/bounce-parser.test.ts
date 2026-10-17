@@ -182,3 +182,64 @@ describe("parseBounce: fallback path", () => {
     expect(parseBounce(NORMAL_INBOUND_MAIL)).toBeNull();
   });
 });
+
+describe("parseBounce: Original-Recipient", () => {
+  test("parses Original-Recipient when present", () => {
+    const withOriginal = RFC_HARD_BOUNCE.replace(
+      "Final-Recipient: rfc822; nonexistent@example.com",
+      "Original-Recipient: rfc822; Alias@Example.com\nFinal-Recipient: rfc822; nonexistent@example.com",
+    );
+    expect(parseBounce(withOriginal)!.originalRecipient).toBe("alias@example.com");
+  });
+
+  test("leaves it undefined when absent", () => {
+    expect(parseBounce(RFC_HARD_BOUNCE)!.originalRecipient).toBeUndefined();
+  });
+
+  test("accepts a Final-Recipient folded after the address type", () => {
+    const folded = RFC_HARD_BOUNCE.replace(
+      "Final-Recipient: rfc822; nonexistent@example.com",
+      "Final-Recipient: rfc822;\n nonexistent@example.com",
+    );
+    expect(parseBounce(folded)!.recipient).toBe("nonexistent@example.com");
+  });
+});
+
+/**
+ * Every inbound message is passed to `parseBounce`, unauthenticated, at up
+ * to 10 MB. These inputs are shaped to trigger super-linear behaviour in
+ * the old implementation (minutes or more); the current one must stay
+ * well inside the budget. The budget is generous so CI stays stable.
+ */
+describe("parseBounce: bounded time on large inputs", () => {
+  const BUDGET_MS = 1000;
+
+  function timed(raw: string): number {
+    const start = performance.now();
+    parseBounce(raw);
+    return performance.now() - start;
+  }
+
+  test("fallback path with many identifier-shaped tokens", () => {
+    const tokens = Array.from({ length: 20_000 }, (_, i) => `<id${i}@h.example>`).join(
+      " ",
+    );
+    const raw =
+      "From: MAILER-DAEMON@example.org\nSubject: Undelivered Mail\n\n" +
+      `550 5.1.1 rejected\nReferences: ${tokens}\n${tokens}\n`;
+    expect(timed(raw)).toBeLessThan(BUDGET_MS);
+  });
+
+  test("long Content-Type header repeating multipart/report", () => {
+    const raw = `Content-Type: ${"multipart/report;".repeat(60_000)}\n\nbody\n`;
+    expect(timed(raw)).toBeLessThan(BUDGET_MS);
+  });
+
+  test("long Final-Recipient value without an address", () => {
+    const raw =
+      "Content-Type: multipart/report; report-type=delivery-status\n\n" +
+      "Original-Message-ID: <m@h.example>\nStatus: 5.1.1\n" +
+      `Final-Recipient: rfc822; ${"a".repeat(1_000_000)}\n`;
+    expect(timed(raw)).toBeLessThan(BUDGET_MS);
+  });
+});
