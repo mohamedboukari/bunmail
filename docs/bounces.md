@@ -34,6 +34,7 @@ Triggered when the message's `Content-Type` is `multipart/report; report-type=de
 | Header | What we use it for |
 |---|---|
 | `Final-Recipient` | The recipient address that bounced |
+| `Original-Recipient` | Optional: the address as first submitted, before forwarding or alias expansion (see recipient check below) |
 | `Status` | Enhanced SMTP status code (`5.x.x` = hard, `4.x.x` = soft, `2.x.x` = ignored) |
 | `Diagnostic-Code` | Human-readable reason: persisted on the suppression row |
 | `Original-Message-ID` | Links the bounce back to the outbound `emails` row |
@@ -56,6 +57,14 @@ We **require** an `originalMessageId` from the parser. Without it, we can't safe
 
 The lookup uses the `messageId` column on `emails`, set by nodemailer at send time. Both the wrapped (`<id@host>`) and unwrapped form are tried: different SMTP flavours include or strip the angle brackets.
 
+### Recipient check
+
+DSNs arrive over unauthenticated inbound SMTP, and the Message-ID that links them is visible to every recipient of the email. So the handler only acts when the bounced address was actually a recipient of that email: `Final-Recipient` or `Original-Recipient` must be one of the original row's `to` / `cc` / `bcc` addresses (case-insensitive). The suppression is filed for that matched address, which is what a later send would use. Anything else is dropped with outcome `dropped-recipient-mismatch` and a warning log. Remaining gap: a recipient of an email can still forge a bounce for another recipient of the same email; a signed per-message return path would close it.
+
+### Parser performance
+
+`parseBounce` runs on every inbound message (up to 10 MB), so it is written to run in linear time: identifiers on `Message-ID` / `In-Reply-To` / `References` lines are collected in one pass, the DSN content-type is checked with two independent tests, field regexes stay on one line, and address extraction looks at most 1,000 characters. `test/unit/bounce-parser.test.ts` has bounded-time tests with large generated inputs.
+
 ## Inline 5xx flow (#68)
 
 When `processEmail`'s SMTP send throws an error, the catch block parses the error message via [src/utils/smtp-error.ts](../src/utils/smtp-error.ts) and dispatches via `handleSendFailure`:
@@ -72,6 +81,7 @@ Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for `MAX
 
 When a DSN parses cleanly and links to an `emails` row, the bounce handler does five things:
 
+0. **Check the recipient** (see [Recipient check](#recipient-check)); drop the bounce if it doesn't match.
 1. **Look up existing suppression** for `(api_key_id, recipient)`.
 2. **Decide hard vs soft** with escalation:
    - Parsed kind `hard` → always `hard`.

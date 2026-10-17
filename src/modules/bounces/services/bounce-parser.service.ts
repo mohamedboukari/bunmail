@@ -30,9 +30,20 @@
 
 import type { ParsedBounce } from "../types/bounce.types.ts";
 
-/** Match `multipart/report; ...; report-type=delivery-status`. */
-const DSN_CONTENT_TYPE_RE =
-  /multipart\/report[^;]*;[^]*report-type\s*=\s*"?delivery-status"?/i;
+/**
+ * `multipart/report; ...; report-type=delivery-status` is checked as two
+ * independent tests. A single expression with `[^]*` between the parts
+ * backtracked over the whole header for every `multipart/report` in it.
+ */
+const MULTIPART_REPORT_RE = /multipart\/report/i;
+const DELIVERY_STATUS_RE = /report-type\s*=\s*"?delivery-status/i;
+
+/**
+ * Longest input `cleanAddress` looks at. An address is at most 254
+ * characters; the cap keeps the address regex linear on a long,
+ * attacker-supplied line with no `@`.
+ */
+const MAX_ADDRESS_LINE = 1000;
 
 /** Match an enhanced SMTP status code: 2.x.x / 4.x.x / 5.x.x. */
 const ENHANCED_STATUS_RE = /\b([245])\.(\d+)\.(\d+)\b/;
@@ -45,7 +56,10 @@ const BASIC_STATUS_RE = /\b([245]\d{2})\b(?!\.)/;
  * comment from an `<addr@host>`-style line.
  */
 function cleanAddress(raw: string): string {
-  const m = raw.trim().match(/<?([^@<>\s]+@[^@<>\s]+)>?/);
+  const m = raw
+    .trim()
+    .slice(0, MAX_ADDRESS_LINE)
+    .match(/<?([^@<>\s]+@[^@<>\s]+)>?/);
   return m ? m[1]!.trim().toLowerCase() : "";
 }
 
@@ -67,9 +81,18 @@ function parseRfc3464(raw: string): ParsedBounce | null {
    * `Final-Recipient` is "<addr-type>; <address>" where addr-type is
    * usually `rfc822`. We accept either with or without the prefix.
    */
-  const recipientLine = raw.match(/^Final-Recipient:\s*(?:[^;]+;)?\s*([^\r\n]+)/im);
+  const recipientLine = raw.match(
+    /^Final-Recipient:[ \t]*(?:[^;\r\n]+;)?\s*([^\r\n]+)/im,
+  );
+  /** Optional: the address as originally submitted, before forwarding or
+   *  alias expansion. The handler accepts a match on either. */
+  const originalRecipientLine = raw.match(
+    /^Original-Recipient:[ \t]*(?:[^;\r\n]+;)?\s*([^\r\n]+)/im,
+  );
   const statusLine = raw.match(/^Status:\s*([245]\.\d+\.\d+)/im);
-  const diagnosticLine = raw.match(/^Diagnostic-Code:\s*(?:[^;]+;)?\s*([^\r\n]+)/im);
+  const diagnosticLine = raw.match(
+    /^Diagnostic-Code:[ \t]*(?:[^;\r\n]+;)?\s*([^\r\n]+)/im,
+  );
   const messageIdLine = raw.match(/^Original-Message-ID:\s*([^\r\n]+)/im);
 
   if (!recipientLine || !statusLine || !messageIdLine) return null;
@@ -82,15 +105,34 @@ function parseRfc3464(raw: string): ParsedBounce | null {
   const recipient = cleanAddress(recipientLine[1]!);
   const originalMessageId = cleanMessageId(messageIdLine[1]!);
   if (!recipient || !originalMessageId) return null;
+  const originalRecipient = originalRecipientLine
+    ? cleanAddress(originalRecipientLine[1]!) || undefined
+    : undefined;
 
   return {
     kind,
     recipient,
+    originalRecipient,
     originalMessageId,
     status,
     diagnostic: diagnosticLine ? diagnosticLine[1]!.trim() : undefined,
     source: "rfc3464",
   };
+}
+
+/**
+ * Lower-cased `<x@y>` tokens on `Message-ID:`, `In-Reply-To:` and
+ * `References:` lines of `text`, in a single linear pass.
+ */
+function messageIdentifiersIn(text: string): Set<string> {
+  const identifiers = new Set<string>();
+  for (const line of text.split(/\r?\n/)) {
+    if (!/^(?:Message-ID|In-Reply-To|References):/i.test(line)) continue;
+    for (const m of line.matchAll(/<([^@<>\s]+@[^@<>\s]+)>/g)) {
+      identifiers.add(m[1]!.toLowerCase());
+    }
+  }
+  return identifiers;
 }
 
 /**
@@ -140,24 +182,14 @@ function parseFallback(raw: string): ParsedBounce | null {
    * Skip postmaster/mailer-daemon (the From: of the bounce itself) and
    * skip anything sitting on a `Message-ID:` / `In-Reply-To:` / `References:`
    * line in the embedded original: those are message identifiers, not
-   * recipient addresses.
+   * recipient addresses. The identifiers are collected in one pass; a
+   * regex per candidate scanned the whole body for each `<x@y>` token,
+   * which was quadratic in the message size.
    */
-  const recipient = recipientCandidates.find((addr) => {
-    if (/^(?:mailer-daemon|postmaster)@/i.test(addr)) return false;
-    /**
-     * Escape every regex metacharacter: local-part of an email address
-     * can technically contain backslash and other special characters
-     * (RFC 5321 quoted-local-part), so escaping only `.+-` would leave
-     * a regex-injection hole. CodeQL flagged this as "incomplete string
-     * escaping or encoding": applying the full escape set fixes it.
-     */
-    const escaped = addr.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-    const headerLineRe = new RegExp(
-      `^(?:Message-ID|In-Reply-To|References):.*<${escaped}>`,
-      "im",
-    );
-    return !headerLineRe.test(body);
-  });
+  const identifiers = messageIdentifiersIn(body);
+  const recipient = recipientCandidates.find(
+    (addr) => !/^(?:mailer-daemon|postmaster)@/i.test(addr) && !identifiers.has(addr),
+  );
   if (!recipient) return null;
 
   /**
@@ -239,7 +271,9 @@ export function parseBounce(raw: string): ParsedBounce | null {
   const contentTypeMatch = raw.match(
     /^Content-Type:\s*([^\r\n]+(?:\r?\n[ \t][^\r\n]+)*)/im,
   );
-  const isDsn = contentTypeMatch ? DSN_CONTENT_TYPE_RE.test(contentTypeMatch[1]!) : false;
+  const contentType = contentTypeMatch?.[1] ?? "";
+  const isDsn =
+    MULTIPART_REPORT_RE.test(contentType) && DELIVERY_STATUS_RE.test(contentType);
 
   if (isDsn) {
     const rfc = parseRfc3464(raw);
