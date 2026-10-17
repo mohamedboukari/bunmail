@@ -42,33 +42,33 @@
     ]
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.2",
-    "@commitlint/config-conventional": "^21.2.2",
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
     "@types/bun": "latest",
-    "@types/mailparser": "^3.4.6",
+    "@types/mailparser": "^3.9.0",
     "@types/smtp-server": "^3.5.13",
     "bumpp": "^12.3.0",
-    "drizzle-kit": "^0.31.10",
+    "drizzle-kit": "^0.31.11",
     "husky": "^9.1.7",
-    "knip": "^6.35.1",
-    "lint-staged": "^17.5.0",
-    "oxlint": "^1.82.0",
-    "oxlint-tsgolint": "^7.0.2001",
+    "knip": "^6.41.0",
+    "lint-staged": "^17.6.0",
+    "oxlint": "^1.88.0",
+    "oxlint-tsgolint": "^7.0.2004",
     "postgres": "^3.4.9",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.10",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@elysiajs/html": "^1.4.2",
     "@elysiajs/openapi": "^1.4.16",
     "@kitajs/html": "^4.2.13",
-    "drizzle-orm": "^0.45.2",
+    "drizzle-orm": "^0.45.4",
     "elysia": "^1.4.30",
-    "fast-xml-parser": "^5.11.1",
+    "fast-xml-parser": "^5.11.2",
     "fflate": "^0.8.3",
-    "file-type": "^22.0.2",
-    "mailparser": "^3.9.24",
-    "nodemailer": "^10.0.3",
-    "smtp-server": "^3.19.10"
+    "file-type": "^22.2.0",
+    "mailparser": "^3.9.40",
+    "nodemailer": "^10.1.2",
+    "smtp-server": "^3.19.23"
   }
 }
