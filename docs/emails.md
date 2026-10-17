@@ -244,7 +244,7 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 }
 ```
 
-**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: either a hard 5xx that auto-suppressed the recipients, or the row hit its retry cap with this group still pending).
+**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: a hard 5xx that auto-suppressed the recipients, a sender policy block, or the email got too old to retry with this group still pending). A group refused for sender reasons (5.7.x, blocklist, authentication) has `"blocked": true` and its recipients are not suppressed (#246).
 
 **Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
 

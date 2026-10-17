@@ -209,17 +209,18 @@ export async function sendMail(options: {
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      /** Hard 5xx → terminal `failed`. Soft errors (4xx, transport)
-       *  stay `retry`; the queue's row-level attempts cap decides
-       *  when to flip them to `failed`. */
+      /** Hard 5xx and policy blocks → terminal `failed` (a block won't
+       *  clear within the retry window). Soft errors (4xx, transport)
+       *  stay `retry` and follow the queue's backoff. */
       const parsed = parseSmtpError(error);
       const nextStatus: DeliveryGroup["status"] =
-        parsed?.kind === "hard" ? "failed" : "retry";
+        parsed?.kind === "hard" || parsed?.kind === "policy" ? "failed" : "retry";
       state[mxHost] = {
         ...group,
         status: nextStatus,
         attempts: group.attempts + 1,
         lastError: error,
+        ...(parsed?.kind === "policy" ? { blocked: true } : {}),
       };
       logger.warn("MX group send failed", {
         mxHost,

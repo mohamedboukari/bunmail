@@ -71,9 +71,10 @@ When `processEmail`'s SMTP send throws an error, the catch block parses the erro
 
 | Classification | What happens |
 |---|---|
-| **Hard (5xx)**: `550 5.1.1`, `5.7.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits: exactly what tanks IP reputation. |
+| **Sender policy block (#246)**: `5.7.x`, or a `5xx` naming a blocklist, reputation or SPF/DKIM/DMARC failure (`550 5.7.1 ... blocked using Spamhaus`) | The receiver refused **the sender**, not the address: the group fails (`blocked: true` in its delivery state), **nobody is suppressed**, and `email.failed` carries `blocked: true`. A reply that also says the user doesn't exist stays a hard bounce. Fix the sending IP's reputation or the domain's authentication, then resend. |
+| **Hard (5xx)**: `550 5.1.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits: exactly what tanks IP reputation. |
 | **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Retried with backoff (5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h) until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180). Repeated soft bounces are still handled by the async-DSN path's escalation rule: the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
-| **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error | Existing retry behaviour. Infrastructure problems don't tell us anything about the recipient. |
+| **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error | Retried with backoff. An IP address or port in the error (`connect ECONNREFUSED 5.6.7.8:25`) is never read as a status code. Infrastructure problems don't tell us anything about the recipient. |
 
 Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for further retries to confirm what the receiver already told us authoritatively.
 

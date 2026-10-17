@@ -431,6 +431,39 @@ describe("sendMail: Reply-To (#169)", () => {
 });
 
 describe("sendMail: per-group outcomes (#97)", () => {
+  test("a sender block (5.7.1 blocklist) fails the group and flags it blocked (#246)", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    sendBehaviour = () =>
+      new Error("550 5.7.1 Service unavailable; Client host blocked using Spamhaus");
+
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@outlook.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    const group = result.deliveryState["smtp.outlook.com"];
+    expect(group?.status).toBe("failed");
+    expect(group?.blocked).toBe(true);
+  });
+
+  test("a network error to an MX on a 5.x.x.x address is retried, not a bounce", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+    sendBehaviour = () => new Error("connect ECONNREFUSED 5.6.7.8:25");
+
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@outlook.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(result.deliveryState["smtp.outlook.com"]?.status).toBe("retry");
+  });
+
   test("hard 5xx marks the group `failed` (terminal), not `retry`", async () => {
     mxResolver = (domain) =>
       Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);

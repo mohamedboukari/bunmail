@@ -36,10 +36,10 @@ describe("parseSmtpError: hard bounces (5xx)", () => {
     expect(parsed!.code).toBe("5.1.1");
   });
 
-  test("Outlook 550 5.7.1 spamhaus block (5.7.1 → hard, the policy block)", () => {
+  test("Outlook 550 5.7.1 spamhaus block is a sender policy block, not a bad recipient (#246)", () => {
     const parsed = parseSmtpError(OUTLOOK_HARD_BLOCKED);
     expect(parsed).not.toBeNull();
-    expect(parsed!.kind).toBe("hard");
+    expect(parsed!.kind).toBe("policy");
     expect(parsed!.code).toBe("5.7.1");
   });
 
@@ -101,5 +101,39 @@ describe("parseSmtpError: non-SMTP errors", () => {
 
   test("2.x.x 'delivered' shape is rejected (shouldn't appear in error path, but defensive)", () => {
     expect(parseSmtpError("250 2.0.0 OK queued")).toBeNull();
+  });
+});
+
+describe("parseSmtpError: sender policy blocks (#246)", () => {
+  test.each([
+    "554 5.7.1 Message rejected due to DMARC policy",
+    "550 5.7.26 Unauthenticated email from example.com is not accepted due to domain's DMARC policy",
+    "554 Service unavailable; client host blocked using zen.spamhaus.org",
+    "550 Your IP has a poor reputation and was rejected",
+  ])("%s → policy", (message) => {
+    expect(parseSmtpError(message)?.kind).toBe("policy");
+  });
+
+  test("a 5.7.x reply that says the recipient does not exist stays hard", () => {
+    expect(
+      parseSmtpError("550 5.7.1 Recipient address rejected: user unknown")?.kind,
+    ).toBe("hard");
+  });
+
+  test("4.7.x deferrals stay soft", () => {
+    expect(parseSmtpError("421 4.7.0 Try again later, closing connection")?.kind).toBe(
+      "soft",
+    );
+  });
+});
+
+describe("parseSmtpError: addresses and ports are not status codes", () => {
+  test.each([
+    "connect ECONNREFUSED 5.6.7.8:25",
+    "Error: connect ETIMEDOUT 4.4.4.4:25",
+    "connect ECONNREFUSED 10.0.0.5:587",
+    "connect EHOSTUNREACH 203.0.113.250:465",
+  ])("%s → null (network error)", (message) => {
+    expect(parseSmtpError(message)).toBeNull();
   });
 });

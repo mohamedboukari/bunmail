@@ -38,6 +38,12 @@ export interface DeliveryGroup {
   deliveredAt?: string;
   /** Last raw error message for this group: diagnostic only. */
   lastError?: string;
+  /**
+   * Set when the receiving MX refused the sender (5.7.x / blocklist /
+   * authentication, #246): the group failed, but its recipients were not
+   * suppressed. A sign of a reputation or DNS problem, not a bad address.
+   */
+  blocked?: boolean;
   /** Per-message-id is canonical across the row, but kept here for symmetry. */
   messageId?: string;
 }
