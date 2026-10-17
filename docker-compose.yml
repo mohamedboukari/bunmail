@@ -28,6 +28,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # The image runs as non-root `bun` (#167). Let it bind inbound SMTP (25)
+    # and submission (587) without root. Scoped to the container's own
+    # network namespace; Docker >= 20.10 already defaults to this, pinned
+    # here so it's explicit. Kubernetes lists it as a "safe" sysctl.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
     restart: unless-stopped
 
   db:

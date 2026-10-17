@@ -7,6 +7,7 @@ import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import { notifyInboundReceived } from "./inbound-notify.service.ts";
 import { isBlacklistedIp } from "./dnsbl.service.ts";
+import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
@@ -447,6 +448,18 @@ export function start(): void {
   });
 
   server.on("error", (err) => {
+    /**
+     * Fail fast if the port can't be bound (#167). Logging and carrying on
+     * left the HTTP side (and its health check) up while no mail could
+     * arrive; exiting makes the outage a visible restart loop instead.
+     */
+    if (isListenError(err)) {
+      logger.error(describeListenError("Inbound SMTP", port, err.code), {
+        port,
+        code: err.code,
+      });
+      process.exit(1);
+    }
     logger.error("SMTP server error", {
       error: err instanceof Error ? err.message : String(err),
     });
