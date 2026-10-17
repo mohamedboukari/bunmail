@@ -219,7 +219,7 @@ export function SuppressionsPage({
                           <button
                             type="submit"
                             class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                            onclick={`return confirm('Remove the suppression for ${sup.email}? They will be able to receive mail from this API key again.')`}
+                            onclick="return confirm('Remove this suppression? The address will be able to receive mail from this API key again.')"
                           >
                             Delete
                           </button>

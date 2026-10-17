@@ -160,10 +160,9 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                   >
                     {template.subject}
                   </td>
-                  <td class="px-4 py-3 text-gray-500 dark:text-gray-400">
-                    {template.variables && template.variables.length > 0
-                      ? template.variables.join(", ")
-                      : "n/a"}
+                  {/* Variables are API-writable by any key: `safe` escapes them. */}
+                  <td class="px-4 py-3 text-gray-500 dark:text-gray-400" safe>
+                    {template.variables.join(", ") || "n/a"}
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={template.createdAt} />
