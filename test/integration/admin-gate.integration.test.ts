@@ -12,10 +12,24 @@ import { describe, test, expect, beforeEach } from "bun:test";
 import { Elysia } from "elysia";
 import { apiKeysPlugin } from "../../src/modules/api-keys/api-keys.plugin.ts";
 import { inboundPlugin } from "../../src/modules/inbound/inbound.plugin.ts";
+import { domainsPlugin } from "../../src/modules/domains/domains.plugin.ts";
+import { dmarcReportsPlugin } from "../../src/modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { truncateAll, seed } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
 
-const app = new Elysia().use(apiKeysPlugin).use(inboundPlugin);
+const app = new Elysia()
+  .use(apiKeysPlugin)
+  .use(inboundPlugin)
+  .use(domainsPlugin)
+  .use(dmarcReportsPlugin);
+
+/** Every management-plane list route: admin-only, unscoped data. */
+const ADMIN_ONLY_ROUTES = [
+  "/api/v1/api-keys",
+  "/api/v1/inbound",
+  "/api/v1/domains",
+  "/api/v1/dmarc-reports",
+];
 
 function req(path: string, key: string, init: RequestInit = {}) {
   return app.handle(
@@ -38,11 +52,12 @@ describe("admin/restricted key gate (#130)", () => {
   test("admin key reaches the management plane", async () => {
     const { rawKey } = await seed.apiKey({ name: "admin", isAdmin: true });
 
-    const list = await req("/api/v1/api-keys", rawKey);
-    expect(list.status).toBe(200);
-
-    const inbound = await req("/api/v1/inbound", rawKey);
-    expect(inbound.status).toBe(200);
+    for (const route of ADMIN_ONLY_ROUTES) {
+      expect({ route, status: (await req(route, rawKey)).status }).toEqual({
+        route,
+        status: 200,
+      });
+    }
   });
 
   test("restricted key is rejected with 403 ADMIN_REQUIRED", async () => {
@@ -53,8 +68,18 @@ describe("admin/restricted key gate (#130)", () => {
     const body = await readJson<{ code?: string }>(list);
     expect(body.code).toBe("ADMIN_REQUIRED");
 
-    const inbound = await req("/api/v1/inbound", rawKey);
-    expect(inbound.status).toBe(403);
+    for (const route of ADMIN_ONLY_ROUTES) {
+      expect({ route, status: (await req(route, rawKey)).status }).toEqual({
+        route,
+        status: 403,
+      });
+    }
+  });
+
+  test("restricted key cannot read a DMARC report by id either", async () => {
+    const { rawKey } = await seed.apiKey({ name: "restricted", isAdmin: false });
+    const res = await req("/api/v1/dmarc-reports/dmr_anything", rawKey);
+    expect(res.status).toBe(403);
   });
 
   test("restricted key CANNOT PATCH allowedSenders (closes the #126 self-bypass)", async () => {

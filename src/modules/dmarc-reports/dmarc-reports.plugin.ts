@@ -5,7 +5,7 @@ import {
   serializeDmarcReportDetail,
 } from "./serializations/dmarc-report.serialization.ts";
 import * as dmarcReportsService from "./services/dmarc-reports.service.ts";
-import { authMiddleware } from "../../middleware/auth.ts";
+import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 
@@ -18,14 +18,17 @@ import { logger } from "../../utils/logger.ts";
  * - GET /:id           Detail with per-source-IP records + computed totals
  *
  * Reports are operator-level data (not tenant-scoped), see
- * docs/dmarc-reports.md for the rationale. All routes still require a
- * Bearer token; in this codebase that's effectively admin auth.
+ * docs/dmarc-reports.md for the rationale: they cover every registered
+ * domain, with sending IPs, volumes and authentication results. So, like
+ * domains and inbound mail (#130), they are admin-only: a restricted key
+ * gets 403 `ADMIN_REQUIRED`.
  */
 export const dmarcReportsPlugin = new Elysia({
   prefix: "/api/v1/dmarc-reports",
   normalize: true,
 })
   .use(authMiddleware)
+  .use(adminMiddleware)
   .use(rateLimitMiddleware)
 
   .get(

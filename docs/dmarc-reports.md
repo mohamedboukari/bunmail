@@ -106,7 +106,7 @@ DMARC aggregate reports are **operator-level** data: they describe authenticatio
 
 ## Read API
 
-REST endpoints under `/api/v1/dmarc-reports/` (Bearer auth + rate limit, like every other API):
+REST endpoints under `/api/v1/dmarc-reports/` (Bearer auth + rate limit, **admin keys only**: a restricted key gets `403 ADMIN_REQUIRED`, since reports are operator-level data covering every domain):
 
 | Verb | Path                            | Description                           |
 | ---- | ------------------------------- | ------------------------------------- |
