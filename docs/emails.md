@@ -112,6 +112,8 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header. Resolution
 
 **Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders need the URL form too: Gmail's "high volume" thresholds (>5k/day to gmail) require RFC 8058 one-click via the URL + POST headers.
 
+**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
+
 **Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
 
 ## Service Methods

@@ -201,6 +201,8 @@ describe("sendMail: DKIM passthrough", () => {
     expect(dkim.domainName).toBe("example.com");
     expect(dkim.keySelector).toBe("bunmail");
     expect(dkim.privateKey).toContain("BEGIN PRIVATE KEY");
+    /** One-click unsubscribe (RFC 8058) needs the Post header signed. */
+    expect(String(dkim.headerFieldNames).split(":")).toContain("List-Unsubscribe-Post");
   });
 
   test("omits DKIM when not provided", async () => {

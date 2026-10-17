@@ -26,6 +26,46 @@ export interface SendMailResult {
   deliveryState: DeliveryState;
 }
 
+/**
+ * Headers covered by the DKIM signature. Setting `headerFieldNames`
+ * replaces nodemailer's default list, so the defaults are restated, plus
+ * `List-Unsubscribe-Post` (RFC 8058 requires it to be signed for one-click
+ * unsubscribe, which Gmail and Yahoo rely on) and `Feedback-ID`. Listing a
+ * header that a message doesn't have costs nothing.
+ */
+export const DKIM_SIGNED_HEADERS = [
+  "From",
+  "Sender",
+  "Reply-To",
+  "Subject",
+  "Date",
+  "Message-ID",
+  "To",
+  "Cc",
+  "MIME-Version",
+  "Content-Type",
+  "Content-Transfer-Encoding",
+  "Content-ID",
+  "Content-Description",
+  "Resent-Date",
+  "Resent-From",
+  "Resent-Sender",
+  "Resent-To",
+  "Resent-Cc",
+  "Resent-Message-ID",
+  "In-Reply-To",
+  "References",
+  "List-Id",
+  "List-Help",
+  "List-Unsubscribe",
+  "List-Unsubscribe-Post",
+  "List-Subscribe",
+  "List-Post",
+  "List-Owner",
+  "List-Archive",
+  "Feedback-ID",
+].join(":");
+
 /** DKIM signing options passed from the queue processor. */
 export interface DkimOptions {
   domainName: string;
@@ -332,6 +372,7 @@ async function sendToMxGroup(args: {
       domainName: args.dkim.domainName,
       keySelector: args.dkim.keySelector,
       privateKey: args.dkim.privateKey,
+      headerFieldNames: DKIM_SIGNED_HEADERS,
     };
   }
 
