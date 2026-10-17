@@ -21,7 +21,7 @@ bun run test:e2e                      # e2e only
 bun run test:integration              # integration only (needs Postgres)
 bun run test:integration:setup        # one-shot: create bunmail_test + migrate
 bun run test:all                      # all three tiers (this is what pre-commit + CI run)
-bun run test:coverage                 # unit + e2e with coverage table
+bun run test:coverage                 # unit + e2e with coverage table + floor check (CI runs this)
 ```
 
 ## Pre-commit runs `test:all`
@@ -78,17 +78,27 @@ Total CI test time: ~2-3 seconds across all three tiers.
 
 ## Coverage
 
-`bun run test:coverage` produces a per-file table for the unit + e2e tiers. **Integration tests run separately for coverage** because Bun's `mock.module` calls in unit/e2e tests shadow real modules when fused into one run, giving misleadingly low integration-tier coverage:
+`bun run test:coverage` runs the unit + e2e tiers in one process with coverage, prints the per-file table, writes `coverage/lcov.info`, then runs `bun run coverage:check`. **CI runs it and fails the build if coverage drops below the floor.**
+
+| Measure | Baseline (#171) | Floor |
+|---|---|---|
+| Lines, weighted by line count | 70.53% (7,011 / 9,941) | **69%** |
+| Functions, weighted | 74.67% (395 / 529) | **73%** |
+
+Two things that are easy to get wrong:
+
+- **The table's `All files` row is a per-file average** (~86% lines today). Many small, fully-covered files inflate it, so the gate uses line-weighted LCOV totals instead.
+- **Bun's native `coverageThreshold` isn't used.** Bun applies it per file (every file must clear it), not to the total, and silently ignores singular keys like `line`. That combination meant the old `bunfig.toml` gate never fired. The floor lives in the `coverage:check` script in `package.json`; raise it there as coverage grows.
+
+**Integration tests run separately for coverage** because Bun's `mock.module` calls in unit/e2e tests shadow real modules when fused into one run, giving misleadingly low integration-tier coverage. That tier isn't gated:
 
 ```bash
-# Unit + e2e coverage (current baseline ~62%):
+# Unit + e2e, gated (what CI runs):
 bun run test:coverage
 
-# Integration tier coverage (typically 80-100% on targeted services):
+# Integration tier (typically 80-100% on targeted services), not gated:
 bun test --preload ./test/integration/_preload.ts --coverage test/integration
 ```
-
-The threshold in [bunfig.toml](../bunfig.toml) (`line = 0.65, function = 0.60`) gates the unit + e2e run. CI fails the build if coverage drops below.
 
 ## Adding tests
 

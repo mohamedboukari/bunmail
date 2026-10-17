@@ -3,9 +3,10 @@
   "project": ["src/**/*.{ts,tsx}"],
   "ignore": ["src/db/seed.ts"],
   "ignoreExportsUsedInFile": true,
+  "ignoreBinaries": ["awk"],
   "rules": {
-    "unlisted": "warn",
-    "exports": "warn",
-    "types": "warn"
+    "unlisted": "error",
+    "exports": "error",
+    "types": "error"
   }
 }

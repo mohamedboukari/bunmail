@@ -93,6 +93,16 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: Format check
+        # lint-staged only formats staged files on machines with hooks
+        # installed; a PR authored elsewhere bypasses it (#171).
+        run: bun run format:check
+
+      - name: Dead code (knip)
+        # Rules are "error" in knip.json, so a new unused export, type or
+        # unlisted dependency fails the build (#171).
+        run: bun run knip
+
       - name: XSS scan (dashboard JSX)
         # `@kitajs/html` does NOT auto-escape interpolated children: every
         # render of stored/user data needs the `safe` attribute. xss-scan
@@ -111,6 +121,13 @@ jobs:
 
       - name: Test (e2e)
         run: bun test test/e2e
+
+      - name: Coverage (unit + e2e)
+        # Re-runs unit + e2e in one process with coverage, then
+        # `coverage:check` fails if line-weighted totals drop below the
+        # floor (69% lines / 73% functions). Not Bun's native
+        # coverageThreshold, which is per file; see bunfig.toml (#171).
+        run: bun run test:coverage
 
       - name: Apply migrations to test DB
         # The integration tier runs against a real Postgres

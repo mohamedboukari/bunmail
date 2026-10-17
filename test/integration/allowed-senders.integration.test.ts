@@ -8,7 +8,7 @@
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import nodemailer from "nodemailer";
+import { createTransport } from "nodemailer";
 import { createEmail } from "../../src/modules/emails/services/email.service.ts";
 import {
   createApiKey,
@@ -16,12 +16,12 @@ import {
 } from "../../src/modules/api-keys/services/api-key.service.ts";
 import { UnauthorizedSenderError } from "../../src/modules/api-keys/errors.ts";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
-import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { truncateAll, db, emails } from "./_helpers.ts";
 
 const TEST_PORT = 12589;
 
 function transport(pass: string) {
-  return nodemailer.createTransport({
+  return createTransport({
     host: "127.0.0.1",
     port: TEST_PORT,
     secure: false,

@@ -284,7 +284,7 @@ describe("sendMail: multi-MX (#87)", () => {
     const hosts = captured
       .map((c) => c.transportConfig.host)
       .filter((h): h is string => typeof h === "string")
-      .sort((a, b) => a.localeCompare(b));
+      .toSorted((a, b) => a.localeCompare(b));
     expect(hosts).toEqual(["smtp.gmail.com", "smtp.outlook.com"]);
   });
 

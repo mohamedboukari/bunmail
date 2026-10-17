@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
-import nodemailer from "nodemailer";
+import { createTransport } from "nodemailer";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
 import * as usage from "../../src/modules/smtp-submission/services/usage.service.ts";
 import { config } from "../../src/config.ts";
@@ -18,7 +18,7 @@ import { smtpSubmissionUsage } from "../../src/modules/smtp-submission/models/sm
 const TEST_PORT = 12588;
 
 function transport(pass: string) {
-  return nodemailer.createTransport({
+  return createTransport({
     host: "127.0.0.1",
     port: TEST_PORT,
     secure: false,

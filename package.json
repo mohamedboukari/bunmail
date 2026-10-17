@@ -14,7 +14,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "bunx tsc --noEmit",
-    "lint": "oxlint --type-aware src/ test/",
+    "lint": "oxlint --type-aware --deny-warnings src/ test/",
     "lint:fix": "oxlint --type-aware src/ test/ --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -26,7 +26,8 @@
     "test:integration": "bun test --preload ./test/integration/_preload.ts test/integration",
     "test:integration:setup": "bun run test/integration/setup-db.ts",
     "test:all": "bun test test/unit test/e2e && bun run test:integration",
-    "test:coverage": "bun test test/unit test/e2e --coverage",
+    "test:coverage": "bun test test/unit test/e2e --coverage && bun run coverage:check",
+    "coverage:check": "awk -F: -v minL=0.69 -v minF=0.73 '/^LF:/{lf+=$2} /^LH:/{lh+=$2} /^FNF:/{ff+=$2} /^FNH:/{fh+=$2} END { if (lf == 0 || ff == 0) { print \"coverage:check: no coverage data in coverage/lcov.info\"; exit 1 } l = lh / lf; f = fh / ff; printf \"Coverage (line-weighted): lines %.2f%% (floor %.0f%%), functions %.2f%% (floor %.0f%%)\\n\", 100 * l, 100 * minL, 100 * f, 100 * minF; if (l < minL || f < minF) { print \"coverage:check: below the floor\"; exit 1 } }' coverage/lcov.info",
     "release": "bumpp",
     "prepare": "husky",
     "xss:toolchain": "D=node_modules/.cache/xss-toolchain; test -x $D/node_modules/.bin/xss-scan || (mkdir -p $D && printf '%s' '{\"name\":\"xss-toolchain\",\"private\":true}' > $D/package.json && bun add --cwd $D typescript@5.9.3 @kitajs/html@4.2.13 @kitajs/ts-html-plugin@4.1.4)"

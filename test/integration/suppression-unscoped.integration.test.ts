@@ -32,7 +32,10 @@ describe("listAllSuppressions (unscoped)", () => {
     const { data, total } = await listAllSuppressions({ page: 1, limit: 25 });
 
     expect(total).toBe(2);
-    expect(data.map((r) => r.email).sort()).toEqual(["a@example.com", "b@example.com"]);
+    expect(data.map((r) => r.email).toSorted()).toEqual([
+      "a@example.com",
+      "b@example.com",
+    ]);
     /** Two distinct api keys represented: proves the unscoped view. */
     expect(new Set(data.map((r) => r.apiKeyId)).size).toBe(2);
   });
@@ -51,7 +54,7 @@ describe("listAllSuppressions (unscoped)", () => {
     });
 
     expect(total).toBe(2);
-    expect(data.map((r) => r.email).sort()).toEqual([
+    expect(data.map((r) => r.email).toSorted()).toEqual([
       "alice@gmail.com",
       "carol@gmail.com",
     ]);

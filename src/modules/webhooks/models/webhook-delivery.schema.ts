@@ -114,4 +114,3 @@ export const webhookDeliveries = pgTable(
 );
 
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
-export type NewWebhookDelivery = typeof webhookDeliveries.$inferInsert;
