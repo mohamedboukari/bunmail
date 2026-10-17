@@ -17,6 +17,7 @@ describe("serializeEmail", () => {
     toAddress: "user@test.com",
     cc: "cc@test.com",
     bcc: null,
+    replyTo: null,
     subject: "Test Subject",
     html: "<p>Hello</p>",
     textContent: "Hello",
@@ -71,5 +72,11 @@ describe("serializeEmail", () => {
     expect(result.messageId).toBe("<msg123@mail.example.com>");
     expect(result.cc).toBe("cc@test.com");
     expect(result.bcc).toBeNull();
+    expect(result.replyTo).toBeNull();
+  });
+
+  test("exposes replyTo when set (#169)", () => {
+    const result = serializeEmail({ ...email, replyTo: "support@example.com" });
+    expect(result.replyTo).toBe("support@example.com");
   });
 });

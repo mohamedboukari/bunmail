@@ -356,6 +356,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       to: email.toAddress,
       cc: email.cc,
       bcc: email.bcc,
+      replyTo: email.replyTo,
       subject: email.subject,
       html: email.html,
       text: email.textContent,

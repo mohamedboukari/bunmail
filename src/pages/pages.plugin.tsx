@@ -580,6 +580,7 @@ export const pagesPlugin = new Elysia({
             to: body.to,
             cc: body.cc || undefined,
             bcc: body.bcc || undefined,
+            replyTo: body.replyTo || undefined,
             subject: body.subject,
             html: body.html || undefined,
             text: body.text || undefined,
@@ -611,6 +612,10 @@ export const pagesPlugin = new Elysia({
         to: t.String({ format: "email" }),
         cc: t.Optional(t.String()),
         bcc: t.Optional(t.String()),
+        /** Same guard as the API DTO: length cap + CR/LF rejected (#169). */
+        replyTo: t.Optional(
+          t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" }),
+        ),
         subject: t.String({ maxLength: 500 }),
         html: t.Optional(t.String()),
         text: t.Optional(t.String()),

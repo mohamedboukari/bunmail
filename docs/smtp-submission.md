@@ -40,12 +40,12 @@ The password is treated as the API key: SHA-256 hashed and looked up exactly lik
 
 The submitted message is parsed and mapped to the same fields the REST send API accepts, then handed to `createEmail`, so it flows through the identical queue, retry, DKIM-signing, suppression, and webhook machinery as an API send.
 
-- **From / To / Cc / Subject / HTML / Text**: mapped from the message.
+- **From / To / Cc / Reply-To / Subject / HTML / Text**: mapped from the message. `Reply-To` (#169) is a header only: it never adds a recipient or affects BCC detection.
 - **BCC**: envelope recipients (`RCPT TO`) that don't appear in the visible `To`/`Cc` headers are treated as blind recipients: delivered, but never rendered in the message headers.
 
 ### Not forwarded (v1 limitations)
 
-- **Attachments and arbitrary custom headers** are **not** relayed. The outbound pipeline (`createEmail` / `sendMail` / the `emails` schema) has no attachment or custom-header field yet, so the submission path relays `from/to/cc/bcc/subject/html/text` only. Fine for typical transactional mail (Infisical/Netbird/Dify invites, alerts, password resets); attachment support is a separate follow-up.
+- **Attachments and arbitrary custom headers** are **not** relayed. The outbound pipeline (`createEmail` / `sendMail` / the `emails` schema) has no attachment or custom-header field yet, so the submission path relays `from/to/cc/bcc/reply-to/subject/html/text` only. Fine for typical transactional mail (Infisical/Netbird/Dify invites, alerts, password resets); attachment support is a separate follow-up.
 
 ## Configuration
 

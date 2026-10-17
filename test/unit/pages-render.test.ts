@@ -82,6 +82,7 @@ const email = {
   toAddress: "user@example.org",
   cc: null,
   bcc: null,
+  replyTo: null,
   subject: "test",
   html: "<p>hello</p>",
   textContent: null,
@@ -192,6 +193,18 @@ describe("Dashboard page render smoke tests", () => {
     expect(typeof EmailDetailPage({ email, isTrashed: true })).toBe("string");
   });
 
+  test("EmailDetailPage shows Reply-To only when set, escaped (#169)", async () => {
+    const without = await EmailDetailPage({ email, isTrashed: false });
+    expect(without).not.toContain("Reply-To");
+    const withReplyTo = await EmailDetailPage({
+      email: { ...email, replyTo: "support@example.com, <b>x</b>" },
+      isTrashed: false,
+    });
+    expect(withReplyTo).toContain("Reply-To");
+    expect(withReplyTo).toContain("support@example.com");
+    expect(withReplyTo).not.toContain("<b>x</b>");
+  });
+
   test("EmailsTrashPage", () => {
     expect(
       typeof EmailsTrashPage({
@@ -247,6 +260,11 @@ describe("Dashboard page render smoke tests", () => {
         retentionDays: 7,
       }),
     ).toBe("string");
+  });
+
+  test("SendEmailPage has a Reply-To input (#169)", async () => {
+    const html = await SendEmailPage({ apiKeys: [apiKey], defaultApiKeyId: apiKey.id });
+    expect(html).toContain('name="replyTo"');
   });
 
   test("SendEmailPage", () => {

@@ -400,6 +400,7 @@ export function start(portOverride?: number): void {
               envelopeFrom,
               toHeader: extractAddresses(parsed.to),
               ccHeader: extractAddresses(parsed.cc),
+              replyToHeader: extractAddresses(parsed.replyTo),
               envelopeRecipients: (session.envelope.rcptTo ?? []).map((r) => r.address),
               subject: parsed.subject ?? "",
               html: typeof parsed.html === "string" ? parsed.html : undefined,

@@ -148,6 +148,24 @@ export function SendEmailPage({
             </div>
           </div>
 
+          {/* Reply-To (#169): replies go here instead of the From address */}
+          <div>
+            <label
+              for="replyTo"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
+              Reply-To
+            </label>
+            <EmailChipInput
+              name="replyTo"
+              id="replyTo"
+              placeholder="support@example.com"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Optional. Where replies go instead of the From address.
+            </p>
+          </div>
+
           {/* subject */}
           <div>
             <label

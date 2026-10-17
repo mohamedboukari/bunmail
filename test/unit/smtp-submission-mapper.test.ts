@@ -61,6 +61,42 @@ describe("buildSubmissionInput: sender resolution", () => {
   });
 });
 
+describe("buildSubmissionInput: Reply-To (#169)", () => {
+  test("maps the Reply-To header through, deduped", () => {
+    const input = buildSubmissionInput({
+      fromHeader: "s@x.com",
+      toHeader: ["a@y.com"],
+      ccHeader: [],
+      replyToHeader: ["help@x.com", "HELP@x.com", "sales@x.com"],
+      envelopeRecipients: ["a@y.com"],
+    });
+    expect(input.replyTo).toBe("help@x.com, sales@x.com");
+  });
+
+  test("absent or empty Reply-To yields undefined", () => {
+    const base = {
+      fromHeader: "s@x.com",
+      toHeader: ["a@y.com"],
+      ccHeader: [],
+      envelopeRecipients: ["a@y.com"],
+    };
+    expect(buildSubmissionInput(base).replyTo).toBeUndefined();
+    expect(buildSubmissionInput({ ...base, replyToHeader: [] }).replyTo).toBeUndefined();
+  });
+
+  test("a Reply-To address is never treated as a recipient or BCC", () => {
+    const input = buildSubmissionInput({
+      fromHeader: "s@x.com",
+      toHeader: ["a@y.com"],
+      ccHeader: [],
+      replyToHeader: ["help@x.com"],
+      envelopeRecipients: ["a@y.com"],
+    });
+    expect(input.to).toBe("a@y.com");
+    expect(input.bcc).toBeUndefined();
+  });
+});
+
 describe("buildSubmissionInput: recipients & BCC preservation", () => {
   test("maps visible To/Cc from headers", () => {
     const input = buildSubmissionInput({

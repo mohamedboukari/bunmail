@@ -41,6 +41,29 @@ describe("createEmail: happy path", () => {
     expect(email.toAddress).toBe("user@example.org");
   });
 
+  test("persists replyTo, and leaves it null when absent (#169)", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { name } = await seed.domain();
+
+    const withReplyTo = await createEmail(
+      {
+        from: `no-reply@${name}`,
+        to: "user@example.org",
+        replyTo: "support@example.com",
+        subject: "t",
+        text: "x",
+      },
+      apiKeyId,
+    );
+    expect(withReplyTo.replyTo).toBe("support@example.com");
+
+    const without = await createEmail(
+      { from: `no-reply@${name}`, to: "user@example.org", subject: "t", text: "x" },
+      apiKeyId,
+    );
+    expect(without.replyTo).toBeNull();
+  });
+
   test("leaves domainId null when sender domain isn't registered (in dev mode)", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     /** No domain row inserted: sender domain unknown. In `BUNMAIL_ENV !==
