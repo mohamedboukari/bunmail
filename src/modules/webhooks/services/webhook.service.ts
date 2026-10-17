@@ -142,17 +142,22 @@ export async function findWebhooksForEvent(
 ): Promise<{ id: string }[]> {
   const columns = { id: webhooks.id, events: webhooks.events };
 
+  /** A revoked key's webhooks receive nothing: revoking a leaked key must
+   *  also cut off the event feed its holder registered. */
+  const live = and(eq(webhooks.isActive, true), eq(apiKeys.isActive, true));
+
   const candidates =
     "apiKeyId" in scope
       ? await db
           .select(columns)
           .from(webhooks)
-          .where(and(eq(webhooks.isActive, true), eq(webhooks.apiKeyId, scope.apiKeyId)))
+          .innerJoin(apiKeys, eq(apiKeys.id, webhooks.apiKeyId))
+          .where(and(live, eq(webhooks.apiKeyId, scope.apiKeyId)))
       : await db
           .select(columns)
           .from(webhooks)
           .innerJoin(apiKeys, eq(apiKeys.id, webhooks.apiKeyId))
-          .where(and(eq(webhooks.isActive, true), eq(apiKeys.isAdmin, true)));
+          .where(and(live, eq(apiKeys.isAdmin, true)));
 
   return candidates.filter((w) => w.events.includes(event)).map((w) => ({ id: w.id }));
 }

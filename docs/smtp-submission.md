@@ -32,7 +32,7 @@ Point the app's SMTP settings at BunMail:
 | **Password** | a BunMail API key, `bm_live_…` |
 | **From** | an address on a domain **registered + DKIM-verified** in BunMail |
 
-The password is treated as the API key: SHA-256 hashed and looked up exactly like a REST `Authorization: Bearer` token. The username is ignored (any value works) so apps that force a non-empty username still work.
+The password is treated as the API key: SHA-256 hashed and looked up exactly like a REST `Authorization: Bearer` token. Revocation also applies to sessions that are already authenticated: each message checks that the key is still active, so a revoked key's open connection is refused (`550`) at its next message. The username is ignored (any value works) so apps that force a non-empty username still work.
 
 > **Sender domain requirement.** In `BUNMAIL_ENV=production`, the `From` domain must be registered in BunMail (`POST /api/v1/domains`) or the send is rejected with SMTP `550`. In development, unregistered domains are allowed (sent unsigned). This is the same rule the REST `POST /api/v1/emails/send` path enforces.
 

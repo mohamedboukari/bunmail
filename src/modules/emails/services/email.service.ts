@@ -7,7 +7,7 @@ import { renderTemplate } from "../../templates/services/template.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
-import { UnauthorizedSenderError } from "../../api-keys/errors.ts";
+import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -90,7 +90,16 @@ export async function createEmail(
    * `createEmail`.
    */
   const key = await findApiKeyById(apiKeyId);
-  if (key && key.allowedSenders.length > 0) {
+  /**
+   * The key must still be active. REST auth already rejects revoked keys,
+   * but an SMTP submission session authenticates once and then sends many
+   * messages, so a key revoked mid-session would otherwise keep sending.
+   */
+  if (!key || !key.isActive) {
+    logger.warn("Send blocked: API key revoked or missing", { id, apiKeyId });
+    throw new InactiveApiKeyError();
+  }
+  if (key.allowedSenders.length > 0) {
     const fromLower = input.from.trim().toLowerCase();
     if (!key.allowedSenders.includes(fromLower)) {
       logger.warn("Send blocked by allowed-senders list", {

@@ -94,6 +94,42 @@ describe("SMTP submission: authentication", () => {
       }),
     ).rejects.toThrow();
   });
+
+  test("revoking a key stops a session that authenticated before the revocation", async () => {
+    const { id, rawKey } = await seed.apiKey();
+    /** A pooled transport keeps one authenticated SMTP session open. */
+    const session = createTransport({
+      host: "127.0.0.1",
+      port: TEST_PORT,
+      secure: false,
+      ignoreTLS: true,
+      auth: { user: "apikey", pass: rawKey },
+      pool: true,
+      maxConnections: 1,
+    });
+    const message = {
+      from: "hello@unregistered.test",
+      to: "user@example.org",
+      text: "hi",
+    };
+
+    try {
+      await session.sendMail({ ...message, subject: "before" });
+
+      const { apiKeys } =
+        await import("../../src/modules/api-keys/models/api-key.schema.ts");
+      await db.update(apiKeys).set({ isActive: false }).where(eq(apiKeys.id, id));
+
+      expect(session.sendMail({ ...message, subject: "after" })).rejects.toThrow(
+        /revoked/,
+      );
+    } finally {
+      session.close();
+    }
+
+    const rows = await db.select().from(emails).where(eq(emails.apiKeyId, id));
+    expect(rows.map((r) => r.subject)).toEqual(["before"]);
+  });
 });
 
 describe("SMTP submission: recipient handling", () => {

@@ -82,6 +82,8 @@ Returns all API keys (active and revoked). The serializer strips `keyHash` befor
 
 Sets `is_active` to false for the given key ID. Returns the updated row or undefined if not found.
 
+What revocation cuts off: REST calls (`401` from `authMiddleware`), sending through `createEmail` (`InactiveApiKeyError`, which also stops an SMTP submission session that authenticated before the revocation, at its next message), and the key's webhooks: dispatch and the delivery worker skip webhooks whose key is inactive, so deliveries already queued for them end at `failed`. The key's webhooks stay listed; delete them from the dashboard if they are no longer needed.
+
 ### `findByHash(hash: string): Promise<ApiKey | undefined>`
 
 Looks up an API key by its SHA-256 hash. Used internally by the auth middleware.

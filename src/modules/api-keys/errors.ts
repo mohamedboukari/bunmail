@@ -19,3 +19,19 @@ export class UnauthorizedSenderError extends Error {
     this.sender = sender;
   }
 }
+
+/**
+ * Thrown by `email.service.createEmail` when the sending API key is
+ * revoked or no longer exists. REST requests with a revoked key are
+ * already rejected by `authMiddleware`; this covers the paths that hold a
+ * key id across time: an SMTP submission session authenticated before the
+ * key was revoked (mapped to SMTP 550), and the dashboard. Mapped to HTTP
+ * 401 with `code: "API_KEY_REVOKED"`.
+ */
+export class InactiveApiKeyError extends Error {
+  override readonly name = "InactiveApiKeyError";
+
+  constructor() {
+    super("This API key has been revoked.");
+  }
+}
