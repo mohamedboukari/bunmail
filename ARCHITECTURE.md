@@ -88,7 +88,8 @@ bunmail/
 │   │   └── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
 │   ├── middleware/
 │   │   ├── auth.ts                       ← API key bearer auth
-│   │   ├── rate-limit.ts                 ← Per-API-key sliding window rate limiter
+│   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
+│   │   ├── rate-limit-core.ts            ← Pure fixed-window algorithm (unit-tested, #174)
 │   │   └── login-rate-limit.ts           ← Per-IP dashboard login brute-force limiter (#109)
 │   ├── utils/
 │   │   ├── id.ts                         ← Prefixed ID generator
@@ -227,6 +228,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
+│       ├── session.ts                    ← Session cookie sign/validate (pure, #174)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
 │       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav
@@ -813,7 +815,7 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 
 Two independent in-memory sliding-window limiters:
 
-**API requests** (`src/middleware/rate-limit.ts`)
+**API requests** (`src/middleware/rate-limit.ts`, algorithm in `rate-limit-core.ts`)
 - **Default limit:** 100 requests per minute per API key
 - **Scope:** Per API key ID
 - **Response on limit:** `429 Too Many Requests` with `Retry-After` header

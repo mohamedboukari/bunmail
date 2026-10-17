@@ -1,48 +1,27 @@
 import { Elysia } from "elysia";
 import { logger } from "../utils/logger.ts";
-
-/** Maximum number of requests allowed per window */
-const MAX_REQUESTS = 100;
-
-/** Window duration in milliseconds (60 seconds) */
-const WINDOW_MS = 60_000;
+import {
+  checkRateLimit,
+  pruneExpiredEntries,
+  readApiKeyId,
+  type RateLimitEntry,
+} from "./rate-limit-core.ts";
 
 /** How often the cleanup loop sweeps expired entries from the map. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Tracks request counts per API key within a sliding time window.
- * Key: API key ID, Value: request count and window start timestamp.
+ * Tracks request counts per API key within a time window. The algorithm
+ * lives in `rate-limit-core.ts` (pure, unit-tested); this module owns the
+ * state, the cleanup timer and the Elysia wiring.
  *
  * Resets on server restart: acceptable for MVP. A production system
  * would use Redis or a shared store for multi-instance deployments.
  */
-interface RateLimitEntry {
-  /** Number of requests made in the current window */
-  count: number;
-  /** Timestamp (ms) when the current window started */
-  windowStart: number;
-}
-
-export const rateLimitMap = new Map<string, RateLimitEntry>();
+const rateLimitMap = new Map<string, RateLimitEntry>();
 
 /** Reference to the periodic cleanup timer; null when not running. */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
-
-/**
- * Removes entries whose window has fully expired.
- * Exported for unit testing: the running server uses the interval below.
- */
-export function pruneExpiredEntries(now: number = Date.now()): number {
-  let removed = 0;
-  for (const [key, entry] of rateLimitMap) {
-    if (now - entry.windowStart >= WINDOW_MS) {
-      rateLimitMap.delete(key);
-      removed += 1;
-    }
-  }
-  return removed;
-}
 
 /**
  * Starts a periodic sweep that drops expired entries from the in-memory
@@ -54,7 +33,10 @@ export function pruneExpiredEntries(now: number = Date.now()): number {
  */
 export function startRateLimitCleanup(): void {
   if (cleanupInterval) return;
-  cleanupInterval = setInterval(() => pruneExpiredEntries(), CLEANUP_INTERVAL_MS);
+  cleanupInterval = setInterval(
+    () => pruneExpiredEntries(rateLimitMap, Date.now()),
+    CLEANUP_INTERVAL_MS,
+  );
   logger.debug("HTTP rate-limit cleanup started", {
     intervalMs: CLEANUP_INTERVAL_MS,
   });
@@ -83,26 +65,9 @@ export function stopRateLimitCleanup(): void {
 export const rateLimitMiddleware = new Elysia({
   name: "rate-limit-middleware",
 }).onBeforeHandle((context) => {
-  /**
-   * Read `apiKeyId` from the derived auth context.
-   *
-   * The auth middleware adds `apiKeyId` via `.resolve()`, but this
-   * plugin is its own `Elysia` instance: it doesn't statically know
-   * about the auth middleware's context, so TypeScript can't see the
-   * field. The read is order-dependent: every plugin that uses the
-   * rate-limiter calls `.use(authMiddleware).use(rateLimitMiddleware)`
-   * so by the time this hook fires, `apiKeyId` is already in the
-   * context if auth ran. Read via a runtime check rather than a cast so
-   * a missing or non-string field degrades to "unauthenticated" instead
-   * of being trusted as a key id.
-   */
-  const apiKeyId =
-    typeof context === "object" &&
-    context !== null &&
-    "apiKeyId" in context &&
-    typeof context.apiKeyId === "string"
-      ? context.apiKeyId
-      : undefined;
+  /** Every plugin applies `.use(authMiddleware).use(rateLimitMiddleware)`, so
+   *  `apiKeyId` is in the context by now if auth ran. See readApiKeyId. */
+  const apiKeyId = readApiKeyId(context);
 
   /**
    * If no apiKeyId is present, auth middleware hasn't run or the route
@@ -114,36 +79,18 @@ export const rateLimitMiddleware = new Elysia({
 
   const { set } = context;
 
-  const now = Date.now();
-  const entry = rateLimitMap.get(apiKeyId);
+  const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now());
+  if (!decision.limited) return;
 
-  if (!entry || now - entry.windowStart >= WINDOW_MS) {
-    /** No entry or window expired: start a new window */
-    rateLimitMap.set(apiKeyId, { count: 1, windowStart: now });
-    return;
-  }
+  const { count, retryAfter } = decision;
+  logger.warn("Rate limit exceeded", { apiKeyId, count, retryAfter });
 
-  /** Increment the counter within the current window */
-  entry.count += 1;
+  set.status = 429;
+  set.headers["retry-after"] = String(retryAfter);
 
-  /** Check if the limit has been exceeded */
-  if (entry.count > MAX_REQUESTS) {
-    /** Calculate seconds remaining in the current window */
-    const retryAfter = Math.ceil((entry.windowStart + WINDOW_MS - now) / 1000);
-
-    logger.warn("Rate limit exceeded", {
-      apiKeyId,
-      count: entry.count,
-      retryAfter,
-    });
-
-    set.status = 429;
-    set.headers["retry-after"] = String(retryAfter);
-
-    return {
-      success: false,
-      error: "Rate limit exceeded: try again later",
-      retryAfter,
-    };
-  }
+  return {
+    success: false,
+    error: "Rate limit exceeded: try again later",
+    retryAfter,
+  };
 });
