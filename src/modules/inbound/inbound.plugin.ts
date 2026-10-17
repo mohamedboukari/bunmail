@@ -54,7 +54,7 @@ export const inboundPlugin = new Elysia({
     },
     {
       query: t.Object({
-        page: t.Optional(t.Number({ minimum: 1 })),
+        page: t.Optional(t.Number({ minimum: 1, maximum: 1_000_000 })),
         limit: t.Optional(t.Number({ minimum: 1, maximum: 100 })),
       }),
       detail: {
@@ -92,7 +92,7 @@ export const inboundPlugin = new Elysia({
     },
     {
       query: t.Object({
-        page: t.Optional(t.Number({ minimum: 1 })),
+        page: t.Optional(t.Number({ minimum: 1, maximum: 1_000_000 })),
         limit: t.Optional(t.Number({ minimum: 1, maximum: 100 })),
       }),
       detail: {

@@ -10,7 +10,8 @@ import { t } from "elysia";
  * `(api_key_id, email)` index already makes exact match fast.
  */
 export const listSuppressionsDto = t.Object({
-  page: t.Optional(t.Numeric({ minimum: 1, default: 1 })),
+  /** Capped so OFFSET stays inside Postgres's bigint range (#172). */
+  page: t.Optional(t.Numeric({ minimum: 1, maximum: 1_000_000, default: 1 })),
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
   email: t.Optional(t.String({ maxLength: 255 })),
 });

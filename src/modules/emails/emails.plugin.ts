@@ -132,7 +132,7 @@ export const emailsPlugin = new Elysia({
     },
     {
       query: t.Object({
-        page: t.Optional(t.Number({ minimum: 1 })),
+        page: t.Optional(t.Number({ minimum: 1, maximum: 1_000_000 })),
         limit: t.Optional(t.Number({ minimum: 1, maximum: 100 })),
       }),
       detail: {
@@ -158,8 +158,8 @@ export const emailsPlugin = new Elysia({
   .get(
     "/tombstones",
     async ({ query, apiKeyId }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 20;
       const messageId =
         typeof query.messageId === "string" && query.messageId.length > 0
           ? query.messageId
@@ -179,9 +179,10 @@ export const emailsPlugin = new Elysia({
       };
     },
     {
+      /** Bounded like the other list endpoints (#172): bad input is a 422. */
       query: t.Object({
-        page: t.Optional(t.String()),
-        limit: t.Optional(t.String()),
+        page: t.Optional(t.Numeric({ minimum: 1, maximum: 1_000_000, default: 1 })),
+        limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
         messageId: t.Optional(t.String()),
       }),
       detail: {

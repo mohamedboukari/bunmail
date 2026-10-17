@@ -39,6 +39,7 @@ import {
   validateSessionCookie,
   SESSION_MAX_AGE,
 } from "./session.ts";
+import { parsePagination } from "./pagination.ts";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -598,8 +599,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/emails",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
       const status = isEmailStatus(query.status) ? query.status : undefined;
       /** Source + API-key filters (#137). Only pass through valid values. */
       const source =
@@ -655,8 +655,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/emails/tombstones",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
       const messageId =
         typeof query.messageId === "string" && query.messageId.length > 0
           ? query.messageId
@@ -694,8 +693,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/emails/trash",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
 
       const { data, total } = await emailService.listTrashedEmailsUnscoped({
         page,
@@ -1541,8 +1539,7 @@ export const pagesPlugin = new Elysia({
         return "";
       }
 
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
       const status =
         query.status === "pending" ||
         query.status === "delivered" ||
@@ -1665,8 +1662,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/inbound",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
 
       const { data, total } = await inboundService.listInboundEmails({ page, limit });
 
@@ -1699,8 +1695,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/inbound/trash",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
 
       const { data, total } = await inboundService.listTrashedInboundEmails({
         page,
@@ -1986,8 +1981,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/dmarc-reports",
     async ({ query }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const { page, limit } = parsePagination(query);
       const domain = query.domain || undefined;
 
       const { data, total } = await dmarcReportsService.listDmarcReports({
@@ -2048,8 +2042,7 @@ export const pagesPlugin = new Elysia({
   .get(
     "/suppressions",
     async ({ query }) => {
-      const page = Math.max(1, parseInt(query.page ?? "1", 10));
-      const limit = Math.min(100, Math.max(1, parseInt(query.limit ?? "25", 10)));
+      const { page, limit } = parsePagination(query, 25);
 
       const [{ data, total }, allKeys] = await Promise.all([
         suppressionService.listAllSuppressions({

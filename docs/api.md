@@ -29,6 +29,17 @@ API keys are managed via the `/api/v1/api-keys` endpoints. The first key is crea
 
 ---
 
+## Pagination
+
+Every list endpoint takes the same query params:
+
+| Param   | Type   | Default | Range         |
+|---------|--------|---------|---------------|
+| `page`  | number | 1       | 1 to 1,000,000 |
+| `limit` | number | 20      | 1 to 100      |
+
+A value outside the range, or one that isn't a number, returns **422** (#172). Responses carry `pagination: { page, limit, total }`. The page cap keeps the underlying `OFFSET` well inside PostgreSQL's integer range.
+
 ## Endpoints
 
 ### Health Check
@@ -103,7 +114,7 @@ List emails for the authenticated API key with pagination.
 
 | Param    | Type   | Default | Description                                  |
 |----------|--------|---------|----------------------------------------------|
-| `page`   | number | 1       | Page number (1-based)                        |
+| `page`   | number | 1       | Page number (1-based, max 1,000,000)         |
 | `limit`  | number | 20      | Items per page (1-100)                       |
 | `status` | string | none    | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
 | `source` | string | none    | Filter by ingress channel: `api` or `smtp` (#137) |
@@ -329,7 +340,7 @@ List received emails (paginated, newest first).
 
 | Param   | Type   | Default | Description           |
 |---------|--------|---------|-----------------------|
-| `page`  | number | 1       | Page number           |
+| `page`  | number | 1       | Page number (max 1,000,000) |
 | `limit` | number | 20      | Items per page (1-100)|
 
 ---
@@ -388,7 +399,7 @@ List parsed reports (paginated, newest report-end-date first).
 
 | Param    | Type   | Default | Description                       |
 |----------|--------|---------|-----------------------------------|
-| `page`   | number | 1       | Page number                       |
+| `page`   | number | 1       | Page number (max 1,000,000)       |
 | `limit`  | number | 20      | Items per page (1-100)            |
 | `domain` | string | none    | Filter by reporting policy domain |
 
