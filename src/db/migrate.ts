@@ -20,9 +20,15 @@
  *     is a database originally provisioned by `db:push` and mark all
  *     known migrations as applied without running them. New migrations
  *     added after this point apply normally.
- *   - **Single-pass**: migrations apply in journal order; no
- *     concurrent runs (assumes a single replica per database, which is
- *     enforced today by the in-memory queue anyway, see #20).
+ *   - **Single-pass, concurrency-safe**: migrations apply in journal
+ *     order while holding a Postgres advisory lock (#175). Every app
+ *     container runs this migrator on start, and nothing limits the app to
+ *     one replica (the queue claims rows with FOR UPDATE SKIP LOCKED), so
+ *     `--scale app=2`, rolling deploys or crash-loop restarts can start two
+ *     runs at once. Without the lock they raced even on the bootstrap
+ *     `CREATE TABLE IF NOT EXISTS` (a duplicate-key error in pg_type) and
+ *     one container crashed. Now the second run waits, then finds every
+ *     tag applied and does nothing.
  *   - **All-or-nothing per migration**: each SQL file runs inside a
  *     transaction; a failure mid-file rolls back and aborts the run.
  */
@@ -35,6 +41,12 @@ import { logger } from "../utils/logger.ts";
 
 const MIGRATIONS_DIR = join(import.meta.dir, "..", "..", "drizzle");
 const MIGRATIONS_TABLE = "__bunmail_migrations";
+
+/**
+ * Advisory-lock key for the migration run. `hashtext` of a namespaced
+ * name keeps it readable and unlikely to collide with any other lock.
+ */
+const MIGRATION_LOCK_KEY = "bunmail:migrations";
 
 interface JournalEntry {
   idx: number;
@@ -122,8 +134,41 @@ export async function runMigrations(databaseUrl?: string): Promise<{
   baselined: string[];
   alreadyApplied: string[];
 }> {
-  const sql = new SQL(databaseUrl ?? config.database.url);
+  /**
+   * One connection only: a session-level advisory lock belongs to the
+   * connection that took it. With a pool, the lock, the migrations and the
+   * unlock could each run on a different connection and protect nothing.
+   */
+  const sql = new SQL({ url: databaseUrl ?? config.database.url, max: 1 });
 
+  try {
+    /** Taken before the bootstrap CREATE TABLE, which is itself racy. */
+    logger.info("Acquiring migration lock (waits if another replica is migrating)");
+    await sql`SELECT pg_advisory_lock(hashtext(${MIGRATION_LOCK_KEY}))`;
+    try {
+      return await applyMigrations(sql);
+    } finally {
+      /** Best effort: if this fails (e.g. a broken connection), close()
+       *  below releases the lock anyway, and the original error wins. */
+      await sql`SELECT pg_advisory_unlock(hashtext(${MIGRATION_LOCK_KEY}))`.catch(
+        () => undefined,
+      );
+    }
+  } finally {
+    /** Closing the session also drops any lock it still holds. */
+    await sql.close();
+  }
+}
+
+/**
+ * The migration work itself. Must run while the caller holds the
+ * migration advisory lock, on that same single connection.
+ */
+async function applyMigrations(sql: SQL): Promise<{
+  applied: string[];
+  baselined: string[];
+  alreadyApplied: string[];
+}> {
   /** Bootstrap the migrations table itself if missing. */
   await sql`
     CREATE TABLE IF NOT EXISTS ${sql(MIGRATIONS_TABLE)} (
@@ -194,8 +239,6 @@ export async function runMigrations(databaseUrl?: string): Promise<{
 
     applied.push(entry.tag);
   }
-
-  await sql.close();
 
   if (applied.length > 0) {
     logger.info("Migrations applied", { count: applied.length, tags: applied });

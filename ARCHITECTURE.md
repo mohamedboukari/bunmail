@@ -638,7 +638,7 @@ Indexes: `UNIQUE (org_email, report_id)` (dedup hot-path), `(domain, date_end DE
 
 ### `__bunmail_migrations`
 
-System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table.
+System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table. The whole run holds a session-level advisory lock (`pg_advisory_lock(hashtext('bunmail:migrations'))`) on a single pinned connection (#175), so concurrent runs from several replicas serialize instead of racing.
 
 ### Relationships
 
