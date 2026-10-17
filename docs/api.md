@@ -393,6 +393,8 @@ Permanently delete every trashed inbound email. Returns `{ "success": true, "del
 
 DMARC aggregate (`rua`) reports parsed from inbound XML attachments. See [docs/dmarc-reports.md](dmarc-reports.md) for the ingest pipeline.
 
+> **Admin-only.** Reports cover every registered domain (sending IPs, volumes, authentication results), so a restricted key gets `403 ADMIN_REQUIRED`, like `/api/v1/domains` and `/api/v1/inbound`.
+
 #### `GET /api/v1/dmarc-reports`
 
 List parsed reports (paginated, newest report-end-date first).
@@ -419,7 +421,7 @@ Get a single report with its per-source-IP records and computed alignment totals
 
 All API key endpoints are prefixed with `/api/v1/api-keys`.
 
-> **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains` and `/api/v1/inbound`. `is_admin` is shown in responses but is **not settable via the API**, only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
+> **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains`, `/api/v1/inbound` and `/api/v1/dmarc-reports`. `is_admin` is shown in responses but is **not settable via the API**, only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
 
 #### `POST /api/v1/api-keys`
 
