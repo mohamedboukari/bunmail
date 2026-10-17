@@ -264,8 +264,9 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Timeout** | 10 seconds per request |
 | **Fire-and-forget enqueue** | `dispatchEvent` returns synchronously after INSERTing rows; the actual POST happens on the worker tick |
 | **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
-| **Crash recovery** | None needed: claim advances `next_attempt_at` by 30s during the in-flight attempt; if the worker crashes, the row becomes claimable again automatically |
-| **Headers** | `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event` |
+| **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
+| **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
+| **Headers** | `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
 | **Signing** | Re-computed per attempt with a fresh timestamp so a 6-hour-old retry still passes the consumer's freshness window |
 
 ### Delivery row lifecycle
@@ -328,7 +329,7 @@ HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once
 INSERTs one `pending` row at `next_attempt_at = now()`.
 
 #### `claimDueDeliveries(n, now?): Promise<Array<...>>`
-Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED`. Inactive webhooks' rows are flipped to `failed` rather than delivered.
+Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED` and increments their `attempts` (each row's returned `attempts` is the count before this attempt). Inactive webhooks' rows are flipped to `failed` rather than delivered, and so are rows over `MAX_DELIVERY_ATTEMPTS` (attempts that never reached `recordAttempt` because the process died).
 
 #### `recordAttempt({ deliveryId, outcome, priorAttempts, now? }): Promise<void>`
 Persists the result of one HTTP attempt: `delivered` on 2xx, reschedule per the backoff table on failure, `failed` once the cap is hit.

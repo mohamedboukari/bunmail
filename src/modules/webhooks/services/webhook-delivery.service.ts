@@ -76,6 +76,58 @@ const ATTEMPT_LOCK_MS = 30_000;
  *  well over typical and still cheap to store. */
 const RESPONSE_PREVIEW_LIMIT = 2048;
 
+/**
+ * Most bytes of a response body ever read. Reading stops (and the stream
+ * is cancelled) once this much has arrived: enough for the 2 KB preview
+ * even with multi-byte characters. The receiver is untrusted, so reading
+ * the whole body would let it fill the worker's memory.
+ */
+const RESPONSE_READ_LIMIT_BYTES = 8 * 1024;
+
+/**
+ * Builds the stored preview from at most `RESPONSE_READ_LIMIT_BYTES` of the
+ * body, then cancels the stream. The response must have been fetched with
+ * `decompress: false`: Bun inflates a compressed body in native code
+ * whatever JavaScript reads (a 0.5 MB gzip response cost about 1 GB of
+ * memory in testing), so the body is never decompressed at all. A body
+ * the receiver encoded anyway is not shown: decoding even a slice of it
+ * would mean running a decompressor on attacker input.
+ */
+async function readBodyPreview(response: Response): Promise<string | null> {
+  if (!response.body) return null;
+
+  const encoding = (response.headers.get("content-encoding") ?? "").trim().toLowerCase();
+  if (encoding !== "" && encoding !== "identity") {
+    await response.body.cancel().catch(() => undefined);
+    const label = encoding.replace(/[^a-z0-9, -]/g, "").slice(0, 40);
+    return `[${label}-encoded response body not shown]`;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < RESPONSE_READ_LIMIT_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      /** Keep only what is still needed: a single chunk can be large. */
+      const needed = value.subarray(0, RESPONSE_READ_LIMIT_BYTES - total);
+      chunks.push(needed);
+      total += needed.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return (
+    new TextDecoder()
+      .decode(Buffer.concat(chunks))
+      /** Postgres jsonb rejects NUL, and the preview is stored as jsonb. */
+      .replaceAll("\u0000", "")
+      .slice(0, RESPONSE_PREVIEW_LIMIT)
+      .toWellFormed()
+  );
+}
+
 interface DeliveryEnvelope {
   event: WebhookEventType;
   /** ISO string: the time the event was *raised*, not the time it was
@@ -126,10 +178,12 @@ export function nextAttemptAt(attempts: number, now: Date = new Date()): Date | 
  * never see the same row, same guarantee as the email queue claim
  * from #20.
  *
- * The claim does NOT mutate `attempts`: that gets bumped by
- * `recordAttempt` after the actual HTTP call lands. We only need the
- * lock-and-mark-in-progress semantics here, and `status` flips from
- * `pending` to itself (a no-op-but-locks-the-row update). Drizzle
+ * The claim counts the attempt (`attempts + 1`) before it is made, and
+ * returns the count from before the claim; `recordAttempt` then writes
+ * that same `prior + 1`. Counting at claim time means an attempt that
+ * crashes the process (before `recordAttempt` runs) still counts toward
+ * the retry limit, so a delivery that kills the worker cannot be retried
+ * forever; once the limit is exceeded the claim marks it `failed`. Drizzle
  * doesn't support a literal SELECT FOR UPDATE in the bun-sql adapter
  * cleanly without an UPDATE wrapper, and we want exclusive locks so
  * concurrent workers' SKIP LOCKED actually skips.
@@ -191,66 +245,97 @@ export async function claimDueDeliveries(
    *  before `recordAttempt` runs, the lock expires after ATTEMPT_LOCK_MS
    *  and the row becomes claimable again: natural crash recovery
    *  with no explicit `recoverInterrupted` step needed. */
-  const claimed = await db
-    .update(webhookDeliveries)
-    .set({
-      nextAttemptAt: new Date(now.getTime() + ATTEMPT_LOCK_MS),
-      updatedAt: now,
-    })
-    .where(inArray(webhookDeliveries.id, pickIds))
-    .returning();
+  /**
+   * The claim and its follow-up updates run in one transaction: if any
+   * statement fails, the `attempts` increment rolls back instead of
+   * costing every claimed row an attempt, and the claimed rows stay
+   * locked until commit, so a concurrent replay or `recordAttempt` waits
+   * rather than being overwritten by the updates below.
+   */
+  return db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(webhookDeliveries)
+      .set({
+        nextAttemptAt: new Date(now.getTime() + ATTEMPT_LOCK_MS),
+        attempts: sql`${webhookDeliveries.attempts} + 1`,
+        updatedAt: now,
+      })
+      .where(inArray(webhookDeliveries.id, pickIds))
+      .returning();
 
-  if (claimed.length === 0) return [];
+    if (claimed.length === 0) return [];
 
-  /** Join the webhook's url + secret per row. We need both for delivery
-   *  but they live on the parent table. One round-trip via inArray. */
-  const webhookIds = [...new Set(claimed.map((r) => r.webhookId))];
-  const hooks = await db
-    .select({
-      id: webhooks.id,
-      url: webhooks.url,
-      secret: webhooks.secret,
-      isActive: webhooks.isActive,
-    })
-    .from(webhooks)
-    .where(inArray(webhooks.id, webhookIds));
-  const hookById = new Map(hooks.map((h) => [h.id, h]));
+    /** Join the webhook's url + secret per row. We need both for delivery
+     *  but they live on the parent table. One round-trip via inArray. */
+    const webhookIds = [...new Set(claimed.map((r) => r.webhookId))];
+    const hooks = await tx
+      .select({
+        id: webhooks.id,
+        url: webhooks.url,
+        secret: webhooks.secret,
+        isActive: webhooks.isActive,
+      })
+      .from(webhooks)
+      .where(inArray(webhooks.id, webhookIds));
+    const hookById = new Map(hooks.map((h) => [h.id, h]));
 
-  /** Drop deliveries whose webhook was deactivated after enqueue. We
-   *  mark them `failed` rather than send to a hook the operator has
-   *  paused: that's the operator's stated intent. */
-  const live: typeof claimed = [];
-  for (const row of claimed) {
-    const hook = hookById.get(row.webhookId);
-    if (!hook || !hook.isActive) {
-      await db
-        .update(webhookDeliveries)
-        .set({
-          status: "failed",
-          lastError: "webhook inactive at delivery time",
-          updatedAt: now,
-        })
-        .where(eq(webhookDeliveries.id, row.id));
-      logger.warn("Webhook delivery cancelled: webhook inactive", {
-        deliveryId: row.id,
-        webhookId: row.webhookId,
-      });
-      continue;
+    /** Drop deliveries whose webhook was deactivated after enqueue. We
+     *  mark them `failed` rather than send to a hook the operator has
+     *  paused: that's the operator's stated intent. */
+    const live: typeof claimed = [];
+    for (const row of claimed) {
+      /** Over the limit only if earlier attempts never reached
+       *  `recordAttempt` (the process died mid-attempt): stop retrying. */
+      if (row.attempts > MAX_DELIVERY_ATTEMPTS) {
+        await tx
+          .update(webhookDeliveries)
+          .set({
+            status: "failed",
+            attempts: MAX_DELIVERY_ATTEMPTS,
+            lastError: "attempt limit reached: earlier attempts were interrupted",
+            updatedAt: now,
+          })
+          .where(eq(webhookDeliveries.id, row.id));
+        logger.warn("Webhook delivery failed: attempts interrupted", {
+          deliveryId: row.id,
+          webhookId: row.webhookId,
+        });
+        continue;
+      }
+      const hook = hookById.get(row.webhookId);
+      if (!hook || !hook.isActive) {
+        await tx
+          .update(webhookDeliveries)
+          .set({
+            status: "failed",
+            /** No request is made: undo the claim's increment. */
+            attempts: row.attempts - 1,
+            lastError: "webhook inactive at delivery time",
+            updatedAt: now,
+          })
+          .where(eq(webhookDeliveries.id, row.id));
+        logger.warn("Webhook delivery cancelled: webhook inactive", {
+          deliveryId: row.id,
+          webhookId: row.webhookId,
+        });
+        continue;
+      }
+      live.push(row);
     }
-    live.push(row);
-  }
 
-  return live.map((row) => {
-    const hook = hookById.get(row.webhookId)!;
-    return {
-      id: row.id,
-      webhookId: row.webhookId,
-      event: row.event,
-      payload: row.payload,
-      attempts: row.attempts,
-      url: hook.url,
-      secret: hook.secret,
-    };
+    return live.map((row) => {
+      const hook = hookById.get(row.webhookId)!;
+      return {
+        id: row.id,
+        webhookId: row.webhookId,
+        event: row.event,
+        payload: row.payload,
+        /** Count before this attempt (the claim already added it). */
+        attempts: row.attempts - 1,
+        url: hook.url,
+        secret: hook.secret,
+      };
+    });
   });
 }
 
@@ -308,8 +393,13 @@ export async function performHttpAttempt(opts: {
         "X-BunMail-Signature": signature,
         "X-BunMail-Timestamp": sigTimestamp,
         "X-BunMail-Event": opts.event,
+        /** Ask for an uncompressed reply, so honest receivers' previews
+         *  can be shown (see readBodyPreview). */
+        "Accept-Encoding": "identity",
       },
       body: opts.body,
+      /** Never inflate the untrusted body (Bun-specific option). */
+      decompress: false,
       /**
        * Never follow redirects (#128): a 3xx `Location` into an internal
        * address (169.254.169.254, 127.0.0.1, …) would bypass the pre-fetch
@@ -321,8 +411,7 @@ export async function performHttpAttempt(opts: {
 
     let bodyPreview: string | null = null;
     try {
-      const text = await response.text();
-      bodyPreview = text.slice(0, RESPONSE_PREVIEW_LIMIT);
+      bodyPreview = await readBodyPreview(response);
     } catch {
       /** Body read can fail (already-consumed, network reset). Not
        *  fatal: the status code is the load-bearing signal. */
