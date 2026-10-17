@@ -73,6 +73,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 ```
 src/pages/
 ├── pages.plugin.tsx          ← Plugin with all routes + session auth
+├── session.ts                ← Session cookie sign/validate (pure, unit-tested)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── layouts/
 │   └── base.tsx              ← HTML shell, Tailwind, sidebar nav

@@ -1,6 +1,6 @@
 import { Elysia, t } from "elysia";
 import { html } from "@elysiajs/html";
-import { createHmac, timingSafeEqual, randomBytes } from "crypto";
+import { timingSafeEqual, randomBytes } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { redactEmail } from "../utils/redact.ts";
@@ -34,6 +34,11 @@ import { InboundDetailPage } from "./routes/inbound-detail.tsx";
 import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
 import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 import { SuppressionsPage } from "./routes/suppressions.tsx";
+import {
+  createSessionCookie,
+  validateSessionCookie,
+  SESSION_MAX_AGE,
+} from "./session.ts";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -72,52 +77,6 @@ function parseSenderList(input: string | undefined): string[] {
 }
 
 /* ─── Session Helpers ─── */
-
-/** Max session age in seconds (24 hours) */
-const SESSION_MAX_AGE = 86400;
-
-/**
- * Creates a signed session cookie value.
- * Format: `<timestamp>.<hmac_hex>` where timestamp is Unix epoch (seconds).
- */
-function createSessionCookie(): string {
-  const timestamp = Math.floor(Date.now() / 1000);
-  const hmac = createHmac("sha256", config.dashboard.sessionSecret)
-    .update(String(timestamp))
-    .digest("hex");
-  return `${timestamp}.${hmac}`;
-}
-
-/**
- * Validates a session cookie value.
- * Recomputes HMAC and checks timestamp is within 24h.
- *
- * @returns true if the session is valid
- */
-function validateSessionCookie(cookie: string): boolean {
-  const dotIndex = cookie.indexOf(".");
-  if (dotIndex === -1) return false;
-
-  const timestamp = cookie.substring(0, dotIndex);
-  const providedHmac = cookie.substring(dotIndex + 1);
-
-  /** Check timestamp is a valid number and within 24h */
-  const ts = parseInt(timestamp, 10);
-  if (isNaN(ts)) return false;
-
-  const now = Math.floor(Date.now() / 1000);
-  if (now - ts > SESSION_MAX_AGE) return false;
-
-  /** Recompute HMAC and compare with timing-safe comparison */
-  const expectedHmac = createHmac("sha256", config.dashboard.sessionSecret)
-    .update(timestamp)
-    .digest("hex");
-
-  /** Both must be the same length for timingSafeEqual */
-  if (providedHmac.length !== expectedHmac.length) return false;
-
-  return timingSafeEqual(Buffer.from(providedHmac), Buffer.from(expectedHmac));
-}
 
 /**
  * Builds the shared `bm_session` cookie attributes (#133).
@@ -435,7 +394,7 @@ export const pagesPlugin = new Elysia({
       logger.info("Dashboard login successful", { ip });
 
       /** Set session cookie: HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
-      const sessionValue = createSessionCookie();
+      const sessionValue = createSessionCookie(config.dashboard.sessionSecret);
       set.headers["set-cookie"] =
         `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
       set.status = 302;
@@ -483,7 +442,10 @@ export const pagesPlugin = new Elysia({
 
     /** Check session cookie */
     const sessionCookie = getSessionCookie(request);
-    if (!sessionCookie || !validateSessionCookie(sessionCookie)) {
+    if (
+      !sessionCookie ||
+      !validateSessionCookie(sessionCookie, config.dashboard.sessionSecret)
+    ) {
       logger.debug("Dashboard session invalid, redirecting to login");
       set.status = 302;
       set.headers["location"] = "/dashboard/login";
