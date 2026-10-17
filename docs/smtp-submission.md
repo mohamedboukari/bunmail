@@ -41,6 +41,7 @@ The password is treated as the API key: SHA-256 hashed and looked up exactly lik
 The submitted message is parsed and mapped to the same fields the REST send API accepts, then handed to `createEmail`, so it flows through the identical queue, retry, DKIM-signing, suppression, and webhook machinery as an API send.
 
 - **From / To / Cc / Reply-To / Subject / HTML / Text**: mapped from the message. `Reply-To` (#169) is a header only: it never adds a recipient or affects BCC detection.
+- **Address length.** Header addresses longer than 254 characters (RFC 5321) are dropped at ingestion with a warning, so an over-long or pathological address never reaches storage or the recipient parser.
 - **Delivery = the envelope.** Only `RCPT TO` recipients (at most 50 per transaction) are delivered. `To`/`Cc` keep only addresses that are also envelope recipients; an address that appears only in a header is neither delivered nor shown. If the headers name recipients but none of them was sent in `RCPT TO`, the message is rejected (`550`) instead of showing the envelope recipients in `To`, which would expose blind recipients to each other.
 - **BCC**: envelope recipients (`RCPT TO`) that don't appear in the visible `To`/`Cc` headers are treated as blind recipients: delivered, but never rendered in the message headers.
 

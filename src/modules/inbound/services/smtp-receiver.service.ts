@@ -12,6 +12,7 @@ import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
 import { config } from "../../../config.ts";
+import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 
@@ -35,7 +36,10 @@ const MAX_RECIPIENTS_PER_TRANSACTION = 50;
  * We don't enforce full RFC 5321 here because real-world senders are
  * varied and a strict regex would drop legitimate mail.
  */
-const BASIC_ADDRESS_RE = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+/** Linear form (domain labels exclude the dot, so nothing overlaps); see
+ *  `EMAIL_RE` in src/utils/recipients.ts for why the previous shape
+ *  backtracked quadratically. */
+const BASIC_ADDRESS_RE = /^[^\s@<>]+@[^\s@<>.]+(?:\.[^\s@<>.]+)+$/;
 
 /** Reference to the running SMTP server instance */
 let server: SMTPServer | null = null;
@@ -171,7 +175,7 @@ export function start(): void {
         return callback();
       }
 
-      if (!BASIC_ADDRESS_RE.test(value)) {
+      if (value.length > MAX_ADDRESS_LENGTH || !BASIC_ADDRESS_RE.test(value)) {
         logger.warn("SMTP MAIL FROM rejected: malformed address", {
           address: redactEmail(value),
         });

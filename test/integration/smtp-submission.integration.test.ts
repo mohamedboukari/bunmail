@@ -133,6 +133,26 @@ describe("SMTP submission: authentication", () => {
 });
 
 describe("SMTP submission: recipient handling", () => {
+  test("drops a header address longer than 254 characters instead of storing it", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+    const overLong = "a".repeat(300) + "@example.org";
+
+    await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to: "user@example.org",
+      cc: overLong,
+      subject: "long cc",
+      text: "hi",
+      envelope: { from: "hello@unregistered.test", to: ["user@example.org", overLong] },
+    });
+
+    const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toAddress).toBe("user@example.org");
+    expect(rows[0]!.cc).toBeNull();
+    expect(rows[0]!.bcc).toBeNull();
+  });
+
   test("only envelope recipients are delivered, whatever the To header lists", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 

@@ -27,8 +27,23 @@ export interface Recipient {
  * deliberately stay lenient: strict-on-our-side rejection just
  * trades one footgun (invalid mail accepted) for another (valid mail
  * refused).
+ *
+ * Linear by construction: the domain is dot-separated labels whose class
+ * excludes the dot, so no two parts of the pattern can match the same
+ * characters. The previous form, `[^...]+\.[^...]+` with dots allowed on
+ * both sides, backtracked quadratically on a malformed piece such as
+ * `a@....@` (about 7 s at 100 KB), and the SMTP submission path fed it
+ * uncapped header addresses.
  */
-const EMAIL_RE = /^[^\s@,<>"]+@[^\s@,<>"]+\.[^\s@,<>"]+$/;
+const EMAIL_RE = /^[^\s@,<>"]+@[^\s@,<>".]+(?:\.[^\s@,<>".]+)+$/;
+
+/**
+ * Longest address accepted anywhere (RFC 5321 section 4.5.3.1.3: 254
+ * characters including the angle brackets). Checked before any regex so a
+ * pathological piece is never scanned at length. Shared with the SMTP
+ * submission and inbound servers.
+ */
+export const MAX_ADDRESS_LENGTH = 254;
 
 /**
  * Parses the three raw fields off an email row into a flat list of
@@ -60,7 +75,7 @@ export function parseRecipients(
     if (!raw) return;
     for (const piece of raw.split(",")) {
       const trimmed = piece.trim();
-      if (!trimmed) continue;
+      if (!trimmed || trimmed.length > MAX_ADDRESS_LENGTH) continue;
       if (!EMAIL_RE.test(trimmed)) continue;
       const lower = trimmed.toLowerCase();
       if (byLower.has(lower)) continue;

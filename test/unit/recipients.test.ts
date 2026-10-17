@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import {
+  MAX_ADDRESS_LENGTH,
   parseRecipients,
   groupByMx,
   type MxResolver,
@@ -177,5 +178,72 @@ describe("groupByMx", () => {
     const { groups, failures } = await groupByMx([], async () => "mx.unused");
     expect(groups.size).toBe(0);
     expect(failures).toEqual([]);
+  });
+});
+
+describe("parseRecipients: address length and shape limits", () => {
+  test("accepts an address exactly at the RFC 5321 limit and drops a longer one", () => {
+    const domain = "@example.org";
+    const atLimit = "a".repeat(MAX_ADDRESS_LENGTH - domain.length) + domain;
+    expect(parseRecipients(atLimit, null, null)).toHaveLength(1);
+    expect(parseRecipients("a" + atLimit, null, null)).toHaveLength(0);
+  });
+
+  test("still accepts common shapes", () => {
+    const list = "first.last+tag@mail.example.co.uk, x_y@sub-domain.example, u@h.io";
+    expect(parseRecipients(list, null, null).map((r) => r.address)).toEqual([
+      "first.last+tag@mail.example.co.uk",
+      "x_y@sub-domain.example",
+      "u@h.io",
+    ]);
+  });
+
+  test("rejects empty domain labels and dotless domains", () => {
+    expect(parseRecipients("a@b..c, a@b., a@.b, a@localhost", null, null)).toHaveLength(
+      0,
+    );
+  });
+});
+
+/**
+ * The previous `EMAIL_RE` backtracked quadratically on a malformed piece
+ * with many dots (about 1 s at 40 KB, 7 s at 100 KB). Pieces are now
+ * length-capped before the regex runs, and the regex is linear, so even an
+ * uncapped caller cannot stall the event loop. The budget is loose on
+ * purpose (the old regex took 1 to 10 s on these inputs, the new one takes
+ * milliseconds) so CI load never makes it flaky; a warm-up call keeps JIT
+ * start-up out of the measurement.
+ */
+describe("parseRecipients: bounded time on adversarial input", () => {
+  const BUDGET_MS = 1_000;
+
+  function timed(to: string): number {
+    parseRecipients("warm@example.org", null, null);
+    const start = performance.now();
+    parseRecipients(to, null, null);
+    return performance.now() - start;
+  }
+
+  test.each([
+    ["dot run", () => "a@" + ".".repeat(100_000) + "@"],
+    ["dot-spaced", () => "a@" + "xxxxxxxxx.".repeat(10_000) + "@"],
+    ["b. repeats", () => "a@" + "b.".repeat(50_000) + "@"],
+    [
+      "fifty 16 KB pieces",
+      () =>
+        Array(50)
+          .fill("a@" + ".".repeat(16_000) + "@")
+          .join(","),
+    ],
+  ])("%s", (_name, build) => {
+    expect(timed(build())).toBeLessThan(BUDGET_MS);
+  });
+
+  test("a 10 MB benign recipient list stays fast", () => {
+    const list = Array.from({ length: 400_000 }, (_, i) => `user${i}@example.org`).join(
+      ",",
+    );
+    expect(list.length).toBeGreaterThan(8_000_000);
+    expect(timed(list)).toBeLessThan(2_000);
   });
 });
