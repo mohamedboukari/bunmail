@@ -110,8 +110,11 @@ USER bun
 EXPOSE 3000 2525
 
 # Health check: Docker & orchestrators use this to determine container health
+# Probe the port the app actually listens on (PORT, default 3000), #206.
+# Shell-form CMD runs in the container, so it sees the same PORT the app
+# reads from env_file / environment. Assumes HOST is 0.0.0.0 or loopback.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun -e "const r = await fetch('http://localhost:3000/health'); if (!r.ok) process.exit(1);"
+  CMD bun -e "const r = await fetch('http://localhost:' + (process.env.PORT || '3000') + '/health'); if (!r.ok) process.exit(1);"
 
 # Run migrations via the bun-native migrator (no drizzle-kit needed),
 # then start the server. The migrator is idempotent and auto-baselines
