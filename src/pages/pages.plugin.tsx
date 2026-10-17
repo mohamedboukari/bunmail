@@ -610,13 +610,18 @@ export const pagesPlugin = new Elysia({
         apiKeyId: t.String(),
         from: t.String({ format: "email" }),
         to: t.String({ format: "email" }),
-        cc: t.Optional(t.String()),
-        bcc: t.Optional(t.String()),
+        /**
+         * Same header-injection guard as the REST `sendEmailDto` (#133):
+         * length cap + CR/LF rejected. The dashboard path previously took
+         * cc/bcc/subject unrestricted (#202).
+         */
+        cc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
+        bcc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
         /** Same guard as the API DTO: length cap + CR/LF rejected (#169). */
         replyTo: t.Optional(
           t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" }),
         ),
-        subject: t.String({ maxLength: 500 }),
+        subject: t.String({ maxLength: 500, pattern: "^[^\\u000d\\u000a]*$" }),
         html: t.Optional(t.String()),
         text: t.Optional(t.String()),
       }),

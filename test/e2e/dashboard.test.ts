@@ -431,6 +431,50 @@ describe("Dashboard E2E", () => {
       expect(location).toMatch(/[?&]reveal=[a-f0-9]{64}\b/);
     });
 
+    describe("POST /dashboard/send header-injection guard (#202)", () => {
+      /** Form-encodes a send with one field overridden. */
+      const sendForm = (overrides: Record<string, string>): Promise<Response> =>
+        app.handle(
+          new Request("http://localhost/dashboard/send", {
+            method: "POST",
+            headers: {
+              cookie: sessionCookie,
+              "content-type": "application/x-www-form-urlencoded",
+              origin: "http://localhost",
+            },
+            body: new URLSearchParams({
+              apiKeyId: "key_test123",
+              from: "hello@example.com",
+              to: "user@example.com",
+              subject: "hi",
+              text: "body",
+              ...overrides,
+            }).toString(),
+          }),
+        );
+
+      test("a clean payload passes validation and reaches the handler", async () => {
+        /** The mocked key list is empty, so the handler redirects: proof
+         *  validation didn't reject it. */
+        const response = await sendForm({ cc: "a@example.com, b@example.com" });
+        expect(response.status).toBe(302);
+      });
+
+      for (const field of ["cc", "bcc", "subject", "replyTo"]) {
+        test(`rejects CR/LF in ${field} with 422`, async () => {
+          const response = await sendForm({
+            [field]: "a@example.com\r\nBcc: victim@example.com",
+          });
+          expect(response.status).toBe(422);
+        });
+      }
+
+      test("rejects an over-long cc with 422", async () => {
+        const response = await sendForm({ cc: "a@example.com,".repeat(200) });
+        expect(response.status).toBe(422);
+      });
+    });
+
     test("reveal token shows the raw key exactly once, then is spent (#132)", async () => {
       /** Create → capture the reveal token from the redirect. */
       const created = await app.handle(
