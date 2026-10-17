@@ -23,7 +23,7 @@ A successfully parsed-and-stored DMARC report **short-circuits** the generic inb
 
 [`looksLikeDmarcReport`](../src/modules/dmarc-reports/services/dmarc-parser.service.ts) is a cheap pre-filter that runs against the raw RFC 5322 bytes before we attempt the (more expensive) XML parse. Any of:
 
-- **Sender** matches `noreply@enterprise.protection.outlook.com`, `noreply-dmarc-support@google.com`, `dmarcreport@yahoo.com`, etc.
+- **Sender** is a known reporter. The address is parsed from the `From:` header first (the `<...>` part wins over any display name) and matched by exact address (`noreply-dmarc-support@google.com`, `dmarcreport@yahoo.com`), by domain or subdomain (`enterprise.protection.outlook.com`), or by the whole local part (`dmarc-no-reply`, `dmarc-support`). These are not substring matches: `x@enterprise.protection.outlook.com.evil.example` or a reporter address quoted only in a display name do not qualify.
 - **Subject** mentions `Report Domain:` or `DMARC` aggregate language.
 - **Content-Type** is `application/zip` / `multipart/report` **and** the body mentions DMARC.
 
