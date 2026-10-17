@@ -42,6 +42,9 @@ export interface SubmissionMessageParts {
   ccHeader: string[];
   /** Envelope `RCPT TO` addresses (the actual delivery set). */
   envelopeRecipients: string[];
+  /** Addresses parsed from the `Reply-To:` header, if any (#169). Optional so
+   *  callers that predate it keep compiling. */
+  replyToHeader?: string[];
   subject?: string;
   html?: string;
   text?: string;
@@ -117,6 +120,8 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     to: toField,
     cc: cc || undefined,
     bcc: bcc || undefined,
+    /** Reply-To is a header only: it never affects delivery or BCC detection. */
+    replyTo: dedupeJoin(parts.replyToHeader ?? []) || undefined,
     subject: parts.subject ?? "",
     html: parts.html,
     text: parts.text,

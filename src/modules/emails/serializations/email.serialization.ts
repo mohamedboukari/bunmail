@@ -11,6 +11,8 @@ export interface SerializedEmail {
   to: string;
   cc: string | null;
   bcc: string | null;
+  /** Reply-To address(es), comma-separated (#169) */
+  replyTo: string | null;
   subject: string;
   html: string | null;
   text: string | null;
@@ -36,6 +38,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     to: email.toAddress,
     cc: email.cc,
     bcc: email.bcc,
+    replyTo: email.replyTo,
     subject: email.subject,
     html: email.html,
     text: email.textContent,

@@ -30,6 +30,13 @@ export const sendEmailDto = t.Object({
   cc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
   bcc: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
 
+  /**
+   * Where replies go instead of `from` (e.g. send as no-reply@, receive at
+   * support@). Comma-separated list like `cc`: RFC 5322 allows several
+   * Reply-To addresses. Same length cap and CR/LF rejection (#169).
+   */
+  replyTo: t.Optional(t.String({ maxLength: 1000, pattern: "^[^\\u000d\\u000a]*$" })),
+
   /** Required when not using a template. CR/LF rejected (header injection). */
   subject: t.Optional(t.String({ maxLength: 500, pattern: "^[^\\u000d\\u000a]*$" })),
   html: t.Optional(t.String({ maxLength: MAX_BODY_LENGTH })),

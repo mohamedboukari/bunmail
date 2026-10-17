@@ -81,6 +81,7 @@ const mockEmail = {
   toAddress: "user@test.com",
   cc: null,
   bcc: null,
+  replyTo: null,
   subject: "Test",
   html: "<p>Test</p>",
   textContent: "Test",
@@ -102,8 +103,12 @@ const mockTrashedEmail = {
 };
 
 /* ─── Mock email service ─── */
+/** Held so tests can assert what the route passed to the service. */
+const createEmailMock = mock((_input: unknown, _apiKeyId: string) =>
+  Promise.resolve(mockEmail),
+);
 void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
-  createEmail: mock(() => Promise.resolve(mockEmail)),
+  createEmail: createEmailMock,
   listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   listAllEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   getEmailById: mock((id: string) =>
@@ -247,6 +252,53 @@ describe("Emails API E2E", () => {
       /** Serialized response exposes the ingress channel (#137). */
       expect(body.data[0]!.source).toBe("api");
       expect(body.pagination.total).toBe(1);
+    });
+
+    test("passes replyTo through to the service and returns it (#169)", async () => {
+      createEmailMock.mockClear();
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/send", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({
+            from: "no-reply@example.com",
+            to: "user@test.com",
+            replyTo: "support@example.com",
+            subject: "Test",
+            text: "hi",
+          }),
+        }),
+      );
+      expect(response.status).toBe(200);
+      expect(createEmailMock).toHaveBeenCalledTimes(1);
+      expect(createEmailMock.mock.calls[0]![0]).toMatchObject({
+        replyTo: "support@example.com",
+      });
+      const body = await readJson<{ data: Record<string, unknown> }>(response);
+      expect(body.data).toHaveProperty("replyTo");
+    });
+
+    test("rejects a CR/LF in replyTo with 422 (#169)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/emails/send", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer test_key",
+          },
+          body: JSON.stringify({
+            from: "no-reply@example.com",
+            to: "user@test.com",
+            replyTo: "a@example.com\r\nBcc: victim@example.com",
+            subject: "Test",
+            text: "hi",
+          }),
+        }),
+      );
+      expect(response.status).toBe(422);
     });
 
     test("accepts ?source= filter (#137)", async () => {

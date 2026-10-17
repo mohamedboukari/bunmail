@@ -33,6 +33,8 @@ export interface SendEmailInput {
   to: string;
   cc?: string;
   bcc?: string;
+  /** Reply-To address(es), comma-separated (#169) */
+  replyTo?: string;
   subject?: string;
   html?: string;
   text?: string;

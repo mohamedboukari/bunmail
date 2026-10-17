@@ -367,6 +367,52 @@ describe("sendMail: multi-MX (#87)", () => {
   });
 });
 
+describe("sendMail: Reply-To (#169)", () => {
+  test("sets the Reply-To header on every MX group's message", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+
+    await sendMail({
+      from: "no-reply@example.com",
+      to: "alice@gmail.com, bob@outlook.com",
+      replyTo: "support@example.com, sales@example.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(captured).toHaveLength(2);
+    for (const c of captured) {
+      expect(c.mailOptions.replyTo).toBe("support@example.com, sales@example.com");
+    }
+  });
+
+  test("is a header only: the envelope sender and recipients are unchanged", async () => {
+    await sendMail({
+      from: "no-reply@example.com",
+      to: "alice@gmail.com",
+      replyTo: "support@example.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    const envelope = asRecord(captured[0]!.mailOptions.envelope);
+    expect(envelope.from).toBe("no-reply@example.com");
+    expect(envelope.to).toEqual(["alice@gmail.com"]);
+    expect(captured[0]!.mailOptions.from).toBe("no-reply@example.com");
+  });
+
+  test("omits Reply-To when not provided", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(captured[0]!.mailOptions.replyTo).toBeUndefined();
+  });
+});
+
 describe("sendMail: per-group outcomes (#97)", () => {
   test("hard 5xx marks the group `failed` (terminal), not `retry`", async () => {
     mxResolver = (domain) =>

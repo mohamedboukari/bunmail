@@ -130,4 +130,21 @@ describe("SMTP submission: recipient handling", () => {
     expect(row!.toAddress).toBe("to@example.org");
     expect(row!.cc).toContain("cc@example.net");
   });
+
+  test("the Reply-To header is relayed, without becoming a recipient (#169)", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+
+    await transport(rawKey).sendMail({
+      from: "no-reply@unregistered.test",
+      to: "to@example.org",
+      replyTo: "support@example.net",
+      subject: "reply-to test",
+      text: "hi",
+    });
+
+    const [row] = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(row!.replyTo).toBe("support@example.net");
+    expect(row!.toAddress).toBe("to@example.org");
+    expect(row!.bcc).toBeNull();
+  });
 });

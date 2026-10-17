@@ -92,6 +92,8 @@ export async function sendMail(options: {
   to: string;
   cc?: string | null;
   bcc?: string | null;
+  /** Reply-To header (#169). Same on every MX group; not part of the envelope. */
+  replyTo?: string | null;
   subject: string;
   html?: string | null;
   text?: string | null;
@@ -144,6 +146,7 @@ export async function sendMail(options: {
         from: options.from,
         headerTo: options.to,
         headerCc: options.cc ?? null,
+        replyTo: options.replyTo ?? null,
         subject: options.subject,
         html: options.html ?? null,
         text: options.text ?? null,
@@ -248,6 +251,7 @@ async function sendToMxGroup(args: {
   from: string;
   headerTo: string;
   headerCc: string | null;
+  replyTo: string | null;
   subject: string;
   html: string | null;
   text: string | null;
@@ -273,6 +277,7 @@ async function sendToMxGroup(args: {
      *  envelope override below. */
     to: args.headerTo,
     cc: args.headerCc ?? undefined,
+    replyTo: args.replyTo ?? undefined,
     subject: args.subject,
     html: args.html ?? undefined,
     text: args.text ?? undefined,

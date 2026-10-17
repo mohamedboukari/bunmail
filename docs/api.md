@@ -67,6 +67,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `text`       | string | No       | Plain text body (max 5 MB)                   |
 | `cc`         | string | No       | Comma-separated CC recipients                |
 | `bcc`        | string | No       | Comma-separated BCC recipients               |
+| `replyTo`    | string | No       | Comma-separated Reply-To address(es): replies go here instead of `from` (#169). Header only; doesn't change the envelope sender. Returned as `replyTo` on email responses (`null` when unset). |
 | `templateId` | string | No       | Template ID (overrides subject/html/text)    |
 | `variables`  | object | No       | Key-value pairs for template rendering       |
 

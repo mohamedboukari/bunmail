@@ -101,6 +101,7 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
           <DetailField label="To" value={email.toAddress} />
           {!!email.cc && <DetailField label="CC" value={email.cc} />}
           {!!email.bcc && <DetailField label="BCC" value={email.bcc} />}
+          {!!email.replyTo && <DetailField label="Reply-To" value={email.replyTo} />}
           <DetailField label="Attempts" value={String(email.attempts)} />
           {!!email.lastError && (
             <DetailField label="Last Error" value={email.lastError} />

@@ -91,6 +91,10 @@ export const emails = pgTable(
     /** Blind carbon copy recipients (comma-separated, nullable) */
     bcc: text("bcc"),
 
+    /** Reply-To address(es), comma-separated (nullable). Header only: the
+     *  envelope sender is still `fromAddress` (#169). */
+    replyTo: text("reply_to"),
+
     /** Email subject line */
     subject: varchar("subject", { length: 500 }).notNull(),
 

@@ -427,6 +427,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | to_address    | varchar(255)   | NOT NULL                        |
 | cc            | text           | nullable                        |
 | bcc           | text           | nullable                        |
+| reply_to      | text           | nullable                        |
 | subject       | varchar(500)   | NOT NULL                        |
 | html          | text           | nullable                        |
 | text_content  | text           | nullable                        |

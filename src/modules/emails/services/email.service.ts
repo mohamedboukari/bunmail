@@ -157,6 +157,7 @@ export async function createEmail(
       toAddress: input.to,
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
+      replyTo: input.replyTo ?? null,
       subject,
       html: htmlContent,
       textContent,

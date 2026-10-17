@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Reply-To support (#169).** `POST /api/v1/emails/send` accepts an optional `replyTo` (comma-separated, length-capped, CR/LF rejected like `cc`/`bcc`), so mail can be sent as `no-reply@` with replies going to `support@`. Stored in a new nullable `emails.reply_to` column (migration `0013`, applied automatically on boot), set as the `Reply-To:` header on every MX group's message (the envelope sender is unchanged), and returned as `replyTo` on email responses. The SMTP submission server now relays an incoming `Reply-To:` header instead of dropping it. The dashboard shows Reply-To on the email detail page and adds a Reply-To field to the Send Email form.
+
 ### Changed
 
 - **CI now gates formatting, dead code, coverage and lint warnings (#171).** Three new `ci.yml` steps: `format:check`, `knip`, and `test:coverage`. knip's rules are now `"error"`; the 3 findings it had reported were removed (`getTrashStats()`, never called despite its comment, and the unused `NewEmailTombstone` / `NewWebhookDelivery` types). `bun run lint` adds `--deny-warnings`; the 17 test-only warnings (13 from oxlint 1.88's new `no-array-sort`) are fixed. **The coverage gate in `bunfig.toml` never worked:** Bun ignores singular `line`/`function` keys, and its `coverageThreshold` applies per file rather than to the total. It's replaced by `coverage:check`, which merges the unit and e2e LCOV files (each tier runs in its own process, since a combined run lets `mock.module` leak between files and breaks on Linux) and fails if line-weighted totals fall below 64% lines / 73% functions (merged baseline 65.27% / 74.67%). `docs/testing.md` previously cited ~62% and a 65/60 gate; it now documents the real numbers.

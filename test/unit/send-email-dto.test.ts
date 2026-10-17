@@ -26,7 +26,7 @@ describe("sendEmailDto: CRLF header-injection guard (#133)", () => {
     expect(check.Check({ ...base, cc: "a@example.com, b@example.com" })).toBe(true);
   });
 
-  for (const field of ["cc", "bcc", "subject"] as const) {
+  for (const field of ["cc", "bcc", "subject", "replyTo"] as const) {
     test(`rejects a CR in ${field}`, () => {
       expect(check.Check({ ...base, [field]: "x\r@example.com" })).toBe(false);
     });
@@ -44,5 +44,15 @@ describe("sendEmailDto: CRLF header-injection guard (#133)", () => {
 
   test("rejects an over-long cc value", () => {
     expect(check.Check({ ...base, cc: "a@example.com,".repeat(200) })).toBe(false);
+  });
+
+  test("accepts a comma-separated replyTo list (#169)", () => {
+    expect(
+      check.Check({ ...base, replyTo: "support@example.com, sales@example.com" }),
+    ).toBe(true);
+  });
+
+  test("rejects an over-long replyTo value (#169)", () => {
+    expect(check.Check({ ...base, replyTo: "a@example.com,".repeat(200) })).toBe(false);
   });
 });

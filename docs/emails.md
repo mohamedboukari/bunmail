@@ -15,6 +15,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `to_address`    | varchar(255)   | NOT NULL                | Recipient email address                     |
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
 | `bcc`           | text           | nullable                | Comma-separated BCC recipients              |
+| `reply_to`      | text           | nullable                | Comma-separated Reply-To address(es) (#169). Sets the `Reply-To:` header on every MX group's message; the envelope sender stays `from_address`. |
 | `subject`       | varchar(500)   | NOT NULL                | Email subject line                          |
 | `html`          | text           | nullable                | HTML body                                   |
 | `text_content`  | text           | nullable                | Plain text body                             |
