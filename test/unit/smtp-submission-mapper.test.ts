@@ -143,6 +143,32 @@ describe("buildSubmissionInput: recipients & BCC preservation", () => {
     expect(input.bcc).toBeUndefined();
   });
 
+  test("delivers only to envelope recipients: header-only addresses are dropped", () => {
+    /** One RCPT plus a long To header must not fan out past the envelope. */
+    const header = Array.from({ length: 1000 }, (_, i) => `victim${i}@example.org`);
+    const input = buildSubmissionInput({
+      fromHeader: "s@x.com",
+      toHeader: ["a@y.com", ...header],
+      ccHeader: ["c@z.com", "extra@example.org"],
+      envelopeRecipients: ["a@y.com", "c@z.com"],
+    });
+    expect(input.to).toBe("a@y.com");
+    expect(input.cc).toBe("c@z.com");
+    expect(input.bcc).toBeUndefined();
+  });
+
+  test("rejects headers that name recipients when none is in the envelope", () => {
+    /** Showing the envelope in To instead would expose blind recipients. */
+    expect(() =>
+      buildSubmissionInput({
+        fromHeader: "s@x.com",
+        toHeader: ["list@example.org"],
+        ccHeader: [],
+        envelopeRecipients: ["hidden1@example.com", "hidden2@example.com"],
+      }),
+    ).toThrow(/RCPT TO/);
+  });
+
   test("throws when there are no recipients at all", () => {
     expect(() =>
       buildSubmissionInput({
