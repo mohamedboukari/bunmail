@@ -291,6 +291,29 @@ certbot --nginx -d mail.yourdomain.com
 
 > **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, uncomment the submission port line in `docker-compose.yml`, and open port 587 to those apps only. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
 
+## Runs as non-root
+
+The container runs as the unprivileged `bun` user (uid 1000), not root (#167). The app only reads from disk, so a compromise can't modify its own code.
+
+**Low ports (25, 587).** A non-root process can only bind ports below 1024 when the kernel setting `net.ipv4.ip_unprivileged_port_start` is `0` inside the container. `docker-compose.yml` pins it:
+
+```yaml
+sysctls:
+  net.ipv4.ip_unprivileged_port_start: 0
+```
+
+It's scoped to the container's own network namespace and changes nothing on the host. Docker 20.10+ already defaults to it; the pin makes it explicit. On Kubernetes it's an allowed "safe" sysctl (set it in the pod's `securityContext.sysctls`). If your platform forbids it, run the servers on high ports inside the container instead (`SMTP_PORT=2525`, `SMTP_SUBMISSION_PORT=2587`) and publish them as `25:2525` and `587:2587`.
+
+**If an SMTP server can't bind its port, BunMail exits** with a message naming the port, the cause and the fix, for example:
+
+```
+Inbound SMTP can't listen on port 25 (EACCES: permission denied). BunMail runs as a non-root user: set the sysctl net.ipv4.ip_unprivileged_port_start=0 (pinned in docker-compose.yml) or use a port >= 1024.
+```
+
+The container then restart-loops visibly instead of staying "healthy" while no mail arrives.
+
+**TLS keys must be readable by uid 1000.** If you mount a certificate and private key for `SMTP_SUBMISSION_TLS_CERT` / `SMTP_SUBMISSION_TLS_KEY`, a key owned by root with mode `600` (or `640` with another group) can't be read and the submission server won't start. Make it readable by uid 1000, e.g. `chgrp 1000 privkey.pem && chmod 640 privkey.pem`, or copy it to a file owned by uid 1000. Keys used only by a TLS proxy in front of BunMail (stunnel, Caddy) are unaffected.
+
 ## Updating BunMail
 
 ```bash
@@ -298,6 +321,8 @@ cd /root/bunmail
 
 # Pull latest code (or rsync again for private repos)
 git pull
+# If you edited docker-compose.yml locally and git refuses to pull:
+#   git stash && git pull && git stash pop
 
 # Rebuild and restart
 docker compose down && docker compose up -d --build

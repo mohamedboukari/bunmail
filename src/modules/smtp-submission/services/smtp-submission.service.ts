@@ -18,6 +18,10 @@ import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
 import { recordOutcome, getAcceptedToday } from "./usage.service.ts";
+import {
+  describeListenError,
+  isListenError,
+} from "../../inbound/services/smtp-listen.ts";
 
 /**
  * The SMTP submission server (#120) lets any SMTP-capable app (Infisical,
@@ -448,6 +452,14 @@ export function start(portOverride?: number): void {
   });
 
   server.on("error", (err: Error) => {
+    /** Fail fast if the port can't be bound (#167); see smtp-listen.ts. */
+    if (isListenError(err)) {
+      logger.error(describeListenError("SMTP submission", port, err.code), {
+        port,
+        code: err.code,
+      });
+      process.exit(1);
+    }
     logger.error("SMTP submission server error", { error: err.message });
   });
 

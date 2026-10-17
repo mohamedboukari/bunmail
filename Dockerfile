@@ -98,6 +98,14 @@ COPY package.json bun.lock tsconfig.json drizzle.config.ts ./
 COPY src/ ./src/
 COPY drizzle/ ./drizzle/
 
+# Drop root (#167). `bun` (uid 1000) ships with the oven/bun image. The app
+# only READS from disk (source, migrations, optional TLS cert/key), so the
+# root-owned, world-readable /app files need no chown, and a compromised
+# process can't modify its own code. Binding 25/587 as non-root relies on
+# net.ipv4.ip_unprivileged_port_start=0, pinned in docker-compose.yml.
+# A mounted TLS private key must be readable by uid 1000.
+USER bun
+
 # Expose the HTTP API port and (optionally) the inbound SMTP port
 EXPOSE 3000 2525
 

@@ -139,6 +139,12 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 - The structured logger doesn't emit secrets: `key_hash`, `dkim_private_key`, and `SESSION_SECRET` are never logged.
 - Recipient PII in log records is redacted (`a***@example.com`) when `LOG_REDACT_PII=true` (#33). Default is `true` in production and `false` in development so dev logs stay debuggable. Webhook payloads still carry full addresses: consumers depend on them; only logs are masked.
 
+### Container
+
+- The image runs as the unprivileged `bun` user (uid 1000), not root (#167). An RCE in the app, `mailparser`, or the DMARC XML path (reachable from **unauthenticated** inbound mail) lands as an unprivileged user that can't modify the application's own files, which are root-owned and read-only to it.
+- Binding 25/587 without root uses the `net.ipv4.ip_unprivileged_port_start=0` sysctl, scoped to the container's network namespace, rather than `CAP_NET_BIND_SERVICE` or file capabilities on the `bun` binary.
+- An SMTP server that can't bind its port exits the process instead of logging and continuing, so a mail outage can't hide behind a passing HTTP health check.
+
 ## 5. What's NOT mitigated in code (operator responsibilities)
 
 These are the controls the codebase cannot apply for you. If you skip them, the threat model breaks.
