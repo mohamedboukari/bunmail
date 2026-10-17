@@ -431,6 +431,35 @@ describe("Dashboard E2E", () => {
       expect(location).toMatch(/[?&]reveal=[a-f0-9]{64}\b/);
     });
 
+    describe("dashboard pagination is clamped, never a 500 (#172)", () => {
+      /** Renders /dashboard/inbound and checks what reached the service. */
+      const expectListedWith = async (qs: string, expected: object): Promise<void> => {
+        const inbound =
+          await import("../../src/modules/inbound/services/inbound.service.ts");
+        const res = await app.handle(
+          new Request(`http://localhost/dashboard/inbound?${qs}`, {
+            headers: { cookie: sessionCookie },
+          }),
+        );
+        expect(res.status).toBe(200);
+        expect(inbound.listInboundEmails).toHaveBeenLastCalledWith(
+          expect.objectContaining(expected),
+        );
+      };
+
+      test("garbage page/limit fall back to defaults", async () => {
+        await expectListedWith("page=0&limit=abc", { page: 1, limit: 20 });
+        await expectListedWith("page=-1&limit=0", { page: 1, limit: 20 });
+      });
+
+      test("huge page/limit are capped", async () => {
+        await expectListedWith("page=99999999999999999999&limit=99999999", {
+          page: 1_000_000,
+          limit: 100,
+        });
+      });
+    });
+
     describe("POST /dashboard/send header-injection guard (#202)", () => {
       /** Form-encodes a send with one field overridden. */
       const sendForm = (overrides: Record<string, string>): Promise<Response> =>

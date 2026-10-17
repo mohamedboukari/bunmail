@@ -111,8 +111,8 @@ export const webhooksPlugin = new Elysia({
   .get(
     "/:id/deliveries",
     async ({ params, query, apiKeyId, set }) => {
-      const page = query.page ? parseInt(query.page, 10) : 1;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 20;
       const status =
         query.status === "pending" ||
         query.status === "delivered" ||

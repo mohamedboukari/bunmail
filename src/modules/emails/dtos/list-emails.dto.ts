@@ -8,7 +8,8 @@ import { t } from "elysia";
  */
 export const listEmailsDto = t.Object({
   /** Page number (1-based). Defaults to 1 if not provided. */
-  page: t.Optional(t.Numeric({ minimum: 1, default: 1 })),
+  /** Capped so OFFSET stays inside Postgres's bigint range (#172). */
+  page: t.Optional(t.Numeric({ minimum: 1, maximum: 1_000_000, default: 1 })),
 
   /** Number of results per page. Defaults to 20, max 100. */
   limit: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
