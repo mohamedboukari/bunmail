@@ -42,6 +42,9 @@ jobs:
         uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           languages: ${{ matrix.language }}
+          # security-extended adds more taint-tracking queries (SSRF,
+          # inefficient regular expressions, ...) to the default suite (#230).
+          queries: security-extended
 
       - name: Autobuild
         uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
