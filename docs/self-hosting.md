@@ -104,6 +104,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed passwords per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
 
+> `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`: per-API-key request limit on the REST API (default `100` requests per `60` seconds, then `429` with `Retry-After`). Raise it if one key legitimately makes more calls than that, for example a high-volume sender. Boot fails on a non-positive or non-integer value.
+
 ## 2. DNS Records
 
 Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.):

@@ -118,7 +118,7 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 
 ### HTTP API hygiene
 
-- **Per-API-key rate limiting** (`src/middleware/rate-limit.ts`): 100 requests / 60 s, sliding window.
+- **Per-API-key rate limiting** (`src/middleware/rate-limit.ts`): fixed window, 100 requests / 60 s by default (`API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`). Covered by an integration test that sends requests through a real plugin; the e2e suites stub this middleware, which is how a missing `.as("scoped")` once left it inactive on every route.
 - **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed passwords **per client IP** (sliding window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit; a successful login clears the counter. Since the dashboard is a single shared password with no username, this is what stops online guessing. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`: the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
 - **Cleanup interval** (#22): the in-memory rate-limit maps (per-API-key and per-IP login) are pruned every 5 minutes so distinct keys / IPs can't grow them unbounded.
 - **CORS:** none configured by default: the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.

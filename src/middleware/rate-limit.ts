@@ -1,11 +1,19 @@
 import { Elysia } from "elysia";
+import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import {
   checkRateLimit,
   pruneExpiredEntries,
   readApiKeyId,
   type RateLimitEntry,
+  type RateLimitOptions,
 } from "./rate-limit-core.ts";
+
+/** The enforced limit, from `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`. */
+const limit: RateLimitOptions = {
+  max: config.apiRateLimit.max,
+  windowMs: config.apiRateLimit.windowSec * 1000,
+};
 
 /** How often the cleanup loop sweeps expired entries from the map. */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -34,7 +42,7 @@ let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 export function startRateLimitCleanup(): void {
   if (cleanupInterval) return;
   cleanupInterval = setInterval(
-    () => pruneExpiredEntries(rateLimitMap, Date.now()),
+    () => pruneExpiredEntries(rateLimitMap, Date.now(), limit.windowMs),
     CLEANUP_INTERVAL_MS,
   );
   logger.debug("HTTP rate-limit cleanup started", {
@@ -61,36 +69,44 @@ export function stopRateLimitCleanup(): void {
  * 4. If over the limit, return 429 with Retry-After header
  *
  * Must be applied AFTER authMiddleware (needs `apiKeyId` in context).
+ * The limit comes from `config.apiRateLimit` (default 100 per 60 s).
  */
 export const rateLimitMiddleware = new Elysia({
   name: "rate-limit-middleware",
-}).onBeforeHandle((context) => {
-  /** Every plugin applies `.use(authMiddleware).use(rateLimitMiddleware)`, so
-   *  `apiKeyId` is in the context by now if auth ran. See readApiKeyId. */
-  const apiKeyId = readApiKeyId(context);
+})
+  .onBeforeHandle((context) => {
+    /** Every plugin applies `.use(authMiddleware).use(rateLimitMiddleware)`, so
+     *  `apiKeyId` is in the context by now if auth ran. See readApiKeyId. */
+    const apiKeyId = readApiKeyId(context);
 
+    /**
+     * If no apiKeyId is present, auth middleware hasn't run or the route
+     * is unprotected: skip rate limiting silently.
+     */
+    if (!apiKeyId) {
+      return;
+    }
+
+    const { set } = context;
+
+    const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now(), limit);
+    if (!decision.limited) return;
+
+    const { count, retryAfter } = decision;
+    logger.warn("Rate limit exceeded", { apiKeyId, count, retryAfter });
+
+    set.status = 429;
+    set.headers["retry-after"] = String(retryAfter);
+
+    return {
+      success: false,
+      error: "Rate limit exceeded: try again later",
+      retryAfter,
+    };
+  })
   /**
-   * If no apiKeyId is present, auth middleware hasn't run or the route
-   * is unprotected: skip rate limiting silently.
+   * Without `scoped`, Elysia keeps this hook local to this instance, so it
+   * never ran for the routes of the plugins that `.use()` it. Scoped
+   * applies it to the parent plugin's routes, like `authMiddleware`.
    */
-  if (!apiKeyId) {
-    return;
-  }
-
-  const { set } = context;
-
-  const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now());
-  if (!decision.limited) return;
-
-  const { count, retryAfter } = decision;
-  logger.warn("Rate limit exceeded", { apiKeyId, count, retryAfter });
-
-  set.status = 429;
-  set.headers["retry-after"] = String(retryAfter);
-
-  return {
-    success: false,
-    error: "Rate limit exceeded: try again later",
-    retryAfter,
-  };
-});
+  .as("scoped");
