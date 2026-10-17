@@ -1,4 +1,4 @@
-import { and, isNotNull, lt, sql } from "drizzle-orm";
+import { and, isNotNull, lt } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import { inboundEmails } from "../../inbound/models/inbound-email.schema.ts";
@@ -134,29 +134,4 @@ export function stop(): void {
     purgeTimer = null;
     logger.info("Trash purge stopped");
   }
-}
-
-/**
- * Returns rough statistics about what's currently in trash.
- * Used by the dashboard to decide whether to show "Empty trash" buttons.
- */
-export async function getTrashStats(): Promise<{
-  emailsInTrash: number;
-  inboundInTrash: number;
-}> {
-  const [emailCount, inboundCount] = await Promise.all([
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(emails)
-      .where(isNotNull(emails.deletedAt)),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(inboundEmails)
-      .where(isNotNull(inboundEmails.deletedAt)),
-  ]);
-
-  return {
-    emailsInTrash: emailCount[0]?.count ?? 0,
-    inboundInTrash: inboundCount[0]?.count ?? 0,
-  };
 }

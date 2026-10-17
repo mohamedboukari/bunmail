@@ -127,7 +127,7 @@ describe("findWebhooksForEvent", () => {
       { ...baseHook, id: "w3", events: ["email.sent"] },
     ];
     const sent = await findWebhooksForEvent("email.sent");
-    expect(sent.map((h) => h.id).sort()).toEqual(["w1", "w3"]);
+    expect(sent.map((h) => h.id).toSorted()).toEqual(["w1", "w3"]);
     selectResult = [
       { ...baseHook, id: "w1", events: ["email.sent", "email.failed"] },
       { ...baseHook, id: "w2", events: ["email.bounced"] },

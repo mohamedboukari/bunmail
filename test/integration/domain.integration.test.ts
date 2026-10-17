@@ -138,7 +138,7 @@ describe("listDomains / getDomainById", () => {
 
     const list = await listDomains();
     expect(list).toHaveLength(2);
-    expect(list.map((d) => d.id).sort()).toEqual([a.id, b.id].sort());
+    expect(list.map((d) => d.id).toSorted()).toEqual([a.id, b.id].toSorted());
 
     const fetched = await getDomainById(a.id);
     expect(fetched?.name).toBe("a.example.com");

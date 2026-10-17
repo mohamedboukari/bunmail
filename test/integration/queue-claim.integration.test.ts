@@ -93,8 +93,8 @@ describe("claimNextEmails: atomic queued → sending claim", () => {
     const claimed = await claimNextEmails(2);
 
     /** Should pick `oldest` and `middle`, leaving `newest`. */
-    const claimedIds = claimed.map((r) => r.id).sort();
-    expect(claimedIds).toEqual([oldest, middle].sort());
+    const claimedIds = claimed.map((r) => r.id).toSorted();
+    expect(claimedIds).toEqual([oldest, middle].toSorted());
 
     const stillQueued = await db
       .select({ id: emails.id })
@@ -134,7 +134,7 @@ describe("claimNextEmails: atomic queued → sending claim", () => {
     expect(uniqueIds.size).toBe(30);
 
     /** Set equality with the seeded set: no row was missed, none invented. */
-    expect([...uniqueIds].sort()).toEqual([...seededIds].sort());
+    expect([...uniqueIds].toSorted()).toEqual([...seededIds].toSorted());
 
     /** Every claimed row in the DB is now `sending` with attempts=1. */
     const dbRows = await db
@@ -166,6 +166,6 @@ describe("claimNextEmails: atomic queued → sending claim", () => {
     /** Exactly 10 claims total: every queued row claimed exactly once. */
     expect(allClaimedIds).toHaveLength(10);
     expect(new Set(allClaimedIds).size).toBe(10);
-    expect([...new Set(allClaimedIds)].sort()).toEqual([...seededIds].sort());
+    expect([...new Set(allClaimedIds)].toSorted()).toEqual([...seededIds].toSorted());
   });
 });

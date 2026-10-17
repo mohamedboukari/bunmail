@@ -89,4 +89,3 @@ export const emailTombstones = pgTable(
 );
 
 export type EmailTombstone = typeof emailTombstones.$inferSelect;
-export type NewEmailTombstone = typeof emailTombstones.$inferInsert;

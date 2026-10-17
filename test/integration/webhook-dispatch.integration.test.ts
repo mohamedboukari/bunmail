@@ -181,7 +181,7 @@ describe("dispatchEvent: end-to-end", () => {
     await waitForDispatch();
 
     expect(captured).toHaveLength(2);
-    const urls = captured.map((c) => c.url).sort();
+    const urls = captured.map((c) => c.url).toSorted();
     expect(urls).toEqual(["https://93.184.216.34", "https://93.184.216.35"]);
 
     /** Both deliveries share the same JSON body (same event payload). */
