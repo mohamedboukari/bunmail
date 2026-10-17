@@ -700,6 +700,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /api/v1/domains               | List domains          | Yes  |
 | GET    | /api/v1/domains/:id           | Get domain details    | Yes  |
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records    | Yes  |
+| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings | Yes |
 | DELETE | /api/v1/domains/:id           | Remove domain         | Yes  |
 
 ### Webhooks

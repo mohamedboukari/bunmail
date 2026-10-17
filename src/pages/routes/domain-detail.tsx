@@ -115,6 +115,44 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
         </form>
       </div>
 
+      {/* List-Unsubscribe overrides (#243) */}
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
+        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+          Unsubscribe
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Every email carries a List-Unsubscribe header. Leave the mailbox empty to use
+          unsubscribe@ this domain. Add an https URL to enable one-click unsubscribe (RFC
+          8058), which Gmail and Yahoo expect from bulk senders.
+        </p>
+        <form
+          method="POST"
+          action={`/dashboard/domains/${domain.id}/unsubscribe`}
+          class="flex flex-col gap-3"
+        >
+          <input
+            type="email"
+            name="unsubscribeEmail"
+            value={domain.unsubscribeEmail ?? ""}
+            placeholder="unsubscribe@yourcompany.com"
+            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+          />
+          <input
+            type="url"
+            name="unsubscribeUrl"
+            value={domain.unsubscribeUrl ?? ""}
+            placeholder="https://yourcompany.com/unsubscribe"
+            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+          />
+          <button
+            type="submit"
+            class="self-start px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors whitespace-nowrap"
+          >
+            Save
+          </button>
+        </form>
+      </div>
+
       {/* Domain details */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
         <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-4">

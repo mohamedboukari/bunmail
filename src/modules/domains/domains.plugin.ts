@@ -1,5 +1,6 @@
 import { Elysia, t } from "elysia";
 import { createDomainDto } from "./dtos/create-domain.dto.ts";
+import { updateDomainDto } from "./dtos/update-domain.dto.ts";
 import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
 import { verifyDomain } from "./services/dns-verification.service.ts";
@@ -49,6 +50,9 @@ export const domainsPlugin = new Elysia({
       const domain = await domainService.createDomain({
         name: body.name,
         notifyEmail: body.notifyEmail,
+        /** Validated by the DTO but previously never passed on (#243). */
+        unsubscribeEmail: body.unsubscribeEmail,
+        unsubscribeUrl: body.unsubscribeUrl,
       });
 
       return {
@@ -109,6 +113,39 @@ export const domainsPlugin = new Elysia({
         tags: ["Domains"],
         summary: "Get domain by ID",
         description: "Returns a single domain by its ID.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * PATCH /api/v1/domains/:id
+   *
+   * Edits the domain's `List-Unsubscribe` overrides (#243). Omitted fields
+   * stay as they are; `null` clears one.
+   */
+  .patch(
+    "/:id",
+    async ({ params, body, set }) => {
+      logger.info("PATCH /api/v1/domains/:id", { domainId: params.id });
+
+      const domain = await domainService.updateDomainUnsubscribe(params.id, body);
+
+      if (!domain) {
+        set.status = 404;
+        return { success: false, error: "Domain not found" };
+      }
+
+      return { success: true, data: serializeDomain(domain) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      body: updateDomainDto,
+      detail: {
+        tags: ["Domains"],
+        summary: "Update domain unsubscribe settings",
+        description:
+          "Sets or clears the List-Unsubscribe mailbox and the RFC 8058 one-click HTTPS URL.",
         security: [{ bearerAuth: [] }],
       },
     },

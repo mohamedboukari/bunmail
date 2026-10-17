@@ -84,6 +84,9 @@ Returns a single domain by its name. Used by the inbound-notification path (#106
 #### `updateDomainNotifyEmail(id, notifyEmail): Promise<Domain | undefined>`
 Sets (or clears, when passed `null`) the inbound-notification address for a domain (#106). Returns `undefined` when no row matches the id.
 
+#### `updateDomainUnsubscribe(id, changes): Promise<Domain | undefined>`
+Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243); only the fields present in `changes` are written, `null` clears one. Also editable from the domain page in the dashboard.
+
 #### `deleteDomain(id): Promise<Domain | undefined>`
 Hard-deletes a domain and its keys.
 
@@ -108,6 +111,7 @@ All routes require Bearer token auth and are rate-limited.
 | GET    | /api/v1/domains               | List domains             |
 | GET    | /api/v1/domains/:id           | Get domain details       |
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records       |
+| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings (#243) |
 | DELETE | /api/v1/domains/:id           | Delete domain            |
 
 `POST /api/v1/domains` accepts an optional `notifyEmail` field to set the
