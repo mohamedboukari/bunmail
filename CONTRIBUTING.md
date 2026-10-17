@@ -86,6 +86,18 @@ We use [Conventional Commits](https://www.conventionalcommits.org/). The commit 
 4. Run `bun test && bunx tsc --noEmit && bun run lint`
 5. Open a PR with a clear description of what and why
 
+## Claude Code tooling (optional)
+
+The repo ships project config for [Claude Code](https://claude.com/claude-code). None of it is needed to build or test BunMail.
+
+- **`/ship`** (`.claude/skills/ship/`): takes an issue from plan to merged PR using this repo's workflow (plan and approval first, gates in CI order, docs and CHANGELOG, PR template, CI watch).
+- **`/release`** (`.claude/skills/release/`): the release flow (CHANGELOG prep commit, `bumpp`, then verifying the GitHub Release and the GHCR image attestation).
+- **No-em-dash hook** (`.claude/hooks/no-em-dash.ts`, wired in `.claude/settings.json`): enforces the CLAUDE.md rule on files Claude writes, and on lines added to the working tree when a turn ends.
+- **Permission allowlist** (`.claude/settings.json`): pre-approves read-only and test commands only (type-check, lint, tests, `git`/`gh` reads, graphify queries). Nothing that pushes, merges or deletes.
+- **Context7 MCP** (`.mcp.json`): up-to-date docs for Elysia, Drizzle and Bun via `https://mcp.context7.com/mcp`. It receives library-name queries, never your code. Claude Code asks you to approve it on first use.
+- **graphify** (`.claude/skills/graphify/`): a local knowledge graph of the codebase (tree-sitter AST, no code leaves the machine). Install the CLI with `uv tool install graphifyy`, then `graphify hook install` once per clone to rebuild the graph after commits, and `graphify update .` to build it. `graphify-out/` and the generated `.husky/post-commit` / `.husky/post-checkout` hooks are gitignored (the hooks embed an absolute local path). Useful for `graphify explain <symbol>` and call graphs; natural-language `graphify query` is keyword-based and can miss.
+  - Its installer also registers `PreToolUse` hooks that push "run `graphify query` first" on nearly every search and file read. They're deliberately **not** used here (they fired on unrelated commands and steered toward the weakest query mode). If you re-run `graphify install`, remove them from `.claude/settings.json` again.
+
 ## Reporting Issues
 
 Please use GitHub Issues. Include:

@@ -1,0 +1,57 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun run typecheck)",
+      "Bash(bunx tsc --noEmit)",
+      "Bash(bun run lint)",
+      "Bash(bun run format:check)",
+      "Bash(bun run knip)",
+      "Bash(bun run lint:xss)",
+      "Bash(bun run coverage:check)",
+      "Bash(bun test:*)",
+      "Bash(bun run test:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run list:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify update:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-em-dash.ts\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$CLAUDE_PROJECT_DIR/.claude/hooks/no-em-dash.ts\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

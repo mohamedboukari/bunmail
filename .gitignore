@@ -44,3 +44,10 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # transitive dependencies for CVE matching.
 bun.lockb
 package-lock.json
+
+# graphify (Claude Code knowledge graph): generated output, rebuilt locally
+graphify-out/
+# graphify's auto-rebuild git hooks embed an absolute local path; husky
+# still runs them from disk, they just must not be committed
+.husky/post-commit
+.husky/post-checkout
