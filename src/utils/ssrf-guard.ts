@@ -73,7 +73,14 @@ function isBlockedIpv6(ip: string): boolean {
   return false;
 }
 
-/** True if the resolved IP is one webhook delivery must never connect to. */
+/**
+ * True if the IP is not publicly routable (private / loopback / link-local /
+ * CGNAT / reserved), or not a valid IP at all.
+ *
+ * Shared by webhook delivery (never connect to these) and the inbound
+ * DNSBL check (never look these up; see `dnsbl.service.ts`). Changing a
+ * range here affects both.
+ */
 export function isBlockedIp(ip: string): boolean {
   const v = isIP(ip);
   if (v === 4) return isBlockedIpv4(ip);

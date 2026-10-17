@@ -29,6 +29,8 @@ src/modules/inbound/
 ├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
 ├── services/
 │   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
+│   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
 ├── models/
 │   └── inbound-email.schema.ts      ← Drizzle pgTable definition
@@ -90,7 +92,7 @@ Checks the connecting IP against a DNS blackhole list (default: [Spamhaus ZEN](h
 | `SMTP_DNSBL_ENABLED` | `true`              | Enable/disable DNSBL checks     |
 | `SMTP_DNSBL_ZONE`    | `zen.spamhaus.org`  | DNSBL zone to query             |
 
-Private/loopback IPs and IPv6 addresses skip the DNSBL check.
+Addresses that aren't publicly routable skip the DNSBL check: private (`10/8`, `172.16/12`, `192.168/16`), loopback (`127/8`), link-local (`169.254/16`), CGNAT (`100.64/10`) and reserved ranges, using the same numeric range checks as the webhook SSRF guard. IPv6 addresses also skip it, since most DNSBL zones don't index them. Every other public IPv4 address is checked.
 
 ### Layer 2: Connection Rate Limiting
 
@@ -173,6 +175,14 @@ Starts the SMTP server on the configured port.
 
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
+
+### dnsbl.service.ts
+
+#### `dnsblQueryName(ip, zone): string | null`
+Pure. Returns the reversed-octet query name (`1.2.3.4` → `4.3.2.1.<zone>`), or `null` when the address should be skipped (not publicly routable, IPv6, or malformed). Reuses `isBlockedIp()` from `src/utils/ssrf-guard.ts`.
+
+#### `isBlacklistedIp(ip, zone): Promise<boolean>`
+Resolves the query name; any A record means listed. Fails open on NOTFOUND or timeout.
 
 ### inbound.service.ts
 

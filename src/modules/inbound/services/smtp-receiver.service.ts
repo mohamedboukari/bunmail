@@ -1,4 +1,3 @@
-import { resolve4 } from "dns/promises";
 import { SMTPServer } from "smtp-server";
 import { simpleParser } from "mailparser";
 import { db } from "../../../db/index.ts";
@@ -7,6 +6,7 @@ import { generateId } from "../../../utils/id.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import { notifyInboundReceived } from "./inbound-notify.service.ts";
+import { isBlacklistedIp } from "./dnsbl.service.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
@@ -78,48 +78,6 @@ function isRateLimited(ip: string): boolean {
 
   entry.count += 1;
   return entry.count > rateLimitMax;
-}
-
-/* ─── DNSBL (DNS-based blackhole list) check ─── */
-
-/**
- * Checks an IPv4 address against a DNSBL zone (e.g. Spamhaus ZEN).
- *
- * Algorithm: reverse the IP octets → query `<reversed>.<zone>`.
- * If the DNS lookup returns any A records, the IP is listed.
- * A NOTFOUND / timeout means the IP is clean.
- *
- * Skips private, loopback, and IPv6 addresses (not indexed by most DNSBLs).
- *
- * @param ip   - The connecting client's IP address
- * @param zone - The DNSBL zone to query (e.g. "zen.spamhaus.org")
- * @returns true if the IP is blacklisted
- */
-async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
-  /** Skip private / loopback IPs: they're never in DNSBLs */
-  if (
-    ip === "127.0.0.1" ||
-    ip === "::1" ||
-    ip.startsWith("10.") ||
-    ip.startsWith("192.168.") ||
-    ip.startsWith("172.")
-  ) {
-    return false;
-  }
-
-  /** IPv6 not supported by most DNSBLs: skip */
-  if (ip.includes(":")) return false;
-
-  const reversed = ip.split(".").toReversed().join(".");
-  const query = `${reversed}.${zone}`;
-
-  try {
-    const results = await resolve4(query);
-    return results.length > 0;
-  } catch {
-    /** NOTFOUND, TIMEOUT, etc.: IP is not listed (fail open) */
-    return false;
-  }
 }
 
 /**
