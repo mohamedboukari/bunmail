@@ -388,16 +388,20 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
           sourceEmailId: emailId,
           expiresAt: null,
         });
-        dispatchEvent("email.bounced", {
-          emailId,
-          to: email.toAddress,
-          recipient: rcpt,
-          bounceType: "hard",
-          status: parsed.code,
-          diagnostic: group.lastError ?? "(no diagnostic)",
-          suppressionId: suppression.id,
-          source: "inline",
-        });
+        dispatchEvent(
+          "email.bounced",
+          {
+            emailId,
+            to: email.toAddress,
+            recipient: rcpt,
+            bounceType: "hard",
+            status: parsed.code,
+            diagnostic: group.lastError ?? "(no diagnostic)",
+            suppressionId: suppression.id,
+            source: "inline",
+          },
+          { apiKeyId: email.apiKeyId },
+        );
         logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {
           emailId,
           apiKeyId: email.apiKeyId,
@@ -444,13 +448,17 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
        *  once: checked against priorStatuses so we don't double-fire
        *  on a future attempt where the same group is already sent. */
       if (anySent && !anySentBefore(priorStatuses)) {
-        dispatchEvent("email.sent", {
-          emailId,
-          from: email.fromAddress,
-          to: email.toAddress,
-          subject: email.subject,
-          messageId,
-        });
+        dispatchEvent(
+          "email.sent",
+          {
+            emailId,
+            from: email.fromAddress,
+            to: email.toAddress,
+            subject: email.subject,
+            messageId,
+          },
+          { apiKeyId: email.apiKeyId },
+        );
       }
       return;
     }
@@ -502,26 +510,34 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     });
 
     if (finalAnySent && !anySentBefore(priorStatuses)) {
-      dispatchEvent("email.sent", {
-        emailId,
-        from: email.fromAddress,
-        to: email.toAddress,
-        subject: email.subject,
-        messageId,
-      });
+      dispatchEvent(
+        "email.sent",
+        {
+          emailId,
+          from: email.fromAddress,
+          to: email.toAddress,
+          subject: email.subject,
+          messageId,
+        },
+        { apiKeyId: email.apiKeyId },
+      );
     }
 
     if (!finalAnySent && finalStatus === "failed") {
       /** Pure failure (no group ever delivered + no hard 5xx): keep
        *  the `email.failed` webhook fired by the legacy path so
        *  consumers that watch this event still see it. */
-      dispatchEvent("email.failed", {
-        emailId,
-        from: email.fromAddress,
-        to: email.toAddress,
-        subject: email.subject,
-        error: summariseFailures(finalState),
-      });
+      dispatchEvent(
+        "email.failed",
+        {
+          emailId,
+          from: email.fromAddress,
+          to: email.toAddress,
+          subject: email.subject,
+          error: summariseFailures(finalState),
+        },
+        { apiKeyId: email.apiKeyId },
+      );
     }
   } catch (error) {
     /**
@@ -544,13 +560,17 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       attempt,
       error: errorMessage,
     });
-    dispatchEvent("email.failed", {
-      emailId,
-      from: email.fromAddress,
-      to: email.toAddress,
-      subject: email.subject,
-      error: errorMessage,
-    });
+    dispatchEvent(
+      "email.failed",
+      {
+        emailId,
+        from: email.fromAddress,
+        to: email.toAddress,
+        subject: email.subject,
+        error: errorMessage,
+      },
+      { apiKeyId: email.apiKeyId },
+    );
   }
 }
 

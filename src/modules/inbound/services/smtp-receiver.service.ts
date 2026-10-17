@@ -383,12 +383,16 @@ export function start(): void {
             });
 
             /** Fire webhook event asynchronously (fire-and-forget) */
-            dispatchEvent("email.received", {
-              inboundEmailId: id,
-              from,
-              to,
-              subject: parsed.subject ?? null,
-            });
+            dispatchEvent(
+              "email.received",
+              {
+                inboundEmailId: id,
+                from,
+                to,
+                subject: parsed.subject ?? null,
+              },
+              { adminOnly: true },
+            );
 
             /**
              * Send the per-domain inbound notification (#106), fire-and-forget.

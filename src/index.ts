@@ -13,6 +13,7 @@ import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import { UnauthorizedSenderError } from "./modules/api-keys/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
+import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
@@ -160,6 +161,19 @@ const app = new Elysia()
      * Webhook URL rejected by the SSRF guard (#128) → 422. Surfaces at
      * create time so the caller sees why the URL was refused.
      */
+    /**
+     * Non-admin key subscribing to inbound events → 403. Inbound mail has
+     * no owning key and is admin-only (#130).
+     */
+    if (error instanceof InboundEventsRequireAdminError) {
+      set.status = 403;
+      return {
+        success: false,
+        error: error.message,
+        code: "INBOUND_EVENTS_REQUIRE_ADMIN",
+      };
+    }
+
     if (error instanceof BlockedUrlError) {
       set.status = 422;
       return { success: false, error: error.message, code: "WEBHOOK_URL_BLOCKED" };
