@@ -46,7 +46,18 @@ let mxResult: Array<{ exchange: string; priority: number }> | Error = [];
 let mxResolver:
   ((domain: string) => Promise<Array<{ exchange: string; priority: number }>>) | null =
   null;
-let sendBehaviour: ((transportHost: string) => Error | void | undefined) | null = null;
+let sendBehaviour: ((mxHost: string) => Error | void | undefined) | null = null;
+
+/** Public test address (TEST-NET-3) every MX host resolves to by default. */
+const MX_IP = "203.0.113.10";
+let lookupResult: Array<{ address: string; family: number }> = [];
+
+/** The MX name a transport was built for: the host is now the pinned IP,
+ *  and the name travels as the TLS servername (SNI). */
+function mxOf(cfg: Record<string, unknown>): string {
+  const name = asRecord(cfg.tls).servername;
+  return typeof name === "string" ? name : "";
+}
 
 void mock.module("dns/promises", () => ({
   resolveMx: mock(async (domain: string) => {
@@ -55,13 +66,14 @@ void mock.module("dns/promises", () => ({
     return mxResult;
   }),
   resolveTxt: mock(async () => []),
+  lookup: mock(async () => lookupResult),
 }));
 
 const createTransportMock = mock((cfg: Record<string, unknown>) => ({
   sendMail: mock(async (opts: Record<string, unknown>) => {
     captured.push({ transportConfig: cfg, mailOptions: opts });
     if (sendBehaviour) {
-      const result = sendBehaviour(typeof cfg.host === "string" ? cfg.host : "");
+      const result = sendBehaviour(mxOf(cfg));
       if (result instanceof Error) throw result;
     }
     return { messageId: "<test-msg@mx.test>" };
@@ -87,6 +99,8 @@ beforeEach(() => {
   mxResult = [{ exchange: "mx.example.org", priority: 10 }];
   mxResolver = null;
   sendBehaviour = null;
+  lookupResult = [{ address: MX_IP, family: 4 }];
+  createTransportMock.mockClear();
 });
 
 describe("sendMail: transport configuration", () => {
@@ -104,7 +118,9 @@ describe("sendMail: transport configuration", () => {
       messageId: MID,
     });
     const cfg = captured[0]!.transportConfig;
-    expect(cfg.host).toBe("mx1.example.org");
+    /** Pinned to the checked address; the MX name is the TLS servername. */
+    expect(cfg.host).toBe(MX_IP);
+    expect(mxOf(cfg)).toBe("mx1.example.org");
     expect(cfg.port).toBe(25);
     expect(cfg.secure).toBe(false);
     expect(cfg.opportunisticTLS).toBe(true);
@@ -282,8 +298,7 @@ describe("sendMail: multi-MX (#87)", () => {
 
     expect(captured).toHaveLength(2);
     const hosts = captured
-      .map((c) => c.transportConfig.host)
-      .filter((h): h is string => typeof h === "string")
+      .map((c) => mxOf(c.transportConfig))
       .toSorted((a, b) => a.localeCompare(b));
     expect(hosts).toEqual(["smtp.gmail.com", "smtp.outlook.com"]);
   });
@@ -300,9 +315,9 @@ describe("sendMail: multi-MX (#87)", () => {
       messageId: MID,
     });
 
-    const gmailSend = captured.find((c) => c.transportConfig.host === "smtp.gmail.com")!;
+    const gmailSend = captured.find((c) => mxOf(c.transportConfig) === "smtp.gmail.com")!;
     const outlookSend = captured.find(
-      (c) => c.transportConfig.host === "smtp.outlook.com",
+      (c) => mxOf(c.transportConfig) === "smtp.outlook.com",
     )!;
     expect(asRecord(gmailSend.mailOptions.envelope).to).toEqual(["alice@gmail.com"]);
     expect(asRecord(outlookSend.mailOptions.envelope).to).toEqual(["bob@outlook.com"]);
@@ -339,7 +354,7 @@ describe("sendMail: multi-MX (#87)", () => {
     });
 
     const outlookSend = captured.find(
-      (c) => c.transportConfig.host === "smtp.outlook.com",
+      (c) => mxOf(c.transportConfig) === "smtp.outlook.com",
     )!;
     expect(asRecord(outlookSend.mailOptions.envelope).to).toEqual(["hidden@outlook.com"]);
     for (const c of captured) {
@@ -502,7 +517,7 @@ describe("sendMail: stateful retry (#97)", () => {
 
     /** Only ONE captured send this attempt: the outlook one. */
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.transportConfig.host).toBe("smtp.outlook.com");
+    expect(mxOf(captured[0]!.transportConfig)).toBe("smtp.outlook.com");
 
     /** Final state: both groups sent, gmail's attempt count unchanged
      *  from attempt 1 because we never re-tried it. */
@@ -560,5 +575,57 @@ describe("sendMail: stateful retry (#97)", () => {
     });
     expect(captured).toHaveLength(0);
     expect(second.deliveryState["<dns:nomx.test>"]!.status).toBe("failed");
+  });
+});
+
+describe("sendMail: outbound SSRF guard on MX hosts", () => {
+  test("never connects to an MX host that resolves to a private address", async () => {
+    lookupResult = [{ address: "10.0.0.5", family: 4 }];
+
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(createTransportMock).not.toHaveBeenCalled();
+    const group = result.deliveryState["mx.example.org"]!;
+    expect(group.status).toBe("retry");
+    expect(group.lastError).toContain("non-public address");
+    /** The internal address is not echoed back to the API caller. */
+    expect(group.lastError).not.toContain("10.0.0.5");
+  });
+
+  test("refuses when any of several addresses is private", async () => {
+    lookupResult = [
+      { address: "198.51.100.7", family: 4 },
+      { address: "127.0.0.1", family: 4 },
+    ];
+
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(createTransportMock).not.toHaveBeenCalled();
+  });
+
+  test("prefers an IPv4 address when the host has both families", async () => {
+    lookupResult = [
+      { address: "2001:db8::25", family: 6 },
+      { address: MX_IP, family: 4 },
+    ];
+
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(captured[0]!.transportConfig.host).toBe(MX_IP);
   });
 });

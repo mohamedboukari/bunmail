@@ -211,6 +211,15 @@ export const config = {
      * raise it to 2-3. Sends to different MXs are unaffected. (#91)
      */
     mxConcurrency: Math.max(1, parseInt(optionalEnv("MAIL_MX_CONCURRENCY", "1"), 10)),
+
+    /**
+     * Allow delivery to MX hosts that resolve to private, loopback or
+     * link-local addresses. Off by default: recipient domains are chosen
+     * by API callers, so a private MX would let any key aim the server's
+     * port-25 connections at its internal network. Set to "true" only to
+     * deliver to an internal mail server on purpose.
+     */
+    allowPrivateMx: optionalEnv("MAIL_ALLOW_PRIVATE_MX", "false") === "true",
   },
 
   /** Inbound SMTP server for receiving emails */

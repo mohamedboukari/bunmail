@@ -7,6 +7,7 @@ import { redactEmail } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
 import { parseSmtpError } from "../../../utils/smtp-error.ts";
+import { resolveMxAddress } from "./mx-address.ts";
 import type { DeliveryGroup, DeliveryState } from "../models/email.schema.ts";
 
 /**
@@ -259,14 +260,24 @@ async function sendToMxGroup(args: {
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
 }): Promise<void> {
+  /**
+   * Connect to a checked address, not the name: the name's DNS answer is
+   * controlled by whoever owns the recipient domain, and resolving it
+   * again in nodemailer would let it change after the check. The MX name
+   * still goes to TLS as SNI.
+   */
+  const address = await resolveMxAddress(args.mxHost, {
+    allowPrivate: config.mail.allowPrivateMx,
+  });
   const transport = createTransport({
-    host: args.mxHost,
+    host: address,
     port: 25,
     secure: false,
     opportunisticTLS: true,
     name: config.mail.hostname,
     tls: {
       rejectUnauthorized: false,
+      servername: args.mxHost,
     },
   });
 

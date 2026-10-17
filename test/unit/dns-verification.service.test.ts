@@ -24,6 +24,7 @@ void mock.module("dns/promises", () => ({
     throw err;
   }),
   resolveMx: mock(async () => []),
+  lookup: mock(async () => []),
 }));
 
 void mock.module("../../src/db/index.ts", () => ({
