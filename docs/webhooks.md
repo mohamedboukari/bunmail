@@ -84,6 +84,7 @@ Events are scoped to the API key that owns the webhook:
 
 - `email.queued`, `email.sent`, `email.failed`, `email.bounced`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
 - `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
+- Webhooks of a **revoked** key receive nothing, and deliveries already queued for them are marked `failed` instead of sent.
 
 ## Webhook Payload
 

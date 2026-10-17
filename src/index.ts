@@ -11,7 +11,10 @@ import { inboundPlugin } from "./modules/inbound/inbound.plugin.ts";
 import { suppressionsPlugin } from "./modules/suppressions/suppressions.plugin.ts";
 import { smtpSubmissionPlugin } from "./modules/smtp-submission/smtp-submission.plugin.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
-import { UnauthorizedSenderError } from "./modules/api-keys/errors.ts";
+import {
+  InactiveApiKeyError,
+  UnauthorizedSenderError,
+} from "./modules/api-keys/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
@@ -141,6 +144,15 @@ const app = new Elysia()
         code: "RECIPIENT_SUPPRESSED",
         suppressionId: error.suppressionId,
       };
+    }
+
+    /**
+     * The sending key was revoked after it was resolved (dashboard, or a
+     * race with revocation) → 401, same as auth rejecting a revoked key.
+     */
+    if (error instanceof InactiveApiKeyError) {
+      set.status = 401;
+      return { success: false, error: error.message, code: "API_KEY_REVOKED" };
     }
 
     /**

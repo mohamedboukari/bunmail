@@ -30,6 +30,7 @@ import { and, desc, eq, sql, inArray, lt } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { webhookDeliveries } from "../models/webhook-delivery.schema.ts";
 import { webhooks } from "../models/webhook.schema.ts";
+import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { signPayload } from "./webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -274,8 +275,12 @@ export async function claimDueDeliveries(
         url: webhooks.url,
         secret: webhooks.secret,
         isActive: webhooks.isActive,
+        /** Deliverable only while the owning key is active too: rows
+         *  queued before a key was revoked are not sent afterwards. */
+        keyActive: apiKeys.isActive,
       })
       .from(webhooks)
+      .innerJoin(apiKeys, eq(apiKeys.id, webhooks.apiKeyId))
       .where(inArray(webhooks.id, webhookIds));
     const hookById = new Map(hooks.map((h) => [h.id, h]));
 
@@ -303,14 +308,14 @@ export async function claimDueDeliveries(
         continue;
       }
       const hook = hookById.get(row.webhookId);
-      if (!hook || !hook.isActive) {
+      if (!hook || !hook.isActive || !hook.keyActive) {
         await tx
           .update(webhookDeliveries)
           .set({
             status: "failed",
             /** No request is made: undo the claim's increment. */
             attempts: row.attempts - 1,
-            lastError: "webhook inactive at delivery time",
+            lastError: "webhook or its API key inactive at delivery time",
             updatedAt: now,
           })
           .where(eq(webhookDeliveries.id, row.id));

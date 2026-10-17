@@ -457,7 +457,7 @@ Update a key's `name` and/or `allowedSenders` (#126). Both optional, only provid
 
 #### `DELETE /api/v1/api-keys/:id`
 
-Revoke an API key (soft delete).
+Revoke an API key (soft delete). The key stops working everywhere at once: REST calls, sending over an already-open SMTP submission session, and its webhooks (no further events, queued deliveries are failed).
 
 ---
 
@@ -565,7 +565,7 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|
-| 401    | Missing or invalid token                        |
+| 401    | Missing or invalid token, or the sending key was revoked (`API_KEY_REVOKED`) |
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`) |
 | 404    | Resource not found                              |
 | 422    | Validation error: includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
