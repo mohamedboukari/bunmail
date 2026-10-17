@@ -72,10 +72,10 @@ When `processEmail`'s SMTP send throws an error, the catch block parses the erro
 | Classification | What happens |
 |---|---|
 | **Hard (5xx)**: `550 5.1.1`, `5.7.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits: exactly what tanks IP reputation. |
-| **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Existing retry behaviour. Repeated soft bounces are still handled by the async-DSN path's escalation rule: the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
+| **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Retried with backoff (5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h) until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180). Repeated soft bounces are still handled by the async-DSN path's escalation rule: the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
 | **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error | Existing retry behaviour. Infrastructure problems don't tell us anything about the recipient. |
 
-Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for `MAX_ATTEMPTS` to confirm what the receiver already told us authoritatively.
+Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for further retries to confirm what the receiver already told us authoritatively.
 
 ## Async DSN → suppression flow
 
@@ -88,7 +88,7 @@ When a DSN parses cleanly and links to an `emails` row, the bounce handler does 
    - Parsed kind `soft`, no existing suppression → `soft` (24h expiry).
    - Parsed kind `soft`, **existing soft suppression still active** → escalate to `hard` (permanent). Repeated transient failures are effectively permanent for IP-reputation purposes.
 3. **Persist via `suppressionService.addFromBounce`**. Idempotent upsert: a re-bounce of the same recipient updates the existing row.
-4. **Mark the original email row**: `status = 'bounced'`. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
+4. **Mark the original email row**: `status = 'bounced'`, only if the queue has finished with it (`sent` or `failed`); a row still being retried keeps its status so its other recipients are still attempted. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
 5. **Fire `email.bounced` webhook** with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the auto-created suppression).
 
 ## Webhook payload

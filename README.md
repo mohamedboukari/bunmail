@@ -92,7 +92,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **SMTP submission**: apps (Infisical, Netbird, Dify, any Nodemailer backend) send *through* BunMail over SMTP using an API key as the password; switch an app off SendGrid/Brevo with a credentials-only change ([docs/smtp-submission.md](docs/smtp-submission.md))
 - **DKIM signing**: auto-generates 2048-bit RSA keys per domain
 - **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard
-- **Email queue**: Postgres-backed with 3 retries, crash recovery, and exactly-once delivery semantics
+- **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
 - **Templates**: Mustache-style `{{variable}}` substitution
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.sent`, `email.failed`, `email.bounced`, `email.received`, `email.complained`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting

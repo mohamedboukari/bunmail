@@ -25,7 +25,7 @@
 │         │                   ▼                                      │
 │  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐     │
 │  │  Middleware  │    │ Email Queue  │───▶│  Nodemailer SMTP  │     │
-│  │  - Auth      │    │ (3 retries)  │    │  (Direct Mode)    │     │
+│  │  - Auth      │    │ (backoff)    │    │  (Direct Mode)    │     │
 │  │  - Rate Limit│    │              │    │  + DKIM Signing   │     │
 │  └──────────────┘    └──────────────┘    └────────┬──────────┘     │
 │                                                    │               │
@@ -344,13 +344,16 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 ┌─────────────────────────────────────────────────────────────────┐
 │  Queue Processor (setInterval, every 2 seconds)                 │
 │                                                                 │
-│  1. ATOMIC CLAIM (#20):                                         │
+│  1. ATOMIC CLAIM (#20, leases #180):                            │
 │     UPDATE emails SET status = 'sending',                       │
-│                       attempts = attempts + 1                   │
+│                       attempts = attempts + 1,                  │
+│                       locked_by = <worker>,                     │
+│                       lease_until = now() + 15 min              │
 │     WHERE id IN (                                               │
-│       SELECT id FROM emails                                     │
-│       WHERE status = 'queued' AND deleted_at IS NULL            │
-│       ORDER BY created_at ASC LIMIT 5                           │
+│       SELECT id FROM emails WHERE deleted_at IS NULL AND (      │
+│         (status = 'queued' AND next_attempt_at <= now())        │
+│         OR (status = 'sending' AND lease_until < now()))        │
+│       ORDER BY next_attempt_at LIMIT 5                          │
 │       FOR UPDATE SKIP LOCKED   ← concurrent-safe                │
 │     ) RETURNING *;                                              │
 │                                                                 │
@@ -362,15 +365,19 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │     │ b. On SUCCESS:                        │                   │
 │     │    status = 'sent', sentAt = now()    │                   │
 │     │                                       │                   │
-│     │ c. On FAILURE:                        │                   │
-│     │    if attempts >= 3:                  │                   │
-│     │      status = 'failed'                │                   │
-│     │      lastError = error.message        │                   │
-│     │    else:                              │                   │
-│     │      status = 'queued' (retry later)  │                   │
+│     │ c. On TEMPORARY FAILURE:              │                   │
+│     │    status = 'queued',                 │                   │
+│     │    next_attempt_at = now() + backoff  │                   │
+│     │    (5m,15m,30m,1h,2h, then every 4h)  │                   │
+│     │    until the email is 48 h old, then  │                   │
+│     │    status = 'failed'                  │                   │
+│     │                                       │                   │
+│     │ d. Every outcome clears the lease,    │                   │
+│     │    only if this worker still holds it │                   │
 │     └───────────────────────────────────────┘                   │
 │                                                                 │
-│  On Boot: Reset any 'sending' → 'queued' (interrupted emails)   │
+│  While sending: the lease is renewed every minute. A dead       │
+│  worker's rows are reclaimed once their lease expires.          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -382,8 +389,8 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 queued → sending → sent → bounced  ← async DSN arrives later (#24)
                  → bounced          ← inline 5xx during SMTP transaction (#68)
                                      auto-suppress + stop retrying on attempt 1
-                 → failed (after 3 attempts on soft 4xx or infra error)
-         ↘ queued (retry on soft 4xx or infrastructure error, attempts < 3)
+                 → failed (soft 4xx or infra error until the email is MAIL_RETRY_MAX_AGE_HOURS old)
+         ↘ queued (retry after a backoff on soft 4xx or infrastructure error)
 ```
 
 `sent` = recipient's MX accepted the SMTP transaction. `bounced` = recipient confirmed permanently unreachable, either inline (`550 5.1.1 ...` during the send, #68) or via a DSN that came back later (#24). Both paths auto-suppress and fire `email.bounced` with `source: "inline"` vs `"rfc3464"` / `"fallback"`. `failed` = soft 4xx or infrastructure error exhausted retries: we never confirmed reachability either way.
@@ -436,6 +443,9 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 | status        | varchar(20)    | NOT NULL, default `'queued'`    |
 | source        | varchar(10)    | NOT NULL, default `'api'` (`api`\|`smtp`, #137) |
 | attempts      | integer        | NOT NULL, default `0`           |
+| next_attempt_at | timestamptz  | NOT NULL, default `now()`: retry backoff (#180) |
+| locked_by     | varchar(64)    | nullable: worker holding a `sending` row (#180) |
+| lease_until   | timestamptz    | nullable: claim expiry while `sending` (#180) |
 | last_error    | text           | nullable                        |
 | message_id    | varchar(255)   | nullable (SMTP Message-ID)      |
 | sent_at       | timestamp      | nullable                        |
@@ -849,7 +859,7 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
-- Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path preserves the existing retry-up-to-MAX_ATTEMPTS behaviour (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
+- Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180) (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 
 ---

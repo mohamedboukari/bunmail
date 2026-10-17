@@ -22,7 +22,7 @@ BunMail is a self-hosted email API for developers, a free alternative to SendGri
 - **SMTP Receiving:** smtp-server
 - **Email Auth:** DKIM signing, SPF/DMARC DNS verification
 - **Database:** PostgreSQL only, via Drizzle ORM (`drizzle-orm/bun-sql`)
-- **Queue:** Postgres-backed poll loop, 3 retries, claimed with `FOR UPDATE SKIP LOCKED`
+- **Queue:** Postgres-backed poll loop, claimed with `FOR UPDATE SKIP LOCKED` plus a renewable lease; temporary failures retried with backoff for up to `MAIL_RETRY_MAX_AGE_HOURS` (48 h)
 - **Dashboard:** Server-rendered Elysia JSX (`@elysiajs/html` + `@kitajs/html`), same process as the API
 - **Deploy:** Docker
 
@@ -45,7 +45,7 @@ Elysia plugins (src/modules/<feature>/<feature>.plugin.ts)
         ↓
 Services (src/modules/<feature>/services/) → PostgreSQL (src/db/, Drizzle)
         ↓
-Queue (poll loop, 3 retries) → SMTP Send (Nodemailer per-MX + DKIM)
+Queue (poll loop, backoff retries) → SMTP Send (Nodemailer per-MX + DKIM)
         ↓
 Webhooks fired on delivery/bounce
 ```

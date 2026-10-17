@@ -108,7 +108,7 @@ The bounce module (#24) closes the loop: when the inbound SMTP receives a Delive
 
 Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 
-The `processEmail` retry path deliberately **does not** auto-suppress on `MAX_ATTEMPTS` exhaustion: that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
+The `processEmail` retry path deliberately **does not** auto-suppress when the retry window runs out: that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
 
 ## Out of scope (separate tickets)
 
