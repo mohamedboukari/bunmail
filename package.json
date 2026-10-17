@@ -19,7 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "lint:xss": "bun run xss:toolchain && L=node_modules/.cache/xss-scan.log; node_modules/.cache/xss-toolchain/node_modules/.bin/xss-scan > $L 2>&1; cat $L; grep -q 'No XSS vulnerabilities found' $L",
+    "lint:xss": "bun run xss:toolchain && bun test/xss-gate.ts",
     "test": "bun test test/unit test/e2e",
     "test:unit": "bun test test/unit",
     "test:e2e": "bun test test/e2e",
