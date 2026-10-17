@@ -1,5 +1,5 @@
 import { createHmac } from "crypto";
-import { findWebhooksForEvent } from "./webhook.service.ts";
+import { findWebhooksForEvent, type DispatchScope } from "./webhook.service.ts";
 import { enqueueDelivery } from "./webhook-delivery.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
@@ -52,6 +52,8 @@ export function signPayload(timestamp: string, body: string, secret: string): st
 export function dispatchEvent(
   event: WebhookEventType,
   data: Record<string, unknown>,
+  /** Who may receive it: the owning API key, or admin keys only. See DispatchScope. */
+  scope: DispatchScope,
 ): void {
   const envelope: WebhookPayload = {
     event,
@@ -59,7 +61,7 @@ export function dispatchEvent(
     data,
   };
 
-  findWebhooksForEvent(event)
+  findWebhooksForEvent(event, scope)
     .then(async (hooks) => {
       if (hooks.length === 0) return;
 

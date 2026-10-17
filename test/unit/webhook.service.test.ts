@@ -53,13 +53,8 @@ void mock.module("../../src/db/index.ts", () => ({
   },
 }));
 
-const {
-  createWebhook,
-  listWebhooks,
-  listAllWebhooks,
-  deleteWebhook,
-  findWebhooksForEvent,
-} = await import("../../src/modules/webhooks/services/webhook.service.ts");
+const { createWebhook, listWebhooks, listAllWebhooks, deleteWebhook } =
+  await import("../../src/modules/webhooks/services/webhook.service.ts");
 
 const baseHook = {
   id: "whk_x",
@@ -114,32 +109,5 @@ describe("deleteWebhook", () => {
   test("returns undefined when the scoped delete matched nothing", async () => {
     deleteResult = [];
     expect(await deleteWebhook("whk_missing", "key_owner")).toBeUndefined();
-  });
-});
-
-describe("findWebhooksForEvent", () => {
-  test("returns only hooks whose events array includes the requested event", async () => {
-    /** The service does the JSON-array filter in JS after the DB returns
-     *  every active hook: we mimic that by feeding a varied list. */
-    selectResult = [
-      { ...baseHook, id: "w1", events: ["email.sent", "email.failed"] },
-      { ...baseHook, id: "w2", events: ["email.bounced"] },
-      { ...baseHook, id: "w3", events: ["email.sent"] },
-    ];
-    const sent = await findWebhooksForEvent("email.sent");
-    expect(sent.map((h) => h.id).toSorted()).toEqual(["w1", "w3"]);
-    selectResult = [
-      { ...baseHook, id: "w1", events: ["email.sent", "email.failed"] },
-      { ...baseHook, id: "w2", events: ["email.bounced"] },
-      { ...baseHook, id: "w3", events: ["email.sent"] },
-    ];
-    const bounced = await findWebhooksForEvent("email.bounced");
-    expect(bounced.map((h) => h.id)).toEqual(["w2"]);
-  });
-
-  test("returns empty array when no hooks subscribe to the event", async () => {
-    selectResult = [{ ...baseHook, events: ["email.sent"] }];
-    const result = await findWebhooksForEvent("email.queued");
-    expect(result).toHaveLength(0);
   });
 });

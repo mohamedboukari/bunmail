@@ -312,6 +312,8 @@ Register a new webhook endpoint.
 
 Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`
 
+Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) is admin-only: a restricted key subscribing to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
+
 **Response includes `secret`**: shown once, used for HMAC signature verification.
 
 ---
@@ -564,7 +566,7 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|
 | 401    | Missing or invalid token                        |
-| 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130) |
+| 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`) |
 | 404    | Resource not found                              |
 | 422    | Validation error: includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
 | 429    | Rate limit exceeded                             |

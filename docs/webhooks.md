@@ -76,7 +76,14 @@ Indexes:
 | `email.failed`     | An email permanently fails (3 attempts)                        |
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification: DSN parsed by the bounce module, original `emails` row marked `bounced`, recipient auto-suppressed (#24). See [docs/bounces.md](bounces.md). |
 | `email.complained` | A recipient marked the message as spam. Reserved for future Feedback Loop (FBL) processing: wiring TBD. |
-| `email.received`   | An inbound email is accepted by the SMTP receiver              |
+| `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |
+
+### Who receives an event
+
+Events are scoped to the API key that owns the webhook:
+
+- `email.queued`, `email.sent`, `email.failed`, `email.bounced`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
+- `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 
 ## Webhook Payload
 
@@ -301,13 +308,16 @@ Deletes a webhook, scoped to the requesting API key. CASCADE removes its deliver
 #### `findWebhookById(id, apiKeyId): Promise<Webhook | undefined>`
 Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to disambiguate "no deliveries yet" from "wrong id" before returning a 404.
 
-#### `findWebhooksForEvent(event): Promise<Webhook[]>`
-Returns all active webhooks subscribed to a given event type.
+#### `findWebhooksForEvent(event, scope): Promise<{ id: string }[]>`
+Returns the ids of active webhooks subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` (only admin keys' webhooks). The owner filter runs in SQL; the event match runs on the parsed `events` array.
+
+#### `createWebhook(input, apiKeyId)`
+Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
 
 ### webhook-dispatch.service.ts
 
-#### `dispatchEvent(event, data): void`
-Finds all subscribed webhooks and **enqueues** one `webhook_deliveries` row per webhook. Synchronous from the caller's perspective; actual HTTP delivery happens on the worker tick.
+#### `dispatchEvent(event, data, scope): void`
+Finds the webhooks in `scope` subscribed to the event and **enqueues** one `webhook_deliveries` row per webhook. Synchronous from the caller's perspective; actual HTTP delivery happens on the worker tick.
 
 #### `signPayload(timestamp, body, secret): string`
 HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once per attempt.

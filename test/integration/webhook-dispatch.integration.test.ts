@@ -129,13 +129,13 @@ describe("findWebhooksForEvent (event filtering)", () => {
   test("returns only active webhooks subscribed to the given event", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     /** Subscribed to email.sent. */
-    await seed.webhook({
+    const { id: sentHook } = await seed.webhook({
       apiKeyId,
       url: "https://a.example.com",
       events: ["email.sent", "email.failed"],
     });
     /** Subscribed to email.bounced only. */
-    await seed.webhook({
+    const { id: bouncedHook } = await seed.webhook({
       apiKeyId,
       url: "https://b.example.com",
       events: ["email.bounced"],
@@ -148,13 +148,13 @@ describe("findWebhooksForEvent (event filtering)", () => {
     });
     await db.update(webhooks).set({ isActive: false }).where(eq(webhooks.id, inactiveId));
 
-    const sent = await findWebhooksForEvent("email.sent");
-    expect(sent.map((h) => h.url)).toEqual(["https://a.example.com"]);
+    const sent = await findWebhooksForEvent("email.sent", { apiKeyId });
+    expect(sent.map((h) => h.id)).toEqual([sentHook]);
 
-    const bounced = await findWebhooksForEvent("email.bounced");
-    expect(bounced.map((h) => h.url)).toEqual(["https://b.example.com"]);
+    const bounced = await findWebhooksForEvent("email.bounced", { apiKeyId });
+    expect(bounced.map((h) => h.id)).toEqual([bouncedHook]);
 
-    const queued = await findWebhooksForEvent("email.queued");
+    const queued = await findWebhooksForEvent("email.queued", { apiKeyId });
     expect(queued).toHaveLength(0);
   });
 });
@@ -173,11 +173,11 @@ describe("dispatchEvent: end-to-end", () => {
       events: ["email.bounced"],
     });
 
-    dispatchEvent("email.bounced", {
-      emailId: "msg_test",
-      to: "user@example.com",
-      bounceType: "hard",
-    });
+    dispatchEvent(
+      "email.bounced",
+      { emailId: "msg_test", to: "user@example.com", bounceType: "hard" },
+      { apiKeyId },
+    );
     await waitForDispatch();
 
     expect(captured).toHaveLength(2);
@@ -217,9 +217,72 @@ describe("dispatchEvent: end-to-end", () => {
       events: ["email.sent"],
     });
 
-    dispatchEvent("email.bounced", { emailId: "msg_test" });
+    dispatchEvent("email.bounced", { emailId: "msg_test" }, { apiKeyId });
     await waitForDispatch();
 
     expect(captured).toHaveLength(0);
+  });
+});
+
+/**
+ * Tenant isolation (GHSA-8r3q-hqf8-2264). Webhooks used to receive every
+ * key's events: one key's email.sent (sender, recipient, subject) reached
+ * another key's webhook, and restricted keys could subscribe to inbound
+ * email.received, bypassing the admin-only inbound API (#130).
+ */
+describe("dispatch is scoped to the owning API key", () => {
+  test("an email event reaches only the owning key's webhooks", async () => {
+    const a = await seed.apiKey({ name: "tenant-a" });
+    const b = await seed.apiKey({ name: "tenant-b" });
+    await seed.webhook({
+      apiKeyId: a.id,
+      url: "https://93.184.216.34",
+      events: ["email.sent"],
+    });
+    await seed.webhook({
+      apiKeyId: b.id,
+      url: "https://93.184.216.35",
+      events: ["email.sent"],
+    });
+
+    dispatchEvent(
+      "email.sent",
+      { emailId: "msg_a", to: "customer@example.org", subject: "Tenant A only" },
+      { apiKeyId: a.id },
+    );
+    await waitForDispatch();
+
+    expect(captured.map((c) => c.url)).toEqual(["https://93.184.216.34"]);
+  });
+
+  test("lookup returns nothing for a key without matching webhooks", async () => {
+    const a = await seed.apiKey({ name: "tenant-a" });
+    const b = await seed.apiKey({ name: "tenant-b" });
+    await seed.webhook({
+      apiKeyId: a.id,
+      url: "https://a.example.com",
+      events: ["email.sent"],
+    });
+    expect(await findWebhooksForEvent("email.sent", { apiKeyId: b.id })).toHaveLength(0);
+  });
+
+  test("inbound email.received reaches admin keys' webhooks only", async () => {
+    const admin = await seed.apiKey({ name: "admin", isAdmin: true });
+    const restricted = await seed.apiKey({ name: "restricted", isAdmin: false });
+    const { id: adminHook } = await seed.webhook({
+      apiKeyId: admin.id,
+      url: "https://admin.example.com",
+      events: ["email.received"],
+    });
+    /** Seeded directly (bypassing the create-time check) to model a webhook
+     *  created before this fix. */
+    await seed.webhook({
+      apiKeyId: restricted.id,
+      url: "https://restricted.example.com",
+      events: ["email.received"],
+    });
+
+    const hooks = await findWebhooksForEvent("email.received", { adminOnly: true });
+    expect(hooks.map((h) => h.id)).toEqual([adminHook]);
   });
 });

@@ -69,7 +69,11 @@ export interface BounceHandlerDeps {
    * Fire `email.bounced` to subscribed webhooks. Fire-and-forget: the
    * handler doesn't await it (matches `dispatchEvent`'s contract).
    */
-  dispatchEvent: (event: "email.bounced", data: Record<string, unknown>) => void;
+  dispatchEvent: (
+    event: "email.bounced",
+    data: Record<string, unknown>,
+    scope: { apiKeyId: string },
+  ) => void;
 }
 
 export interface HandleBounceResult {
@@ -150,14 +154,18 @@ export async function handleBounce(
    * cross-reference the just-created suppression row in the dashboard
    * or via API without a separate lookup.
    */
-  deps.dispatchEvent("email.bounced", {
-    emailId: original.id,
-    to: parsed.recipient,
-    bounceType: finalKind,
-    status: parsed.status,
-    diagnostic: parsed.diagnostic ?? null,
-    suppressionId: suppression.id,
-  });
+  deps.dispatchEvent(
+    "email.bounced",
+    {
+      emailId: original.id,
+      to: parsed.recipient,
+      bounceType: finalKind,
+      status: parsed.status,
+      diagnostic: parsed.diagnostic ?? null,
+      suppressionId: suppression.id,
+    },
+    { apiKeyId: original.apiKeyId },
+  );
 
   const escalated = parsed.kind === "soft" && finalKind === "hard";
 
