@@ -106,6 +106,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`: per-API-key request limit on the REST API (default `100` requests per `60` seconds, then `429` with `Retry-After`). Raise it if one key legitimately makes more calls than that, for example a high-volume sender. Boot fails on a non-positive or non-integer value.
 
+> `MAIL_ALLOW_PRIVATE_MX`: by default BunMail refuses to deliver to an MX host that resolves to a private, loopback or link-local address, since recipient domains (and their MX records) are chosen by API callers. Set `true` only if you deliberately deliver to an internal mail server.
+
 ## 2. DNS Records
 
 Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.):
