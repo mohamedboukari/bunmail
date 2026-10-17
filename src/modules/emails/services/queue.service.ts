@@ -711,6 +711,8 @@ async function sendClaimedEmail(
           to: email.toAddress,
           subject: email.subject,
           error: summariseFailures(finalState),
+          /** Some receiver refused the sender (#246), not the recipient. */
+          blocked: Object.values(finalState).some((g) => g.blocked === true),
         },
         { apiKeyId: email.apiKeyId },
       );

@@ -19,7 +19,7 @@ import {
 import { apiKeys } from "../../src/modules/api-keys/models/api-key.schema.ts";
 import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
 import type { DeliveryGroupStatus } from "../../src/modules/emails/models/email.schema.ts";
-import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
 
 /** A mailer that reports one MX group with the given outcome. */
 function fakeMailer(status: DeliveryGroupStatus, lastError?: string): typeof sendMail {
@@ -249,5 +249,31 @@ describe("review follow-ups", () => {
     const r = await row(id);
     expect(r.status).toBe("queued");
     expect(r.sentAt?.toISOString()).toBe(deliveredAt);
+  });
+});
+
+describe("sender policy blocks (#246)", () => {
+  test("a blocklist rejection fails the email without suppressing the recipient", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id } = await seed.email({ apiKeyId, toAddress: "user@example.org" });
+
+    await runQueueCycle({
+      sendMail: async (options) => ({
+        messageId: options.messageId,
+        deliveryState: {
+          "mx.example.org": {
+            status: "failed",
+            recipients: ["user@example.org"],
+            attempts: 1,
+            blocked: true,
+            lastError:
+              "550 5.7.1 Service unavailable; Client host blocked using Spamhaus",
+          },
+        },
+      }),
+    });
+
+    expect((await row(id)).status).toBe("failed");
+    expect(await db.select().from(suppressions)).toEqual([]);
   });
 });
