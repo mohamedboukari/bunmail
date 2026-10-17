@@ -1,0 +1,33 @@
+import { createHash, randomBytes } from "crypto";
+
+/**
+ * Opaque tokens for sessions and one-time links (#214). A token is 32
+ * random bytes (256 bits), sent to the user as base64url; only its SHA-256
+ * hash is stored (`sessions.token_hash`, `user_tokens.token_hash`), so a
+ * database leak does not yield usable tokens. Lookups hash the presented
+ * token and compare hashes, which also keeps the stored column fixed-width.
+ *
+ * Pure: no I/O, no config.
+ */
+
+/** A freshly minted token and the hash to store for it. */
+export interface MintedToken {
+  /** Give this to the user (cookie value or link); never store it. */
+  token: string;
+  /** Store this; look the token up by it. */
+  hash: string;
+}
+
+/** SHA-256 of a presented token, hex, as stored in the `token_hash` columns. */
+// Consumed by the session and invite flows (#216, #217); exported ahead of them.
+/** @public */
+export function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Mints a new random token and its storage hash. */
+/** @public */
+export function mintToken(): MintedToken {
+  const token = randomBytes(32).toString("base64url");
+  return { token, hash: hashToken(token) };
+}

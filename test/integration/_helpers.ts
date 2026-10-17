@@ -39,6 +39,10 @@ import { config } from "../../src/config.ts";
 export async function truncateAll(): Promise<void> {
   await db.execute(
     drizzleSql`TRUNCATE TABLE
+      user_tokens,
+      sessions,
+      user_credentials,
+      users,
       suppressions,
       emails,
       email_tombstones,

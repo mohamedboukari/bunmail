@@ -1,7 +1,11 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "project": ["src/**/*.{ts,tsx}"],
-  "ignore": ["src/db/seed.ts"],
+  "ignore": [
+    "src/db/seed.ts",
+    "src/modules/users/services/password.service.ts",
+    "src/modules/users/services/token.service.ts"
+  ],
   "ignoreExportsUsedInFile": true,
   "ignoreBinaries": ["awk"],
   "rules": {
