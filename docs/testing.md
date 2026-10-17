@@ -128,3 +128,14 @@ When adding a service unit test, prefer the **dependency-injection pattern**: ex
 - Use unique `from` and `to` per test to avoid accidental cross-test interference.
 - Don't rely on row counts surviving across tests: `truncateAll` runs between every test.
 - Don't import production secrets into tests: `test/setup.ts` and `test/integration/_preload.ts` set deterministic dummy values.
+
+## Parser time budgets (#232)
+
+Everything that parses untrusted input has a unit test that feeds it generated input at the size the server accepts (10 MB for inbound and submitted messages, 25 MB after DMARC decompression) and asserts completion inside a generous budget, so a super-linear regression fails CI instead of being found by the first crafted message:
+
+- `test/unit/parser-time-budgets.test.ts`: the DMARC heuristic and parser, mailparser (`simpleParser`), and the inbound notification builder.
+- `test/unit/bounce-parser.test.ts`: the DSN parser (#235).
+- `test/unit/recipients.test.ts`: `parseRecipients`, including the adversarial shapes that made the previous address regex backtrack quadratically.
+
+Inputs are generated in the test, never stored as fixtures. Budgets are deliberately loose (hundreds of ms to a few seconds) to stay stable on CI; each was checked to fail against a quadratic implementation.
+

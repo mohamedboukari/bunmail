@@ -14,6 +14,7 @@ import { redactEmail } from "../../../utils/redact.ts";
 import { hashApiKey } from "../../../utils/crypto.ts";
 import { findByHash } from "../../api-keys/services/api-key.service.ts";
 import { createEmail } from "../../emails/services/email.service.ts";
+import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
@@ -126,7 +127,17 @@ function extractAddresses(field: AddressObject | AddressObject[] | undefined): s
   for (const obj of objs) {
     for (const a of obj.value ?? []) {
       const addr = a.address?.trim();
-      if (addr) out.push(addr);
+      if (!addr) continue;
+      /** RFC 5321 cap, applied at ingestion so an over-long (and possibly
+       *  pathological) address never reaches storage or the recipient
+       *  parser. Dropped, like an address that fails the shape check. */
+      if (addr.length > MAX_ADDRESS_LENGTH) {
+        logger.warn("SMTP submission: dropping over-long header address", {
+          length: addr.length,
+        });
+        continue;
+      }
+      out.push(addr);
     }
   }
   return out;
