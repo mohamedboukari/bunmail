@@ -44,5 +44,11 @@ export const sendEmailDto = t.Object({
 
   /** Template-based sending: takes precedence over inline content when set */
   templateId: t.Optional(t.String()),
-  variables: t.Optional(t.Record(t.String(), t.String())),
+  /** At most 100 variables, names up to 100 and values up to 100 KB long:
+   *  the rendered output is also capped (see renderTemplate). */
+  variables: t.Optional(
+    t.Record(t.String({ maxLength: 100 }), t.String({ maxLength: 100_000 }), {
+      maxProperties: 100,
+    }),
+  ),
 });

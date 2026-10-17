@@ -51,7 +51,9 @@ Templates use Mustache-style `{{variableName}}` syntax. When sending an email wi
 }
 ```
 
-The subject, HTML, and text bodies are all rendered with the provided variables. Unmatched `{{variables}}` are left as-is.
+The subject, HTML, and text bodies are all rendered with the provided variables. Unmatched `{{variables}}` are left as-is, and only the object's own keys are used (`{{constructor}}` stays as written).
+
+Limits: a template's `html` and `text` are at most 5 MB each, and it declares at most 100 variable names (`^\w+$`, up to 100 characters). A send passes at most 100 variables with values up to 100 KB. Variables multiply a template's size, so rendering is bounded too: it stops with `422 TEMPLATE_OUTPUT_TOO_LARGE` as soon as a body would pass 5 MB or the subject 500 characters, before the oversized string is built.
 
 ## Dashboard HTML Preview
 
@@ -62,8 +64,8 @@ The template create and edit pages (`/dashboard/templates` and `/dashboard/templ
 
 ## Service Methods
 
-#### `renderTemplate(templateStr, variables): string`
-Replaces `{{key}}` placeholders with values from the variables object.
+#### `renderTemplate(templateStr, variables, maxLength?): string`
+Replaces `{{key}}` placeholders with values from the variables object (own keys only). Throws `TemplateTooLargeError` (`src/modules/templates/errors.ts`) once the output would exceed `maxLength` (default `MAX_RENDERED_BODY_LENGTH`, 5 MB; subjects use `MAX_RENDERED_SUBJECT_LENGTH`, 500).
 
 #### `createTemplate(input, apiKeyId): Promise<Template>`
 Creates a new template scoped to the API key.

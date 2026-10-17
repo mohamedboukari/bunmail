@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, ValidationError } from "elysia";
 import { openapi } from "@elysiajs/openapi";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
@@ -15,6 +15,7 @@ import {
   InactiveApiKeyError,
   UnauthorizedSenderError,
 } from "./modules/api-keys/errors.ts";
+import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { dmarcReportsPlugin } from "./modules/dmarc-reports/dmarc-reports.plugin.ts";
@@ -116,6 +117,33 @@ const app = new Elysia()
    * from leaking in production.
    */
   .onError(async ({ error, code, set, request }) => {
+    /**
+     * Request validation failed → 422 with a short list of what is wrong.
+     * Bodies are validated before the auth hooks run, so this is reachable
+     * without a key: the response never echoes the submitted values (only
+     * each failing path and TypeBox's fixed message, capped), and it is not
+     * logged as a server error. It used to fall through to the 500 path,
+     * which logged the whole request body.
+     */
+    if (code === "VALIDATION" && error instanceof ValidationError) {
+      set.status = 422;
+      return {
+        success: false,
+        error: "Request validation failed",
+        code: "VALIDATION_ERROR",
+        details: error.all.slice(0, 10).map((e) => ({
+          path: e.path,
+          message: e.message.slice(0, 200),
+        })),
+      };
+    }
+
+    /** Malformed body (e.g. invalid JSON) → 400, same reasoning. */
+    if (code === "PARSE") {
+      set.status = 400;
+      return { success: false, error: "Malformed request body", code: "INVALID_BODY" };
+    }
+
     if (code === "NOT_FOUND") {
       set.status = 404;
 
@@ -144,6 +172,14 @@ const app = new Elysia()
         code: "RECIPIENT_SUPPRESSED",
         suppressionId: error.suppressionId,
       };
+    }
+
+    /**
+     * Variables would make the rendered template larger than allowed → 422.
+     */
+    if (error instanceof TemplateTooLargeError) {
+      set.status = 422;
+      return { success: false, error: error.message, code: "TEMPLATE_OUTPUT_TOO_LARGE" };
     }
 
     /**
@@ -257,6 +293,7 @@ const app = new Elysia()
   .listen({
     port: config.server.port,
     hostname: config.server.host,
+    maxRequestBodySize: config.server.maxRequestBodyBytes,
   });
 
 logger.info("BunMail server started", {

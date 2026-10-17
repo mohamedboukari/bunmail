@@ -56,3 +56,29 @@ describe("sendEmailDto: CRLF header-injection guard (#133)", () => {
     expect(check.Check({ ...base, replyTo: "a@example.com,".repeat(200) })).toBe(false);
   });
 });
+
+describe("sendEmailDto: template variable caps", () => {
+  test("accepts up to 100 variables", () => {
+    const variables = Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [`v${i}`, "x"]),
+    );
+    expect(check.Check({ ...base, templateId: "tpl_x", variables })).toBe(true);
+  });
+
+  test("rejects more than 100 variables", () => {
+    const variables = Object.fromEntries(
+      Array.from({ length: 101 }, (_, i) => [`v${i}`, "x"]),
+    );
+    expect(check.Check({ ...base, templateId: "tpl_x", variables })).toBe(false);
+  });
+
+  test("rejects a variable value over 100 KB", () => {
+    expect(
+      check.Check({
+        ...base,
+        templateId: "tpl_x",
+        variables: { a: "x".repeat(100_001) },
+      }),
+    ).toBe(false);
+  });
+});

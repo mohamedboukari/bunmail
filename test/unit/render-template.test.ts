@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test";
-import { renderTemplate } from "../../src/modules/templates/services/template.service.ts";
+import {
+  MAX_RENDERED_BODY_LENGTH,
+  renderTemplate,
+} from "../../src/modules/templates/services/template.service.ts";
+import { TemplateTooLargeError } from "../../src/modules/templates/errors.ts";
 
 /**
  * Unit tests for renderTemplate.
@@ -50,5 +54,36 @@ describe("renderTemplate", () => {
   test("handles variables with special regex characters in values", () => {
     const result = renderTemplate("Price: {{price}}", { price: "$100.00 (USD)" });
     expect(result).toBe("Price: $100.00 (USD)");
+  });
+});
+
+describe("renderTemplate: bounded output", () => {
+  test("stops an amplifying template before building the huge string", () => {
+    /** 1M placeholders x 1 KB values would be about 1 GB of output. */
+    const template = "{{a}}".repeat(1_000_000);
+    const start = performance.now();
+    expect(() => renderTemplate(template, { a: "x".repeat(1024) })).toThrow(
+      TemplateTooLargeError,
+    );
+    expect(performance.now() - start).toBeLessThan(1_000);
+  });
+
+  test("allows output exactly at the limit", () => {
+    const value = "x".repeat(MAX_RENDERED_BODY_LENGTH);
+    expect(renderTemplate("{{a}}", { a: value })).toHaveLength(MAX_RENDERED_BODY_LENGTH);
+    expect(() => renderTemplate("{{a}}!", { a: value })).toThrow(TemplateTooLargeError);
+  });
+
+  test("applies a custom limit (used for subjects)", () => {
+    expect(() => renderTemplate("Hi {{name}}", { name: "x".repeat(500) }, 500)).toThrow(
+      TemplateTooLargeError,
+    );
+    expect(renderTemplate("Hi {{name}}", { name: "Ann" }, 500)).toBe("Hi Ann");
+  });
+
+  test("ignores inherited property names", () => {
+    expect(renderTemplate("{{constructor}} {{toString}}", {})).toBe(
+      "{{constructor}} {{toString}}",
+    );
   });
 });
