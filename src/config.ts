@@ -175,6 +175,13 @@ export const config = {
     port: parseInt(optionalEnv("PORT", "3000"), 10),
     /** Bind address */
     host: optionalEnv("HOST", "0.0.0.0"),
+    /**
+     * Largest request body accepted, in bytes. Bun rejects anything larger
+     * with 413 before reading it; its default is 128 MB, and request bodies
+     * are parsed before authentication runs. The largest legitimate body
+     * is a send or template with 5 MB of html plus 5 MB of text.
+     */
+    maxRequestBodyBytes: 12 * 1024 * 1024,
   },
 
   /**

@@ -3,7 +3,10 @@ import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { templates } from "../../templates/models/template.schema.ts";
-import { renderTemplate } from "../../templates/services/template.service.ts";
+import {
+  MAX_RENDERED_SUBJECT_LENGTH,
+  renderTemplate,
+} from "../../templates/services/template.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
@@ -126,7 +129,7 @@ export async function createEmail(
     }
 
     const vars = input.variables ?? {};
-    subject = renderTemplate(tpl.subject, vars);
+    subject = renderTemplate(tpl.subject, vars, MAX_RENDERED_SUBJECT_LENGTH);
     htmlContent = tpl.html ? renderTemplate(tpl.html, vars) : null;
     textContent = tpl.textContent ? renderTemplate(tpl.textContent, vars) : null;
   }

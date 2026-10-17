@@ -80,7 +80,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `bcc`        | string | No       | Comma-separated BCC recipients               |
 | `replyTo`    | string | No       | Comma-separated Reply-To address(es): replies go here instead of `from` (#169). Header only; doesn't change the envelope sender. Returned as `replyTo` on email responses (`null` when unset). |
 | `templateId` | string | No       | Template ID (overrides subject/html/text)    |
-| `variables`  | object | No       | Key-value pairs for template rendering       |
+| `variables`  | object | No       | Key-value pairs for template rendering (max 100 entries, values max 100 KB; the rendered body is capped at 5 MB and the subject at 500 characters, else `422 TEMPLATE_OUTPUT_TOO_LARGE`) |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
@@ -265,9 +265,9 @@ Create a new email template.
 |-------------|----------|----------|------------------------------------------|
 | `name`      | string   | Yes      | Human-readable name                      |
 | `subject`   | string   | Yes      | Subject template (supports `{{vars}}`)   |
-| `html`      | string   | No       | HTML body template                       |
-| `text`      | string   | No       | Plain text body template                 |
-| `variables` | string[] | No       | List of variable names for documentation |
+| `html`      | string   | No       | HTML body template (max 5 MB)            |
+| `text`      | string   | No       | Plain text body template (max 5 MB)      |
+| `variables` | string[] | No       | Variable names (max 100, each `^\w+$`, max 100 chars) |
 
 ---
 
@@ -567,8 +567,10 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|
+| 400    | Malformed request body, e.g. invalid JSON (`INVALID_BODY`) |
 | 401    | Missing or invalid token, or the sending key was revoked (`API_KEY_REVOKED`) |
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`) |
 | 404    | Resource not found                              |
-| 422    | Validation error: includes webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128) |
+| 413    | Request body larger than 12 MB (rejected before it is read) |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), or a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`) |
 | 429    | Rate limit exceeded                             |
