@@ -92,6 +92,8 @@ INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
 ```
 
+> `MAIL_HOSTNAME` is **required in production** (#242): it is the SMTP EHLO name and the Message-ID domain of every email. BunMail refuses to start if it is unset, `localhost`, an IP address, not fully qualified, or a placeholder (`*.example.com`, `*.yourdomain.com`, `.test`, `.local`). Use this server's real hostname, whose A record points at the server and which the sending IP's PTR resolves to (see the reverse DNS section below).
+
 > Generate a session secret: `openssl rand -hex 32`
 >
 > Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.

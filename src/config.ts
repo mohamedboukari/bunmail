@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { isIP } from "net";
 
 /**
  * Reads a required environment variable. Throws at startup if missing
@@ -155,6 +156,68 @@ function readSessionSecret(env: "development" | "production"): string {
 }
 
 /**
+ * Suffixes that can never be a real sending host: RFC 2606 / 6761
+ * reserved names and the placeholders used in `.env.example` and the docs.
+ */
+const PLACEHOLDER_HOST_SUFFIXES = [
+  "example.com",
+  "example.net",
+  "example.org",
+  "yourdomain.com",
+  "example",
+  "test",
+  "invalid",
+  "localhost",
+  "local",
+];
+
+/**
+ * Why `hostname` can't be used as the SMTP EHLO name and Message-ID domain,
+ * or `null` if it can. Receivers expect a fully qualified name whose A
+ * record and the sending IP's PTR match; `localhost`, an IP literal or a
+ * placeholder is a strong spam signal. Pure, for tests.
+ */
+export function mailHostnameProblem(hostname: string): string | null {
+  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (host === "") return "it is not set";
+  if (host === "localhost") return "it is localhost";
+  if (isIP(host) !== 0) return "it is an IP address";
+  if (!host.includes(".")) return "it is not a fully qualified domain name";
+  if (
+    host.length > 253 ||
+    !host.split(".").every((l) => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(l))
+  ) {
+    return "it is not a valid hostname";
+  }
+  if (PLACEHOLDER_HOST_SUFFIXES.some((s) => host === s || host.endsWith(`.${s}`))) {
+    return "it is a placeholder or reserved name";
+  }
+  return null;
+}
+
+/**
+ * Reads `MAIL_HOSTNAME`, the EHLO name and Message-ID domain of outbound
+ * mail. Production refuses to start with a value receivers would distrust
+ * (#242); development keeps the `localhost` default.
+ */
+export function readMailHostname(
+  env: AppEnv,
+  raw: string = optionalEnv("MAIL_HOSTNAME", ""),
+): string {
+  const problem = mailHostnameProblem(raw);
+  if (env === "production" && problem) {
+    throw new Error(
+      `[config] MAIL_HOSTNAME is not usable in production: ${problem} ("${raw}").\n` +
+        "  → Set it to this server's fully qualified hostname (e.g. mail.yourcompany.com),\n" +
+        "    whose A record points at the server and which the sending IP's PTR\n" +
+        "    (reverse DNS) resolves to. It is used as the SMTP EHLO name and the\n" +
+        "    Message-ID domain; `localhost` or a placeholder lands mail in spam.",
+    );
+  }
+  return raw.trim() === "" ? "localhost" : raw.trim();
+}
+
+/**
  * Central application configuration.
  *
  * Every setting is read from environment variables at import time.
@@ -206,8 +269,8 @@ export const config = {
   appBaseUrl: optionalEnv("APP_BASE_URL", "").replace(/\/+$/, ""),
 
   mail: {
-    /** Hostname used in SMTP HELO command and Message-ID header */
-    hostname: optionalEnv("MAIL_HOSTNAME", "localhost"),
+    /** Hostname used in SMTP HELO command and Message-ID header (#242) */
+    hostname: readMailHostname(readAppEnv()),
 
     /**
      * Max parallel SMTP sessions per destination MX host. Direct-to-MX
