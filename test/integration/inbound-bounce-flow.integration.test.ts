@@ -329,3 +329,30 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     expect(captured).toHaveLength(0);
   });
 });
+
+describe("inbound DSN for an email that is still being retried (#180)", () => {
+  test("records the suppression but leaves a queued email's status alone", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const messageId = "test-retrying-001@example.com";
+    const recipient = "gone@example.org";
+    /** One group already delivered and bounced later; another still deferred. */
+    const { id: emailId } = await seed.email({
+      apiKeyId,
+      toAddress: recipient,
+      status: "queued",
+      messageId: `<${messageId}>`,
+    });
+
+    const parsed = parseBounce(makeHardBounceDsn(messageId, recipient));
+    const result = await handleParsedBounce(parsed!);
+    expect(result.outcome).toBe("applied");
+
+    const [emailRow] = await db.select().from(emails).where(eq(emails.id, emailId));
+    expect(emailRow?.status).toBe("queued");
+    const supps = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.apiKeyId, apiKeyId));
+    expect(supps.map((s) => s.email)).toEqual([recipient]);
+  });
+});

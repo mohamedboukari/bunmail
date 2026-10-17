@@ -1,5 +1,7 @@
 import { randomBytes } from "crypto";
-import { eq, asc, and, isNull, inArray, sql } from "drizzle-orm";
+import { hostname } from "os";
+import { eq, asc, and, or, isNull, inArray, sql, getTableColumns } from "drizzle-orm";
+import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
@@ -13,6 +15,8 @@ import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { parseSmtpError } from "../../../utils/smtp-error.ts";
 import { config } from "../../../config.ts";
+import { nextRetryDelayMs } from "./retry-schedule.ts";
+import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -137,31 +141,74 @@ const POLL_INTERVAL_MS = 2000;
 /** Max emails to process in a single poll cycle */
 const BATCH_SIZE = 5;
 
-/** Max send attempts before marking an email as permanently failed */
-const MAX_ATTEMPTS = 3;
+/**
+ * How long a claim lasts (#180). The worker renews it every
+ * `LEASE_RENEW_MS` while it sends, so only a dead or stuck worker lets it
+ * expire; the row is then claimable again.
+ */
+const LEASE_MINUTES = 15;
+
+/** `NOW() + 15 minutes`, in database time. The length is a constant, so
+ *  it is inlined rather than bound as a parameter. */
+const LEASE_EXPIRY = sql`NOW() + interval ${sql.raw(`'${LEASE_MINUTES} minutes'`)}`;
+
+/** How often a worker renews the lease on a row it is sending. */
+const LEASE_RENEW_MS = 60_000;
+
+/**
+ * Oldest an email may get while temporary failures are still retried.
+ * Read at use time, not import time, so modules that import this one
+ * with a partial config stub (unit tests) still load.
+ */
+function retryMaxAgeMs(): number {
+  return config.mail.retryMaxAgeHours * 60 * 60 * 1000;
+}
+
+/**
+ * Identifies this process in `emails.locked_by`, so its updates only
+ * apply to rows it still holds.
+ */
+const WORKER_ID = `${hostname()}:${process.pid}:${randomBytes(4).toString("hex")}`.slice(
+  0,
+  64,
+);
+
+/**
+ * A claimed row, plus its age on the database clock. `created_at` has no
+ * time zone and is written by the database, so its age is computed there
+ * rather than against the app's clock.
+ */
+type ClaimedEmail = typeof emails.$inferSelect & { ageMs: number };
+
+/** The mailer, injectable so tests can drive the queue without SMTP. */
+interface QueueDeps {
+  sendMail: typeof sendMail;
+}
+
+const defaultDeps: QueueDeps = { sendMail };
 
 /** Reference to the setInterval timer: used to stop the queue */
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Starts the queue processor.
+ * Starts the queue processor: polls every 2 seconds for due emails.
  *
- * First recovers any emails stuck in "sending" state (from a previous
- * crash), then begins polling every 2 seconds for queued emails.
+ * There is no recovery step at boot (#180). Rows a crashed worker left in
+ * `sending` are reclaimed by the normal claim once their lease expires.
+ * The old boot step reset every `sending` row, including ones another
+ * replica was still sending, which delivered those emails twice.
  */
 export async function start(): Promise<void> {
   logger.info("Starting email queue processor", {
     pollIntervalMs: POLL_INTERVAL_MS,
     batchSize: BATCH_SIZE,
-    maxAttempts: MAX_ATTEMPTS,
+    retryMaxAgeHours: config.mail.retryMaxAgeHours,
+    workerId: WORKER_ID,
   });
-
-  /** Recover emails that were mid-send when the server last shut down */
-  await recoverInterrupted();
 
   /** Begin the poll loop */
   pollTimer = setInterval(() => {
-    processQueue().catch((error) => {
+    runQueueCycle().catch((error) => {
       logger.error("Queue processing error", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -184,28 +231,6 @@ export function stop(): void {
 }
 
 /**
- * Recovers emails stuck in "sending" status.
- *
- * This happens when the server crashes or restarts while emails are
- * being sent. We reset them back to "queued" so the queue picks them
- * up again on the next cycle.
- */
-async function recoverInterrupted(): Promise<void> {
-  const result = await db
-    .update(emails)
-    .set({ status: "queued", updatedAt: new Date() })
-    .where(and(eq(emails.status, "sending"), isNull(emails.deletedAt)))
-    .returning({ id: emails.id });
-
-  if (result.length > 0) {
-    logger.warn("Recovered interrupted emails", {
-      count: result.length,
-      ids: result.map((r) => r.id),
-    });
-  }
-}
-
-/**
  * Atomically claims up to `n` queued emails for processing.
  *
  * The query is a single statement that flips `queued → sending` with
@@ -224,33 +249,139 @@ async function recoverInterrupted(): Promise<void> {
  *      overlapping ones. Each returned row was claimed by exactly one
  *      caller.
  *
+ * Eligible rows (#180): `queued` rows whose `next_attempt_at` has passed
+ * (retries wait out their backoff), and `sending` rows whose lease has
+ * expired (their worker died). Both comparisons use the database clock.
+ * A `sending` row with no lease (claimed by a version without leases,
+ * e.g. an old replica during a rolling deploy) counts as leased until 15
+ * minutes after its last update. The claim takes a lease for this worker.
+ *
  * Exported so the integration test can hit it directly without going
  * through the poll loop.
  */
-export async function claimNextEmails(
-  n: number,
-): Promise<Array<typeof emails.$inferSelect>> {
-  /** Inner subquery that picks the next `n` queued ids and locks them. */
+export async function claimNextEmails(n: number): Promise<ClaimedEmail[]> {
+  /** Inner subquery that picks the next `n` due ids and locks them. */
   const pickIds = db
     .select({ id: emails.id })
     .from(emails)
-    .where(and(eq(emails.status, "queued"), isNull(emails.deletedAt)))
-    .orderBy(asc(emails.createdAt))
+    .where(
+      and(
+        isNull(emails.deletedAt),
+        or(
+          and(eq(emails.status, "queued"), sql`${emails.nextAttemptAt} <= NOW()`),
+          and(
+            eq(emails.status, "sending"),
+            /** `updated_at` holds UTC wall time written by the app. */
+            sql`COALESCE(${emails.leaseUntil}, (${emails.updatedAt} AT TIME ZONE 'UTC') + interval ${sql.raw(`'${LEASE_MINUTES} minutes'`)}) < NOW()`,
+          ),
+        ),
+      ),
+    )
+    .orderBy(asc(emails.nextAttemptAt), asc(emails.createdAt))
     .limit(n)
     .for("update", { skipLocked: true });
 
-  /** Outer UPDATE flips state + bumps attempts in the same statement. */
+  /** Outer UPDATE flips state, bumps attempts and takes the lease. */
   const claimed = await db
     .update(emails)
     .set({
       status: "sending",
       attempts: sql`${emails.attempts} + 1`,
+      lockedBy: WORKER_ID,
+      leaseUntil: LEASE_EXPIRY,
       updatedAt: new Date(),
     })
     .where(inArray(emails.id, pickIds))
-    .returning();
+    .returning({
+      ...getTableColumns(emails),
+      ageMs:
+        sql<number>`(extract(epoch from (NOW() - ${emails.createdAt})) * 1000)::float8`.mapWith(
+          Number,
+        ),
+    });
 
   return claimed;
+}
+
+/**
+ * One claim of a row: the row id plus its `attempts` value at claim time.
+ * Every claim increments `attempts`, so it works as a fencing token: a
+ * claim that was superseded (even by this same process reclaiming its own
+ * expired row) no longer matches.
+ */
+interface Claim {
+  emailId: string;
+  attempt: number;
+}
+
+/** Matches the row only while this exact claim still holds it. */
+function heldBy(claim: Claim) {
+  return and(
+    eq(emails.id, claim.emailId),
+    eq(emails.lockedBy, WORKER_ID),
+    eq(emails.attempts, claim.attempt),
+    eq(emails.status, "sending"),
+  );
+}
+
+/**
+ * Extends the lease on a row this claim is still sending. Returns false
+ * when the claim no longer holds the row (its lease expired and the row
+ * was reclaimed).
+ */
+async function renewLease(claim: Claim): Promise<boolean> {
+  const renewed = await db
+    .update(emails)
+    .set({ leaseUntil: LEASE_EXPIRY })
+    .where(heldBy(claim))
+    .returning({ id: emails.id });
+  return renewed.length > 0;
+}
+
+/**
+ * Expires the leases on every row this process is sending, so other
+ * workers can claim them right away. Called on shutdown: the process is
+ * about to exit, so its in-flight sends will not finish, and without this
+ * those rows would wait out their 15-minute lease.
+ */
+export async function releaseOwnLeases(): Promise<void> {
+  const released = await db
+    .update(emails)
+    .set({ leaseUntil: sql`NOW()` })
+    .where(and(eq(emails.lockedBy, WORKER_ID), eq(emails.status, "sending")))
+    .returning({ id: emails.id });
+  if (released.length > 0) {
+    logger.info("Released leases on shutdown", { count: released.length });
+  }
+}
+
+/**
+ * Writes a row's outcome and releases its lease, only if this claim still
+ * holds it. If the lease was lost (the row was reclaimed), the update is
+ * skipped and logged rather than overwriting the newer claim's state.
+ */
+async function releaseRow(
+  claim: Claim,
+  values: PgUpdateSetSource<typeof emails>,
+): Promise<void> {
+  const updated = await db
+    .update(emails)
+    .set({ ...values, lockedBy: null, leaseUntil: null, updatedAt: new Date() })
+    .where(heldBy(claim))
+    .returning({ id: emails.id });
+  if (updated.length === 0) {
+    logger.warn("Email outcome not saved: lease was lost to another claim", {
+      emailId: claim.emailId,
+    });
+  }
+}
+
+/** Earliest time any MX group was delivered, if one was. */
+function firstDeliveredAt(state: DeliveryState): Date | null {
+  const times = Object.values(state)
+    .map((g) => (g.deliveredAt ? Date.parse(g.deliveredAt) : NaN))
+    .filter((t) => !Number.isNaN(t));
+  return times.length > 0 ? new Date(Math.min(...times)) : null;
 }
 
 /**
@@ -263,11 +394,13 @@ export async function claimNextEmails(
  * 2. For each claimed row (concurrently):
  *    a. Try SMTP delivery via the mailer service.
  *    b. On success: mark "sent" with timestamp.
- *    c. On failure: hand off to `handleSendFailure` which classifies
- *       inline 5xx (auto-suppress, #68) vs transient (retry up to
- *       MAX_ATTEMPTS, then "failed").
+ *    c. On failure: hard 5xx groups are auto-suppressed (#68); temporary
+ *       failures are requeued with backoff until the email is older than
+ *       `MAIL_RETRY_MAX_AGE_HOURS`, then marked "failed" (#180).
+ *
+ * Exported (with an injectable mailer) so tests can drive one cycle.
  */
-async function processQueue(): Promise<void> {
+export async function runQueueCycle(deps: QueueDeps = defaultDeps): Promise<void> {
   const batch = await claimNextEmails(BATCH_SIZE);
 
   /** Nothing to process: skip silently */
@@ -276,7 +409,7 @@ async function processQueue(): Promise<void> {
   logger.debug("Processing email batch", { count: batch.length });
 
   /** Process all emails in the batch concurrently */
-  await Promise.allSettled(batch.map((email) => processEmail(email)));
+  await Promise.allSettled(batch.map((email) => processEmail(email, deps)));
 }
 
 /**
@@ -285,7 +418,34 @@ async function processQueue(): Promise<void> {
  *
  * @param email - The queued email row to process
  */
-async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
+async function processEmail(email: ClaimedEmail, deps: QueueDeps): Promise<void> {
+  const claim: Claim = { emailId: email.id, attempt: email.attempts };
+  /** Keep the lease alive for as long as this send takes. */
+  const renewal = setInterval(() => {
+    renewLease(claim)
+      .then((held) => {
+        if (!held) logger.warn("Lease lost while sending", { ...claim });
+      })
+      .catch((error: unknown) => {
+        logger.error("Lease renewal failed", {
+          ...claim,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }, LEASE_RENEW_MS);
+  try {
+    await sendClaimedEmail(email, claim, deps);
+  } finally {
+    clearInterval(renewal);
+  }
+}
+
+/** Sends one claimed email and records the outcome (see {@link runQueueCycle}). */
+async function sendClaimedEmail(
+  email: ClaimedEmail,
+  claim: Claim,
+  deps: QueueDeps,
+): Promise<void> {
   const emailId = email.id;
   /**
    * The row arrives already in `sending` state with `attempts` incremented:
@@ -299,6 +459,21 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     attempt,
     to: redactEmail(email.toAddress),
   });
+
+  /**
+   * Retries can run for up to `MAIL_RETRY_MAX_AGE_HOURS` after the send
+   * was accepted, so check that the sending key is still active: a key
+   * revoked in the meantime (#239) must not keep sending.
+   */
+  const key = await findApiKeyById(email.apiKeyId);
+  if (!key?.isActive) {
+    await releaseRow(claim, {
+      status: "failed",
+      lastError: "API key revoked before delivery",
+    });
+    logger.warn("Email not sent: API key revoked", { emailId, apiKeyId: email.apiKeyId });
+    return;
+  }
 
   try {
     /**
@@ -351,7 +526,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       }
     }
 
-    const result = await sendMail({
+    const result = await deps.sendMail({
       from: email.fromAddress,
       to: email.toAddress,
       cc: email.cc,
@@ -415,8 +590,9 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     /**
      * Decide row-level outcome from the aggregate group state.
      *
-     * - any group still `retry` AND attempts < cap → schedule next pass
-     * - else (all terminal, or cap exhausted) → terminal row status:
+     * - any group still `retry` AND the email is young enough → schedule
+     *   the next pass after the backoff (#180)
+     * - else (all terminal, or too old to retry) → terminal row status:
      *   - any group `sent` → row `sent`
      *   - else any failed-due-to-hard-5xx → row `bounced`
      *   - else → row `failed`
@@ -425,24 +601,28 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
     const anyRetry = groups.some(([, g]) => g.status === "retry");
     const anySent = groups.some(([, g]) => g.status === "sent");
 
-    if (anyRetry && attempt < MAX_ATTEMPTS) {
-      /** At least one group transient-failed; row goes back to
-       *  `queued` so the claim loop picks it up again. Persist the
-       *  state so the next pass can skip already-sent groups. */
-      await db
-        .update(emails)
-        .set({
-          status: "queued",
-          messageId,
-          deliveryState: result.deliveryState,
-          lastError: summariseRetries(result.deliveryState),
-          updatedAt: new Date(),
-        })
-        .where(eq(emails.id, emailId));
+    const retryDelayMs = anyRetry
+      ? nextRetryDelayMs(attempt, email.ageMs, retryMaxAgeMs())
+      : null;
+
+    if (retryDelayMs !== null) {
+      /** At least one group transient-failed; row goes back to `queued`
+       *  and is not claimable before the backoff passes (database clock).
+       *  Persist the state so the next pass can skip already-sent groups;
+       *  `sentAt` records the first delivered group. */
+      const retrySeconds = Math.round(retryDelayMs / 1000);
+      await releaseRow(claim, {
+        status: "queued",
+        nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
+        messageId,
+        deliveryState: result.deliveryState,
+        sentAt: firstDeliveredAt(result.deliveryState),
+        lastError: summariseRetries(result.deliveryState),
+      });
       logger.warn("Email send had retry groups, requeued", {
         emailId,
         attempt,
-        remainingAttempts: MAX_ATTEMPTS - attempt,
+        retryInSeconds: retrySeconds,
       });
       /** If this attempt landed at least one group, fire `email.sent`
        *  once: checked against priorStatuses so we don't double-fire
@@ -463,7 +643,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
       return;
     }
 
-    /** Cap-exhaust or all-terminal path. Flip any straggling retry
+    /** Too-old-to-retry or all-terminal path. Flip any straggling retry
      *  groups to `failed` (transient-exhausted, not hard-bounced) so
      *  the persisted state has no ambiguous statuses left. */
     const finalState: DeliveryState = { ...result.deliveryState };
@@ -485,20 +665,16 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
         ? "bounced"
         : "failed";
 
-    await db
-      .update(emails)
-      .set({
-        status: finalStatus,
-        messageId,
-        deliveryState: finalState,
-        sentAt: finalAnySent ? new Date() : null,
-        lastError:
-          finalStatus === "sent" && finalGroups.every((g) => g.status === "sent")
-            ? null
-            : summariseFailures(finalState),
-        updatedAt: new Date(),
-      })
-      .where(eq(emails.id, emailId));
+    await releaseRow(claim, {
+      status: finalStatus,
+      messageId,
+      deliveryState: finalState,
+      sentAt: finalAnySent ? (firstDeliveredAt(finalState) ?? new Date()) : null,
+      lastError:
+        finalStatus === "sent" && finalGroups.every((g) => g.status === "sent")
+          ? null
+          : summariseFailures(finalState),
+    });
 
     logger.info("Email reached terminal state", {
       emailId,
@@ -547,14 +723,7 @@ async function processEmail(email: typeof emails.$inferSelect): Promise<void> {
      * So this catch is a one-shot terminal: mark `failed`, no retry.
      */
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await db
-      .update(emails)
-      .set({
-        status: "failed",
-        lastError: errorMessage,
-        updatedAt: new Date(),
-      })
-      .where(eq(emails.id, emailId));
+    await releaseRow(claim, { status: "failed", lastError: errorMessage });
     logger.error("Email permanently failed (input error)", {
       emailId,
       attempt,

@@ -22,6 +22,9 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`. `sent` rows can later transition to `bounced` when a DSN comes back (#24). |
 | `source`        | varchar(10)    | NOT NULL, default `api` | Ingress channel: `api` (REST `POST /api/v1/emails/send`) or `smtp` (SMTP submission server, #120). Existing rows backfill to `api` (#137). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
+| `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
+| `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
+| `lease_until`   | timestamptz    | nullable                | Claim expiry while `sending`; renewed by the worker, reclaimable once passed (#180) |
 | `last_error`    | text           | nullable                | Error message from last failed attempt      |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
@@ -160,17 +163,21 @@ Sends an email via direct SMTP. When `dkim` options are provided, signs the mess
 ### queue.service.ts
 
 #### `start(): void`
-Starts the queue processor. Recovers interrupted emails, then polls every 2 seconds.
+Starts the queue processor: polls every 2 seconds. There is no boot-time recovery step: rows a dead worker left in `sending` are reclaimed by the normal claim once their lease expires (#180).
+
+#### `runQueueCycle(deps?): Promise<void>`
+One poll cycle: claims up to 5 due rows and sends them. The mailer is injectable for tests.
 
 #### `stop(): void`
 Stops the queue processor gracefully.
 
-#### `processEmail(email): Promise<void>`
-1. Marks as `sending`, increments attempts
+#### `processEmail(email, deps): Promise<void>`
+1. Arrives already `sending`, with `attempts` incremented and a 15-minute lease (the claim does both); the lease is renewed every minute while sending
 2. Looks up DKIM keys for the sender's domain
 3. Sends via SMTP with DKIM signing (if keys available)
 4. On success: marks `sent`, fires `email.sent` webhook
-5. On failure after 3 attempts: marks `failed`, fires `email.failed` webhook
+5. On a temporary failure: requeues with `next_attempt_at` from the backoff schedule; once the email is older than `MAIL_RETRY_MAX_AGE_HOURS`, marks `failed` and fires `email.failed`
+6. Every outcome clears the lease, and is only written if this claim still holds the row (matched on `locked_by` and the claim's `attempts`)
 
 ## Status Flow
 
@@ -185,9 +192,9 @@ queued ──→ sending ──→ sent ✓        → webhook: email.sent
   │           │       (inline 5xx)     set by handleSendFailure (#68)
   │           │                        on attempt 1: stops retrying
   │           │
-  └───────────┴───→ queued (retry, attempts < 3, soft 4xx or infra error)
+  └───────────┴───→ queued (retry after backoff, soft 4xx or infra error)
 
-queued ──→ sending ──→ failed ✗ (attempts >= 3, soft 4xx or infra error)
+queued ──→ sending ──→ failed ✗ (still failing when MAIL_RETRY_MAX_AGE_HOURS old)
                        → webhook: email.failed (never confirmed unreachable)
 ```
 
@@ -246,8 +253,8 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 | Per-group outcomes | Email status | Auto-suppression | Retry |
 |---|---|---|---|
 | All groups `sent` | `sent` | none | none |
-| Any group `retry` AND row attempts < cap | `queued` (retry pass) | per-recipient on `failed` groups only | yes, only `retry` groups re-submitted |
-| Cap exhausted with any `retry` left | `failed` (or `bounced` if any hard) | per-recipient on `failed` groups (hard 5xx) | none |
+| Any group `retry` AND email younger than the retry window | `queued` (retry pass after backoff) | per-recipient on `failed` groups only | yes, only `retry` groups re-submitted |
+| Retry window passed with any `retry` left | `failed` (or `bounced` if any hard) | per-recipient on `failed` groups (hard 5xx) | none |
 | All groups `failed`, any hard 5xx | `bounced` | per-recipient on each failed group | none |
 | All groups `failed`, all transient | `failed` | none | none |
 | Mixed: some `sent`, some `failed` | `sent` (partial delivery) | per-recipient on the failed groups (hard 5xx) | none |
@@ -258,11 +265,15 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 
 - **Polling interval:** 2 seconds
 - **Batch size:** 5 emails per cycle
-- **Max attempts:** 3
+- **Retry backoff (#180):** a temporary failure (4xx, connection or DNS error) requeues the email with `next_attempt_at` set 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h after each attempt, until the email is older than `MAIL_RETRY_MAX_AGE_HOURS` (default 48); then it is `failed`. Receivers that defer (greylisting, Yahoo `421 [TSS04]`, Microsoft `451 4.7.500`, Gmail `421 4.7.28`) are retried when they expect it instead of within seconds. While deferred, the API shows `status: "queued"` and `nextAttemptAt`.
+- **Leases (#180):** the claim stamps `locked_by` and a 15-minute `lease_until`; the worker renews the lease every minute and clears it with the outcome, which is only written if it still holds the row. If a worker dies, its rows become claimable once the lease expires (the lost attempt counts). This replaces the boot-time reset of every `sending` row, which resent emails another replica was still sending.
+- **SMTP timeouts:** nodemailer's defaults (2 min setup, 10 min socket inactivity). Shorter ones would risk duplicates: a receiver may answer the final `.` of DATA minutes after accepting the message. Long sends are safe because the lease is renewed while they run.
+- **Upgrade and shutdown:** a `sending` row with no lease (claimed by a version without leases, e.g. during a rolling deploy) counts as leased until 15 minutes after its last update. On shutdown a process expires its own leases so another worker can take its in-flight rows right away.
+- **Re-checks on retry:** each pass checks that the sending API key is still active; a key revoked in the meantime fails the email without sending. `sentAt` is the time the first MX group was delivered, set as soon as one is, even while other groups are still retrying.
 - **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims: running multiple BunMail instances against the same DB will not double-send.
 - **MX address check:** each MX host is resolved by the mailer itself and refused if any address is not publicly routable (`mx-address.ts`, same ranges as the webhook SSRF guard), or if the domain publishes a null MX. The transport connects to the checked address (IPv4 preferred) with the MX name as TLS SNI, so a DNS answer cannot change between check and connect. A refused MX is a normal failed attempt for that group (retried, then `failed`); nothing is suppressed. `MAIL_ALLOW_PRIVATE_MX=true` allows private MX hosts for deliberate internal delivery.
 - **Per-MX throttle (#91):** SMTP sessions are throttled per destination MX via a module-level semaphore (`src/utils/mx-throttle.ts`). Default is **one parallel session per MX** (configurable via `MAIL_MX_CONCURRENCY`). Sends to different MXs run in parallel; sends to the same MX serialize. The semaphore holds across poll cycles, so back-to-back batches that share a destination can't pile up either. This is what stops strict receivers (Outlook, Yahoo) from `421`ing parallel sessions from the same source IP. Operators with established IP reputation can raise the cap to 2-3; values above 3 are rarely worth it.
-- **Crash recovery:** On startup, `sending` → `queued`
+- **Crash recovery:** lease expiry (see Leases above); nothing runs at startup
 - **DKIM:** Automatically signs with domain's RSA key when available
 - **Webhooks:** Dispatches `email.sent` and `email.failed` events
 

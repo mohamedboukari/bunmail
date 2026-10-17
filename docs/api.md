@@ -97,10 +97,13 @@ Oversize bodies return `422 Unprocessable Entity` from the validation layer.
     "status": "queued",
     "source": "api",
     "attempts": 0,
+    "nextAttemptAt": "2026-03-15T12:00:00.000Z",
     "createdAt": "2026-03-15T12:00:00.000Z"
   }
 }
 ```
+
+`nextAttemptAt` is set while `status` is `queued`: the earliest time the next delivery attempt can run. After a temporary failure (for example greylisting) it moves out with the retry backoff; it is `null` once the email is sending or done.
 
 The `source` field is the ingress channel the email arrived through: `api` (this REST endpoint) or `smtp` (the SMTP submission server, #120).
 

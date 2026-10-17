@@ -108,6 +108,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_ALLOW_PRIVATE_MX`: by default BunMail refuses to deliver to an MX host that resolves to a private, loopback or link-local address, since recipient domains (and their MX records) are chosen by API callers. Set `true` only if you deliberately deliver to an internal mail server.
 
+> `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h.
+
 ## 2. DNS Records
 
 Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.):

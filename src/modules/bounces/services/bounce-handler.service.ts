@@ -10,7 +10,7 @@
  * exercise the core with fake callbacks: no DB needed.
  */
 
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import {
@@ -261,10 +261,16 @@ export async function handleParsedBounce(
       return { id: row.id };
     },
     markEmailBounced: async (emailId) => {
+      /**
+       * Only rows the queue has finished with. A row still `queued` or
+       * `sending` has groups being retried (multi-MX sends can bounce for
+       * one recipient while another is deferred); marking it `bounced`
+       * would stop those retries. The suppression is still recorded.
+       */
       await db
         .update(emails)
         .set({ status: STATUS_BOUNCED, updatedAt: new Date() })
-        .where(eq(emails.id, emailId));
+        .where(and(eq(emails.id, emailId), inArray(emails.status, ["sent", "failed"])));
     },
     dispatchEvent,
   });

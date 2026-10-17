@@ -275,6 +275,13 @@ async function sendToMxGroup(args: {
     secure: false,
     opportunisticTLS: true,
     name: config.mail.hostname,
+    /**
+     * Timeouts stay at nodemailer's defaults (2 min setup, 10 min socket
+     * inactivity). Shorter ones are unsafe: a receiver may take minutes to
+     * answer the final `.` of DATA after it has accepted the message, and
+     * a timeout there leads to a retry and a duplicate. The queue's lease
+     * is renewed while a send runs, so long sends are fine.
+     */
     tls: {
       rejectUnauthorized: false,
       servername: args.mxHost,

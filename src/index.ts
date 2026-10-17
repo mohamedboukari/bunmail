@@ -375,6 +375,15 @@ startLoginRateLimitCleanup(config.dashboard.loginRateLimit.windowSec * 1000);
 function shutdown() {
   logger.info("Shutting down...");
   queueService.stop();
+  /** Hand this process's in-flight emails back before exiting (#180),
+   *  instead of leaving them leased for 15 minutes. Best effort. */
+  void queueService
+    .releaseOwnLeases()
+    .catch(() => undefined)
+    .finally(() => finishShutdown());
+}
+
+function finishShutdown() {
   smtpReceiver.stop();
   smtpSubmission.stop();
   trashPurge.stop();

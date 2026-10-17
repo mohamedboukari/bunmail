@@ -244,7 +244,7 @@ export function LandingPage() {
                   <h3 class="font-medium text-sm">Email Queue</h3>
                 </div>
                 <p class="text-sm text-gray-500 dark:text-gray-400">
-                  Automatic retries (3 attempts)
+                  Automatic retries with backoff (up to 48 h)
                 </p>
               </div>
 

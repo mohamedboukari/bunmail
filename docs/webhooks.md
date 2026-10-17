@@ -73,7 +73,7 @@ Indexes:
 |--------------------|----------------------------------------------------------------|
 | `email.queued`     | An email is inserted into the queue                            |
 | `email.sent`       | An email is successfully delivered                             |
-| `email.failed`     | An email permanently fails (3 attempts)                        |
+| `email.failed`     | An email permanently fails (temporary failures are retried with backoff until it is `MAIL_RETRY_MAX_AGE_HOURS` old) |
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification: DSN parsed by the bounce module, original `emails` row marked `bounced`, recipient auto-suppressed (#24). See [docs/bounces.md](bounces.md). |
 | `email.complained` | A recipient marked the message as spam. Reserved for future Feedback Loop (FBL) processing: wiring TBD. |
 | `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |

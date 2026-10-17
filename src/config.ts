@@ -220,6 +220,14 @@ export const config = {
     mxConcurrency: Math.max(1, parseInt(optionalEnv("MAIL_MX_CONCURRENCY", "1"), 10)),
 
     /**
+     * How long a temporarily failing email keeps being retried, in hours
+     * (#180). Retries follow an escalating schedule (5 m, 15 m, 30 m, 1 h,
+     * 2 h, then every 4 h); once the next retry would land past this age
+     * the email fails for good. RFC 5321 suggests 4 to 5 days.
+     */
+    retryMaxAgeHours: optionalPositiveInt("MAIL_RETRY_MAX_AGE_HOURS", 48),
+
+    /**
      * Allow delivery to MX hosts that resolve to private, loopback or
      * link-local addresses. Off by default: recipient domains are chosen
      * by API callers, so a private MX would let any key aim the server's

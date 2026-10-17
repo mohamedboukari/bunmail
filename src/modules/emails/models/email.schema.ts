@@ -7,16 +7,18 @@ import {
   jsonb,
   index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 
 /**
  * Status of a single MX-group's delivery attempt within an email row.
  *   - `sent`: accepted by the receiving MX. Won't be retried.
- *   - `retry`: transient failure, eligible for the next queue pass
- *                provided the row's overall `attempts` is under cap.
+ *   - `retry`: transient failure, retried on a later queue pass (after
+ *                the backoff) while the email is younger than
+ *                `MAIL_RETRY_MAX_AGE_HOURS` (#180).
  *   - `failed`: terminal failure. Either a hard 5xx (the per-recipient
- *                auto-suppress fired) or the row hit its retry cap
+ *                auto-suppress fired) or the email got too old to retry
  *                while this group was still pending.
  */
 export type DeliveryGroupStatus = "sent" | "retry" | "failed";
@@ -126,8 +128,30 @@ export const emails = pgTable(
      */
     source: varchar("source", { length: 10 }).notNull().default("api"),
 
-    /** Number of send attempts so far (max 3 before marking as failed) */
+    /** Number of send attempts so far (retries stop when the email is
+     *  older than `MAIL_RETRY_MAX_AGE_HOURS`, not after a fixed count) */
     attempts: integer("attempts").notNull().default(0),
+
+    /**
+     * Earliest time the queue may try this email (#180). `now()` on
+     * insert; after a temporary failure it is pushed out by the backoff
+     * schedule (5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h), so deferrals
+     * such as greylisting are retried later instead of within seconds.
+     */
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+
+    /** Worker that holds the row while it is `sending` (#180). */
+    lockedBy: varchar("locked_by", { length: 64 }),
+
+    /**
+     * Claim expiry for a `sending` row (#180). The worker renews it while
+     * it sends; if the worker dies, the row becomes claimable again once
+     * this passes. Replaces the unscoped reset of every `sending` row on
+     * boot, which could resend another replica's in-flight email.
+     */
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
 
     /** Last SMTP error message (stored on failure for debugging) */
     lastError: text("last_error"),
@@ -178,5 +202,13 @@ export const emails = pgTable(
 
     /** Index for trash list and purge queries (api_key + deleted_at) */
     index("idx_emails_api_key_deleted").on(table.apiKeyId, table.deletedAt),
+
+    /** Queue claim (#180): due queued rows, and expired leases. */
+    index("idx_emails_due")
+      .on(table.nextAttemptAt)
+      .where(sql`status = 'queued' AND deleted_at IS NULL`),
+    index("idx_emails_lease")
+      .on(table.leaseUntil)
+      .where(sql`status = 'sending'`),
   ],
 );

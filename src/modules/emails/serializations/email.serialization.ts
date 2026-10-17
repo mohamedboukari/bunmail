@@ -20,6 +20,11 @@ export interface SerializedEmail {
   /** Ingress channel: "api" (REST) or "smtp" (submission server) (#137) */
   source: string;
   attempts: number;
+  /**
+   * When a deferred email will be retried (#180): set while `status` is
+   * `queued`, `null` otherwise.
+   */
+  nextAttemptAt: Date | null;
   lastError: string | null;
   messageId: string | null;
   sentAt: Date | null;
@@ -45,6 +50,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     status: email.status,
     source: email.source,
     attempts: email.attempts,
+    nextAttemptAt: email.status === "queued" ? email.nextAttemptAt : null,
     lastError: email.lastError,
     messageId: email.messageId,
     sentAt: email.sentAt,
