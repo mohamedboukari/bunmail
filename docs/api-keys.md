@@ -27,7 +27,7 @@ Client                     Server
 ## Rate Limiting
 
 - **Algorithm:** Fixed-window counter per API key ID
-- **Limit:** 100 requests per 60 seconds
+- **Limit:** 100 requests per 60 seconds by default, set with `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`
 - **Storage:** In-memory `Map` (resets on server restart)
 - **Response:** `429 Too Many Requests` with `Retry-After` header
 

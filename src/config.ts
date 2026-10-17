@@ -22,6 +22,22 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+/**
+ * Reads an optional positive-integer environment variable. Fails at boot
+ * on anything else: a bare `parseInt` turns a typo into `NaN`, and a
+ * `count > NaN` check is always false, which would silently disable a
+ * limit instead of reporting the mistake.
+ */
+function optionalPositiveInt(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`[config] ${key} must be a positive integer, got "${raw}"`);
+  }
+  return value;
+}
+
 /** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -159,6 +175,18 @@ export const config = {
     port: parseInt(optionalEnv("PORT", "3000"), 10),
     /** Bind address */
     host: optionalEnv("HOST", "0.0.0.0"),
+  },
+
+  /**
+   * Per-API-key request limit on the REST API: at most `max` requests per
+   * `windowSec`, then HTTP 429 with `Retry-After`. In-memory and
+   * per-replica, like the dashboard login limiter.
+   */
+  apiRateLimit: {
+    /** Requests allowed per key per window (default 100). */
+    max: optionalPositiveInt("API_RATE_LIMIT_MAX", 100),
+    /** Window length in seconds (default 60). */
+    windowSec: optionalPositiveInt("API_RATE_LIMIT_WINDOW", 60),
   },
 
   /**

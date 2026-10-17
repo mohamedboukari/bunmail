@@ -97,7 +97,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.sent`, `email.failed`, `email.bounced`, `email.received`, `email.complained`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
 - **Inbound notifications**: per-domain "you have new mail" summary email on receive, DKIM-signed from the recipient domain; opt-in via each domain's `notify_email`
-- **API key auth**: SHA-256 hashed Bearer tokens with sliding-window rate limiting
+- **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting
 - **Trash + auto-purge**: Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
 - **Suppression list**: per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance

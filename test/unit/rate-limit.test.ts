@@ -65,6 +65,32 @@ describe("checkRateLimit", () => {
   });
 });
 
+describe("checkRateLimit with a configured limit (API_RATE_LIMIT_*)", () => {
+  const options = { max: 3, windowMs: 10_000 };
+
+  test("enforces the configured max instead of the default", () => {
+    const map = new Map<string, RateLimitEntry>();
+    for (let i = 0; i < 3; i++) {
+      expect(checkRateLimit(map, "key_a", T0, options)).toEqual({ limited: false });
+    }
+    expect(checkRateLimit(map, "key_a", T0 + 1_000, options)).toEqual({
+      limited: true,
+      count: 4,
+      retryAfter: 9,
+    });
+  });
+
+  test("uses the configured window for resets and pruning", () => {
+    const map = new Map<string, RateLimitEntry>();
+    for (let i = 0; i < 4; i++) checkRateLimit(map, "key_a", T0, options);
+    /** 10 s later the configured window has expired (the default is 60 s). */
+    expect(checkRateLimit(map, "key_a", T0 + 10_000, options)).toEqual({
+      limited: false,
+    });
+    expect(pruneExpiredEntries(map, T0 + 20_000, options.windowMs)).toBe(1);
+  });
+});
+
 describe("readApiKeyId (skip rate limiting when auth didn't run)", () => {
   test("returns the key ID set by the auth middleware", () => {
     expect(readApiKeyId({ apiKeyId: "key_a" })).toBe("key_a");

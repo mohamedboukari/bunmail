@@ -303,7 +303,7 @@ Client Request
      │
      ▼
 ┌─────────────┐
-│  Rate Limit │  ← In-memory sliding window (100 req/min per API key)
+│  Rate Limit │  ← In-memory fixed window (100 req/min per API key)
 │  Middleware │
 └──────┬──────┘
        │
@@ -813,12 +813,13 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 
 ## Rate Limiting
 
-Two independent in-memory sliding-window limiters:
+Two independent in-memory fixed-window limiters:
 
 **API requests** (`src/middleware/rate-limit.ts`, algorithm in `rate-limit-core.ts`)
 - **Default limit:** 100 requests per minute per API key
 - **Scope:** Per API key ID
 - **Response on limit:** `429 Too Many Requests` with `Retry-After` header
+- **Tunable:** `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW` (seconds)
 
 **Dashboard login** (`src/middleware/login-rate-limit.ts`, #109)
 - **Default limit:** 5 failed password attempts per 15 minutes, per client IP
