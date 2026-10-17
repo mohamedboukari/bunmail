@@ -55,7 +55,12 @@ export interface SubmissionMessageParts {
  *
  * - **Sender**: the `From:` header wins; otherwise the envelope `MAIL FROM`.
  *   Throws if neither is present.
- * - **To / Cc**: taken from the visible headers.
+ * - **To / Cc**: taken from the visible headers, **limited to envelope
+ *   recipients**. Delivery always equals the envelope (`RCPT TO`, capped
+ *   per transaction): an address that is only in a header is neither
+ *   delivered nor shown. Before this, every header address was delivered,
+ *   so one RCPT plus a long `To:` header bypassed the recipient cap and
+ *   the per-submission quota.
  * - **BCC preservation**: any envelope recipient not present in the visible
  *   To/Cc headers is a blind recipient → placed in `bcc` so it's delivered
  *   but never rendered in headers. Matches how a normal MTA treats BCC.
@@ -63,8 +68,10 @@ export interface SubmissionMessageParts {
  *   put everything in the envelope), the non-BCC envelope recipients become
  *   the `to` field so the send still has a visible recipient.
  *
- * Throws if there is no resolvable sender or no recipients at all: the
- * caller maps these to an SMTP 550.
+ * Throws if there is no resolvable sender, no recipients at all, or the
+ * headers name recipients of which none was sent in `RCPT TO` (showing the
+ * envelope recipients in `To` instead would expose blind recipients to each
+ * other): the caller maps these to an SMTP 550.
  */
 export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailInput {
   const from = parts.fromHeader?.trim() || parts.envelopeFrom?.trim();
@@ -72,9 +79,24 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     throw new Error("Missing sender address (no From header or MAIL FROM)");
   }
 
-  const to = dedupeJoin(parts.toHeader);
-  const cc = dedupeJoin(parts.ccHeader);
+  const envelope = new Set(
+    parts.envelopeRecipients.map((a) => a.trim().toLowerCase()).filter(Boolean),
+  );
+  const inEnvelope = (address: string): boolean =>
+    envelope.has(address.trim().toLowerCase());
+
+  const to = dedupeJoin(parts.toHeader.filter(inEnvelope));
+  const cc = dedupeJoin(parts.ccHeader.filter(inEnvelope));
   const hasVisibleHeader = Boolean(to || cc);
+
+  const headerNamesRecipients = [...parts.toHeader, ...parts.ccHeader].some((a) =>
+    a?.trim(),
+  );
+  if (headerNamesRecipients && !hasVisibleHeader) {
+    throw new Error(
+      "None of the To/Cc addresses was sent in RCPT TO: BunMail delivers only to envelope recipients",
+    );
+  }
 
   /** Visible set = every address rendered in To/Cc, lowercased. */
   const visible = new Set(

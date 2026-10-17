@@ -133,6 +133,25 @@ describe("SMTP submission: authentication", () => {
 });
 
 describe("SMTP submission: recipient handling", () => {
+  test("only envelope recipients are delivered, whatever the To header lists", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+
+    await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to: ["one@example.org", "two@example.org", "three@example.org"],
+      subject: "fan-out",
+      text: "hi",
+      /** One RCPT TO, three addresses in the visible To header. */
+      envelope: { from: "hello@unregistered.test", to: ["one@example.org"] },
+    });
+
+    const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toAddress).toBe("one@example.org");
+    expect(rows[0]!.cc).toBeNull();
+    expect(rows[0]!.bcc).toBeNull();
+  });
+
   test("BCC recipients are delivered but kept out of the visible headers", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
