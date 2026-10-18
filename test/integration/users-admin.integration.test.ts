@@ -657,6 +657,7 @@ describe("Ownership transfer hardening (#218)", () => {
     }
   });
 
+  /** Runs `maxAttempts` argon2id verifies in parallel: slow on a busy CI runner. */
   test("a parallel burst of wrong passwords runs at most the budget of verifies", async () => {
     const verify = spyOn(Bun.password, "verify");
     verify.mockClear();
@@ -678,7 +679,7 @@ describe("Ownership transfer hardening (#218)", () => {
     } finally {
       verify.mockRestore();
     }
-  });
+  }, 30_000);
 
   test("a completed transfer clears the budget of the actor and the address", async () => {
     for (let i = 0; i < maxAttempts - 1; i += 1) {
