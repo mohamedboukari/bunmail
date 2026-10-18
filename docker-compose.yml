@@ -9,8 +9,18 @@
 # Set POSTGRES_PASSWORD in your .env file (required).
 # Never commit real credentials to version control.
 
+# Log rotation (#284): BunMail writes one line per HTTP request, queue
+# attempt and SMTP session. Docker's json-file driver keeps at most 5 files
+# of 10 MB per container (~50 MB), dropping the oldest lines.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   app:
+    logging: *default-logging
     build: .
     ports:
       - "${PORT:-3000}:${PORT:-3000}" # HTTP API + Dashboard
@@ -37,6 +47,7 @@ services:
     restart: unless-stopped
 
   db:
+    logging: *default-logging
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bunmail}

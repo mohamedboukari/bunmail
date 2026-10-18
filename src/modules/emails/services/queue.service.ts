@@ -11,6 +11,7 @@ import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { runWithLogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { parseSmtpError } from "../../../utils/smtp-error.ts";
@@ -433,10 +434,23 @@ async function processEmail(email: ClaimedEmail, deps: QueueDeps): Promise<void>
         });
       });
   }, LEASE_RENEW_MS);
+  /**
+   * The attempt runs in its own log context (#284): every line it writes,
+   * down to the mailer, DKIM and the webhooks it fires, carries the email
+   * id and attempt number.
+   */
+  const startedAt = performance.now();
   try {
-    await sendClaimedEmail(email, claim, deps);
+    await runWithLogContext({ job: "email-send", jobId: email.id }, () =>
+      sendClaimedEmail(email, claim, deps),
+    );
   } finally {
     clearInterval(renewal);
+    logger.debug("Email send attempt finished", {
+      emailId: email.id,
+      attempt: email.attempts,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
   }
 }
 

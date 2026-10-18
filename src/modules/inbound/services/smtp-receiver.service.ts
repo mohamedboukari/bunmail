@@ -14,6 +14,7 @@ import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmar
 import { config } from "../../../config.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
+import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 
 /**
@@ -99,6 +100,17 @@ function isRateLimited(ip: string): boolean {
  */
 
 /**
+ * Per live connection, by `smtp-server` session id: when it started and how
+ * many messages it sent, for the close summary (#284). Removed on close.
+ */
+const sessionStats = new Map<string, { startedAt: number; messages: number }>();
+
+/** The log context of one inbound SMTP connection (#284). */
+function sessionContext(session: { id: string }): LogContext {
+  return { smtpSessionId: session.id, listener: "inbound" };
+}
+
+/**
  * Builds the error shape `smtp-server` callbacks expect: a standard
  * `Error` carrying the SMTP reply code the library writes back to the
  * client. `Object.assign` widens the type structurally, so call sites
@@ -126,38 +138,58 @@ export function start(): void {
     size: MAX_MESSAGE_BYTES,
 
     /**
+     * One summary line per connection when it closes (#284): who, how many
+     * messages, how long. Runs in the session's log context.
+     */
+    onClose(session) {
+      const stats = sessionStats.get(session.id);
+      sessionStats.delete(session.id);
+      runWithLogContext(sessionContext(session), () => {
+        logger.info("SMTP session closed", {
+          remoteAddress: session.remoteAddress,
+          messages: stats?.messages ?? 0,
+          durationMs:
+            stats === undefined ? null : Math.round(performance.now() - stats.startedAt),
+        });
+      });
+    },
+
+    /**
      * Called when a client connects.
      * Runs rate limiting (instant) and DNSBL check (async DNS)
      * to reject bad IPs before they can send any data.
      */
     onConnect(session, callback) {
-      const ip = session.remoteAddress;
+      runWithLogContext(sessionContext(session), () => {
+        sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
+        const ip = session.remoteAddress;
 
-      /** Layer 2: Per-IP rate limiting (runs first, instant, no I/O) */
-      if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
-        logger.warn("SMTP connection rate limited", { ip });
-        return callback(smtpError("Too many connections, try again later", 421));
-      }
+        /** Layer 2: Per-IP rate limiting (runs first, instant, no I/O) */
+        if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
+          logger.warn("SMTP connection rate limited", { ip });
+          return callback(smtpError("Too many connections, try again later", 421));
+        }
 
-      /** Layer 1: DNSBL check (async DNS lookup) */
-      if (!spamProtection.dnsblEnabled) {
-        return callback();
-      }
+        /** Layer 1: DNSBL check (async DNS lookup) */
+        if (!spamProtection.dnsblEnabled) {
+          return callback();
+        }
 
-      isBlacklistedIp(ip, spamProtection.dnsblZone)
-        .then((listed) => {
-          if (listed) {
-            logger.warn("SMTP connection rejected: IP blacklisted", { ip });
-            return callback(
-              smtpError("Connection rejected: your IP is blacklisted", 554),
-            );
-          }
-          callback();
-        })
-        .catch(() => {
-          /** DNS lookup failed: allow connection (fail open) */
-          callback();
-        });
+        isBlacklistedIp(ip, spamProtection.dnsblZone)
+          .then((listed) => {
+            if (listed) {
+              logger.warn("SMTP connection rejected: IP blacklisted", { ip });
+              return callback(
+                smtpError("Connection rejected: your IP is blacklisted", 554),
+              );
+            }
+            callback();
+          })
+          .catch(() => {
+            /** DNS lookup failed: allow connection (fail open) */
+            callback();
+          });
+      });
     },
 
     /**
@@ -167,22 +199,24 @@ export function start(): void {
      * `<>` is explicitly allowed because it's how DSN bounces address
      * themselves per RFC 3464.
      */
-    onMailFrom(address, _session, callback) {
-      const value = address.address;
+    onMailFrom(address, session, callback) {
+      runWithLogContext(sessionContext(session), () => {
+        const value = address.address;
 
-      /** Empty envelope sender = legitimate DSN bounce; let it through. */
-      if (value === "") {
-        return callback();
-      }
+        /** Empty envelope sender = legitimate DSN bounce; let it through. */
+        if (value === "") {
+          return callback();
+        }
 
-      if (value.length > MAX_ADDRESS_LENGTH || !BASIC_ADDRESS_RE.test(value)) {
-        logger.warn("SMTP MAIL FROM rejected: malformed address", {
-          address: redactEmail(value),
-        });
-        return callback(smtpError("Sender address is not a valid email address", 553));
-      }
+        if (value.length > MAX_ADDRESS_LENGTH || !BASIC_ADDRESS_RE.test(value)) {
+          logger.warn("SMTP MAIL FROM rejected: malformed address", {
+            address: redactEmail(value),
+          });
+          return callback(smtpError("Sender address is not a valid email address", 553));
+        }
 
-      callback();
+        callback();
+      });
     },
 
     /**
@@ -193,61 +227,63 @@ export function start(): void {
      * Rejects mail to unknown domains with SMTP 550.
      */
     onRcptTo(address, session, callback) {
-      /**
-       * Cap recipients per transaction. `session.envelope.rcptTo` is the
-       * already-accepted list; this hook fires before the new address is
-       * appended, so reject when the existing length is at or above the
-       * cap. SMTP 452 = "too many recipients" (RFC 5321 §3.5).
-       */
-      const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
-      if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
-        logger.warn("SMTP RCPT TO rejected: too many recipients", {
-          acceptedSoFar,
-          ip: session.remoteAddress,
-        });
-        return callback(
-          smtpError(
-            `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
-            452,
-          ),
-        );
-      }
-
-      if (!spamProtection.recipientValidationEnabled) {
-        return callback();
-      }
-
-      const recipientAddress = address.address;
-      const domain = recipientAddress.split("@")[1]?.toLowerCase();
-
-      if (!domain) {
-        logger.warn("SMTP RCPT TO rejected: invalid address", {
-          address: redactEmail(recipientAddress),
-        });
-        return callback(smtpError("Invalid recipient address", 550));
-      }
-
-      domainExistsByName(domain)
-        .then((exists) => {
-          if (!exists) {
-            logger.warn("SMTP RCPT TO rejected: unknown domain", {
-              address: redactEmail(recipientAddress),
-              domain,
-              ip: session.remoteAddress,
-            });
-            return callback(
-              smtpError(`Recipient domain "${domain}" is not handled here`, 550),
-            );
-          }
-          callback();
-        })
-        .catch((error) => {
-          /** DB query failed: allow through (fail open) */
-          logger.error("Domain lookup failed during RCPT TO check", {
-            error: error instanceof Error ? error.message : String(error),
+      runWithLogContext(sessionContext(session), () => {
+        /**
+         * Cap recipients per transaction. `session.envelope.rcptTo` is the
+         * already-accepted list; this hook fires before the new address is
+         * appended, so reject when the existing length is at or above the
+         * cap. SMTP 452 = "too many recipients" (RFC 5321 §3.5).
+         */
+        const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
+        if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
+          logger.warn("SMTP RCPT TO rejected: too many recipients", {
+            acceptedSoFar,
+            ip: session.remoteAddress,
           });
-          callback();
-        });
+          return callback(
+            smtpError(
+              `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
+              452,
+            ),
+          );
+        }
+
+        if (!spamProtection.recipientValidationEnabled) {
+          return callback();
+        }
+
+        const recipientAddress = address.address;
+        const domain = recipientAddress.split("@")[1]?.toLowerCase();
+
+        if (!domain) {
+          logger.warn("SMTP RCPT TO rejected: invalid address", {
+            address: redactEmail(recipientAddress),
+          });
+          return callback(smtpError("Invalid recipient address", 550));
+        }
+
+        domainExistsByName(domain)
+          .then((exists) => {
+            if (!exists) {
+              logger.warn("SMTP RCPT TO rejected: unknown domain", {
+                address: redactEmail(recipientAddress),
+                domain,
+                ip: session.remoteAddress,
+              });
+              return callback(
+                smtpError(`Recipient domain "${domain}" is not handled here`, 550),
+              );
+            }
+            callback();
+          })
+          .catch((error) => {
+            /** DB query failed: allow through (fail open) */
+            logger.error("Domain lookup failed during RCPT TO check", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            callback();
+          });
+      });
     },
 
     /**
@@ -256,188 +292,201 @@ export function start(): void {
      * and fires an `email.received` webhook event.
      */
     onData(stream, session, callback) {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      /**
-       * Tracks whether we've already aborted this stream because of the
-       * size cap; needed because `data` events keep arriving briefly
-       * after we call `stream.unpipe()` / `destroy()`.
-       */
-      let aborted = false;
-
-      stream.on("data", (chunk: Buffer) => {
-        if (aborted) return;
-        totalBytes += chunk.length;
-
+      runWithLogContext(sessionContext(session), () => {
+        const stats = sessionStats.get(session.id);
+        if (stats) stats.messages += 1;
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
         /**
-         * Belt-and-suspenders: even though `SMTPServer({ size })` already
-         * advertises and enforces the cap at the protocol level, an
-         * over-cooperative client can ignore the SIZE extension and just
-         * push bytes anyway. Drain the rest, log, and reject with 552.
+         * Tracks whether we've already aborted this stream because of the
+         * size cap; needed because `data` events keep arriving briefly
+         * after we call `stream.unpipe()` / `destroy()`.
          */
-        if (totalBytes > MAX_MESSAGE_BYTES) {
-          aborted = true;
-          logger.warn("SMTP DATA rejected: message exceeds size cap", {
-            ip: session.remoteAddress,
-            totalBytes,
-            cap: MAX_MESSAGE_BYTES,
+        let aborted = false;
+
+        stream.on("data", (chunk: Buffer) => {
+          runWithLogContext(sessionContext(session), () => {
+            if (aborted) return;
+            totalBytes += chunk.length;
+
+            /**
+             * Belt-and-suspenders: even though `SMTPServer({ size })` already
+             * advertises and enforces the cap at the protocol level, an
+             * over-cooperative client can ignore the SIZE extension and just
+             * push bytes anyway. Drain the rest, log, and reject with 552.
+             */
+            if (totalBytes > MAX_MESSAGE_BYTES) {
+              aborted = true;
+              logger.warn("SMTP DATA rejected: message exceeds size cap", {
+                ip: session.remoteAddress,
+                totalBytes,
+                cap: MAX_MESSAGE_BYTES,
+              });
+              /** Drop accumulated chunks to free memory before the error. */
+              chunks.length = 0;
+              stream.unpipe();
+              stream.resume();
+              callback(smtpError("Message size exceeds limit", 552));
+              return;
+            }
+
+            chunks.push(chunk);
           });
-          /** Drop accumulated chunks to free memory before the error. */
-          chunks.length = 0;
-          stream.unpipe();
-          stream.resume();
-          callback(smtpError("Message size exceeds limit", 552));
-          return;
-        }
+        });
 
-        chunks.push(chunk);
-      });
+        stream.on("end", () => {
+          runWithLogContext(sessionContext(session), () => {
+            /** The listener must return void; the body is guarded by its own
+             *  try/catch, and `void` keeps a rejected promise from escaping
+             *  as an unhandled rejection. */
+            void (async () => {
+              if (aborted) return;
+              try {
+                const rawMessage = Buffer.concat(chunks).toString("utf-8");
+                const parsed = await simpleParser(rawMessage);
 
-      stream.on("end", () => {
-        /** The listener must return void; the body is guarded by its own
-         *  try/catch, and `void` keeps a rejected promise from escaping
-         *  as an unhandled rejection. */
-        void (async () => {
-          if (aborted) return;
-          try {
-            const rawMessage = Buffer.concat(chunks).toString("utf-8");
-            const parsed = await simpleParser(rawMessage);
+                /**
+                 * Bounce branch (#24). If the message is a DSN, route it to
+                 * the bounce handler: suppress the recipient, mark the
+                 * original email as `bounced`, fire `email.bounced` webhook,
+                 * and skip the regular `inbound_emails` insert. Bounces
+                 * shouldn't pollute the inbound list (operators get noise
+                 * about delivery failures from mailer-daemon@gmail every
+                 * time someone mistypes an address).
+                 */
+                const bounce = parseBounce(rawMessage);
+                if (bounce) {
+                  const result = await handleParsedBounce(bounce);
+                  /**
+                   * `dropped-no-original` means we couldn't link the bounce
+                   * back to one of our `emails` rows. We still acknowledge
+                   * the SMTP transaction (returning ok keeps the upstream MTA
+                   * from retrying); the warning was already logged by the
+                   * handler.
+                   */
+                  logger.debug("Bounce branch handled inbound message", { result });
+                  callback();
+                  return;
+                }
 
-            /**
-             * Bounce branch (#24). If the message is a DSN, route it to
-             * the bounce handler: suppress the recipient, mark the
-             * original email as `bounced`, fire `email.bounced` webhook,
-             * and skip the regular `inbound_emails` insert. Bounces
-             * shouldn't pollute the inbound list (operators get noise
-             * about delivery failures from mailer-daemon@gmail every
-             * time someone mistypes an address).
-             */
-            const bounce = parseBounce(rawMessage);
-            if (bounce) {
-              const result = await handleParsedBounce(bounce);
-              /**
-               * `dropped-no-original` means we couldn't link the bounce
-               * back to one of our `emails` rows. We still acknowledge
-               * the SMTP transaction (returning ok keeps the upstream MTA
-               * from retrying); the warning was already logged by the
-               * handler.
-               */
-              logger.debug("Bounce branch handled inbound message", { result });
-              callback();
-              return;
-            }
+                /**
+                 * DMARC aggregate (rua) report branch (#41). If the message
+                 * looks like a DMARC report from a remote receiver, parse the
+                 * compressed XML attachment and store as `dmarc_reports` +
+                 * `dmarc_records` rows. Skip the regular `inbound_emails`
+                 * insert: daily DMARC reports would otherwise pile up in
+                 * the inbox view and obscure real customer mail.
+                 */
+                const attachments = (parsed.attachments ?? []).map((att) => ({
+                  filename: att.filename,
+                  contentType: att.contentType,
+                  content: new Uint8Array(att.content),
+                }));
+                const dmarcResult = await persistDmarcReportFromInbound(
+                  rawMessage,
+                  attachments,
+                  typeof parsed.text === "string" ? parsed.text : null,
+                );
+                if (
+                  dmarcResult.outcome === "stored" ||
+                  dmarcResult.outcome === "duplicate"
+                ) {
+                  logger.debug("DMARC branch handled inbound message", {
+                    outcome: dmarcResult.outcome,
+                    reportId: dmarcResult.reportId,
+                    recordCount: dmarcResult.recordCount,
+                  });
+                  callback();
+                  return;
+                }
 
-            /**
-             * DMARC aggregate (rua) report branch (#41). If the message
-             * looks like a DMARC report from a remote receiver, parse the
-             * compressed XML attachment and store as `dmarc_reports` +
-             * `dmarc_records` rows. Skip the regular `inbound_emails`
-             * insert: daily DMARC reports would otherwise pile up in
-             * the inbox view and obscure real customer mail.
-             */
-            const attachments = (parsed.attachments ?? []).map((att) => ({
-              filename: att.filename,
-              contentType: att.contentType,
-              content: new Uint8Array(att.content),
-            }));
-            const dmarcResult = await persistDmarcReportFromInbound(
-              rawMessage,
-              attachments,
-              typeof parsed.text === "string" ? parsed.text : null,
-            );
-            if (dmarcResult.outcome === "stored" || dmarcResult.outcome === "duplicate") {
-              logger.debug("DMARC branch handled inbound message", {
-                outcome: dmarcResult.outcome,
-                reportId: dmarcResult.reportId,
-                recordCount: dmarcResult.recordCount,
-              });
-              callback();
-              return;
-            }
+                const mailFrom = session.envelope.mailFrom;
+                const from =
+                  parsed.from?.value?.[0]?.address ??
+                  (mailFrom && typeof mailFrom === "object"
+                    ? mailFrom.address
+                    : undefined) ??
+                  "unknown";
 
-            const mailFrom = session.envelope.mailFrom;
-            const from =
-              parsed.from?.value?.[0]?.address ??
-              (mailFrom && typeof mailFrom === "object" ? mailFrom.address : undefined) ??
-              "unknown";
+                const to = parsed.to
+                  ? ((Array.isArray(parsed.to)
+                      ? parsed.to[0]?.value?.[0]?.address
+                      : parsed.to.value?.[0]?.address) ?? "")
+                  : (session.envelope.rcptTo?.[0]?.address ?? "unknown");
 
-            const to = parsed.to
-              ? ((Array.isArray(parsed.to)
-                  ? parsed.to[0]?.value?.[0]?.address
-                  : parsed.to.value?.[0]?.address) ?? "")
-              : (session.envelope.rcptTo?.[0]?.address ?? "unknown");
+                const id = generateId("inb");
 
-            const id = generateId("inb");
-
-            await db.insert(inboundEmails).values({
-              id,
-              fromAddress: from,
-              toAddress: to,
-              subject: parsed.subject ?? null,
-              html: typeof parsed.html === "string" ? parsed.html : null,
-              textContent: parsed.text ?? null,
-              rawMessage,
-            });
-
-            logger.info("Inbound email received and stored", {
-              id,
-              from: redactEmail(from),
-              to: redactEmail(to),
-              subject: parsed.subject,
-            });
-
-            /** Fire webhook event asynchronously (fire-and-forget) */
-            dispatchEvent(
-              "email.received",
-              {
-                inboundEmailId: id,
-                from,
-                to,
-                subject: parsed.subject ?? null,
-              },
-              { adminOnly: true },
-            );
-
-            /**
-             * Send the per-domain inbound notification (#106), fire-and-forget.
-             * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
-             * reports never trigger it. NOT awaited: a slow notification
-             * (DNS/MX resolution) must never delay the SMTP ack below, which
-             * would risk the upstream MTA timing out and redelivering.
-             *
-             * Domain resolution keys off the **envelope** RCPT TO (the
-             * addresses actually validated + accepted in `onRcptTo`), not the
-             * spoofable `To:` header, so BCC / list mail still notifies the
-             * domain it was received for, and a forged header can't steer
-             * the signing identity. `notifyInboundReceived` never throws; the
-             * `.catch` is a redundant belt.
-             */
-            if (config.inboundNotify.enabled) {
-              const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
-                (r) => r.address,
-              );
-              void notifyInboundReceived({
-                inboundId: id,
-                from,
-                recipients: envelopeRecipients,
-                subject: parsed.subject ?? null,
-                text: parsed.text ?? null,
-              }).catch((err) => {
-                logger.error("Inbound notification dispatch failed", {
+                await db.insert(inboundEmails).values({
                   id,
-                  error: err instanceof Error ? err.message : String(err),
+                  fromAddress: from,
+                  toAddress: to,
+                  subject: parsed.subject ?? null,
+                  html: typeof parsed.html === "string" ? parsed.html : null,
+                  textContent: parsed.text ?? null,
+                  rawMessage,
                 });
-              });
-            }
 
-            callback();
-          } catch (error) {
-            logger.error("Failed to process inbound email", {
-              error: error instanceof Error ? error.message : String(error),
-            });
-            callback(smtpError("Failed to process message", 451));
-          }
-        })();
+                logger.info("Inbound email received and stored", {
+                  id,
+                  from: redactEmail(from),
+                  to: redactEmail(to),
+                  subject: parsed.subject,
+                });
+
+                /** Fire webhook event asynchronously (fire-and-forget) */
+                dispatchEvent(
+                  "email.received",
+                  {
+                    inboundEmailId: id,
+                    from,
+                    to,
+                    subject: parsed.subject ?? null,
+                  },
+                  { adminOnly: true },
+                );
+
+                /**
+                 * Send the per-domain inbound notification (#106), fire-and-forget.
+                 * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
+                 * reports never trigger it. NOT awaited: a slow notification
+                 * (DNS/MX resolution) must never delay the SMTP ack below, which
+                 * would risk the upstream MTA timing out and redelivering.
+                 *
+                 * Domain resolution keys off the **envelope** RCPT TO (the
+                 * addresses actually validated + accepted in `onRcptTo`), not the
+                 * spoofable `To:` header, so BCC / list mail still notifies the
+                 * domain it was received for, and a forged header can't steer
+                 * the signing identity. `notifyInboundReceived` never throws; the
+                 * `.catch` is a redundant belt.
+                 */
+                if (config.inboundNotify.enabled) {
+                  const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
+                    (r) => r.address,
+                  );
+                  void notifyInboundReceived({
+                    inboundId: id,
+                    from,
+                    recipients: envelopeRecipients,
+                    subject: parsed.subject ?? null,
+                    text: parsed.text ?? null,
+                  }).catch((err) => {
+                    logger.error("Inbound notification dispatch failed", {
+                      id,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  });
+                }
+
+                callback();
+              } catch (error) {
+                logger.error("Failed to process inbound email", {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                callback(smtpError("Failed to process message", 451));
+              }
+            })();
+          });
+        });
       });
     },
   });

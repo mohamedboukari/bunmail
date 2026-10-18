@@ -506,7 +506,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 ## Troubleshooting
 
 **Container keeps restarting:**
-- Check logs: `docker compose logs app`
+- Check logs: `docker compose logs app` (every line carries its request or job ID; see [docs/logging.md](logging.md) for tracing one request, email or SMTP session)
 - Common cause: missing env vars or database connection issues
 
 **"Failed to connect" errors:**

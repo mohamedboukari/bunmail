@@ -26,6 +26,7 @@ import {
   purgeOldDeliveries,
 } from "./webhook-delivery.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { runWithLogContext } from "../../../utils/log-context.ts";
 import { config } from "../../../config.ts";
 
 /** How often the worker checks for due deliveries. 5s is a balance:
@@ -110,47 +111,49 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
   logger.debug("Webhook worker: processing batch", { count: batch.length });
 
   await Promise.allSettled(
-    batch.map(async (row) => {
-      const outcome = await performHttpAttempt({
-        url: row.url,
-        secret: row.secret,
-        body: row.payload,
-        event: row.event,
-      });
-      try {
-        await recordAttempt({
-          deliveryId: row.id,
-          outcome,
-          priorAttempts: row.attempts,
+    batch.map(async (row) =>
+      runWithLogContext({ job: "webhook-delivery", jobId: row.id }, async () => {
+        const outcome = await performHttpAttempt({
+          url: row.url,
+          secret: row.secret,
+          body: row.payload,
+          event: row.event,
         });
-      } catch (err) {
-        /** A DB error here is bad: the row stays `pending` with the
-         *  old `next_attempt_at`, so it'll be re-claimed on the next
-         *  tick and we'll re-attempt. Log loud. */
-        logger.error("Webhook worker: failed to persist attempt outcome", {
-          deliveryId: row.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+        try {
+          await recordAttempt({
+            deliveryId: row.id,
+            outcome,
+            priorAttempts: row.attempts,
+          });
+        } catch (err) {
+          /** A DB error here is bad: the row stays `pending` with the
+           *  old `next_attempt_at`, so it'll be re-claimed on the next
+           *  tick and we'll re-attempt. Log loud. */
+          logger.error("Webhook worker: failed to persist attempt outcome", {
+            deliveryId: row.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
 
-      if (outcome.ok) {
-        logger.debug("Webhook delivered", {
-          deliveryId: row.id,
-          url: row.url,
-          event: row.event,
-          status: outcome.status,
-        });
-      } else {
-        logger.warn("Webhook delivery attempt failed", {
-          deliveryId: row.id,
-          url: row.url,
-          event: row.event,
-          attempt: row.attempts + 1,
-          httpStatus: outcome.status,
-          error: outcome.error,
-        });
-      }
-    }),
+        if (outcome.ok) {
+          logger.debug("Webhook delivered", {
+            deliveryId: row.id,
+            url: row.url,
+            event: row.event,
+            status: outcome.status,
+          });
+        } else {
+          logger.warn("Webhook delivery attempt failed", {
+            deliveryId: row.id,
+            url: row.url,
+            event: row.event,
+            attempt: row.attempts + 1,
+            httpStatus: outcome.status,
+            error: outcome.error,
+          });
+        }
+      }),
+    ),
   );
 
   return { claimed: batch.length };

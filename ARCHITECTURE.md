@@ -88,13 +88,15 @@ bunmail/
 │   │   ├── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
 │   │   └── reset-owner.ts                ← Shell-only recovery: prints a fresh owner setup link (#215)
 │   ├── middleware/
+│   │   ├── request-context.ts            ← Request ID, X-Request-Id and the per-request log line (#284)
 │   │   ├── auth.ts                       ← API key bearer auth
 │   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
 │   │   ├── rate-limit-core.ts            ← Pure fixed-window algorithm (unit-tested, #174)
 │   │   └── login-rate-limit.ts           ← Per-IP dashboard login brute-force limiter (#109)
 │   ├── utils/
 │   │   ├── id.ts                         ← Prefixed ID generator
-│   │   ├── logger.ts                     ← Structured JSON logger
+│   │   ├── logger.ts                     ← Structured JSON logger: adds the log context, redacts secret-named fields (#284)
+│   │   ├── log-context.ts                ← Request/job/SMTP-session correlation IDs on AsyncLocalStorage (#284)
 │   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/

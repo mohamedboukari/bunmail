@@ -106,6 +106,17 @@ src/modules/<feature>/
 - Throw Elysia-compatible errors from services and let Elysia's error handler format responses.
 - Do not return raw errors or stack traces from route handlers.
 
+### Logging
+
+Logs must be good enough for a post-mortem (#284, full guide in `docs/logging.md`). Every new route, background job and service entry point follows these rules:
+
+- **Boundary line**: log the outcome of each unit of work once, with its IDs and a duration where it matters. HTTP requests get theirs automatically (`src/middleware/request-context.ts`).
+- **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` (`src/utils/log-context.ts`) so every line inside carries its ID. Never call `AsyncLocalStorage.enterWith` (it segfaults Bun 1.3.14 inside Elysia hooks).
+- **Every failure path logs**: `warn` for expected, handled failures, `error` for unexpected ones, with the IDs involved and the error code or a sanitized message (never a raw drizzle query error: its message embeds the query parameters).
+- **Detail at `debug`**: internal steps useful while investigating, off in normal operation.
+- **No secrets, no bodies**: never log passwords, keys, tokens, hashes, cookies or message content; route emails through `redactEmail`. The logger's redaction of secret-named fields is a safety net, not a license.
+- Use the `logger`, never `console.*` (the logger adds the context and the redaction).
+
 ### Email
 
 - Email templates are database-backed via the `templates` module (`src/modules/templates/`). Email send logic lives in `src/modules/emails/services/mailer.service.ts`. Do not send mail from route handlers directly.
@@ -127,7 +138,8 @@ When adding an endpoint:
 3. Implement service logic under `services/`.
 4. If response shape differs from raw model, add/update a serializer.
 5. Ensure the plugin is in `apiPlugins` (`src/modules/api-plugins.ts`), which `src/index.ts` mounts, and add the route to the `ROUTES` table in `test/integration/authz-matrix.integration.test.ts` (access level, valid body, owned resource).
-6. Add/extend tests.
+6. Log per the Logging rules above: failure paths with context; any new background work wrapped in `runWithLogContext`.
+7. Add/extend tests.
 
 When adding a data model:
 1. Create `<entity>.schema.ts` under `models/`.
