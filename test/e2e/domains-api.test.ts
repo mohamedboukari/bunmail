@@ -91,6 +91,8 @@ const mockDomain = {
 /* ─── Mock domain service ─── */
 void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   createDomain: mock(() => Promise.resolve(mockDomain)),
+  suggestedSpfRecord: mock(() => "v=spf1 a:mail.example.com -all"),
+  spfAuthorizationTerm: mock(() => "a:mail.example.com"),
   listDomains: mock(() => Promise.resolve([mockDomain])),
   getDomainById: mock((id: string) =>
     Promise.resolve(id === "dom_test123" ? mockDomain : undefined),

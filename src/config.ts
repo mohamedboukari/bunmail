@@ -79,6 +79,30 @@ export function optionalStrictBoolean(
   throw new Error(`[config] ${key} must be "true" or "false", got "${raw}"`);
 }
 
+/**
+ * Reads `MAIL_PUBLIC_IP` (#247, #248): the public IPv4/IPv6 addresses this
+ * server sends mail from, comma-separated. Optional: unset, BunMail uses
+ * the A/AAAA records of `MAIL_HOSTNAME`. Set it when they differ (NAT, a
+ * separate egress IP). Any entry that is not an IP address refuses to
+ * boot. Exported for tests.
+ */
+export function readPublicIps(
+  raw: string | undefined = process.env["MAIL_PUBLIC_IP"],
+): string[] {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  for (const entry of entries) {
+    if (isIP(entry) === 0) {
+      throw new Error(
+        `[config] MAIL_PUBLIC_IP must be IP addresses separated by commas, got "${entry}"`,
+      );
+    }
+  }
+  return [...new Set(entries)];
+}
+
 /** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -398,6 +422,9 @@ export const config = {
   mail: {
     /** Hostname used in SMTP HELO command and Message-ID header (#242) */
     hostname: readMailHostname(readAppEnv()),
+
+    /** Public sending IPs (`MAIL_PUBLIC_IP`); empty: use the A/AAAA records of `hostname`. */
+    publicIps: readPublicIps(),
 
     /**
      * Max parallel SMTP sessions per destination MX host. Direct-to-MX

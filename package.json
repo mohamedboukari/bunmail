@@ -74,6 +74,7 @@
     "fast-xml-parser": "^5.11.2",
     "fflate": "^0.8.3",
     "file-type": "^22.2.0",
+    "mailauth": "7.1.1",
     "mailparser": "^3.9.40",
     "nodemailer": "^10.1.2",
     "smtp-server": "^3.19.23"

@@ -3,7 +3,11 @@ import { VerificationBadge } from "../components/status-badge.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
-import { getDkimDnsRecord } from "../../modules/domains/services/domain.service.ts";
+import {
+  getDkimDnsRecord,
+  spfAuthorizationTerm,
+  suggestedSpfRecord,
+} from "../../modules/domains/services/domain.service.ts";
 import type { Domain } from "../../modules/domains/types/domain.types.ts";
 
 interface DomainDetailPageProps {
@@ -65,9 +69,14 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
           <DnsRecordEntry
             type="TXT"
             host={domain.name}
-            value={`v=spf1 a mx ip4:<YOUR_SERVER_IP> -all`}
+            value={suggestedSpfRecord()}
             label="SPF Record"
           />
+          <p class="text-xs text-gray-500 dark:text-gray-400 -mt-2">
+            Already have an SPF record (Google Workspace, Microsoft 365, ...)? Add the{" "}
+            <code safe>{spfAuthorizationTerm()}</code> term to it instead: a domain must
+            publish exactly one SPF record.
+          </p>
           {dkimRecord != null && (
             <DnsRecordEntry
               type="TXT"

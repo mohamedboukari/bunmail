@@ -58,7 +58,7 @@ The `dns-verification.service.ts` checks three DNS record types:
 
 | Record | Host                                    | What it checks                              |
 |--------|-----------------------------------------|---------------------------------------------|
-| SPF    | `<domain>`                              | TXT record starting with `v=spf1`           |
+| SPF    | `<domain>`                              | exactly one `v=spf1` record that gives `pass` (RFC 7208, evaluated with mailauth) for every sending IP of this server (#247) |
 | DKIM   | `<selector>._domainkey.<domain>`        | TXT record containing the expected public key |
 | DMARC  | `_dmarc.<domain>`                       | TXT record starting with `v=DMARC1`         |
 
@@ -99,7 +99,7 @@ Hard-deletes a domain and its keys.
 ### dns-verification.service.ts
 
 #### `verifyDomain(domain): Promise<VerificationResult>`
-Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns `{ spf, dkim, dmarc }`.
+Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns `{ spf, dkim, dmarc, spfReason }`. SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record.
 
 ## Serialization
 

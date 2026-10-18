@@ -24,6 +24,8 @@ let redactPiiFlag = true;
 void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost:5432/test" },
+    /** Leaks into later files that render pages or read the sending identity (#247). */
+    mail: { hostname: "localhost", publicIps: [] },
     get logRedactPii() {
       return redactPiiFlag;
     },
