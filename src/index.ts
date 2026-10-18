@@ -14,6 +14,7 @@ import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { withRequestContext } from "./middleware/request-context.ts";
+import { securityHeadersPlugin } from "./middleware/security-headers.ts";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
 import { NotFoundPage } from "./pages/routes/not-found.tsx";
@@ -142,6 +143,8 @@ const app = new Elysia()
    * one `HTTP request` line records method, path, status and duration.
    */
   .wrap(withRequestContext)
+  /** Browser security headers on every response (#255). */
+  .use(securityHeadersPlugin({ httpsBaseUrl: config.appBaseUrl.startsWith("https://") }))
   .use(
     openapi({
       path: "/api/docs",
