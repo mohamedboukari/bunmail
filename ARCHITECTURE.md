@@ -379,7 +379,9 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Queue Processor (setInterval, every 2 seconds)                 │
+│  Queue Processor (self-scheduling poll, every 2 s +/-10%, #176) │
+│  0. FREE SLOTS: QUEUE_MAX_CONCURRENT_SENDS (10) - in flight;    │
+│     none free → claim nothing. Polls never overlap.             │
 │                                                                 │
 │  1. ATOMIC CLAIM (#20, leases #180):                            │
 │     UPDATE emails SET status = 'sending',                       │
@@ -390,11 +392,11 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │       SELECT id FROM emails WHERE deleted_at IS NULL AND (      │
 │         (status = 'queued' AND next_attempt_at <= now())        │
 │         OR (status = 'sending' AND lease_until < now()))        │
-│       ORDER BY next_attempt_at LIMIT 5                          │
+│       ORDER BY next_attempt_at LIMIT min(batch 5, free slots)   │
 │       FOR UPDATE SKIP LOCKED   ← concurrent-safe                │
 │     ) RETURNING *;                                              │
 │                                                                 │
-│  2. For each claimed row (up to 5 concurrent):                  │
+│  2. For each claimed row, in the background (not awaited):      │
 │     ┌───────────────────────────────────────┐                   │
 │     │ a. Call mailerService.sendMail()      │                   │
 │     │    (Nodemailer per-MX + DKIM)         │                   │

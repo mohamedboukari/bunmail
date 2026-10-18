@@ -348,7 +348,7 @@ Deletes `delivered` rows older than the cutoff. Called hourly by the worker.
 Idempotent worker control. Wired into the app's main `start()` / SIGINT path.
 
 #### `runPollCycle(): Promise<{ claimed }>`
-Single tick: exposed for tests so they can drive the worker deterministically without arming `setInterval`.
+Single tick: exposed for tests so they can drive the worker deterministically without arming the poll timer. The worker schedules each tick after the previous one finished (5 s +/-10%), so ticks never overlap (#176).
 
 ## API Endpoints
 

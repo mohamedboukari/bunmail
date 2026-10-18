@@ -38,17 +38,27 @@ const POLL_INTERVAL_MS = 5_000;
 
 /** Max rows claimed per tick. Caps blast radius of a misbehaving
  *  consumer (a single hammered URL won't block the rest). With one
- *  attempt per row, 25 rows × 10s timeout = 4 minutes worst case
- *  before the next tick: still well inside the 5-min freshness
- *  window because most attempts return in milliseconds. */
+ *  attempt per row and the batch sent in parallel, the next tick waits
+ *  for at most one 10s timeout (#176): well inside the 5-min freshness
+ *  window, and most attempts return in milliseconds. */
 const BATCH_SIZE = 25;
 
 /** Cleanup task cadence. Delivered rows accumulate slowly; once an
  *  hour is plenty, and lighter on the box than scanning every tick. */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1h
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** True between `start()` and `stop()`. */
+let running = false;
+/** True while a poll runs; that poll schedules the next one when it ends. */
+let polling = false;
+/** The next scheduled poll, or `null` while a poll runs or once stopped. */
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+/** `ms` +/-10%, so several replicas don't poll the database in lockstep (#176). */
+function withJitter(ms: number): number {
+  return Math.round(ms * (0.9 + Math.random() * 0.2));
+}
 
 /**
  * Starts the worker. Idempotent: calling twice is a no-op.
@@ -56,9 +66,14 @@ let cleanupTimer: ReturnType<typeof setInterval> | null = null;
  * stored `pending` rows are picked up by the very next poll without
  * any special-cased "left over from before reboot" handling. That's
  * the whole point of persistence.
+ *
+ * Each poll is scheduled once the previous one has finished its batch
+ * (#176), so polls never overlap: a batch of slow receivers delays the
+ * next poll instead of stacking another 25 requests on top of it.
  */
 export function start(): void {
-  if (pollTimer !== null) return;
+  if (running) return;
+  running = true;
 
   logger.info("Starting webhook delivery worker", {
     pollIntervalMs: POLL_INTERVAL_MS,
@@ -66,19 +81,32 @@ export function start(): void {
     retentionDays: config.webhookDelivery.retentionDays,
   });
 
-  pollTimer = setInterval(() => {
-    void runPollCycle();
-  }, POLL_INTERVAL_MS);
+  /** A poll still running from before a `stop()` reschedules itself. */
+  if (!polling) schedulePoll();
 
   cleanupTimer = setInterval(() => {
     void runCleanupCycle();
   }, CLEANUP_INTERVAL_MS);
 }
 
+/** Schedules the next poll, unless the worker was stopped. */
+function schedulePoll(): void {
+  if (!running) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    polling = true;
+    void runPollCycle().finally(() => {
+      polling = false;
+      schedulePoll();
+    });
+  }, withJitter(POLL_INTERVAL_MS));
+}
+
 /** Stops the worker. Called from the SIGINT/SIGTERM shutdown path. */
 export function stop(): void {
+  running = false;
   if (pollTimer !== null) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
   }
   if (cleanupTimer !== null) {
@@ -94,7 +122,7 @@ export function stop(): void {
  * captures them, so one bad URL can't gate the rest.
  *
  * Exported for tests so they can drive a deterministic single-tick
- * loop without arming the setInterval.
+ * loop without arming the poll timer.
  */
 export async function runPollCycle(): Promise<{ claimed: number }> {
   let batch: Awaited<ReturnType<typeof claimDueDeliveries>>;
