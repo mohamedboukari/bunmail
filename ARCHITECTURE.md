@@ -971,7 +971,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 **DKIM Signing:**
 - RSA 2048-bit key pair generated per domain
 - Private key encrypted at rest with AES-256-GCM via `DKIM_ENCRYPTION_KEY` (#23); public key provided as DNS TXT record value
-- Decrypted in memory on each send and handed to nodemailer's signer; decrypt failure logs and falls through to unsigned mail (fail-open)
+- Decrypted in memory on each send and handed to nodemailer's signer. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).

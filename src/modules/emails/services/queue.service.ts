@@ -28,6 +28,8 @@ export interface DomainLookupRow {
   name: string;
   dkimSelector: string;
   dkimPrivateKey: string | null;
+  /** A key is stored but does not decrypt with `DKIM_ENCRYPTION_KEY` (#244). */
+  dkimKeyUnreadable: boolean;
   unsubscribeEmail: string | null;
   unsubscribeUrl: string | null;
 }
@@ -78,29 +80,37 @@ export async function resolveDomainForEmail(
  *     hand. Logged as a warning so it shows up in incident review,
  *     then returned as-is so the email still signs.
  *
- * On decrypt failure (wrong key, tampered ciphertext) we log and return
- * `null`: the mail is sent unsigned rather than failed outright. This
- * is **fail-open** by design: a key-rotation accident shouldn't take
- * down outbound delivery.
+ * On decrypt failure (wrong key, tampered ciphertext) the key is reported
+ * as unreadable (#244). The send path then holds the email in production
+ * (see {@link holdForUnreadableDkimKey}) rather than sending it unsigned:
+ * a wrong `DKIM_ENCRYPTION_KEY` would otherwise strip DKIM from every
+ * domain at once while the dashboard still says "verified". Development
+ * still sends unsigned.
  */
-function decryptDkimPrivateKey(stored: string | null, domainName: string): string | null {
-  if (stored === null) return null;
+function readDkimPrivateKey(
+  stored: string | null,
+  domainName: string,
+): { dkimPrivateKey: string | null; dkimKeyUnreadable: boolean } {
+  if (stored === null) return { dkimPrivateKey: null, dkimKeyUnreadable: false };
 
   if (!isEncryptedSecret(stored)) {
     logger.warn("DKIM private key stored as plaintext: boot encrypter has not run", {
       domain: domainName,
     });
-    return stored;
+    return { dkimPrivateKey: stored, dkimKeyUnreadable: false };
   }
 
   try {
-    return decryptSecret(stored, config.dkimEncryptionKey);
+    return {
+      dkimPrivateKey: decryptSecret(stored, config.dkimEncryptionKey),
+      dkimKeyUnreadable: false,
+    };
   } catch (err) {
-    logger.error("Failed to decrypt DKIM private key: sending unsigned", {
+    logger.error("Failed to decrypt DKIM private key", {
       domain: domainName,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { dkimPrivateKey: null, dkimKeyUnreadable: true };
   }
 }
 
@@ -117,7 +127,7 @@ async function queryDomainById(id: string): Promise<DomainLookupRow | undefined>
     .from(domains)
     .where(eq(domains.id, id));
   if (!row) return undefined;
-  return { ...row, dkimPrivateKey: decryptDkimPrivateKey(row.dkimPrivateKey, row.name) };
+  return { ...row, ...readDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
 
 /** Concrete `byName` query against the live Drizzle DB. */
@@ -133,7 +143,7 @@ async function queryDomainByName(name: string): Promise<DomainLookupRow | undefi
     .from(domains)
     .where(eq(domains.name, name));
   if (!row) return undefined;
-  return { ...row, dkimPrivateKey: decryptDkimPrivateKey(row.dkimPrivateKey, row.name) };
+  return { ...row, ...readDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
 
 /**
@@ -587,6 +597,22 @@ async function sendClaimedEmail(
       byName: queryDomainByName,
     });
 
+    /**
+     * A stored key that does not decrypt (#244): in production, never send
+     * unsigned. Hold the email on the normal retry backoff, so fixing
+     * `DKIM_ENCRYPTION_KEY` within the retry window still delivers it.
+     */
+    if (domain?.dkimKeyUnreadable && config.env === "production") {
+      await holdForUnreadableDkimKey(email, claim, domain.name);
+      return;
+    }
+    if (domain?.dkimKeyUnreadable) {
+      logger.warn("DKIM key unreadable: sending unsigned (development only)", {
+        emailId,
+        domain: domain.name,
+      });
+    }
+
     let dkim: DkimOptions | undefined;
     let unsubscribe: UnsubscribeOptions | undefined;
 
@@ -845,6 +871,53 @@ async function sendClaimedEmail(
       { apiKeyId: email.apiKeyId },
     );
   }
+}
+
+/**
+ * Holds an email whose sender domain has a DKIM key that does not decrypt
+ * (#244, production only): back to `queued` on the retry backoff (#180),
+ * or `failed` with `email.failed` once the email is too old to retry.
+ * Nothing is sent, so no delivery state changes.
+ */
+async function holdForUnreadableDkimKey(
+  email: ClaimedEmail,
+  claim: Claim,
+  domainName: string,
+): Promise<void> {
+  const lastError = `DKIM key for ${domainName} cannot be decrypted with DKIM_ENCRYPTION_KEY: not sent unsigned`;
+  const retryDelayMs = nextRetryDelayMs(claim.attempt, email.ageMs, retryMaxAgeMs());
+  if (retryDelayMs !== null) {
+    const retrySeconds = Math.round(retryDelayMs / 1000);
+    await releaseRow(claim, {
+      status: "queued",
+      nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
+      lastError,
+    });
+    logger.error("Email held: DKIM key unreadable", {
+      emailId: email.id,
+      domain: domainName,
+      attempt: claim.attempt,
+      retryInSeconds: retrySeconds,
+    });
+    return;
+  }
+  await releaseRow(claim, { status: "failed", lastError });
+  logger.error("Email failed: DKIM key unreadable for the whole retry window", {
+    emailId: email.id,
+    domain: domainName,
+    attempt: claim.attempt,
+  });
+  dispatchEvent(
+    "email.failed",
+    {
+      emailId: email.id,
+      from: email.fromAddress,
+      to: email.toAddress,
+      subject: email.subject,
+      error: lastError,
+    },
+    { apiKeyId: email.apiKeyId },
+  );
 }
 
 /**

@@ -15,6 +15,7 @@ const sampleRow: DomainLookupRow = {
   name: "example.com",
   dkimSelector: "bunmail",
   dkimPrivateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
+  dkimKeyUnreadable: false,
   unsubscribeEmail: null,
   unsubscribeUrl: null,
 };

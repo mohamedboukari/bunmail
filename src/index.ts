@@ -28,7 +28,10 @@ import {
   startLoginRateLimitCleanup,
   stopLoginRateLimitCleanup,
 } from "./middleware/login-rate-limit.ts";
-import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
+import {
+  encryptDomainKeys,
+  findUndecryptableDomainKeys,
+} from "./db/encrypt-domain-keys.ts";
 import { encryptWebhookSecrets } from "./db/encrypt-webhook-secrets.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
@@ -41,6 +44,31 @@ import { redactEmail } from "./utils/redact.ts";
  * restart can never read a plaintext row.
  */
 await encryptDomainKeys();
+
+/**
+ * Every stored DKIM key must decrypt with the current key (#244). A wrong
+ * `DKIM_ENCRYPTION_KEY` would hold every send from those domains (the
+ * queue never sends unsigned in production), so production refuses to
+ * start, naming the domains, like the other boot guards. Development
+ * warns and sends unsigned.
+ */
+const undecryptableDomains = await findUndecryptableDomainKeys();
+if (undecryptableDomains.length > 0) {
+  const detail = {
+    domains: undecryptableDomains,
+    hint: "DKIM_ENCRYPTION_KEY differs from the key these were encrypted with (SECURITY.md, Rotation)",
+  };
+  if (config.env === "production") {
+    logger.error("[boot] DKIM private keys do not decrypt: refusing to start", detail);
+    throw new Error(
+      `[boot] DKIM private keys of ${undecryptableDomains.length} domain(s) do not decrypt with DKIM_ENCRYPTION_KEY`,
+    );
+  }
+  logger.warn(
+    "DKIM private keys do not decrypt: those domains send unsigned (development only)",
+    detail,
+  );
+}
 
 /** Same for webhook signing secrets from before #259, before the webhook worker starts. */
 await encryptWebhookSecrets();
