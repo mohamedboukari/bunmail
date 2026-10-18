@@ -105,7 +105,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard
 - **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
 - **Templates**: Mustache-style `{{variable}}` substitution
-- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.sent`, `email.failed`, `email.bounced`, `email.received`, `email.complained`
+- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.received` (`email.complained` is reserved for future feedback-loop processing)
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
 - **Inbound notifications**: per-domain "you have new mail" summary email on receive, DKIM-signed from the recipient domain; opt-in via each domain's `notify_email`
 - **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting
@@ -203,7 +203,7 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
 | Framework | [Elysia](https://elysiajs.com) |
 | ORM | [Drizzle ORM](https://orm.drizzle.team) (`drizzle-orm/bun-sql`) |
 | Database | PostgreSQL 16+ |
-| SMTP outbound | Nodemailer (direct mode + DKIM) |
+| SMTP outbound | Nodemailer (one transport per recipient MX on port 25 + DKIM) |
 | SMTP inbound | smtp-server + mailparser |
 | Dashboard | Elysia JSX (`@elysiajs/html` + `@kitajs/html`) |
 | Deployment | Docker + Docker Compose |
@@ -237,7 +237,8 @@ bun install
 bun run dev            # start dev server (--watch)
 bun test               # run all tests
 bun test test/unit     # unit tests only
-bun test test/e2e      # integration tests only
+bun test test/e2e      # e2e (plugin) tests only
+bun run test:integration  # real-Postgres tests (bun run test:integration:setup first)
 bunx tsc --noEmit      # type check (TypeScript 7, native)
 bun run lint           # oxlint (type-aware)
 docker compose up -d   # full stack with Postgres
@@ -250,6 +251,8 @@ See [docs/](docs/) for module-level documentation:
 - [docs/emails.md](docs/emails.md): Outbound module
 - [docs/inbound.md](docs/inbound.md): Inbound module
 - [docs/dmarc-reports.md](docs/dmarc-reports.md): DMARC `rua` aggregate report ingest
+- [docs/users.md](docs/users.md): Dashboard accounts, roles, invitations, sessions and password reset links
+- [docs/logging.md](docs/logging.md): Log format, correlation IDs and tracing a request, email or SMTP session
 - [docs/self-hosting.md](docs/self-hosting.md): Production deployment with DNS records
 - [THREAT_MODEL.md](THREAT_MODEL.md): Assets, attackers, controls, and operator responsibilities
 - [SECURITY.md](SECURITY.md): Reporting a vulnerability
@@ -272,8 +275,7 @@ Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/moh
 
 Near-term highlights:
 
-- Webhook delivery persistence + replay (in-memory retries today)
-- Trash purge tombstones for audit trail
+- Two-factor login, passkeys and SSO for dashboard accounts (#220, #223, #224)
 - Optional SMTP relay mode (use Resend / SES / Postmark as the underlying sender)
 - Bun-native SMTP client (subsumes per-domain TLS observability and `requireValidCert`)
 

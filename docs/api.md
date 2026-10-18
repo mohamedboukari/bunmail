@@ -23,7 +23,7 @@ API keys are managed via the `/api/v1/api-keys` endpoints. The first key is crea
 
 ## Rate Limiting
 
-- **Limit:** 100 requests per 60-second sliding window per API key
+- **Limit:** 100 requests per 60-second fixed window per API key by default (`API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`)
 - **Scope:** Per API key ID (not per IP)
 - **Response on exceed:** `429 Too Many Requests` with `Retry-After` header (seconds)
 
@@ -171,6 +171,18 @@ Permanently delete a trashed email immediately. Only works on rows already in tr
 #### `POST /api/v1/emails/trash/empty`
 
 Permanently delete every trashed email for the calling API key. Returns `{ "success": true, "deleted": <count> }`.
+
+---
+
+#### `GET /api/v1/emails/tombstones`
+
+List the post-purge audit snapshots (#34) of the calling key's hard-deleted emails: identifiers only (`id`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`), never the body. Optional `?messageId=` (wrapped or unwrapped form) to trace a complaint or late bounce. Paginated; kept for `TOMBSTONE_RETENTION_DAYS` (default 90). See [docs/emails.md](emails.md#tombstones-34).
+
+---
+
+#### `GET /api/v1/emails/tombstones/:id`
+
+A single tombstone by the original email id (`msg_...`). `404` when none exists for the calling key.
 
 ---
 
@@ -342,7 +354,25 @@ List webhooks for the authenticated API key. Secrets are not included.
 
 #### `DELETE /api/v1/webhooks/:id`
 
-Delete a webhook.
+Delete a webhook. Its delivery history is deleted with it.
+
+---
+
+#### `GET /api/v1/webhooks/:id/deliveries`
+
+List the delivery attempts of one of the calling key's webhooks (#30), newest first. Optional `?status=pending|delivered|failed`. Paginated; `404` for a webhook of another key.
+
+---
+
+#### `GET /api/v1/webhooks/deliveries/:deliveryId`
+
+A single delivery with its payload and the last response (status and a 2 KB body preview).
+
+---
+
+#### `POST /api/v1/webhooks/deliveries/:deliveryId/replay`
+
+Replay a delivery: it goes back to `pending` with its attempts reset, and the worker sends it on its next tick. See [docs/webhooks.md](webhooks.md#delivery-behavior).
 
 ---
 
@@ -587,7 +617,7 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 |--------|-------------------------------------------------|
 | 400    | Malformed request body, e.g. invalid JSON (`INVALID_BODY`) |
 | 401    | Missing or invalid token, or the sending key was revoked (`API_KEY_REVOKED`) |
-| 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`) |
+| 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found                              |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
 | 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), or a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`) |
