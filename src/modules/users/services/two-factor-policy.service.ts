@@ -29,3 +29,13 @@ export function twoFactorRequired(policy: TwoFactorPolicy, role: UserRole): bool
 export function isTwoFactorEnrolmentPath(path: string): boolean {
   return path === TWO_FACTOR_PAGE || path.startsWith(`${TWO_FACTOR_PAGE}/`);
 }
+
+/**
+ * Failed two-factor code checks allowed per key and window (#220): a code
+ * constant, not `DASHBOARD_LOGIN_RATE_LIMIT_MAX`, so a loose (or broken)
+ * login setting can never leave the 6-digit code without a budget.
+ */
+export const TWO_FACTOR_MAX_FAILURES = 5;
+
+/** Length of the two-factor failure window, in seconds (15 minutes). */
+export const TWO_FACTOR_WINDOW_SECONDS = 15 * 60;

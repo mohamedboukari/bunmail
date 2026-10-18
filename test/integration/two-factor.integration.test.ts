@@ -65,6 +65,12 @@ import {
 } from "../../src/utils/crypto.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { logger } from "../../src/utils/logger.ts";
+import { TWO_FACTOR_MAX_FAILURES } from "../../src/modules/users/services/two-factor-policy.service.ts";
+import { resetCodesExhaustedAlerts } from "../../src/pages/lib/two-factor-limiter.ts";
+import * as twoFactorAlert from "../../src/modules/users/services/two-factor-alert.service.ts";
+import * as passwordService from "../../src/modules/users/services/password.service.ts";
+import * as mailer from "../../src/modules/emails/services/mailer.service.ts";
+import { domains } from "../../src/modules/domains/models/domain.schema.ts";
 import { config } from "../../src/config.ts";
 
 const app = new Elysia().use(pagesPlugin);
@@ -82,7 +88,8 @@ const STEP = totp.totpStep(T0);
 const PAGE = "/dashboard/account/two-factor";
 const SECOND_STEP = "/dashboard/login/two-factor";
 
-const { maxAttempts } = config.dashboard.loginRateLimit;
+/** The fixed two-factor budget (not `DASHBOARD_LOGIN_RATE_LIMIT_MAX`, #220). */
+const maxAttempts = TWO_FACTOR_MAX_FAILURES;
 const originalProxyHops = config.dashboard.trustedProxyHops;
 const originalPolicy = config.dashboard.require2fa;
 
@@ -98,6 +105,7 @@ const noLimit: AttemptLimiter = {
 beforeEach(async () => {
   setSystemTime(new Date(T0));
   loginAttemptMap.clear();
+  resetCodesExhaustedAlerts();
   await truncateAll();
   ids.owner = (await seed.user({ email: OWNER, role: "owner", password: PASSWORD })).id;
   ids.admin = (await seed.user({ email: ADMIN, role: "admin", password: PASSWORD })).id;
@@ -168,10 +176,13 @@ function submitCode(token: string, code: string, ip?: string): Promise<Response>
 }
 
 /** A full (`password`) session of the account, the way a login opens it. */
-async function fullSession(userId: string): Promise<{ id: string; token: string }> {
+async function fullSession(
+  userId: string,
+  assurance: "password" | "mfa" = "password",
+): Promise<{ id: string; token: string }> {
   const created = await sessionService.createSession({
     userId,
-    assurance: "password",
+    assurance,
     authMethod: "password",
     ip: null,
     userAgent: null,
@@ -258,7 +269,10 @@ describe("enrolment", () => {
     expect(offHtml).toContain("Set up two-factor authentication");
     expect(offHtml).toContain('href="/dashboard/account/two-factor"');
 
-    const started = await call("POST", `${PAGE}/start`, { token: browser.token });
+    const started = await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: PASSWORD },
+    });
     expect(started.status).toBe(302);
     expect(started.headers.get("location")).toBe(PAGE);
 
@@ -285,7 +299,10 @@ describe("enrolment", () => {
 
   test("a wrong code is refused and changes nothing; the enrolment stays", async () => {
     const browser = await fullSession(ids.member);
-    await call("POST", `${PAGE}/start`, { token: browser.token });
+    await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: PASSWORD },
+    });
     const response = await call("POST", `${PAGE}/confirm`, {
       token: browser.token,
       body: { code: "000000" },
@@ -308,7 +325,10 @@ describe("enrolment", () => {
     const browser = await fullSession(ids.member);
     const otherDevice = await fullSession(ids.member);
     const bystander = await fullSession(ids.admin);
-    await call("POST", `${PAGE}/start`, { token: browser.token });
+    await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: PASSWORD },
+    });
     const [pendingRow] = await db
       .select({ pending: sessions.totpPendingSecret })
       .from(sessions)
@@ -379,7 +399,10 @@ describe("enrolment", () => {
 
   test("the recovery codes are revealed only to the session that enabled 2FA", async () => {
     const browser = await fullSession(ids.member);
-    await call("POST", `${PAGE}/start`, { token: browser.token });
+    await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: PASSWORD },
+    });
     const [pendingRow] = await db
       .select({ pending: sessions.totpPendingSecret })
       .from(sessions)
@@ -404,8 +427,11 @@ describe("enrolment", () => {
 
   test("start and confirm are refused once 2FA is on", async () => {
     await seedTotp(ids.member);
-    const browser = await fullSession(ids.member);
-    const started = await call("POST", `${PAGE}/start`, { token: browser.token });
+    const browser = await fullSession(ids.member, "mfa");
+    const started = await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: PASSWORD },
+    });
     expect(decodeURIComponent(started.headers.get("location") ?? "")).toContain(
       "already on",
     );
@@ -741,7 +767,7 @@ describe("login with two-factor", () => {
 describe("disable and regenerate", () => {
   test("disabling needs the password AND a code; then the login needs the password only", async () => {
     const { key } = await seedTotp(ids.member);
-    const browser = await fullSession(ids.member);
+    const browser = await fullSession(ids.member, "mfa");
     const wrongPassword = await call("POST", `${PAGE}/disable`, {
       token: browser.token,
       body: { password: "not the password at all", code: codeAt(key) },
@@ -770,13 +796,13 @@ describe("disable and regenerate", () => {
     expect(await totpRow(ids.member)).toBeUndefined();
     expect(await recoveryRows(ids.member)).toHaveLength(0);
     /** Sessions are kept. */
-    expect(await assuranceOf(browser.id)).toBe("password");
+    expect(await assuranceOf(browser.id)).toBe("mfa");
     expect((await passwordLogin(MEMBER)).headers.get("location")).toBe("/dashboard");
   });
 
   test("a recovery code can disable it", async () => {
     const { codes } = await seedTotp(ids.member);
-    const browser = await fullSession(ids.member);
+    const browser = await fullSession(ids.member, "mfa");
     await call("POST", `${PAGE}/disable`, {
       token: browser.token,
       body: { password: PASSWORD, code: codes[3] ?? "" },
@@ -786,7 +812,7 @@ describe("disable and regenerate", () => {
 
   test("regenerating needs an app code (not a recovery code) and replaces every code", async () => {
     const { key, codes } = await seedTotp(ids.member);
-    const browser = await fullSession(ids.member);
+    const browser = await fullSession(ids.member, "mfa");
     const withRecovery = await call("POST", `${PAGE}/recovery-codes`, {
       token: browser.token,
       body: { code: codes[0] ?? "" },
@@ -924,7 +950,10 @@ describe("REQUIRE_2FA", () => {
     );
 
     /** Enrolling through the page lets the admin in. */
-    await call("POST", `${PAGE}/start`, { token: admin.token });
+    await call("POST", `${PAGE}/start`, {
+      token: admin.token,
+      body: { password: PASSWORD },
+    });
     const [row] = await db
       .select({ pending: sessions.totpPendingSecret })
       .from(sessions)
@@ -942,10 +971,10 @@ describe("REQUIRE_2FA", () => {
     );
   });
 
-  test("a password session of an enrolled account is not held back", async () => {
+  test("an mfa session of an enrolled account is not held back", async () => {
     expect(Reflect.set(config.dashboard, "require2fa", "owner")).toBe(true);
     await seedTotp(ids.owner);
-    const owner = await fullSession(ids.owner);
+    const owner = await fullSession(ids.owner, "mfa");
     expect((await call("GET", "/dashboard", { token: owner.token })).status).toBe(200);
   });
 });
@@ -973,5 +1002,324 @@ describe("storage", () => {
       .from(userRecoveryCodes)
       .where(isNull(userRecoveryCodes.usedAt));
     expect(unused).toHaveLength(0);
+  });
+});
+
+/* ─── Review hardening ─── */
+
+/** Spies on the 2FA security emails without sending anything; returns the events. */
+function spyAlerts(): {
+  events: () => string[];
+  restore: () => void;
+} {
+  const spy = spyOn(twoFactorAlert, "sendTwoFactorAlert").mockImplementation(() =>
+    Promise.resolve({ sent: true }),
+  );
+  return {
+    events: () => spy.mock.calls.map(([input]) => input.event),
+    restore: () => spy.mockRestore(),
+  };
+}
+
+/** Starts and confirms an enrolment over HTTP in `token`'s session; returns the key. */
+async function enrolOverHttp(token: string, sessionId: string): Promise<Buffer> {
+  await call("POST", `${PAGE}/start`, { token, body: { password: PASSWORD } });
+  const [row] = await db
+    .select({ pending: sessions.totpPendingSecret })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId));
+  const key = totp.base32Decode(
+    decryptSecret(row?.pending ?? "", config.dkimEncryptionKey),
+  );
+  if (!key) throw new Error("bad secret");
+  await call("POST", `${PAGE}/confirm`, { token, body: { code: codeAt(key) } });
+  return key;
+}
+
+describe("re-authentication before enrolment (review 1)", () => {
+  test("start needs the current password; a wrong one writes nothing and confirm cannot run", async () => {
+    const browser = await fullSession(ids.member);
+    const refused = await call("POST", `${PAGE}/start`, {
+      token: browser.token,
+      body: { password: "not the password at all" },
+    });
+    expect(decodeURIComponent(refused.headers.get("location") ?? "")).toContain(
+      "Current password is incorrect.",
+    );
+    const [row] = await db
+      .select({ pending: sessions.totpPendingSecret })
+      .from(sessions)
+      .where(eq(sessions.id, browser.id));
+    expect(row?.pending).toBeNull();
+    /** Counted on the password change's keys. */
+    expect(loginAttemptMap.has(`password:user:${ids.member}`)).toBe(true);
+
+    /** A stolen session cannot confirm anything: no start passed the password. */
+    const confirmed = await call("POST", `${PAGE}/confirm`, {
+      token: browser.token,
+      body: { code: "123456" },
+    });
+    expect(decodeURIComponent(confirmed.headers.get("location") ?? "")).toContain(
+      "Start the setup again",
+    );
+    expect(await totpRow(ids.member)).toBeUndefined();
+  });
+
+  test("start is throttled by the password change budget", async () => {
+    const limits = config.dashboard.loginRateLimit;
+    const enabled = limits.enabled;
+    expect(Reflect.set(limits, "enabled", true)).toBe(true);
+    try {
+      const browser = await fullSession(ids.member);
+      for (let i = 0; i < limits.maxAttempts; i += 1) {
+        await call("POST", `${PAGE}/start`, {
+          token: browser.token,
+          body: { password: "not the password at all" },
+        });
+      }
+      const verify = spyOn(passwordService, "verifyPassword");
+      try {
+        const blocked = await call("POST", `${PAGE}/start`, {
+          token: browser.token,
+          body: { password: PASSWORD },
+        });
+        expect(decodeURIComponent(blocked.headers.get("location") ?? "")).toContain(
+          "Too many attempts",
+        );
+        expect(verify).not.toHaveBeenCalled();
+      } finally {
+        verify.mockRestore();
+      }
+    } finally {
+      expect(Reflect.set(limits, "enabled", enabled)).toBe(true);
+    }
+  });
+
+  test("turning 2FA on, getting new codes and turning it off each email the account", async () => {
+    const alerts = spyAlerts();
+    try {
+      const browser = await fullSession(ids.member);
+      const key = await enrolOverHttp(browser.token, browser.id);
+      expect(alerts.events()).toEqual(["enabled"]);
+      await call("POST", `${PAGE}/recovery-codes`, {
+        token: browser.token,
+        body: { code: codeAt(key, 1) },
+      });
+      expect(alerts.events()).toEqual(["enabled", "recovery_codes_regenerated"]);
+      setSystemTime(new Date(T0 + 60_000));
+      await call("POST", `${PAGE}/disable`, {
+        token: browser.token,
+        body: { password: PASSWORD, code: totp.totpCode(key, STEP + 2) },
+      });
+      expect(alerts.events()).toEqual([
+        "enabled",
+        "recovery_codes_regenerated",
+        "disabled",
+      ]);
+      expect(await totpRow(ids.member)).toBeUndefined();
+    } finally {
+      alerts.restore();
+    }
+  });
+
+  test("a completed reset link and a completed reset-owner link that remove 2FA email the account; without 2FA, no email", async () => {
+    const alerts = spyAlerts();
+    try {
+      await seedTotp(ids.member);
+      const issued = await issuePasswordReset(ids.admin, ids.member);
+      if (!issued.ok) throw new Error(issued.reason);
+      const resetToken = new URL(issued.url).searchParams.get("token") ?? "";
+      await call("POST", "/dashboard/reset", {
+        body: { token: resetToken, password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+      });
+      expect(alerts.events()).toEqual(["removed_by_reset"]);
+
+      await seedTotp(ids.owner);
+      const link = await issueOwnerSetupLink(OWNER);
+      await call("POST", "/dashboard/setup", {
+        body: { token: link.token, password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+      });
+      expect(alerts.events()).toEqual(["removed_by_reset", "removed_by_reset"]);
+
+      /** An account without 2FA: the reset sends nothing of the kind. */
+      const plain = await issuePasswordReset(ids.owner, ids.admin);
+      if (!plain.ok) throw new Error(plain.reason);
+      await call("POST", "/dashboard/reset", {
+        body: {
+          token: new URL(plain.url).searchParams.get("token") ?? "",
+          password: NEW_PASSWORD,
+          confirm: NEW_PASSWORD,
+        },
+      });
+      expect(alerts.events()).toHaveLength(2);
+    } finally {
+      alerts.restore();
+    }
+  });
+
+  test("the alert goes out through the system sender, DKIM path, with no link", async () => {
+    const domain = await seed.domain({ name: "example.com" });
+    await db.update(domains).set({ dkimVerified: true }).where(eq(domains.id, domain.id));
+    const originalFrom = config.systemMailFrom;
+    expect(Reflect.set(config, "systemMailFrom", "security@example.com")).toBe(true);
+    const sendMail = spyOn(mailer, "sendMail").mockImplementation((options) =>
+      Promise.resolve({
+        messageId: options.messageId,
+        deliveryState: {
+          "mx.example.com": { status: "sent", recipients: [options.to], attempts: 1 },
+        },
+      }),
+    );
+    try {
+      const outcome = await twoFactorAlert.sendTwoFactorAlert({
+        event: "enabled",
+        userId: ids.member,
+        email: MEMBER,
+        ip: "203.0.113.5",
+      });
+      expect(outcome).toEqual({ sent: true });
+      const [options] = sendMail.mock.calls[0] ?? [];
+      expect(options?.to).toBe(MEMBER);
+      expect(options?.from).toBe("security@example.com");
+      expect(options?.dkim).toBeDefined();
+      expect(options?.subject).toBe(
+        "Two-factor authentication turned on for your BunMail account",
+      );
+      expect(`${options?.text}${options?.html}`).not.toMatch(/https?:|href=/);
+    } finally {
+      sendMail.mockRestore();
+      expect(Reflect.set(config, "systemMailFrom", originalFrom)).toBe(true);
+    }
+  });
+});
+
+describe("in-session checks have their own budget (review 2)", () => {
+  test("wrong codes in a session never lock the account's sign-in, and spending the session's budget revokes that session", async () => {
+    expect(Reflect.set(config.dashboard, "trustedProxyHops", 1)).toBe(true);
+    const { key } = await seedTotp(ids.member);
+    const thief = await fullSession(ids.member, "mfa");
+    let last: Response | undefined;
+    for (let i = 0; i < maxAttempts; i += 1) {
+      last = await call("POST", `${PAGE}/recovery-codes`, {
+        token: thief.token,
+        body: { code: "000000" },
+        ip: "198.51.100.66",
+      });
+    }
+    expect(last?.status).toBe(302);
+    expect(last?.headers.get("location")).toBe("/dashboard/login");
+    expect(await assuranceOf(thief.id)).toBeUndefined();
+    expect(loginAttemptMap.has(`totp:user:${ids.member}`)).toBe(false);
+
+    /** The real user signs in from another address, code and all. */
+    const pending = await pendingLogin(MEMBER, "203.0.113.70");
+    const signedIn = await submitCode(pending, codeAt(key), "203.0.113.70");
+    expect(signedIn.headers.get("location")).toBe("/dashboard");
+  });
+
+  test("password guesses on the disable form spend the session's budget too", async () => {
+    await seedTotp(ids.member);
+    const thief = await fullSession(ids.member, "mfa");
+    let last: Response | undefined;
+    for (let i = 0; i < maxAttempts; i += 1) {
+      last = await call("POST", `${PAGE}/disable`, {
+        token: thief.token,
+        body: { password: `guess number ${i}, long enough`, code: "000000" },
+      });
+    }
+    expect(last?.headers.get("location")).toBe("/dashboard/login");
+    expect(await assuranceOf(thief.id)).toBeUndefined();
+    expect(await totpRow(ids.member)).toBeDefined();
+  });
+});
+
+describe("disable on an account without 2FA (review 3)", () => {
+  test("answers that 2FA is off at once, without checking the password", async () => {
+    const browser = await fullSession(ids.member);
+    const verify = spyOn(passwordService, "verifyPassword");
+    try {
+      for (const password of ["not the password at all", PASSWORD]) {
+        const response = await call("POST", `${PAGE}/disable`, {
+          token: browser.token,
+          body: { password, code: "123456" },
+        });
+        expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+          "Two-factor authentication is off.",
+        );
+      }
+      expect(verify).not.toHaveBeenCalled();
+    } finally {
+      verify.mockRestore();
+    }
+  });
+});
+
+describe("a password-level session never outlives 2FA (review 4)", () => {
+  test("a password session of an account that now has a second factor is refused everywhere", async () => {
+    /** A login that checked the password just before a confirmation committed. */
+    const racing = await fullSession(ids.member);
+    const enrolled = await fullSession(ids.member, "mfa");
+    expect((await call("GET", "/dashboard", { token: racing.token })).status).toBe(200);
+    await seedTotp(ids.member);
+
+    expect(await sessionService.findActiveSession(racing.token)).toBeNull();
+    const refused = await call("GET", "/dashboard", { token: racing.token });
+    expect(refused.status).toBe(302);
+    expect(refused.headers.get("location")).toBe("/dashboard/login");
+    /** The Active sessions list shows only what still opens the dashboard. */
+    const listed = await sessionService.listUserSessions(ids.member);
+    expect(listed.map((row) => row.id)).toEqual([enrolled.id]);
+    expect((await call("GET", "/dashboard", { token: enrolled.token })).status).toBe(200);
+  });
+});
+
+describe("the 2FA budget is fixed (review 5)", () => {
+  test("a loose DASHBOARD_LOGIN_RATE_LIMIT_MAX does not widen it", async () => {
+    const limits = config.dashboard.loginRateLimit;
+    const original = limits.maxAttempts;
+    expect(Reflect.set(limits, "maxAttempts", 100)).toBe(true);
+    try {
+      await seedTotp(ids.member);
+      const pending = await pendingLogin(MEMBER);
+      let last: Response | undefined;
+      for (let i = 0; i < TWO_FACTOR_MAX_FAILURES; i += 1) {
+        last = await submitCode(pending, "000000");
+      }
+      expect(last?.headers.get("location")).toBe(
+        "/dashboard/login?error=two_factor_locked",
+      );
+    } finally {
+      expect(Reflect.set(limits, "maxAttempts", original)).toBe(true);
+    }
+  });
+});
+
+describe("an exhausted login budget emails the account (review 6)", () => {
+  test("once per window, and only the account whose own budget ran out", async () => {
+    expect(Reflect.set(config.dashboard, "trustedProxyHops", 1)).toBe(true);
+    await seedTotp(ids.member);
+    const { key } = await seedTotp(ids.admin);
+    const alerts = spyAlerts();
+    try {
+      const ip = "198.51.100.40";
+      const pending = await pendingLogin(MEMBER, ip);
+      for (let i = 0; i < maxAttempts; i += 1) await submitCode(pending, "000000", ip);
+      expect(alerts.events()).toEqual(["login_codes_exhausted"]);
+
+      /** Still blocked, from another address: no second email in the window. */
+      const again = await pendingLogin(MEMBER, "198.51.100.41");
+      await submitCode(again, codeAt(key), "198.51.100.41");
+      expect(alerts.events()).toHaveLength(1);
+
+      /** Another account blocked only by the shared address key: no email for it. */
+      const other = await pendingLogin(ADMIN, ip);
+      const blocked = await submitCode(other, codeAt(key), ip);
+      expect(blocked.headers.get("location")).toBe(
+        "/dashboard/login?error=two_factor_locked",
+      );
+      expect(alerts.events()).toHaveLength(1);
+    } finally {
+      alerts.restore();
+    }
   });
 });

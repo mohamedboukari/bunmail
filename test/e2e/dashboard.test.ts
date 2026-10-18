@@ -459,6 +459,16 @@ void mock.module("../../src/modules/users/services/login.service.ts", () => ({
  */
 const recognizeSignInDevice = mock((_event: SignInDeviceEvent) => Promise.resolve());
 
+/**
+ * The 2FA security emails (#220): their contents and sending are covered
+ * by the unit and integration tests. Mocked here so the dashboard does not
+ * load the system mail path (and the domain service) in this file.
+ */
+void mock.module("../../src/modules/users/services/two-factor-alert.service.ts", () => ({
+  sendTwoFactorAlert: mock(() => Promise.resolve({ sent: true })),
+  buildTwoFactorAlertEmail: mock(() => ({ subject: "", text: "", html: "" })),
+}));
+
 /** Every export of sign-in-device.service.ts. */
 void mock.module("../../src/modules/users/services/sign-in-device.service.ts", () => ({
   recognizeSignInDevice,

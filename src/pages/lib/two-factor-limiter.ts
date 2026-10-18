@@ -1,5 +1,8 @@
-import { config } from "../../config.ts";
 import type { AttemptLimiter } from "../../modules/users/types/user.types.ts";
+import {
+  TWO_FACTOR_MAX_FAILURES,
+  TWO_FACTOR_WINDOW_SECONDS,
+} from "../../modules/users/services/two-factor-policy.service.ts";
 import {
   clearLoginAttempts,
   isLoginRateLimited,
@@ -9,39 +12,88 @@ import {
 } from "../../middleware/login-rate-limit.ts";
 
 /**
- * Failed-attempt budget for every check of a second factor (#220): the
- * login step, disabling 2FA and regenerating recovery codes. Built from
- * the login limiter's primitives and settings (`DASHBOARD_LOGIN_RATE_LIMIT_MAX`
- * attempts per `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` seconds), with keys of
- * its own: `totp:user:<userId>` and `totp:ip:<client IP bucket>` (IPv6 by
- * /64). One budget for all three routes, so a code cannot be guessed
- * faster by spreading the guesses over them.
+ * Failed-attempt budgets for checks of a second factor (#220), on the
+ * login limiter's primitives with keys of their own and fixed numbers
+ * (`TWO_FACTOR_MAX_FAILURES` per `TWO_FACTOR_WINDOW_SECONDS`: 5 per 15
+ * minutes), always on, whatever `DASHBOARD_LOGIN_RATE_LIMIT_*` says: a
+ * six-digit code (three valid at any moment) needs a budget.
  *
- * Always on, even when `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED=false`: a
- * six-digit code is guessable without a budget (three codes are valid at
- * any moment), and the per-account key is what bounds it. That key is
- * reachable only after the password (or with a signed-in session), so
- * locking it costs an attacker the password first.
+ * Two budgets, so neither can be spent to block the other:
  *
- * `clear` (a success) forgets the account's failures and gives back this
+ * - The **login step** (`twoFactorLoginLimiter`): `totp:user:<userId>` and
+ *   `totp:ip:<client IP bucket>`. The account key is reachable only with
+ *   the password, and it is what bounds guessing spread over many
+ *   addresses.
+ * - **In-session checks** (`twoFactorSessionLimiter`: disabling 2FA,
+ *   regenerating recovery codes): `totp:session:<sessionId>` and the same
+ *   address key. A stolen session can spend only its own budget, never the
+ *   account's login budget; once spent, the route revokes that session.
+ *
+ * `clear` (a success) forgets the own key's failures and gives back this
  * request's own count on the address key; earlier failures from the
  * address stay until their window ends, as for the password login (#256).
  */
-export function twoFactorLimiter(userId: string, ip: string): AttemptLimiter {
-  const { maxAttempts, windowSec } = config.dashboard.loginRateLimit;
-  const windowMs = windowSec * 1000;
-  const userKey = `totp:user:${userId}`;
+
+/** An `AttemptLimiter` that also says whether its own key (account or session) is spent. */
+export interface TwoFactorLimiter extends AttemptLimiter {
+  /** True when the account key (login) or the session key (in-session) is over budget. */
+  ownKeyLimited(): boolean;
+}
+
+/** The window in milliseconds. */
+const WINDOW_MS = TWO_FACTOR_WINDOW_SECONDS * 1000;
+
+/** A limiter over an own key and the client's address key. */
+function limiterFor(ownKey: string, ip: string): TwoFactorLimiter {
   const ipKey = `totp:ip:${rateLimitBucket(ip)}`;
-  const keys = [userKey, ipKey];
+  const keys = [ownKey, ipKey];
+  const limited = (key: string): boolean =>
+    isLoginRateLimited(key, TWO_FACTOR_MAX_FAILURES, WINDOW_MS).limited;
   return {
-    isLimited: () =>
-      keys.some((key) => isLoginRateLimited(key, maxAttempts, windowMs).limited),
+    isLimited: () => keys.some(limited),
+    ownKeyLimited: () => limited(ownKey),
     record: () => {
-      for (const key of keys) recordFailedLogin(key, windowMs);
+      for (const key of keys) recordFailedLogin(key, WINDOW_MS);
     },
     clear: () => {
-      clearLoginAttempts(userKey);
-      refundLoginAttempt(ipKey, windowMs);
+      clearLoginAttempts(ownKey);
+      refundLoginAttempt(ipKey, WINDOW_MS);
     },
   };
+}
+
+/** The budget of the second login step: per account and per client address. */
+export function twoFactorLoginLimiter(userId: string, ip: string): TwoFactorLimiter {
+  return limiterFor(`totp:user:${userId}`, ip);
+}
+
+/** The budget of in-session code checks: per session and per client address. */
+export function twoFactorSessionLimiter(sessionId: string, ip: string): TwoFactorLimiter {
+  return limiterFor(`totp:session:${sessionId}`, ip);
+}
+
+/** When each account was last alerted that its login code budget ran out. */
+const exhaustedAlerts = new Map<string, number>();
+
+/**
+ * Whether to email the account that its second login step's budget ran
+ * out (#220): at most once per account and window, so a burst of
+ * refused requests sends one email. Drops entries older than the window
+ * on the way. In memory and per replica, like the budget itself.
+ */
+export function shouldAlertCodesExhausted(
+  userId: string,
+  now: number = Date.now(),
+): boolean {
+  for (const [key, at] of exhaustedAlerts) {
+    if (now - at >= WINDOW_MS) exhaustedAlerts.delete(key);
+  }
+  if (exhaustedAlerts.has(userId)) return false;
+  exhaustedAlerts.set(userId, now);
+  return true;
+}
+
+/** Forgets every "alerted" mark. For tests, which reset the limiter map too. */
+export function resetCodesExhaustedAlerts(): void {
+  exhaustedAlerts.clear();
 }

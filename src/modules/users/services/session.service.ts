@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -15,7 +15,6 @@ import {
   type NewSessionInput,
   type PendingSession,
   type RotatedSession,
-  type SessionAssurance,
   type Tx,
   type UserSessionSummary,
 } from "../types/user.types.ts";
@@ -55,9 +54,6 @@ import { hashToken, mintToken } from "./token.service.ts";
  * token hashes in its params.
  */
 
-/** Assurance levels that may open a protected page; `pending` may not (#220). */
-const ADMITTED_ASSURANCES: SessionAssurance[] = ["password", "mfa"];
-
 /**
  * A constant interval literal, e.g. `interval '60 seconds'`. Inlined
  * rather than bound: the values are code constants, and a bound number
@@ -70,14 +66,25 @@ function seconds(value: number): SQL {
 /**
  * The session-side half of "live" (#216, #281): unexpired (`expires_at`
  * carries both the 24 h idle and the 7 d absolute rule, see
- * `slidingExpiry`) and an assurance that may open a page. The guard
+ * `slidingExpiry`) and an assurance that may open a page: `mfa`, or
+ * `password` only while the account has no TOTP second factor (#220).
+ * `pending` never. So a password-level session can never outlive the
+ * account turning 2FA on, even one a login opened while a confirmation
+ * was committing (confirmation deletes the other sessions, but a login
+ * that checked the password just before can insert after it). The guard
  * (`findActiveSession`) and the Active sessions list share it, so the
  * list shows exactly the sessions that still open the dashboard.
  */
 function liveSession(): SQL | undefined {
   return and(
     sql`${sessions.expiresAt} > now()`,
-    inArray(sessions.assurance, ADMITTED_ASSURANCES),
+    or(
+      eq(sessions.assurance, "mfa"),
+      and(
+        eq(sessions.assurance, "password"),
+        sql`NOT ${hasTotpCredential(sessions.userId)}`,
+      ),
+    ),
   );
 }
 

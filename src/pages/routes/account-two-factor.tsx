@@ -65,6 +65,29 @@ function CodeInput({ id, hint }: { id: string; hint: string }) {
 }
 
 /**
+ * The current password, asked before an enrolment starts (#220): a stolen
+ * session alone must not turn 2FA on. Never refilled.
+ */
+function PasswordInput({ id }: { id: string }) {
+  return (
+    <>
+      <label for={id} class={LABEL_CLASS}>
+        Current password
+      </label>
+      <input
+        type="password"
+        id={id}
+        name="password"
+        required
+        autocomplete="current-password"
+        maxlength={String(SETUP_PASSWORD_MAX_LENGTH)}
+        class={`${INPUT_CLASS} mb-4`}
+      />
+    </>
+  );
+}
+
+/**
  * Two-factor page (#220, every role): turn TOTP two-factor authentication
  * on (scan a QR code or type the secret, then confirm with a first code),
  * see how many recovery codes are left, get new ones, or turn it off
@@ -152,18 +175,7 @@ export function AccountTwoFactorPage({
               stop working.
             </p>
             <form method="POST" action="/dashboard/account/two-factor/disable">
-              <label for="disable-password" class={LABEL_CLASS}>
-                Current password
-              </label>
-              <input
-                type="password"
-                id="disable-password"
-                name="password"
-                required
-                autocomplete="current-password"
-                maxlength={String(SETUP_PASSWORD_MAX_LENGTH)}
-                class={`${INPUT_CLASS} mb-4`}
-              />
+              <PasswordInput id="disable-password" />
               <CodeInput
                 id="disable-code"
                 hint="The 6-digit code from your app, or a recovery code."
@@ -205,14 +217,17 @@ export function AccountTwoFactorPage({
               Turn on two-factor authentication
             </button>
           </form>
-          <form method="POST" action="/dashboard/account/two-factor/start" class="mt-3">
-            <button
-              type="submit"
-              class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-            >
+          <details class="mt-3">
+            <summary class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 cursor-pointer">
               Start over with a new key
-            </button>
-          </form>
+            </summary>
+            <form method="POST" action="/dashboard/account/two-factor/start" class="mt-3">
+              <PasswordInput id="restart-password" />
+              <button type="submit" class={PRIMARY_BUTTON}>
+                Start over
+              </button>
+            </form>
+          </details>
         </div>
       ) : (
         <div class={CARD_CLASS}>
@@ -222,6 +237,7 @@ export function AccountTwoFactorPage({
             enough.
           </p>
           <form method="POST" action="/dashboard/account/two-factor/start">
+            <PasswordInput id="start-password" />
             <button type="submit" class={PRIMARY_BUTTON}>
               Set up two-factor authentication
             </button>

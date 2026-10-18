@@ -103,7 +103,10 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/account/sessions/:id/revoke": { access: "member" },
   /** Every role manages its own second factor (#220); a dummy code changes nothing. */
   "GET /dashboard/account/two-factor": { access: "member" },
-  "POST /dashboard/account/two-factor/start": { access: "member" },
+  "POST /dashboard/account/two-factor/start": {
+    access: "member",
+    body: { password: "x" },
+  },
   "POST /dashboard/account/two-factor/confirm": { access: "member", body: { code: "x" } },
   "POST /dashboard/account/two-factor/recovery-codes": {
     access: "member",

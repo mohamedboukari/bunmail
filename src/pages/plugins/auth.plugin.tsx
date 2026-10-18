@@ -55,7 +55,11 @@ import { redirect } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
-import { twoFactorLimiter } from "../lib/two-factor-limiter.ts";
+import {
+  shouldAlertCodesExhausted,
+  twoFactorLoginLimiter,
+} from "../lib/two-factor-limiter.ts";
+import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 
 /**
  * SQLSTATE of a foreign-key violation: a login's session insert naming a
@@ -460,7 +464,7 @@ export function authPages(app: PublicDashboard) {
               return redirect(set, "/dashboard");
             }
 
-            const limiter = twoFactorLimiter(pending.userId, ip);
+            const limiter = twoFactorLoginLimiter(pending.userId, ip);
             const result = await twoFactorService.completeTwoFactorLogin(
               pending,
               token,
@@ -491,6 +495,22 @@ export function authPages(app: PublicDashboard) {
                   "Two-factor sign-in blocked: too many attempts, pending session revoked",
                   { userId: pending.userId, sessionId: pending.sessionId, ip },
                 );
+                /**
+                 * The account's own budget ran out: the password was right
+                 * and the codes kept failing, a likely password compromise.
+                 * Email the account, at most once per window.
+                 */
+                if (
+                  limiter.ownKeyLimited() &&
+                  shouldAlertCodesExhausted(pending.userId)
+                ) {
+                  void sendTwoFactorAlert({
+                    event: "login_codes_exhausted",
+                    userId: pending.userId,
+                    email: pending.email,
+                    ip: sessionIp(ip),
+                  });
+                }
                 clearSession(set);
                 return redirect(set, "/dashboard/login?error=two_factor_locked");
               }
@@ -680,7 +700,20 @@ export function authPages(app: PublicDashboard) {
             return <OwnerSetupInvalidPage />;
           }
 
-          logger.warn("Owner setup completed", { owner: redactEmail(owner.email), ip });
+          logger.warn("Owner setup completed", {
+            owner: redactEmail(owner.email),
+            twoFactorRemoved: owner.twoFactorRemoved,
+            ip,
+          });
+          /** A `reset-owner` link removed the owner's 2FA (#220): tell the owner. */
+          if (owner.twoFactorRemoved) {
+            void sendTwoFactorAlert({
+              event: "removed_by_reset",
+              userId: owner.userId,
+              email: owner.email,
+              ip: sessionIp(ip),
+            });
+          }
 
           issueSession(set, owner.sessionToken);
           return redirect(set, "/dashboard");
@@ -996,9 +1029,19 @@ export function authPages(app: PublicDashboard) {
             sessionsRevoked: result.sessionsRevoked,
             tokensRevoked: result.tokensRevoked,
             issuedTokensRevoked: result.issuedTokensRevoked,
+            twoFactorRemoved: result.twoFactorRemoved,
             sessionId: result.sessionId,
             ip,
           });
+          /** The reset removed the account's 2FA (#220): tell the account. */
+          if (result.twoFactorRemoved) {
+            void sendTwoFactorAlert({
+              event: "removed_by_reset",
+              userId: result.userId,
+              email: result.email,
+              ip: sessionIp(ip),
+            });
+          }
 
           issueSession(set, result.sessionToken);
           return redirect(set, "/dashboard");

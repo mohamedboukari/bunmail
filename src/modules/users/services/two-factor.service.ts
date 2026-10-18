@@ -59,7 +59,11 @@ import * as totp from "./totp.service.ts";
  * **Throttling.** Every check of a code an attacker could guess (the
  * login step, disabling, regenerating) takes an `AttemptLimiter` and runs
  * `isLimited` then `record` with no await in between, before any work:
- * a parallel burst cannot verify more codes than the budget.
+ * a parallel burst cannot verify more codes than the budget. The login
+ * step spends the account's budget; disabling and regenerating spend only
+ * the session's, so a stolen session cannot lock the real user's sign-in.
+ * Starting an enrolment re-checks the current password under the password
+ * change's budget.
  *
  * Never logs (the routes log with their IDs); never returns or logs a
  * secret, a code hash or an `otpauth://` URI except to the page that
@@ -225,21 +229,66 @@ export async function twoFactorStatus(userId: string): Promise<TwoFactorStatus> 
   });
 }
 
+/** The account's `password` credential hash, or null. */
+async function passwordHashOf(userId: string): Promise<string | null> {
+  const [credential] = await withSanitizedErrors(() =>
+    db
+      .select({ secretHash: userCredentials.secretHash })
+      .from(userCredentials)
+      .where(
+        and(
+          eq(userCredentials.userId, userId),
+          eq(userCredentials.type, PASSWORD_CREDENTIAL),
+        ),
+      )
+      .limit(1),
+  );
+  return credential?.secretHash ?? null;
+}
+
 /**
- * Starts an enrolment in this session: a new random secret (20 bytes),
- * encrypted and kept on the session row until it is confirmed. Starting
- * again replaces it (the earlier QR code stops working). Refused when the
- * account already has a second factor.
+ * Starts an enrolment in this session, after the user re-entered the
+ * current password: a stolen session cookie alone must not be able to
+ * turn 2FA on (which would sign the owner's other devices out and put
+ * the account behind a code only the thief has). In order:
+ *
+ * 1. An account that already has a second factor is refused
+ *    (`already_enabled`), before any password work.
+ * 2. The password budget (`limiter`: the password change's keys,
+ *    `password:user:<id>` and `password:ip:<bucket>`): over budget is
+ *    refused (`rate_limited`), then the attempt is counted with no await
+ *    in between.
+ * 3. Exactly one argon2id verify of the current password; wrong (or no
+ *    password credential): `wrong_password`, nothing written.
+ * 4. A new random secret (20 bytes), encrypted and kept on the session
+ *    row until it is confirmed; the budget is cleared. Starting again
+ *    replaces it (the earlier QR code stops working).
+ *
+ * The pending secret is written only here, after the password check, so
+ * `confirmEnrolment` (which needs it) can never run without a start that
+ * passed the check.
  */
 export async function startEnrolment(
   userId: string,
   sessionId: string,
-): Promise<{ ok: true } | { ok: false; reason: "already_enabled" }> {
+  password: string,
+  limiter: AttemptLimiter,
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: "already_enabled" | "rate_limited" | "wrong_password" }
+> {
   if ((await twoFactorStatus(userId)).enabled) {
     return { ok: false, reason: "already_enabled" };
   }
+  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
+  limiter.record();
+  const hash = await passwordHashOf(userId);
+  if (hash === null || !(await verifyPassword(password, hash))) {
+    return { ok: false, reason: "wrong_password" };
+  }
   const encrypted = encryptSecret(totp.generateTotpSecret(), config.dkimEncryptionKey);
   await setTotpPendingSecret(userId, sessionId, encrypted);
+  limiter.clear();
   return { ok: true };
 }
 
@@ -388,11 +437,14 @@ export async function completeTwoFactorLogin(
 
 /**
  * Turns two-factor authentication off: the current password AND a valid
- * code (from the app, or a recovery code) are required. The budget is
- * checked and counted first (shared with the login step), then one
- * argon2id verify outside the transaction, then, in one transaction, the
- * code is spent and the `totp` credential deleted (its recovery codes go
- * with it, by cascade). Sessions are kept.
+ * code (from the app, or a recovery code) are required. In order: an
+ * account without a second factor is answered `not_enabled` at once,
+ * before any password work (so this form never says whether a password
+ * is right on such an account); the budget (`limiter`: this session's,
+ * never the account's login budget) is checked and counted; one argon2id
+ * verify outside the transaction; then, in one transaction, the code is
+ * spent and the `totp` credential deleted (its recovery codes go with it,
+ * by cascade). Sessions are kept.
  */
 export async function disableTwoFactor(
   userId: string,
@@ -401,22 +453,13 @@ export async function disableTwoFactor(
   limiter: AttemptLimiter,
   nowMs: number = Date.now(),
 ): Promise<DisableTwoFactorResult> {
+  if (!(await withSanitizedErrors(() => totpCredentialOf(db, userId)))) {
+    return { ok: false, reason: "not_enabled" };
+  }
   if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
   limiter.record();
 
-  const [credential] = await withSanitizedErrors(() =>
-    db
-      .select({ secretHash: userCredentials.secretHash })
-      .from(userCredentials)
-      .where(
-        and(
-          eq(userCredentials.userId, userId),
-          eq(userCredentials.type, PASSWORD_CREDENTIAL),
-        ),
-      )
-      .limit(1),
-  );
-  const hash = credential?.secretHash ?? null;
+  const hash = await passwordHashOf(userId);
   if (hash === null || !(await verifyPassword(password, hash))) {
     return { ok: false, reason: "wrong_password" };
   }
@@ -440,8 +483,9 @@ export async function disableTwoFactor(
  * Replaces every recovery code of the account with ten new ones. A code
  * from the authenticator app is required (not a recovery code: someone
  * holding only a leaked recovery code must not be able to mint more).
- * Budget first, as for the login step; then, in one transaction, the code
- * is spent, the old codes (used or not) deleted and the new ones stored.
+ * Budget first (this session's, never the account's login budget); then,
+ * in one transaction, the code is spent, the old codes (used or not)
+ * deleted and the new ones stored.
  *
  * @returns the raw new codes, for the one-time reveal.
  */

@@ -392,6 +392,33 @@ export function readRequire2fa(
   return value;
 }
 
+/**
+ * Reads `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (a whole number from 1 to 100,
+ * default 5) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, 60 to
+ * 86400, default 900). Anything else (not a number, 0, a sign, a
+ * decimal, an absurd value) refuses to boot (#220): these numbers budget
+ * the login and the password checks of the ownership transfer, the
+ * password change and the 2FA enrolment start, and a `NaN` used to turn
+ * the login budget off silently. Exported for tests.
+ */
+export function readLoginRateLimitNumbers(
+  env: { max: string | undefined; window: string | undefined } = {
+    max: process.env["DASHBOARD_LOGIN_RATE_LIMIT_MAX"],
+    window: process.env["DASHBOARD_LOGIN_RATE_LIMIT_WINDOW"],
+  },
+): { maxAttempts: number; windowSec: number } {
+  return {
+    maxAttempts: optionalBoundedInt("DASHBOARD_LOGIN_RATE_LIMIT_MAX", 5, 1, 100, env.max),
+    windowSec: optionalBoundedInt(
+      "DASHBOARD_LOGIN_RATE_LIMIT_WINDOW",
+      900,
+      60,
+      86_400,
+      env.window,
+    ),
+  };
+}
+
 /** Online GeoIP providers BunMail can ask (#281). Opt-in only. */
 const GEOIP_PROVIDERS = ["ipinfo"] as const;
 type GeoipProvider = (typeof GEOIP_PROVIDERS)[number];
@@ -784,10 +811,12 @@ export const config = {
     loginRateLimit: {
       /** Master switch: set to "false" to disable login throttling. */
       enabled: optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_ENABLED", "true") === "true",
-      /** Failed attempts allowed per IP per window before lockout. */
-      maxAttempts: parseInt(optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_MAX", "5"), 10),
-      /** Lockout window in seconds (default 900 = 15 minutes). */
-      windowSec: parseInt(optionalEnv("DASHBOARD_LOGIN_RATE_LIMIT_WINDOW", "900"), 10),
+      /**
+       * Failed attempts allowed per IP per window before lockout, and the
+       * window in seconds (default 5 per 900 = 15 minutes). Strict bounds,
+       * see `readLoginRateLimitNumbers`.
+       */
+      ...readLoginRateLimitNumbers(),
     },
   },
 

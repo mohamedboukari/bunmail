@@ -31,7 +31,12 @@ import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
-import { twoFactorLimiter } from "../lib/two-factor-limiter.ts";
+import {
+  twoFactorSessionLimiter,
+  type TwoFactorLimiter,
+} from "../lib/two-factor-limiter.ts";
+import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
+import { sessionIp } from "../../modules/users/services/session-policy.service.ts";
 
 /* ─── Password change helpers (#279) ─── */
 
@@ -143,6 +148,49 @@ function toTwoFactorPage(
     set,
     `${TWO_FACTOR_PAGE}?${query}${reveal === undefined ? "" : `&reveal=${reveal}`}`,
   );
+}
+
+/**
+ * Ends this session when its own two-factor budget is spent (#220): a
+ * session that keeps guessing codes (or the password on the disable form)
+ * is treated as stolen. Only the session's key decides, not the address
+ * key, which other accounts behind the same address share. Returns the
+ * redirect to the login page, or `undefined` when the budget is not spent.
+ */
+async function endSessionIfBudgetSpent(
+  limiter: TwoFactorLimiter,
+  auth: DashboardAuth,
+  set: Context["set"],
+  ip: string,
+  action: "disable" | "recovery_codes",
+): Promise<string | undefined> {
+  if (!limiter.ownKeyLimited()) return undefined;
+  await sessionService.revokeUserSession(auth.user.id, auth.session.id);
+  logger.warn("Two-factor code budget spent in a session: session revoked", {
+    userId: auth.user.id,
+    sessionId: auth.session.id,
+    action,
+    ip,
+  });
+  clearSession(set);
+  return redirect(set, "/dashboard/login");
+}
+
+/**
+ * Emails the account about a change to its two-factor authentication
+ * (#220), in the background: never awaited, never fails the action.
+ */
+function alertTwoFactorChange(
+  event: "enabled" | "disabled" | "recovery_codes_regenerated",
+  auth: DashboardAuth,
+  ip: string,
+): void {
+  void sendTwoFactorAlert({
+    event,
+    userId: auth.user.id,
+    email: auth.user.email,
+    ip: sessionIp(ip),
+  });
 }
 
 /**
@@ -390,22 +438,40 @@ export function accountPages(app: GuardedDashboard) {
 
       /**
        * POST /dashboard/account/two-factor/start
-       * Starts an enrolment (#220): a new secret, encrypted and kept on this
-       * session's row until confirmed (a restart or another replica keeps
-       * it; logout or expiry drops it). Starting again replaces it. The
-       * page then shows the QR code and the key; nothing secret goes in the
-       * redirect.
+       * Starts an enrolment (#220), only after the current password
+       * (form field `password`): a stolen session cookie alone cannot turn
+       * 2FA on and lock the owner out. The check uses the password change's
+       * budget (`password:user:<id>`, `password:ip:<bucket>`, #279), counted
+       * before the single argon2id verify. Then a new secret, encrypted and
+       * kept on this session's row until confirmed (a restart or another
+       * replica keeps it; logout or expiry drops it); confirming needs it,
+       * so it cannot happen without a start that passed the password.
+       * Starting again (password again) replaces it. The page then shows
+       * the QR code and the key; nothing secret goes in the redirect.
        */
       .post(
         "/account/two-factor/start",
-        async ({ auth, set }) => {
+        async ({ body, auth, set, request, server }) => {
+          const ip = clientIp(request, server?.requestIP(request)?.address);
           try {
             const result = await twoFactorService.startEnrolment(
               auth.user.id,
               auth.session.id,
+              body.password,
+              passwordChangeLimiter(auth.user.id, ip),
             );
             if (!result.ok) {
-              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+              logger.warn("Two-factor enrolment start refused", {
+                userId: auth.user.id,
+                sessionId: auth.session.id,
+                reason: result.reason,
+                ip,
+              });
+              const message =
+                result.reason === "wrong_password"
+                  ? "Current password is incorrect."
+                  : TWO_FACTOR_REFUSAL[result.reason];
+              return toTwoFactorPage(set, message, "error");
             }
             logger.info("Two-factor enrolment started", {
               userId: auth.user.id,
@@ -425,7 +491,10 @@ export function accountPages(app: GuardedDashboard) {
             );
           }
         },
-        { beforeHandle: memberGuard },
+        {
+          beforeHandle: memberGuard,
+          body: t.Object({ password: t.String({ maxLength: 1024 }) }),
+        },
       )
 
       /**
@@ -462,6 +531,7 @@ export function accountPages(app: GuardedDashboard) {
               sessionsRevoked: result.sessionsRevoked,
               ip,
             });
+            alertTwoFactorChange("enabled", auth, ip);
             return toTwoFactorPage(
               set,
               "Two-factor authentication is on. You were signed out on every other device.",
@@ -492,14 +562,16 @@ export function accountPages(app: GuardedDashboard) {
        * POST /dashboard/account/two-factor/recovery-codes
        * Replaces every recovery code with ten new ones (#220). Needs a code
        * from the authenticator app (not a recovery code), checked against
-       * the shared second-factor budget before any verification. The new
-       * codes are revealed once.
+       * this session's own budget (`totp:session:<id>` and the address key,
+       * never the account's login budget) before any verification; once
+       * the session's budget is spent the session is revoked. The new codes
+       * are revealed once, and the account is emailed.
        */
       .post(
         "/account/two-factor/recovery-codes",
         async ({ body, auth, set, request, server }) => {
           const ip = clientIp(request, server?.requestIP(request)?.address);
-          const limiter = twoFactorLimiter(auth.user.id, ip);
+          const limiter = twoFactorSessionLimiter(auth.session.id, ip);
           try {
             const result = await twoFactorService.regenerateRecoveryCodes(
               auth.user.id,
@@ -513,6 +585,14 @@ export function accountPages(app: GuardedDashboard) {
                 reason: result.reason,
                 ip,
               });
+              const ended = await endSessionIfBudgetSpent(
+                limiter,
+                auth,
+                set,
+                ip,
+                "recovery_codes",
+              );
+              if (ended !== undefined) return ended;
               return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
             }
             limiter.clear();
@@ -521,6 +601,7 @@ export function accountPages(app: GuardedDashboard) {
               sessionId: auth.session.id,
               ip,
             });
+            alertTwoFactorChange("recovery_codes_regenerated", auth, ip);
             return toTwoFactorPage(
               set,
               "New recovery codes created. The old ones no longer work.",
@@ -549,18 +630,22 @@ export function accountPages(app: GuardedDashboard) {
 
       /**
        * POST /dashboard/account/two-factor/disable
-       * Turns two-factor authentication off (#220). Needs the current
-       * password AND a code (from the app, or a recovery code), with the
-       * shared second-factor budget checked and counted before the argon2id
-       * verify. The `totp` credential and its recovery codes are deleted;
-       * sessions are kept. Under `REQUIRE_2FA` the account is then sent
-       * back to this page until it enrols again.
+       * Turns two-factor authentication off (#220). An account without 2FA
+       * is answered at once, before any password work. Otherwise needs the
+       * current password AND a code (from the app, or a recovery code),
+       * with this session's own budget (`totp:session:<id>` and the address
+       * key, never the account's login budget) checked and counted before
+       * the argon2id verify; once the session's budget is spent the session
+       * is revoked. The `totp` credential and its recovery codes are
+       * deleted; sessions are kept; the account is emailed. Under
+       * `REQUIRE_2FA` the account is then sent back to this page until it
+       * enrols again.
        */
       .post(
         "/account/two-factor/disable",
         async ({ body, auth, set, request, server }) => {
           const ip = clientIp(request, server?.requestIP(request)?.address);
-          const limiter = twoFactorLimiter(auth.user.id, ip);
+          const limiter = twoFactorSessionLimiter(auth.session.id, ip);
           try {
             const result = await twoFactorService.disableTwoFactor(
               auth.user.id,
@@ -575,6 +660,14 @@ export function accountPages(app: GuardedDashboard) {
                 reason: result.reason,
                 ip,
               });
+              const ended = await endSessionIfBudgetSpent(
+                limiter,
+                auth,
+                set,
+                ip,
+                "disable",
+              );
+              if (ended !== undefined) return ended;
               const reason =
                 result.reason === "wrong_code" ? "wrong_password" : result.reason;
               return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[reason], "error");
@@ -586,6 +679,7 @@ export function accountPages(app: GuardedDashboard) {
               method: result.method,
               ip,
             });
+            alertTwoFactorChange("disabled", auth, ip);
             return toTwoFactorPage(set, "Two-factor authentication is off.", "success");
           } catch (error: unknown) {
             logger.error("Two-factor disable failed", {
