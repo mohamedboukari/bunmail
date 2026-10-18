@@ -10,6 +10,7 @@ import { simpleParser } from "mailparser";
 import type { AddressObject } from "mailparser";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { hashApiKey } from "../../../utils/crypto.ts";
 import { findByHash } from "../../api-keys/services/api-key.service.ts";
@@ -155,6 +156,17 @@ function smtpError(message: string, responseCode: number): Error {
 /* ─── Server lifecycle ─── */
 
 /**
+ * Per live connection, by `smtp-server` session id: when it started and how
+ * many messages it sent, for the close summary (#284). Removed on close.
+ */
+const sessionStats = new Map<string, { startedAt: number; messages: number }>();
+
+/** The log context of one submission SMTP connection (#284). */
+function sessionContext(session: { id: string }): LogContext {
+  return { smtpSessionId: session.id, listener: "submission" };
+}
+
+/**
  * Starts the SMTP submission server on the configured port. Requires
  * AUTH; authenticates the password against the API-keys table. STARTTLS is
  * advertised when a cert/key pair is configured; plaintext AUTH is allowed
@@ -225,24 +237,44 @@ export function start(portOverride?: number): void {
     size: MAX_MESSAGE_BYTES,
 
     /**
+     * One summary line per connection when it closes (#284): who, how many
+     * messages, how long. Runs in the session's log context.
+     */
+    onClose(session) {
+      const stats = sessionStats.get(session.id);
+      sessionStats.delete(session.id);
+      runWithLogContext(sessionContext(session), () => {
+        logger.info("SMTP session closed", {
+          remoteAddress: session.remoteAddress,
+          messages: stats?.messages ?? 0,
+          durationMs:
+            stats === undefined ? null : Math.round(performance.now() - stats.startedAt),
+        });
+      });
+    },
+
+    /**
      * Per-IP connection rate limiting (instant, no I/O). Runs before AUTH
      * to blunt connection churn. SMTP 421 = temporary rejection.
      */
     onConnect(session: SMTPServerSession, callback: (err?: Error) => void) {
-      const ip = session.remoteAddress;
-      if (
-        connectionRateLimit.enabled &&
-        hitWindow(
-          connectionMap,
-          ip,
-          connectionRateLimit.max,
-          connectionRateLimit.windowSec,
-        )
-      ) {
-        logger.warn("SMTP submission connection rate limited", { ip });
-        return callback(smtpError("Too many connections, try again later", 421));
-      }
-      callback();
+      runWithLogContext(sessionContext(session), () => {
+        sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
+        const ip = session.remoteAddress;
+        if (
+          connectionRateLimit.enabled &&
+          hitWindow(
+            connectionMap,
+            ip,
+            connectionRateLimit.max,
+            connectionRateLimit.windowSec,
+          )
+        ) {
+          logger.warn("SMTP submission connection rate limited", { ip });
+          return callback(smtpError("Too many connections, try again later", 421));
+        }
+        callback();
+      });
     },
 
     /**
@@ -259,45 +291,47 @@ export function start(portOverride?: number): void {
         response?: SMTPServerAuthenticationResponse,
       ) => void,
     ) {
-      const ip = session.remoteAddress;
-      const { authRateLimit } = config.smtpSubmission;
+      runWithLogContext(sessionContext(session), () => {
+        const ip = session.remoteAddress;
+        const { authRateLimit } = config.smtpSubmission;
 
-      if (authRateLimit.enabled && isAuthLockedOut(ip)) {
-        logger.warn("SMTP submission AUTH rate limited", { ip });
-        /** 454 = temporary auth failure; client should back off. */
-        return callback(smtpError("Too many failed authentication attempts", 454));
-      }
+        if (authRateLimit.enabled && isAuthLockedOut(ip)) {
+          logger.warn("SMTP submission AUTH rate limited", { ip });
+          /** 454 = temporary auth failure; client should back off. */
+          return callback(smtpError("Too many failed authentication attempts", 454));
+        }
 
-      /** Password is the API key; some clients only set the username. */
-      const candidate = auth.password || auth.username || "";
-      if (!candidate) {
-        if (authRateLimit.enabled) recordAuthFailure(ip);
-        return callback(smtpError("Authentication credentials required", 535));
-      }
+        /** Password is the API key; some clients only set the username. */
+        const candidate = auth.password || auth.username || "";
+        if (!candidate) {
+          if (authRateLimit.enabled) recordAuthFailure(ip);
+          return callback(smtpError("Authentication credentials required", 535));
+        }
 
-      findByHash(hashApiKey(candidate))
-        .then((apiKey) => {
-          if (!apiKey || !apiKey.isActive) {
-            if (authRateLimit.enabled) recordAuthFailure(ip);
-            logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
-            return callback(smtpError("Invalid API key", 535));
-          }
-          /** Success: clear the failure counter and stash the key id. */
-          authFailureMap.delete(ip);
-          logger.info("SMTP submission client authenticated", {
-            ip,
-            apiKeyId: apiKey.id,
+        findByHash(hashApiKey(candidate))
+          .then((apiKey) => {
+            if (!apiKey || !apiKey.isActive) {
+              if (authRateLimit.enabled) recordAuthFailure(ip);
+              logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
+              return callback(smtpError("Invalid API key", 535));
+            }
+            /** Success: clear the failure counter and stash the key id. */
+            authFailureMap.delete(ip);
+            logger.info("SMTP submission client authenticated", {
+              ip,
+              apiKeyId: apiKey.id,
+            });
+            callback(null, { user: apiKey.id });
+          })
+          .catch((error) => {
+            logger.error("SMTP submission AUTH lookup failed", {
+              ip,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            /** 451 = local error; don't leak details, don't count as a guess. */
+            callback(smtpError("Temporary authentication failure", 451));
           });
-          callback(null, { user: apiKey.id });
-        })
-        .catch((error) => {
-          logger.error("SMTP submission AUTH lookup failed", {
-            ip,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          /** 451 = local error; don't leak details, don't count as a guess. */
-          callback(smtpError("Temporary authentication failure", 451));
-        });
+      });
     },
 
     /**
@@ -311,20 +345,22 @@ export function start(portOverride?: number): void {
       session: SMTPServerSession,
       callback: (err?: Error) => void,
     ) {
-      const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
-      if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
-        logger.warn("SMTP submission RCPT TO rejected: too many recipients", {
-          acceptedSoFar,
-          ip: session.remoteAddress,
-        });
-        return callback(
-          smtpError(
-            `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
-            452,
-          ),
-        );
-      }
-      callback();
+      runWithLogContext(sessionContext(session), () => {
+        const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
+        if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
+          logger.warn("SMTP submission RCPT TO rejected: too many recipients", {
+            acceptedSoFar,
+            ip: session.remoteAddress,
+          });
+          return callback(
+            smtpError(
+              `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
+              452,
+            ),
+          );
+        }
+        callback();
+      });
     },
 
     /**
@@ -336,121 +372,132 @@ export function start(portOverride?: number): void {
       session: SMTPServerSession,
       callback: (err?: Error) => void,
     ) {
-      const chunks: Buffer[] = [];
-      let totalBytes = 0;
-      let aborted = false;
+      runWithLogContext(sessionContext(session), () => {
+        const stats = sessionStats.get(session.id);
+        if (stats) stats.messages += 1;
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let aborted = false;
 
-      stream.on("data", (chunk: Buffer) => {
-        if (aborted) return;
-        totalBytes += chunk.length;
-        if (totalBytes > MAX_MESSAGE_BYTES) {
-          aborted = true;
-          logger.warn("SMTP submission DATA rejected: message exceeds size cap", {
-            ip: session.remoteAddress,
-            totalBytes,
-            cap: MAX_MESSAGE_BYTES,
-          });
-          chunks.length = 0;
-          stream.unpipe();
-          stream.resume();
-          callback(smtpError("Message size exceeds limit", 552));
-          return;
-        }
-        chunks.push(chunk);
-      });
-
-      stream.on("end", () => {
-        /** The listener must return void; the body is guarded by its own
-         *  try/catch, and `void` keeps a rejected promise from escaping
-         *  as an unhandled rejection. */
-        void (async () => {
-          if (aborted) return;
-
-          /** onAuth stashed the API key id here; guard defensively. */
-          const apiKeyId = session.user;
-          if (!apiKeyId) {
-            logger.error("SMTP submission DATA without an authenticated session");
-            callback(smtpError("Authentication required", 530));
-            return;
-          }
-
-          try {
-            /**
-             * Per-key daily quota (#123). Checked before the send so an
-             * over-quota key never queues. `452` is temporary: the quota
-             * window resets at the next UTC day, so the client should retry
-             * later rather than treat it as a permanent failure.
-             */
-            const { dailyQuota } = config.smtpSubmission;
-            if (dailyQuota > 0) {
-              const usedToday = await getAcceptedToday(apiKeyId);
-              if (usedToday >= dailyQuota) {
-                logger.warn("SMTP submission rejected: daily quota exceeded", {
-                  apiKeyId,
-                  usedToday,
-                  dailyQuota,
-                });
-                await recordOutcome(apiKeyId, "rejected");
-                callback(
-                  smtpError(
-                    `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
-                    452,
-                  ),
-                );
-                return;
-              }
-            }
-
-            const rawMessage = Buffer.concat(chunks).toString("utf-8");
-            const parsed = await simpleParser(rawMessage);
-
-            const envelopeFrom =
-              session.envelope.mailFrom && typeof session.envelope.mailFrom === "object"
-                ? session.envelope.mailFrom.address
-                : undefined;
-
-            /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
-            const input: SendEmailInput = buildSubmissionInput({
-              fromHeader: parsed.from?.value?.[0]?.address,
-              envelopeFrom,
-              toHeader: extractAddresses(parsed.to),
-              ccHeader: extractAddresses(parsed.cc),
-              replyToHeader: extractAddresses(parsed.replyTo),
-              envelopeRecipients: (session.envelope.rcptTo ?? []).map((r) => r.address),
-              subject: parsed.subject ?? "",
-              html: typeof parsed.html === "string" ? parsed.html : undefined,
-              text: typeof parsed.text === "string" ? parsed.text : undefined,
-            });
-
-            /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
-            const email = await createEmail(input, apiKeyId, "smtp");
-            await recordOutcome(apiKeyId, "accepted");
-
-            logger.info("SMTP submission accepted: email queued", {
-              id: email.id,
-              apiKeyId,
-              from: redactEmail(input.from),
-              to: redactEmail(input.to),
-            });
-
-            callback();
-          } catch (error) {
-            /** Post-auth rejection: count it against the key's daily usage. */
-            await recordOutcome(apiKeyId, "rejected").catch(() => {});
-            if (error instanceof SuppressedRecipientError) {
-              logger.warn("SMTP submission rejected: recipient suppressed", {
-                apiKeyId,
-                suppressionId: error.suppressionId,
+        stream.on("data", (chunk: Buffer) => {
+          runWithLogContext(sessionContext(session), () => {
+            if (aborted) return;
+            totalBytes += chunk.length;
+            if (totalBytes > MAX_MESSAGE_BYTES) {
+              aborted = true;
+              logger.warn("SMTP submission DATA rejected: message exceeds size cap", {
+                ip: session.remoteAddress,
+                totalBytes,
+                cap: MAX_MESSAGE_BYTES,
               });
-              callback(smtpError(error.message, 550));
+              chunks.length = 0;
+              stream.unpipe();
+              stream.resume();
+              callback(smtpError("Message size exceeds limit", 552));
               return;
             }
-            const message = error instanceof Error ? error.message : String(error);
-            logger.warn("SMTP submission rejected", { apiKeyId, error: message });
-            /** Sender-domain / validation errors from createEmail → 550. */
-            callback(smtpError(message, 550));
-          }
-        })();
+            chunks.push(chunk);
+          });
+        });
+
+        stream.on("end", () => {
+          runWithLogContext(sessionContext(session), () => {
+            /** The listener must return void; the body is guarded by its own
+             *  try/catch, and `void` keeps a rejected promise from escaping
+             *  as an unhandled rejection. */
+            void (async () => {
+              if (aborted) return;
+
+              /** onAuth stashed the API key id here; guard defensively. */
+              const apiKeyId = session.user;
+              if (!apiKeyId) {
+                logger.error("SMTP submission DATA without an authenticated session");
+                callback(smtpError("Authentication required", 530));
+                return;
+              }
+
+              try {
+                /**
+                 * Per-key daily quota (#123). Checked before the send so an
+                 * over-quota key never queues. `452` is temporary: the quota
+                 * window resets at the next UTC day, so the client should retry
+                 * later rather than treat it as a permanent failure.
+                 */
+                const { dailyQuota } = config.smtpSubmission;
+                if (dailyQuota > 0) {
+                  const usedToday = await getAcceptedToday(apiKeyId);
+                  if (usedToday >= dailyQuota) {
+                    logger.warn("SMTP submission rejected: daily quota exceeded", {
+                      apiKeyId,
+                      usedToday,
+                      dailyQuota,
+                    });
+                    await recordOutcome(apiKeyId, "rejected");
+                    callback(
+                      smtpError(
+                        `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
+                        452,
+                      ),
+                    );
+                    return;
+                  }
+                }
+
+                const rawMessage = Buffer.concat(chunks).toString("utf-8");
+                const parsed = await simpleParser(rawMessage);
+
+                const envelopeFrom =
+                  session.envelope.mailFrom &&
+                  typeof session.envelope.mailFrom === "object"
+                    ? session.envelope.mailFrom.address
+                    : undefined;
+
+                /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
+                const input: SendEmailInput = buildSubmissionInput({
+                  fromHeader: parsed.from?.value?.[0]?.address,
+                  envelopeFrom,
+                  toHeader: extractAddresses(parsed.to),
+                  ccHeader: extractAddresses(parsed.cc),
+                  replyToHeader: extractAddresses(parsed.replyTo),
+                  envelopeRecipients: (session.envelope.rcptTo ?? []).map(
+                    (r) => r.address,
+                  ),
+                  subject: parsed.subject ?? "",
+                  html: typeof parsed.html === "string" ? parsed.html : undefined,
+                  text: typeof parsed.text === "string" ? parsed.text : undefined,
+                });
+
+                /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
+                const email = await createEmail(input, apiKeyId, "smtp");
+                await recordOutcome(apiKeyId, "accepted");
+
+                logger.info("SMTP submission accepted: email queued", {
+                  id: email.id,
+                  apiKeyId,
+                  from: redactEmail(input.from),
+                  to: redactEmail(input.to),
+                });
+
+                callback();
+              } catch (error) {
+                /** Post-auth rejection: count it against the key's daily usage. */
+                await recordOutcome(apiKeyId, "rejected").catch(() => {});
+                if (error instanceof SuppressedRecipientError) {
+                  logger.warn("SMTP submission rejected: recipient suppressed", {
+                    apiKeyId,
+                    suppressionId: error.suppressionId,
+                  });
+                  callback(smtpError(error.message, 550));
+                  return;
+                }
+                const message = error instanceof Error ? error.message : String(error);
+                logger.warn("SMTP submission rejected", { apiKeyId, error: message });
+                /** Sender-domain / validation errors from createEmail → 550. */
+                callback(smtpError(message, 550));
+              }
+            })();
+          });
+        });
       });
     },
   });

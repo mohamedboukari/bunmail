@@ -12,6 +12,7 @@ import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
+import { withRequestContext } from "./middleware/request-context.ts";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
 import { NotFoundPage } from "./pages/routes/not-found.tsx";
@@ -130,6 +131,12 @@ if (config.dashboard.legacyAuthEnv.length > 0) {
  * Each module exposes an Elysia plugin that gets .use()'d here.
  */
 const app = new Elysia()
+  /**
+   * Every request runs in its own log context (#284): each log line it
+   * writes carries its `requestId`, the response gets `X-Request-Id`, and
+   * one `HTTP request` line records method, path, status and duration.
+   */
+  .wrap(withRequestContext)
   .use(
     openapi({
       path: "/api/docs",

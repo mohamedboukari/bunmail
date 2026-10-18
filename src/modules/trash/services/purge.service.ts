@@ -9,6 +9,7 @@ import {
 import { purgeExpiredSessions } from "../../users/services/session.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { runWithLogContext } from "../../../utils/log-context.ts";
 
 /**
  * How often the purge runs once started, in milliseconds. We hit it
@@ -97,6 +98,16 @@ export async function runSessionSweep(): Promise<{ deleted: number }> {
 }
 
 /**
+ * One purge cycle (trash, tombstone retention, expired sessions) in its own
+ * log context (#284), so every line it writes carries `job: "purge"`.
+ */
+function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
+  return runWithLogContext({ job: "purge" }, () =>
+    Promise.allSettled([runTrashPurge(), runTombstoneRetention(), runSessionSweep()]),
+  );
+}
+
+/**
  * Starts the trash purge loop: runs once immediately, then every 6 hours.
  * Safe to call multiple times: subsequent calls are no-ops if already running.
  */
@@ -115,11 +126,7 @@ export function start(): void {
    *  was down. Runs every sweep; tombstone retention is cheap when the
    *  cutoff is 90 days out and the table is small, and the session sweep
    *  is one indexed DELETE. */
-  void Promise.allSettled([
-    runTrashPurge(),
-    runTombstoneRetention(),
-    runSessionSweep(),
-  ]).then((results) => {
+  void runCycle().then((results) => {
     for (const r of results) {
       if (r.status === "rejected") {
         logger.error("Initial trash purge cycle failed", {
@@ -130,11 +137,7 @@ export function start(): void {
   });
 
   purgeTimer = setInterval(() => {
-    void Promise.allSettled([
-      runTrashPurge(),
-      runTombstoneRetention(),
-      runSessionSweep(),
-    ]).then((results) => {
+    void runCycle().then((results) => {
       for (const r of results) {
         if (r.status === "rejected") {
           logger.error("Scheduled trash purge cycle failed", {
