@@ -152,6 +152,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 src/pages/
 ├── pages.plugin.tsx          ← Plugin with all routes + session guard
 ├── guards.tsx                ← Role and assurance checks per route (#222)
+├── reveal-store.ts           ← One-time secret reveal, bound to kind, user and session (#132, #280)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── layouts/
