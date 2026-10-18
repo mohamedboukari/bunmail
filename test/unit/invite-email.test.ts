@@ -217,6 +217,8 @@ describe("sendInviteEmail", () => {
 
   test("a failing lookup is logged by name and SQLSTATE, never by its raw message", async () => {
     const warn = spyOn(logger, "warn");
+    /** Start from zero: a spy left on logger.warn by another file keeps its history. */
+    warn.mockClear();
     try {
       const leaky = new Error(
         "Failed query: select * from domains where name = $1\nparams: secret@example.com",
