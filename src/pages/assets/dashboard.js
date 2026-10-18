@@ -107,12 +107,22 @@
     var target = e.target;
     if (!(target instanceof Element)) return;
 
-    /* A filter dropdown: each option's value is the URL to open. */
+    /*
+     * A filter dropdown: each option's value is the URL to open. Only a
+     * same-origin http(s) URL is followed, never another site or a
+     * `javascript:` URL, whatever ends up in an option value.
+     */
     if (
       target instanceof HTMLSelectElement &&
       target.hasAttribute("data-navigate-on-change")
     ) {
-      window.location.assign(target.value);
+      var next = new URL(target.value, window.location.href);
+      if (
+        next.origin === window.location.origin &&
+        (next.protocol === "http:" || next.protocol === "https:")
+      ) {
+        window.location.assign(next.href);
+      }
       return;
     }
 

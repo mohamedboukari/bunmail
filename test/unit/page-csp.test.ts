@@ -124,9 +124,9 @@ const pages: Array<[string, () => string | Promise<string>]> = [
   ["not found", () => NotFoundPage()],
 ];
 
-/** Every `<script ...>` opening tag in the page. */
+/** Every `<script ...>` opening tag in the page, in any letter case. */
 function scriptTags(html: string): string[] {
-  return [...html.matchAll(/<script\b[^>]*>/g)].map((m) => m[0]);
+  return [...html.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
 }
 
 describe("pages carry no inline or third-party script (#255)", () => {

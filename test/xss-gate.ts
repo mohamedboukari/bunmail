@@ -49,8 +49,8 @@ const HANDLER_RE = /\son[a-z]+=["'{]/;
 /** An inline `<script>`: no `src=`, and not a `type="application/json"` data block. */
 const INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[\s>]/;
 
-/** The Tailwind Play CDN the pages loaded before #255. */
-const TAILWIND_CDN_RE = /cdn\.tailwindcss\.com/;
+/** The Tailwind Play CDN host the pages loaded before #255 (a plain substring check). */
+const TAILWIND_CDN_HOST = "cdn.tailwindcss.com";
 
 let failed = false;
 function fail(message: string): void {
@@ -87,22 +87,25 @@ function runScanner(): void {
 
 /** Rejects event-handler attributes, inline scripts and the Tailwind CDN under src/pages. */
 async function sweepInlineCode(): Promise<void> {
-  const rules: Array<[RegExp, string]> = [
+  const rules: Array<[(line: string) => boolean, string]> = [
     [
-      HANDLER_RE,
+      (line) => HANDLER_RE.test(line),
       "event-handler attribute; wire it in assets/dashboard.js with a data- attribute",
     ],
     [
-      INLINE_SCRIPT_RE,
+      (line) => INLINE_SCRIPT_RE.test(line),
       "inline <script>; the CSP only runs /dashboard/assets/dashboard.js",
     ],
-    [TAILWIND_CDN_RE, "Tailwind CDN; the pages use the self-hosted dashboard.css"],
+    [
+      (line) => line.includes(TAILWIND_CDN_HOST),
+      "Tailwind CDN; the pages use the self-hosted dashboard.css",
+    ],
   ];
   for await (const relative of new Bun.Glob("**/*.{ts,tsx}").scan(PAGES_DIR)) {
     const lines = (await Bun.file(join(PAGES_DIR, relative)).text()).split("\n");
     lines.forEach((line, index) => {
-      for (const [re, why] of rules) {
-        if (re.test(line)) fail(`src/pages/${relative}:${index + 1}: ${why}`);
+      for (const [matches, why] of rules) {
+        if (matches(line)) fail(`src/pages/${relative}:${index + 1}: ${why}`);
       }
     });
   }
