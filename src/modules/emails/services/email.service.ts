@@ -168,7 +168,10 @@ export async function createEmail(
 
     const vars = input.variables ?? {};
     subject = renderTemplate(tpl.subject, vars, MAX_RENDERED_SUBJECT_LENGTH);
-    htmlContent = tpl.html ? renderTemplate(tpl.html, vars) : null;
+    /** HTML body: `{{var}}` escaped, `{{{var}}}` raw (#250). */
+    htmlContent = tpl.html
+      ? renderTemplate(tpl.html, vars, undefined, { html: true })
+      : null;
     textContent = tpl.textContent ? renderTemplate(tpl.textContent, vars) : null;
   }
 

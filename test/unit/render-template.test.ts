@@ -87,3 +87,42 @@ describe("renderTemplate: bounded output", () => {
     );
   });
 });
+
+describe("renderTemplate: HTML escaping (#250)", () => {
+  const vars = {
+    name: `<b>Bob</b> & "co" 'x'`,
+    link: '<a href="https://example.com">x</a>',
+  };
+
+  test("{{var}} is HTML-escaped in an HTML body", () => {
+    expect(renderTemplate("<p>Hi {{name}}</p>", vars, undefined, { html: true })).toBe(
+      "<p>Hi &lt;b&gt;Bob&lt;/b&gt; &amp; &quot;co&quot; &#39;x&#39;</p>",
+    );
+  });
+
+  test("{{{var}}} inserts the value as is in an HTML body", () => {
+    expect(renderTemplate("<p>{{{link}}}</p>", vars, undefined, { html: true })).toBe(
+      '<p><a href="https://example.com">x</a></p>',
+    );
+  });
+
+  test("subjects and text bodies are not HTML: both forms insert as is", () => {
+    expect(renderTemplate("Hi {{name}}", vars)).toBe(`Hi <b>Bob</b> & "co" 'x'`);
+    expect(renderTemplate("Hi {{{name}}}", vars)).toBe(`Hi <b>Bob</b> & "co" 'x'`);
+  });
+
+  test("unknown placeholders stay as written in both forms", () => {
+    expect(
+      renderTemplate("{{missing}} {{{missing}}}", vars, undefined, { html: true }),
+    ).toBe("{{missing}} {{{missing}}}");
+  });
+
+  test("the size cap counts the escaped length", () => {
+    expect(() =>
+      renderTemplate("{{v}}", { v: "<".repeat(10) }, 30, { html: true }),
+    ).toThrow();
+    expect(renderTemplate("{{v}}", { v: "<".repeat(5) }, 30, { html: true })).toBe(
+      "&lt;".repeat(5),
+    );
+  });
+});

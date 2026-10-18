@@ -69,9 +69,14 @@ const PREVIEW_SAMPLE_VALUES: Record<string, string> = {
  * client-side `substitute()` in `assets/dashboard.js`.
  */
 export function renderPreviewSamples(html: string): string {
-  return html.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
-    return PREVIEW_SAMPLE_VALUES[key] ?? key;
-  });
+  /** `{{{var}}}` (raw, #250) and `{{var}}`: samples are plain text either way. */
+  return html.replace(
+    /\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g,
+    (_match, rawKey: string | undefined, key: string | undefined) => {
+      const name = rawKey ?? key ?? "";
+      return PREVIEW_SAMPLE_VALUES[name] ?? name;
+    },
+  );
 }
 
 export function HtmlPreview({

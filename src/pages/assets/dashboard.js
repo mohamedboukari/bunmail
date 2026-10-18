@@ -485,9 +485,15 @@
 
     /* Mirrors renderPreviewSamples() in html-preview.tsx and renderTemplate()'s {{\w+}} matcher. */
     function substitute(html) {
-      return html.replace(/\{\{(\w+)\}\}/g, function (match, key) {
-        return Object.prototype.hasOwnProperty.call(SAMPLES, key) ? SAMPLES[key] : key;
-      });
+      return html.replace(
+        /\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g,
+        function (match, rawKey, key) {
+          var name = rawKey || key;
+          return Object.prototype.hasOwnProperty.call(SAMPLES, name)
+            ? SAMPLES[name]
+            : name;
+        },
+      );
     }
     function wrap(html) {
       return (
