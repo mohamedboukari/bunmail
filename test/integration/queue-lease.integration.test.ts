@@ -326,3 +326,85 @@ describe("bounded concurrency (#176)", () => {
     expect(after).toEqual(["sent", "sent", "sent", "sent", "sent", "sent"]);
   });
 });
+
+describe("suppression re-check on retry (#262)", () => {
+  /** Puts the email in its state after a first pass that left one MX group in retry. */
+  async function retryingWith(id: string, recipients: string[]): Promise<void> {
+    await db
+      .update(emails)
+      .set({
+        attempts: 1,
+        deliveryState: {
+          "mx.example.org": {
+            status: "retry",
+            recipients,
+            attempts: 1,
+            lastError: "421 later",
+          },
+        },
+      })
+      .where(eq(emails.id, id));
+  }
+
+  /** A mailer that records the state it was handed and delivers every retry group. */
+  function recordingMailer(): {
+    mailer: typeof sendMail;
+    seen: Array<Parameters<typeof sendMail>[0]["existingState"]>;
+  } {
+    const seen: Array<Parameters<typeof sendMail>[0]["existingState"]> = [];
+    const mailer: typeof sendMail = async (options) => {
+      seen.push(options.existingState);
+      const state = structuredClone(options.existingState ?? {});
+      for (const group of Object.values(state)) {
+        if (group.status === "retry") group.status = "sent";
+      }
+      return { messageId: options.messageId, deliveryState: state };
+    };
+    return { mailer, seen };
+  }
+
+  test("a recipient suppressed since the first pass is not sent; the others are", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id } = await seed.email({
+      apiKeyId,
+      toAddress: "a@example.org, b@example.org",
+    });
+    await retryingWith(id, ["a@example.org", "b@example.org"]);
+    await seed.suppression({ apiKeyId, email: "b@example.org", reason: "unsubscribe" });
+    const { mailer, seen } = recordingMailer();
+
+    await runQueueCycle({ sendMail: mailer });
+
+    expect(seen[0]?.["mx.example.org"]?.recipients).toEqual(["a@example.org"]);
+    expect((await row(id)).status).toBe("sent");
+  });
+
+  test("a group whose recipients are all suppressed fails without sending", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id } = await seed.email({ apiKeyId, toAddress: "b@example.org" });
+    await retryingWith(id, ["b@example.org"]);
+    await seed.suppression({ apiKeyId, email: "B@Example.org", reason: "bounce" });
+    const { mailer, seen } = recordingMailer();
+
+    await runQueueCycle({ sendMail: mailer });
+
+    expect(seen[0]?.["mx.example.org"]?.status).toBe("failed");
+    const r = await row(id);
+    expect(r.status).toBe("failed");
+    expect(r.lastError).toContain("suppressed before this retry");
+  });
+
+  test("another key's suppression does not apply", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id: otherKey } = await seed.apiKey();
+    const { id } = await seed.email({ apiKeyId, toAddress: "b@example.org" });
+    await retryingWith(id, ["b@example.org"]);
+    await seed.suppression({ apiKeyId: otherKey, email: "b@example.org" });
+    const { mailer, seen } = recordingMailer();
+
+    await runQueueCycle({ sendMail: mailer });
+
+    expect(seen[0]?.["mx.example.org"]?.recipients).toEqual(["b@example.org"]);
+    expect((await row(id)).status).toBe("sent");
+  });
+});

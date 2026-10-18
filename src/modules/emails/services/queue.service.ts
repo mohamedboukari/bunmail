@@ -18,6 +18,7 @@ import { parseSmtpError } from "../../../utils/smtp-error.ts";
 import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
+import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -644,7 +645,14 @@ async function sendClaimedEmail(
     const messageId =
       email.messageId ?? `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
 
-    const existingState = email.deliveryState;
+    /**
+     * Retry passes re-check the suppression list (#262): a recipient
+     * suppressed since the email was accepted (a bounce or complaint from
+     * another email, an unsubscribe, a manual entry) is not sent to.
+     */
+    const existingState = email.deliveryState
+      ? await dropSuppressedRecipients(email.deliveryState, email.apiKeyId, emailId)
+      : email.deliveryState;
     /** Capture pre-attempt status per group so we can detect
      *  transitions (retry → failed via hard 5xx) for bounce webhooks. */
     const priorStatuses = new Map<string, DeliveryGroup["status"]>();
@@ -871,6 +879,42 @@ async function sendClaimedEmail(
       { apiKeyId: email.apiKeyId },
     );
   }
+}
+
+/** `last_error` of a group whose every recipient was suppressed before a retry (#262). */
+const SUPPRESSED_BEFORE_RETRY = "All recipients were suppressed before this retry";
+
+/**
+ * Removes recipients suppressed since the email was accepted from every
+ * group still in `retry` (#262). A group left with nobody becomes
+ * `failed` (keeping its recipients for the record), so the row reaches
+ * its terminal state without sending; other groups and other recipients
+ * are untouched. Logs counts only, never addresses.
+ */
+async function dropSuppressedRecipients(
+  state: DeliveryState,
+  apiKeyId: string,
+  emailId: string,
+): Promise<DeliveryState> {
+  const next: DeliveryState = { ...state };
+  let dropped = 0;
+  for (const [mxHost, group] of Object.entries(state)) {
+    if (group.status !== "retry") continue;
+    const kept: string[] = [];
+    for (const recipient of group.recipients) {
+      if (await isSuppressed(apiKeyId, recipient)) dropped += 1;
+      else kept.push(recipient);
+    }
+    if (kept.length === group.recipients.length) continue;
+    next[mxHost] =
+      kept.length === 0
+        ? { ...group, status: "failed", lastError: SUPPRESSED_BEFORE_RETRY }
+        : { ...group, recipients: kept };
+  }
+  if (dropped > 0) {
+    logger.info("Suppressed recipients dropped before retry", { emailId, dropped });
+  }
+  return next;
 }
 
 /**
