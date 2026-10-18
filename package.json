@@ -76,6 +76,7 @@
     "file-type": "^22.2.0",
     "mailauth": "7.1.1",
     "mailparser": "^3.9.40",
+    "mmdb-lib": "3.0.3",
     "nodemailer": "^10.1.2",
     "smtp-server": "^3.19.23"
   }

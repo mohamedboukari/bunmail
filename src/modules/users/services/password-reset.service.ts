@@ -23,6 +23,8 @@ import { withOwnerLock } from "./owner.service.ts";
 import { PASSWORD_RESET_TTL_MINUTES } from "./password-reset-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
+import { locateSession } from "./session-location.service.ts";
+import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
 
 /**
@@ -229,7 +231,7 @@ export async function completePasswordReset(
   const secretHash = await hashPassword(password);
   const tokenHash = hashToken(token);
 
-  return withOwnerLock(async (tx): Promise<CompletePasswordResetResult> => {
+  const result = await withOwnerLock(async (tx): Promise<CompletePasswordResetResult> => {
     const [spent] = await tx
       .update(userTokens)
       .set({ usedAt: sql`now()` })
@@ -318,4 +320,7 @@ export async function completePasswordReset(
       sessionToken: session.token,
     };
   });
+  /** Committed: look the new session's location up in the background (#281). */
+  if (result.ok) void locateSession(result.sessionId, sessionIp(client.ip));
+  return result;
 }

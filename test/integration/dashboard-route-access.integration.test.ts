@@ -85,6 +85,10 @@ const ROUTES: Record<string, RouteSpec> = {
     access: "member",
     body: { current: "x", password: "x", confirm: "x" },
   },
+  /** Every role sees and signs out only its own sessions (#281); a dummy id is not found. */
+  "GET /dashboard/account/sessions": { access: "member" },
+  "POST /dashboard/account/sessions/revoke-others": { access: "member" },
+  "POST /dashboard/account/sessions/:id/revoke": { access: "member" },
   "GET /dashboard/send": { access: "member" },
   "POST /dashboard/send": {
     access: "member",

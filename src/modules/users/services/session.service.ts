@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -14,6 +14,7 @@ import {
   type NewSessionInput,
   type RotatedSession,
   type SessionAssurance,
+  type UserSessionSummary,
 } from "../types/user.types.ts";
 import {
   SESSION_ABSOLUTE_SECONDS,
@@ -60,6 +61,20 @@ const ADMITTED_ASSURANCES: SessionAssurance[] = ["password", "mfa"];
  */
 function seconds(value: number): SQL {
   return sql.raw(`interval '${Math.trunc(value)} seconds'`);
+}
+
+/**
+ * The session-side half of "live" (#216, #281): unexpired (`expires_at`
+ * carries both the 24 h idle and the 7 d absolute rule, see
+ * `slidingExpiry`) and an assurance that may open a page. The guard
+ * (`findActiveSession`) and the Active sessions list share it, so the
+ * list shows exactly the sessions that still open the dashboard.
+ */
+function liveSession(): SQL | undefined {
+  return and(
+    sql`${sessions.expiresAt} > now()`,
+    inArray(sessions.assurance, ADMITTED_ASSURANCES),
+  );
 }
 
 /** `expires_at` after activity: the idle timeout, capped by the absolute one. */
@@ -133,9 +148,8 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
             eq(sessions.tokenHash, tokenHash),
             eq(sessions.previousTokenHash, tokenHash),
           ),
-          sql`${sessions.expiresAt} > now()`,
+          liveSession(),
           sql`${users.disabledAt} IS NULL`,
-          inArray(sessions.assurance, ADMITTED_ASSURANCES),
         ),
       )
       .limit(1),
@@ -277,6 +291,81 @@ export async function revokeAllUserSessions(
       .returning({ id: sessions.id }),
   );
   return rows.length;
+}
+
+/**
+ * The live sessions of one user, most recently active first, for the
+ * Active sessions page (#281). "Live" is the guard's own predicate
+ * (`liveSession`), so an expired session is never listed. Only columns
+ * safe to show: never a token hash.
+ */
+export async function listUserSessions(userId: string): Promise<UserSessionSummary[]> {
+  return withSanitizedErrors(() =>
+    db
+      .select({
+        id: sessions.id,
+        ip: sessions.ip,
+        userAgent: sessions.userAgent,
+        location: sessions.location,
+        createdAt: sessions.createdAt,
+        lastSeenAt: sessions.lastSeenAt,
+      })
+      .from(sessions)
+      .where(and(eq(sessions.userId, userId), liveSession()))
+      .orderBy(desc(sessions.lastSeenAt), desc(sessions.createdAt)),
+  );
+}
+
+/**
+ * Deletes one session, but only when it belongs to `userId` (#281): the
+ * ownership check is in the `WHERE`, so another user's session id (or an
+ * unknown one) deletes nothing. Its token history goes with it (cascade).
+ *
+ * @returns true when a session was revoked.
+ */
+export async function revokeUserSession(
+  userId: string,
+  sessionId: string,
+): Promise<boolean> {
+  const rows = await withSanitizedErrors(() =>
+    db
+      .delete(sessions)
+      .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId)))
+      .returning({ id: sessions.id }),
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Deletes every session of `userId` except `keepSessionId` ("sign out
+ * all other devices", #281). Token history rows cascade.
+ *
+ * @returns how many sessions were revoked.
+ */
+export async function revokeOtherUserSessions(
+  userId: string,
+  keepSessionId: string,
+): Promise<number> {
+  const rows = await withSanitizedErrors(() =>
+    db
+      .delete(sessions)
+      .where(and(eq(sessions.userId, userId), ne(sessions.id, keepSessionId)))
+      .returning({ id: sessions.id }),
+  );
+  return rows.length;
+}
+
+/**
+ * Stores the approximate location looked up for a session (#281). A
+ * session revoked meanwhile is simply not found.
+ */
+export async function setSessionLocation(
+  sessionId: string,
+  location: string,
+): Promise<void> {
+  await withSanitizedErrors(() =>
+    db.update(sessions).set({ location }).where(eq(sessions.id, sessionId)),
+  );
 }
 
 /**

@@ -15,6 +15,8 @@ import { passwordChangeProblem } from "./password-change-policy.service.ts";
 import { revokeResetLinks } from "./password-reset.service.ts";
 import { hashPassword, verifyPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
+import { locateSession } from "./session-location.service.ts";
+import { sessionIp } from "./session-policy.service.ts";
 
 /**
  * A signed-in user changing their own password (#279), from
@@ -198,6 +200,10 @@ export async function changePassword(
     };
   });
 
-  if (result.ok) limiter.clear();
+  if (result.ok) {
+    limiter.clear();
+    /** Committed: look the new session's location up in the background (#281). */
+    void locateSession(result.sessionId, sessionIp(client.ip));
+  }
   return result;
 }

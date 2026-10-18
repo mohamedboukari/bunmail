@@ -75,6 +75,15 @@ export const sessions = pgTable(
     ip: varchar("ip", { length: 45 }),
     userAgent: varchar("user_agent", { length: 255 }),
 
+    /**
+     * Approximate location of `ip` (#281), "City, Country" or "Country",
+     * looked up once after the session is created when GeoIP is
+     * configured (`GEOIP_DB_PATH` or `GEOIP_PROVIDER`). Null when GeoIP is
+     * off, the address is private, the lookup found nothing or failed, or
+     * the lookup has not finished yet. A VPN shows the VPN's location.
+     */
+    location: varchar("location", { length: 128 }),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

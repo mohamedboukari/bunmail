@@ -538,6 +538,25 @@ export interface DashboardAuth {
   };
 }
 
+/**
+ * One live session of a user, as the Active sessions page lists it
+ * (#281). Never carries a token or a hash.
+ */
+export interface UserSessionSummary {
+  /** `sessions.id`; safe to log, not a credential. */
+  id: string;
+  /** Client address at login (a valid IP literal), or null. */
+  ip: string | null;
+  /** Raw stored `User-Agent` (escape before rendering), or null. */
+  userAgent: string | null;
+  /** Approximate location of `ip` ("City, Country"), or null. */
+  location: string | null;
+  /** When the session was opened (signed in at). */
+  createdAt: Date;
+  /** Last activity: moved forward by every token rotation. */
+  lastSeenAt: Date;
+}
+
 /** A rotated session token and how long the cookie may live. */
 export interface RotatedSession {
   /** The new raw cookie value. */

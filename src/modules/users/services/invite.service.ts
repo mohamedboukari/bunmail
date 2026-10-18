@@ -38,6 +38,8 @@ import {
 } from "./invite-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { createSession } from "./session.service.ts";
+import { locateSession } from "./session-location.service.ts";
+import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
 
 /**
@@ -599,8 +601,9 @@ export async function acceptInvitation(
   const tokenHash = hashToken(token);
   const name = acceptance.name.trim();
 
+  let result: AcceptInvitationResult;
   try {
-    return await withInviteLock(
+    result = await withInviteLock(
       target.email,
       async (tx): Promise<AcceptInvitationResult> => {
         if (await emailHasAccount(tx, target.email)) {
@@ -660,4 +663,7 @@ export async function acceptInvitation(
     }
     throw error;
   }
+  /** Committed: look the new session's location up in the background (#281). */
+  if (result.ok) void locateSession(result.sessionId, sessionIp(client.ip));
+  return result;
 }

@@ -176,6 +176,13 @@
       "when": 1792359596877,
       "tag": "0024_short_master_chief",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792360230915,
+      "tag": "0025_chief_human_torch",
+      "breakpoints": true
     }
   ]
 }

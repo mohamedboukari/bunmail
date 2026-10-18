@@ -62,7 +62,7 @@ The role is read on every request, so a role change applies on the next request.
 
 | Helper | Lets through | Used for |
 |---|---|---|
-| `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), active sessions (the page and both sign-out actions, own sessions only, #281), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
 | `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
@@ -80,7 +80,7 @@ Deny by default: `test/integration/dashboard-route-access.integration.test.ts` r
 - A token two or more rotations old is reuse too: every replaced hash is kept in `session_token_history` until the session ends, so any superseded token, however old, revokes every session of the user, on protected pages and also when presented to the login or logout page. A token that was never issued, or belongs to an expired or revoked session, is simply rejected (cookie cleared, `302`).
 - A rotation error is logged (`Dashboard session rotation failed`) and the request is served; the old token stays current.
 
-So a copied cookie is detected as soon as both copies are used: whichever side falls behind a rotation presents a superseded token, and the account is signed out everywhere. A thief who keeps the session active while the real user is idle is caught the moment the real browser returns, however many rotations have passed. The limit: if the real browser never comes back, the thief's session lives until the 7-day cap, a `reset-owner`, or (later) a sign-out from the sessions page (#281). The cost is a rare false logout: if the response carrying a new cookie never reaches the browser (a dropped connection), its next request after the grace period looks like reuse.
+So a copied cookie is detected as soon as both copies are used: whichever side falls behind a rotation presents a superseded token, and the account is signed out everywhere. A thief who keeps the session active while the real user is idle is caught the moment the real browser returns, however many rotations have passed. The limit: if the real browser never comes back, the thief's session lives until the 7-day cap, a `reset-owner`, or a sign-out from the [Active sessions](#active-sessions-281) page (#281). The cost is a rare false logout: if the response carrying a new cookie never reaches the browser (a dropped connection), its next request after the grace period looks like reuse.
 
 **Logout** (`POST /dashboard/logout`, public): same-origin only (`403` and a `warn` log otherwise). It deletes the session row (matched by the current or the previous token hash, so a just-rotated cookie still logs out), logs `Dashboard logout` with `sessionId` and `ip`, and always clears the cookie and redirects to `/dashboard/login`, also for a missing, malformed, already revoked or legacy cookie, and after a database error (logged as `Dashboard logout: session revoke failed`). Replaying the old cookie afterwards gets a `302` to the login page.
 
@@ -154,6 +154,16 @@ Every signed-in account, the owner included, changes its own password at **Chang
 2. `POST /dashboard/account/password` (form fields `current`, `password`, `confirm`, `memberGuard`): the session guard refuses a cross-origin POST first (`403`). Then the failed-attempt budget: the login limiter's settings (`DASHBOARD_LOGIN_RATE_LIMIT_*`) under keys of its own, `password:user:<userId>` and `password:ip:<client IP>` (IPv6 by `/64`); over budget the form comes back with `429` and `Too many attempts. Try again later.`, before any argon2id work. Then the policy, with no argon2id and no attempt counted (current password required; the new one 15 to 256 characters, confirmed, different from the current one; `200` with the message). Then the attempt is counted and the current password verified, exactly one argon2id verify; a wrong one gets `200` and the generic `Current password is incorrect.` and stays counted. A completed change clears both keys.
 3. On success, in one transaction: the password is replaced, every session of the account is signed out (this browser's too), the account's open reset links are revoked, and a fresh session bound to the new password is opened for this browser; its cookie is set and the browser goes back to the form with `Password changed. You were signed out on every other device.` If the password was reset elsewhere, or the account deactivated, between the check and the change, nothing changes (`409`). Logged at `warn` as `Password changed` (`userId`, the new `sessionId`, `previousSessionId`, `sessionsRevoked`, `resetLinksRevoked`, `ip`); a refusal is `warn` `Password change refused` with a `reason`. Never a password.
 
+### Active sessions (#281)
+
+Every signed-in account, the owner included, sees and signs out its own sessions at **Active sessions** (`/dashboard/account/sessions`, in the Account group at the bottom of the sidebar, next to Change password). Only the account's own sessions: other accounts' sessions are managed from the Users page (deactivation signs an account out everywhere). Internals: [docs/users.md](users.md#active-sessions-281).
+
+1. `GET /dashboard/account/sessions` (`memberGuard`, `no-store`) lists one row per **live** session of the account, most recently active first: the same predicate the session guard uses (unexpired, which covers the 24 h idle and 7 d absolute rules, and `password` or `mfa` assurance), so an expired or `pending` session is never listed. Each row shows the device (browser and system parsed from the stored user agent, for example `Chrome on macOS`; `Unknown browser` when unrecognized), the IP address, the approximate location when one is stored (the column appears only then, labelled "Approximate location": a VPN or proxy shows its own location), signed in at and last active (moved forward by each token rotation, so at most a minute behind), and a **This device** badge on the session of the request. Every stored value is escaped.
+2. `POST /dashboard/account/sessions/:id/revoke` (`memberGuard`; the session guard refuses a cross-origin POST with `403`) signs out one session. The delete is scoped to the account in SQL, so another account's session id, or an unknown one, changes nothing: the page comes back with `404` and `That session was not found: nothing was changed.` (logged at `warn` as `Session revoke refused: not one of the user's sessions`). Another of the account's sessions: back to the page with `Signed out that device.`; its cookie stops working at once. The current session: this browser is signed out (cookie cleared, `302` to the login page). Logged at `warn` as `Session revoked by its user` (`userId`, the revoked `sessionId`, `currentSessionId`, `current`, `ip`).
+3. `POST /dashboard/account/sessions/revoke-others` (`memberGuard`, same-origin) signs out every session of the account except the current one (their token history goes with them) and comes back with `Signed out N other devices.` Logged at `warn` as `Other sessions revoked by their user` (`userId`, the kept `sessionId`, `sessionsRevoked`, `ip`).
+
+**Approximate location** is off by default. With `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or the opt-in online provider (`GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN`, which sends every sign-in IP to ipinfo.io), the location of a new session's IP is looked up once, in the background, after the session is created (login, owner setup, invitation accept, password reset, password change), and stored on the session; it never delays or fails a sign-in. Setup: [docs/self-hosting.md](self-hosting.md#approximate-session-locations-geoip-281).
+
 **Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
 
 ### Brute-force protection (#109)
@@ -202,6 +212,7 @@ per-replica.
 | GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections; for admins and the owner, a **Server identity** card (#248): each sending IP (`MAIL_PUBLIC_IP` or the A/AAAA records of `MAIL_HOSTNAME`) with whether its PTR names `MAIL_HOSTNAME` and resolves back. The result comes from the boot check and refreshes in the background every 10 minutes, so the page never waits on DNS |
 | GET /dashboard/account/password  | Change your own password; signs out every other session (any role, #279) |
+| GET /dashboard/account/sessions  | Your own live sessions: device, IP, approximate location, signed in, last active, this device marked; sign out one or all others (any role, #281) |
 | GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
@@ -274,7 +285,7 @@ src/pages/
 ├── plugins/                  ← One functional plugin per area, each with only its routes (#291)
 │   ├── auth.plugin.tsx       ← Public: login, logout, owner setup, invitation accept, password reset
 │   ├── home.plugin.tsx       ← Stats overview
-│   ├── account.plugin.tsx    ← The signed-in user's own account: change password (#279)
+│   ├── account.plugin.tsx    ← The signed-in user's own account: active sessions (#281), change password (#279)
 │   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
@@ -305,7 +316,7 @@ src/pages/
 │   ├── dashboard.js          ← The only script every page loads (#255)
 │   └── icons.tsx             ← Inline SVG icons
 ├── layouts/
-│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role, Change password for every role)
+│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role; the Account group, Active sessions and Change password, for every role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
 │   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx and reset.tsx
@@ -314,6 +325,7 @@ src/pages/
 │   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
 │   ├── reset.tsx             ← Password reset form and invalid-link page (#277)
 │   ├── account-password.tsx  ← Change password form for the signed-in user (#279)
+│   ├── account-sessions.tsx  ← Active sessions page for the signed-in user (#281)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -391,6 +403,8 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Issue a password reset link → `POST /dashboard/users/:id/reset-password`
 - Reset a password → `POST /dashboard/reset` (public; form fields: `token`, `password`, `confirm`)
 - Change your own password → `POST /dashboard/account/password` (any role; form fields: `current`, `password`, `confirm`; signs out every other session, #279)
+- Sign out one of your sessions → `POST /dashboard/account/sessions/:id/revoke` (any role, own sessions only; the current one signs this browser out, #281)
+- Sign out all your other sessions → `POST /dashboard/account/sessions/revoke-others` (any role, #281)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)

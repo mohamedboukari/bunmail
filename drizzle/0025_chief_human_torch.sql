@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "location" varchar(128);

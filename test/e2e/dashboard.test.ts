@@ -60,6 +60,8 @@ void mock.module("../../src/config.ts", () => ({
     /** Read by the invitation services (#217), which are mocked below. */
     systemMailFrom: null,
     invites: { expiryDays: 7 },
+    /** Session locations off (#281): login looks nothing up. */
+    geoip: { source: "off" },
     logLevel: "error",
     logRedactPii: false,
   },
@@ -410,6 +412,11 @@ void mock.module("../../src/modules/users/services/session.service.ts", () => ({
   revokeSessionByToken,
   revokeAllUserSessions,
   purgeExpiredSessions: mock(() => Promise.resolve(0)),
+  /** The Active sessions page (#281); its SQL is covered by the integration test. */
+  listUserSessions: mock(() => Promise.resolve([])),
+  revokeUserSession: mock(() => Promise.resolve(false)),
+  revokeOtherUserSessions: mock(() => Promise.resolve(0)),
+  setSessionLocation: mock(() => Promise.resolve()),
 }));
 
 /** The one account the fake login service knows. */
