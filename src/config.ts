@@ -39,6 +39,29 @@ function optionalPositiveInt(key: string, fallback: number): number {
   return value;
 }
 
+/**
+ * Reads an optional whole number that must lie in `[min, max]` (#176).
+ * Unset or blank gives `fallback`; anything else (signs, decimals,
+ * exponents, hex, out of range) refuses to boot. Exported for tests.
+ */
+export function optionalBoundedInt(
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+  raw: string | undefined = process.env[key],
+): number {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed === "") return fallback;
+  const value = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || value < min || value > max) {
+    throw new Error(
+      `[config] ${key} must be a whole number from ${min} to ${max}, got "${raw}"`,
+    );
+  }
+  return value;
+}
+
 /** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -376,6 +399,20 @@ export const config = {
      * the email fails for good. RFC 5321 suggests 4 to 5 days.
      */
     retryMaxAgeHours: optionalPositiveInt("MAIL_RETRY_MAX_AGE_HOURS", 48),
+
+    /**
+     * Send queue throughput and its bound (#176). Each poll (every
+     * `QUEUE_POLL_INTERVAL_MS`, +/-10% jitter, never overlapping the
+     * previous one) claims up to `QUEUE_BATCH_SIZE` due emails, but never
+     * more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS`, the cap
+     * on sends in flight in this process. A slow receiver holds one slot
+     * instead of making the queue open ever more connections. Sends that
+     * wait for a busy MX (`MAIL_MX_CONCURRENCY`) hold their slot while
+     * they wait.
+     */
+    queueBatchSize: optionalBoundedInt("QUEUE_BATCH_SIZE", 5, 1, 100),
+    queuePollIntervalMs: optionalBoundedInt("QUEUE_POLL_INTERVAL_MS", 2000, 250, 60_000),
+    queueMaxConcurrentSends: optionalBoundedInt("QUEUE_MAX_CONCURRENT_SENDS", 10, 1, 500),
 
     /**
      * Allow delivery to MX hosts that resolve to private, loopback or

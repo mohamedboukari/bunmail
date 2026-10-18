@@ -119,6 +119,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h.
 
+> `QUEUE_BATCH_SIZE` / `QUEUE_POLL_INTERVAL_MS` / `QUEUE_MAX_CONCURRENT_SENDS`: send queue throughput (#176). Every `QUEUE_POLL_INTERVAL_MS` (default `2000`, 250 to 60000, with +/-10% jitter) the queue claims up to `QUEUE_BATCH_SIZE` due emails (default `5`, 1 to 100), but never more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS` (default `10`, 1 to 500), the cap on sends in flight per process. A slow receiver holds its slot instead of making the queue open more connections; sends waiting for a busy MX (`MAIL_MX_CONCURRENCY`) hold theirs too. Raise the cap for high volume to many different domains; mind your IP reputation. Any other value refuses to boot.
+
 ## 2. DNS Records
 
 Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.):

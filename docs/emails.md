@@ -167,10 +167,10 @@ Sends an email via direct SMTP. When `dkim` options are provided, signs the mess
 ### queue.service.ts
 
 #### `start(): void`
-Starts the queue processor: polls every 2 seconds. There is no boot-time recovery step: rows a dead worker left in `sending` are reclaimed by the normal claim once their lease expires (#180).
+Starts the queue processor: polls every `QUEUE_POLL_INTERVAL_MS` (default 2 s, +/-10% jitter). Each poll is scheduled after the previous one has claimed its rows, so polls never overlap; the sends run in the background (#176). There is no boot-time recovery step: rows a dead worker left in `sending` are reclaimed by the normal claim once their lease expires (#180).
 
-#### `runQueueCycle(deps?): Promise<void>`
-One poll cycle: claims up to 5 due rows and sends them. The mailer is injectable for tests.
+#### `runQueueCycle(deps?, limits?): Promise<void>`
+One poll cycle, waiting for its sends: claims up to `min(batchSize, free slots)` due rows and sends them. The mailer and the limits (`{ batchSize, maxConcurrentSends }`, default from config) are injectable for tests.
 
 #### `stop(): void`
 Stops the queue processor gracefully.
@@ -267,8 +267,9 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 
 ## Queue Architecture
 
-- **Polling interval:** 2 seconds
-- **Batch size:** 5 emails per cycle
+- **Polling interval:** `QUEUE_POLL_INTERVAL_MS`, default 2 seconds, +/-10% jitter so replicas don't poll in lockstep. A poll is scheduled only after the previous one has claimed its rows: polls never overlap (#176).
+- **Batch size:** `QUEUE_BATCH_SIZE`, default 5 emails per poll.
+- **Bounded concurrency (#176):** at most `QUEUE_MAX_CONCURRENT_SENDS` (default 10) sends in flight per process. A poll claims only as many rows as there are free slots, and none when all are taken, so a slow or hanging receiver holds its slots instead of making the queue open ever more connections. Sends waiting for a busy MX (per-MX throttle below) hold their slot while they wait.
 - **Retry backoff (#180):** a temporary failure (4xx, connection or DNS error) requeues the email with `next_attempt_at` set 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h after each attempt, until the email is older than `MAIL_RETRY_MAX_AGE_HOURS` (default 48); then it is `failed`. Receivers that defer (greylisting, Yahoo `421 [TSS04]`, Microsoft `451 4.7.500`, Gmail `421 4.7.28`) are retried when they expect it instead of within seconds. While deferred, the API shows `status: "queued"` and `nextAttemptAt`.
 - **Leases (#180):** the claim stamps `locked_by` and a 15-minute `lease_until`; the worker renews the lease every minute and clears it with the outcome, which is only written if it still holds the row. If a worker dies, its rows become claimable once the lease expires (the lost attempt counts). This replaces the boot-time reset of every `sending` row, which resent emails another replica was still sending.
 - **SMTP timeouts:** nodemailer's defaults (2 min setup, 10 min socket inactivity). Shorter ones would risk duplicates: a receiver may answer the final `.` of DATA minutes after accepting the message. Long sends are safe because the lease is renewed while they run.

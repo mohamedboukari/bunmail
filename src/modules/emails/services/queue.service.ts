@@ -136,12 +136,6 @@ async function queryDomainByName(name: string): Promise<DomainLookupRow | undefi
   return { ...row, dkimPrivateKey: decryptDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
 
-/** How often the queue checks for new emails to send (in ms) */
-const POLL_INTERVAL_MS = 2000;
-
-/** Max emails to process in a single poll cycle */
-const BATCH_SIZE = 5;
-
 /**
  * How long a claim lasts (#180). The worker renews it every
  * `LEASE_RENEW_MS` while it sends, so only a dead or stuck worker lets it
@@ -188,11 +182,44 @@ interface QueueDeps {
 
 const defaultDeps: QueueDeps = { sendMail };
 
-/** Reference to the setInterval timer: used to stop the queue */
-let pollTimer: ReturnType<typeof setInterval> | null = null;
+/** How many emails one cycle may claim, and how many may be in flight (#176). */
+interface QueueLimits {
+  batchSize: number;
+  maxConcurrentSends: number;
+}
+
+/** The configured limits, read at use time (see {@link retryMaxAgeMs}). */
+function configuredLimits(): QueueLimits {
+  return {
+    batchSize: config.mail.queueBatchSize,
+    maxConcurrentSends: config.mail.queueMaxConcurrentSends,
+  };
+}
+
+/** Sends this process has started and not yet finished (#176). */
+let inFlight = 0;
+
+/** True between `start()` and `stop()`. */
+let running = false;
+
+/** True while a poll runs; that poll schedules the next one when it ends. */
+let polling = false;
+
+/** The next scheduled poll, or `null` while a poll runs or once stopped. */
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** `ms` +/-10%, so several replicas don't poll the database in lockstep (#176). */
+function withJitter(ms: number): number {
+  return Math.round(ms * (0.9 + Math.random() * 0.2));
+}
 
 /**
- * Starts the queue processor: polls every 2 seconds for due emails.
+ * Starts the queue processor: polls for due emails every
+ * `QUEUE_POLL_INTERVAL_MS` (#176).
+ *
+ * Each poll is scheduled only after the previous one has claimed its
+ * rows, so polls never overlap; sends run in the background, bounded by
+ * `QUEUE_MAX_CONCURRENT_SENDS` (see {@link startQueueCycle}).
  *
  * There is no recovery step at boot (#180). Rows a crashed worker left in
  * `sending` are reclaimed by the normal claim once their lease expires.
@@ -200,21 +227,42 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
  * replica was still sending, which delivered those emails twice.
  */
 export async function start(): Promise<void> {
+  if (running) return;
+  running = true;
   logger.info("Starting email queue processor", {
-    pollIntervalMs: POLL_INTERVAL_MS,
-    batchSize: BATCH_SIZE,
+    pollIntervalMs: config.mail.queuePollIntervalMs,
+    ...configuredLimits(),
     retryMaxAgeHours: config.mail.retryMaxAgeHours,
     workerId: WORKER_ID,
   });
+  /** A poll still running from before a `stop()` reschedules itself. */
+  if (!polling) schedulePoll();
+}
 
-  /** Begin the poll loop */
-  pollTimer = setInterval(() => {
-    runQueueCycle().catch((error) => {
-      logger.error("Queue processing error", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+/** Schedules the next poll, unless the queue was stopped. */
+function schedulePoll(): void {
+  if (!running) return;
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    void poll();
+  }, withJitter(config.mail.queuePollIntervalMs));
+}
+
+/** One poll: start the sends there is room for, then schedule the next poll. */
+async function poll(): Promise<void> {
+  polling = true;
+  try {
+    const sends = await startQueueCycle(defaultDeps, configuredLimits());
+    /** Not awaited: the sends run in the background, and each one resolves, never rejects. */
+    void Promise.all(sends);
+  } catch (error: unknown) {
+    logger.error("Queue processing error", {
+      error: error instanceof Error ? error.message : String(error),
     });
-  }, POLL_INTERVAL_MS);
+  } finally {
+    polling = false;
+    schedulePoll();
+  }
 }
 
 /**
@@ -222,13 +270,17 @@ export async function start(): Promise<void> {
  *
  * Called during graceful shutdown (SIGINT/SIGTERM) to prevent
  * new emails from being picked up while the server is stopping.
+ * Sends already in flight are not awaited: shutdown releases their
+ * leases (`releaseOwnLeases`) so another worker picks them up.
  */
 export function stop(): void {
+  if (!running) return;
+  running = false;
   if (pollTimer) {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     pollTimer = null;
-    logger.info("Email queue processor stopped");
   }
+  logger.info("Email queue processor stopped", { inFlight });
 }
 
 /**
@@ -386,31 +438,67 @@ function firstDeliveredAt(state: DeliveryState): Date | null {
 }
 
 /**
- * Single poll cycle: claims a batch of queued emails and processes them.
+ * Single poll cycle, waiting for the sends it started: what the poll
+ * loop does, plus the wait. Exported (with an injectable mailer and
+ * limits) so tests can drive one cycle and inspect its outcome.
+ */
+export async function runQueueCycle(
+  deps: QueueDeps = defaultDeps,
+  limits: QueueLimits = configuredLimits(),
+): Promise<void> {
+  await Promise.all(await startQueueCycle(deps, limits));
+}
+
+/**
+ * Claims as many due emails as there are free send slots and starts
+ * sending them, without waiting for the sends (#176). Returns the sends
+ * so a caller may wait for them; each one resolves, never rejects.
  *
  * Steps:
- * 1. Atomically claim up to BATCH_SIZE rows (queued → sending in one
- *    statement, with `FOR UPDATE SKIP LOCKED` so concurrent workers
- *    can't claim the same row, see {@link claimNextEmails}).
- * 2. For each claimed row (concurrently):
+ * 1. Count the free slots: `maxConcurrentSends` minus the sends in
+ *    flight. None free: claim nothing, so a slow receiver can only hold
+ *    the slots it has, never grow the number of open connections.
+ * 2. Atomically claim up to `min(batchSize, free)` rows (queued → sending
+ *    in one statement, with `FOR UPDATE SKIP LOCKED` so concurrent
+ *    workers can't claim the same row, see {@link claimNextEmails}).
+ * 3. For each claimed row, in the background:
  *    a. Try SMTP delivery via the mailer service.
  *    b. On success: mark "sent" with timestamp.
  *    c. On failure: hard 5xx groups are auto-suppressed (#68); temporary
  *       failures are requeued with backoff until the email is older than
  *       `MAIL_RETRY_MAX_AGE_HOURS`, then marked "failed" (#180).
- *
- * Exported (with an injectable mailer) so tests can drive one cycle.
  */
-export async function runQueueCycle(deps: QueueDeps = defaultDeps): Promise<void> {
-  const batch = await claimNextEmails(BATCH_SIZE);
+async function startQueueCycle(
+  deps: QueueDeps,
+  limits: QueueLimits,
+): Promise<Promise<void>[]> {
+  const free = limits.maxConcurrentSends - inFlight;
+  if (free <= 0) {
+    logger.debug("Queue at its concurrency cap, claiming nothing", { inFlight });
+    return [];
+  }
+
+  const batch = await claimNextEmails(Math.min(limits.batchSize, free));
 
   /** Nothing to process: skip silently */
-  if (batch.length === 0) return;
+  if (batch.length === 0) return [];
 
-  logger.debug("Processing email batch", { count: batch.length });
+  logger.debug("Processing email batch", { count: batch.length, inFlight });
 
-  /** Process all emails in the batch concurrently */
-  await Promise.allSettled(batch.map((email) => processEmail(email, deps)));
+  /** Counted before any await, so the next poll sees these slots as taken. */
+  return batch.map((email) => {
+    inFlight++;
+    return processEmail(email, deps)
+      .catch((error: unknown) => {
+        logger.error("Email send attempt crashed", {
+          emailId: email.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      })
+      .finally(() => {
+        inFlight--;
+      });
+  });
 }
 
 /**

@@ -36,6 +36,11 @@ function fakeMailer(status: DeliveryGroupStatus, lastError?: string): typeof sen
   });
 }
 
+/** Polls `done` every 10 ms for up to 2 s. */
+async function waitUntil(done: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !done(); i++) await Bun.sleep(10);
+}
+
 async function row(id: string) {
   const [r] = await db.select().from(emails).where(eq(emails.id, id));
   if (!r) throw new Error(`email ${id} not found`);
@@ -275,5 +280,49 @@ describe("sender policy blocks (#246)", () => {
 
     expect((await row(id)).status).toBe("failed");
     expect(await db.select().from(suppressions)).toEqual([]);
+  });
+});
+
+describe("bounded concurrency (#176)", () => {
+  test("a cycle claims only free slots: slow sends never grow the number in flight", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    for (let i = 0; i < 6; i++) {
+      await seed.email({ apiKeyId, toAddress: `user${i}@example.org` });
+    }
+
+    /** A receiver that holds every send until released. */
+    let started = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: typeof sendMail = async (options) => {
+      started++;
+      await gate;
+      return fakeMailer("sent")(options);
+    };
+    const limits = { batchSize: 5, maxConcurrentSends: 3 };
+
+    const first = runQueueCycle({ sendMail: slow }, limits);
+    await waitUntil(() => started >= 3);
+    expect(started).toBe(3);
+
+    /** Every slot is taken: the next cycle claims nothing. */
+    await runQueueCycle({ sendMail: slow }, limits);
+    expect(started).toBe(3);
+    const statuses = (await db.select({ status: emails.status }).from(emails)).map(
+      (r) => r.status,
+    );
+    expect(statuses.filter((s) => s === "sending")).toHaveLength(3);
+    expect(statuses.filter((s) => s === "queued")).toHaveLength(3);
+
+    /** Slots free up once the sends finish, and the rest drains. */
+    release();
+    await first;
+    await runQueueCycle({ sendMail: fakeMailer("sent") }, limits);
+    const after = (await db.select({ status: emails.status }).from(emails)).map(
+      (r) => r.status,
+    );
+    expect(after).toEqual(["sent", "sent", "sent", "sent", "sent", "sent"]);
   });
 });
