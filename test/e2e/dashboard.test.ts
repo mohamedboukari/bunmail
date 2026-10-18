@@ -1170,6 +1170,58 @@ describe("Dashboard E2E", () => {
       expect(await second.text()).not.toContain("bm_live_test1234567890abcdef12345678");
     });
 
+    /** Creates an API key in the session behind `cookie`; returns its reveal token. */
+    async function createKeyRevealToken(cookie: string): Promise<string> {
+      const created = await app.handle(
+        new Request("http://localhost/dashboard/api-keys", {
+          method: "POST",
+          headers: {
+            cookie,
+            "content-type": "application/x-www-form-urlencoded",
+            origin: "http://localhost",
+          },
+          body: "name=BoundKey",
+        }),
+      );
+      return (
+        created.headers.get("location")?.match(/[?&]reveal=([a-f0-9]{64})\b/)?.[1] ?? ""
+      );
+    }
+
+    /** GETs `path` with `cookie` and returns the HTML. */
+    async function pageText(path: string, cookie: string): Promise<string> {
+      const response = await app.handle(
+        new Request(`http://localhost${path}`, { headers: { cookie } }),
+      );
+      expect(response.status).toBe(200);
+      return response.text();
+    }
+
+    test("another session cannot redeem the reveal token, and the creator still can (#280)", async () => {
+      const token = await createKeyRevealToken(sessionCookie);
+      expect(token).not.toBe("");
+      const otherSession = `bm_session=${seedSession()}`;
+
+      const stolen = await pageText(`/dashboard/api-keys?reveal=${token}`, otherSession);
+      expect(stolen).not.toContain("bm_live_test1234567890abcdef12345678");
+
+      /** The mismatch did not burn it: the creator still sees the key once. */
+      const own = await pageText(`/dashboard/api-keys?reveal=${token}`, sessionCookie);
+      expect(own).toContain("bm_live_test1234567890abcdef12345678");
+    });
+
+    test("an API-key reveal token shows nothing on the webhooks page (#280)", async () => {
+      const token = await createKeyRevealToken(sessionCookie);
+      const webhooks = await pageText(
+        `/dashboard/webhooks?reveal=${token}`,
+        sessionCookie,
+      );
+      expect(webhooks).not.toContain("bm_live_test1234567890abcdef12345678");
+
+      const own = await pageText(`/dashboard/api-keys?reveal=${token}`, sessionCookie);
+      expect(own).toContain("bm_live_test1234567890abcdef12345678");
+    });
+
     test("POST /dashboard/domains creates domain and redirects", async () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/domains", {

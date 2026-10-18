@@ -242,6 +242,7 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
+│       ├── reveal-store.ts               ← One-time secret reveal bound to kind, user and session (#132, #280)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/

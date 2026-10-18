@@ -1,9 +1,14 @@
 import { Elysia, t, type Context } from "elysia";
 import { html } from "@elysiajs/html";
-import { randomBytes } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { setLogContextUser } from "../utils/log-context.ts";
+import {
+  consumeRevealSecret,
+  stashRevealSecret,
+  type RevealOwner,
+} from "./reveal-store.ts";
+import type { DashboardAuth } from "../modules/users/types/user.types.ts";
 import { redactEmail } from "../utils/redact.ts";
 import {
   resolveClientIp,
@@ -217,76 +222,12 @@ function isSameOrigin(request: Request): boolean {
   }
 }
 
-/* ─── One-Time Secret Reveal (#132) ─── */
-
 /**
- * Newly-created secrets (the raw `bm_live_…` API key and the webhook HMAC
- * secret) are shown to the operator exactly once. They MUST NOT travel in a
- * URL: query strings leak into browser history, reverse-proxy / CDN / access
- * logs, and the `Referer` header of any sub-resource the page loads, which
- * would defeat the "shown once, stored hashed" model (#132).
- *
- * Instead of putting the secret in the redirect, we stash it here under an
- * opaque random token and put only the *token* in the URL. The GET consumes
- * the token (single-read, deleted immediately) and renders the secret. This
- * keeps the refresh-safe Post/Redirect/Get flow while keeping the secret out
- * of every URL/log/history.
- *
- * Caveat (documented in SECURITY.md): this store is in-memory and per-process,
- * like the login rate-limiter and the session model. On a multi-replica deploy
- * a create on one replica and the follow-up GET on another would miss the
- * token; the operator would then revoke + recreate. A shared store is a
- * separate concern, not a regression introduced here.
+ * The owner a one-time reveal is bound to (#280): the signed-in user and
+ * the session that created it, from the guard's `auth` (#222).
  */
-const REVEAL_TTL_MS = 60_000;
-/** Hard cap so a burst of creates can't grow the map unbounded. */
-const REVEAL_MAX_ENTRIES = 1000;
-
-interface RevealEntry {
-  /** The one-time secret to show (raw API key or webhook secret). */
-  value: string;
-  /** Unix epoch ms after which the entry is considered expired. */
-  expiresAt: number;
-}
-
-const oneTimeReveals = new Map<string, RevealEntry>();
-
-/** Drops expired entries; cheap lazy sweep run on each stash. */
-function sweepExpiredReveals(): void {
-  const now = Date.now();
-  for (const [token, entry] of oneTimeReveals) {
-    if (entry.expiresAt <= now) oneTimeReveals.delete(token);
-  }
-}
-
-/**
- * Stashes a one-time secret and returns the opaque token to put in the URL.
- * The token is a 32-byte random hex string (unguessable), valid for
- * {@link REVEAL_TTL_MS} and readable exactly once.
- */
-function stashRevealSecret(value: string): string {
-  sweepExpiredReveals();
-  /** If we somehow still exceed the cap, evict the oldest insertion. */
-  if (oneTimeReveals.size >= REVEAL_MAX_ENTRIES) {
-    const oldest = oneTimeReveals.keys().next().value;
-    if (oldest) oneTimeReveals.delete(oldest);
-  }
-  const token = randomBytes(32).toString("hex");
-  oneTimeReveals.set(token, { value, expiresAt: Date.now() + REVEAL_TTL_MS });
-  return token;
-}
-
-/**
- * Consumes a reveal token: returns the secret and deletes it (single-read),
- * or `undefined` if the token is unknown/expired/already consumed.
- */
-function consumeRevealSecret(token: string | undefined): string | undefined {
-  if (!token) return undefined;
-  const entry = oneTimeReveals.get(token);
-  if (!entry) return undefined;
-  oneTimeReveals.delete(token);
-  if (entry.expiresAt <= Date.now()) return undefined;
-  return entry.value;
+function revealOwnerOf(auth: DashboardAuth): RevealOwner {
+  return { userId: auth.user.id, sessionId: auth.session.id };
 }
 
 /* ─── DNS-verify throttle (#133) ─── */
@@ -1302,7 +1243,7 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/api-keys",
-    async ({ query }) => {
+    async ({ query, auth }) => {
       const keys = await apiKeyService.listApiKeys();
 
       /** Parse flash message from query params (set after create/revoke) */
@@ -1313,7 +1254,7 @@ export const pagesPlugin = new Elysia({
        * (#132): never in the URL. `consumeRevealSecret` returns it once,
        * then it's gone.
        */
-      const rawKey = consumeRevealSecret(query.reveal);
+      const rawKey = consumeRevealSecret(query.reveal, "api_key", revealOwnerOf(auth));
 
       return <ApiKeysPage keys={keys} flash={flash} rawKey={rawKey} />;
     },
@@ -1334,7 +1275,7 @@ export const pagesPlugin = new Elysia({
    */
   .post(
     "/api-keys",
-    async ({ body, set }) => {
+    async ({ body, set, auth }) => {
       try {
         const { rawKey } = await apiKeyService.createApiKey({
           name: body.name,
@@ -1354,7 +1295,7 @@ export const pagesPlugin = new Elysia({
          * never the raw key itself. The GET consumes the token and shows
          * the key once. Keeps secrets out of history / access logs / Referer.
          */
-        const reveal = stashRevealSecret(rawKey);
+        const reveal = stashRevealSecret(rawKey, "api_key", revealOwnerOf(auth));
         set.status = 302;
         set.headers["location"] =
           `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&reveal=${reveal}`;
@@ -1875,11 +1816,15 @@ export const pagesPlugin = new Elysia({
 
   .get(
     "/webhooks",
-    async ({ query }) => {
+    async ({ query, auth }) => {
       const hooks = await webhookService.listAllWebhooks();
       const flash = toFlash(query.flash, query.flashType);
       /** One-time reveal of the webhook HMAC secret (#132): never in URL. */
-      const secret = consumeRevealSecret(query.reveal);
+      const secret = consumeRevealSecret(
+        query.reveal,
+        "webhook_secret",
+        revealOwnerOf(auth),
+      );
 
       return <WebhooksPage webhooks={hooks} flash={flash} secret={secret} />;
     },
@@ -1895,7 +1840,7 @@ export const pagesPlugin = new Elysia({
 
   .post(
     "/webhooks",
-    async ({ body, set }) => {
+    async ({ body, set, auth }) => {
       try {
         const keys = await apiKeyService.listApiKeys();
         const activeKey = keys.find((k) => k.isActive);
@@ -1913,7 +1858,7 @@ export const pagesPlugin = new Elysia({
           activeKey.id,
         );
         /** One-time reveal token in the URL (#132): never the secret. */
-        const reveal = stashRevealSecret(secret);
+        const reveal = stashRevealSecret(secret, "webhook_secret", revealOwnerOf(auth));
         set.status = 302;
         set.headers["location"] =
           `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&reveal=${reveal}`;

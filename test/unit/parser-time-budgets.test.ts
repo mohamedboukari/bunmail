@@ -159,7 +159,12 @@ describe("mailparser at 10 MB (inbound and submission)", () => {
 });
 
 describe("buildInboundNotification with 10 MB fields", () => {
-  const BUDGET_MS = 3_000;
+  /**
+   * Same budget as the mailparser cases: 3 s was tight enough that CI's
+   * coverage instrumentation pushed the 10 MB subject case past it (3.6 s).
+   * A super-linear regression at 10 MB takes minutes, so 10 s still catches it.
+   */
+  const BUDGET_MS = 10_000;
 
   test.each([
     [
