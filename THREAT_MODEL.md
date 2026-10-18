@@ -29,7 +29,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **Spam operator on the public internet** | Use BunMail as an open relay (inbound SMTP) or to send mail through stolen API keys. | Constant: assume always present. |
 | **Internet scanner** | Find exposed dashboards, leaked `.env` files, vulnerable endpoints. | Constant. |
 | **Compromised API consumer** | A leaked key sends mail from real domains. | Likely over time. |
-| **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23): useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
+| **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys (#23) and webhook signing secrets (#259) are AES-256-GCM encrypted at rest**: useless without `DKIM_ENCRYPTION_KEY` from `.env`, so a dump can neither sign mail nor forge webhook events. | Likely on careless backups. |
 | **Privileged insider with DB write** | Forge mail history, grant their own API keys, exfiltrate. | Lower likelihood; full DB write effectively bypasses the app. |
 | **Network adversary on egress path** | Strip TLS on outbound to recipients (downgrade attack). | Realistic on hostile networks; mostly irrelevant on cloud egress. |
 | **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape): every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate runs in CI since #150 (blind spots closed in #229). |

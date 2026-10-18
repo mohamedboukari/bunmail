@@ -34,6 +34,7 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { signPayload } from "./webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { generateId } from "../../../utils/id.ts";
+import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import {
   buildPinnedRequest,
   resolvePublicWebhookTarget,
@@ -208,7 +209,8 @@ export async function claimDueDeliveries(
     payload: string;
     attempts: number;
     url: string;
-    secret: string;
+    /** The signing secret in plaintext, or `null` when it cannot be decrypted. */
+    secret: string | null;
   }>
 > {
   /**
@@ -344,10 +346,38 @@ export async function claimDueDeliveries(
         /** Count before this attempt (the claim already added it). */
         attempts: row.attempts - 1,
         url: hook.url,
-        secret: hook.secret,
+        secret: readWebhookSecret(hook.secret, hook.id),
       };
     });
   });
+}
+
+/**
+ * Decrypts a webhook's stored signing secret (#259). A row from before
+ * #259 still holds the plaintext until the boot pass encrypts it: used
+ * as is, with a warning. A secret that does not decrypt (the key changed
+ * or the value was tampered with) gives `null`, and the attempt fails
+ * without sending: never a request signed with the wrong secret.
+ */
+function readWebhookSecret(stored: string, webhookId: string): string | null {
+  if (!isEncryptedSecret(stored)) {
+    logger.warn(
+      "Webhook signing secret stored as plaintext: boot encrypter has not run",
+      {
+        webhookId,
+      },
+    );
+    return stored;
+  }
+  try {
+    return decryptSecret(stored, config.dkimEncryptionKey);
+  } catch (error: unknown) {
+    logger.error("Failed to decrypt webhook signing secret: delivery not sent", {
+      webhookId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 interface AttemptOutcome {
@@ -372,7 +402,8 @@ interface AttemptOutcome {
  */
 export async function performHttpAttempt(opts: {
   url: string;
-  secret: string;
+  /** `null` when the stored secret could not be decrypted (#259): fails without sending. */
+  secret: string | null;
   body: string;
   event: string;
   fetchImpl?: typeof fetch;
@@ -380,6 +411,14 @@ export async function performHttpAttempt(opts: {
   resolver?: ResolveAll;
   timeoutMs?: number;
 }): Promise<AttemptOutcome> {
+  if (opts.secret === null) {
+    return {
+      ok: false,
+      status: null,
+      error: "Signing secret could not be decrypted with DKIM_ENCRYPTION_KEY",
+      bodyPreview: null,
+    };
+  }
   const fetchFn = opts.fetchImpl ?? globalThis.fetch;
   const sigTimestamp = Math.floor(Date.now() / 1000).toString();
   const signature = signPayload(sigTimestamp, opts.body, opts.secret);

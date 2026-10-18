@@ -540,7 +540,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL      |
 | url          | text           | NOT NULL                        |
 | events       | jsonb          | NOT NULL, default `[]`          |
-| secret       | varchar(64)    | NOT NULL                        |
+| secret       | varchar(255)   | NOT NULL, encrypted at rest (#259) |
 | is_active    | boolean        | NOT NULL, default `true`        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 | updated_at   | timestamp      | NOT NULL, default `now()`       |

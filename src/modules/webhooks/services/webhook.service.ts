@@ -4,6 +4,7 @@ import { db } from "../../../db/index.ts";
 import { webhooks } from "../models/webhook.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { InboundEventsRequireAdminError } from "../errors.ts";
+import { encryptSecret } from "../../../utils/crypto.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactUrl } from "../../../utils/redact.ts";
@@ -66,7 +67,8 @@ export async function createWebhook(
       apiKeyId,
       url: input.url,
       events: input.events,
-      secret,
+      /** Only the ciphertext is stored (#259); the caller gets the raw secret once. */
+      secret: encryptSecret(secret, config.dkimEncryptionKey),
       createdByUserId,
     })
     .returning();

@@ -101,7 +101,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `BUNMAIL_OWNER_EMAIL` is **required in production** (#215): the email address of the dashboard owner account. BunMail refuses to start if it is unset, and refuses a malformed address or one over 254 characters in every environment (development only warns and skips the owner bootstrap when it is unset). It is stored lowercased. On first boot BunMail creates the owner and logs a one-time setup link (see [Claim the owner account](#claim-the-owner-account)). While setup is pending, a changed value updates the stored owner email on the next boot. After setup the database is the source of truth: changing the variable later only logs a warning. This account is the only way into the dashboard (#216): with the variable unset, development has no dashboard login and logs a warning at boot.
 
-> Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
+> Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key (#23) and every webhook signing secret (#259) at rest with AES-256-GCM. See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 

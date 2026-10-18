@@ -40,6 +40,8 @@ void mock.module("../../src/config.ts", () => ({
     mail: { hostname: "localhost" },
     dashboard: { ownerEmail: null },
     webhookDelivery: { retentionDays: 30, allowInsecureHttp: false },
+    /** `createWebhook` encrypts the signing secret at rest (#259). */
+    dkimEncryptionKey: Buffer.alloc(32, 7),
     logLevel: "error",
     logRedactPii: false,
   },

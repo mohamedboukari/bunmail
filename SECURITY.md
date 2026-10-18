@@ -59,6 +59,8 @@ For the full picture: assets we protect, attackers we model against, controls al
 
 ## DKIM Private Key Encryption at Rest
 
+The same key and format also protect **webhook signing secrets** (#259): with one, anyone can sign requests every receiver accepts as genuine (fake `email.bounced` or `email.received`). They are encrypted on create, decrypted only in the delivery worker, and a boot pass ([`src/db/encrypt-webhook-secrets.ts`](src/db/encrypt-webhook-secrets.ts)) encrypts rows from before #259. Everything below about the key, the format and rotation applies to both.
+
 Every domain registered through `POST /api/v1/domains` gets a freshly-generated 2048-bit RSA keypair. The **public** half is published in DNS (it's literally `v=DKIM1; k=rsa; p=...`), so storing it raw is fine. The **private** half is what an attacker would steal from a DB dump and use to forge signed mail under your domains forever, so it's encrypted at rest.
 
 ### Algorithm
@@ -87,9 +89,9 @@ On first boot after upgrading, [`src/db/encrypt-domain-keys.ts`](src/db/encrypt-
 Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_PREVIOUS`) is tracked as a follow-up.
 
 1. **Stop sending traffic** (drain the queue, take the API offline).
-2. With the *current* key still set, run a one-shot script that decrypts every row's `dkim_private_key` to plaintext PEM in memory.
+2. With the *current* key still set, run a one-shot script that decrypts every row's `dkim_private_key` to plaintext PEM, and every `webhooks.secret` to its plaintext, writing them back unencrypted.
 3. Generate a new key (`openssl rand -base64 32`), update `.env`, set `DKIM_ENCRYPTION_KEY=<new>`.
-4. Restart: the boot-time encrypter sees the now-plaintext rows and re-encrypts them under the new key.
+4. Restart: the boot-time encrypters (DKIM keys and webhook secrets) see the now-plaintext rows and re-encrypt them under the new key.
 5. Resume traffic.
 
 A safer rolling rotation (read with old key, write with new) needs both keys to coexist briefly, see the follow-up issue for the planned design.
