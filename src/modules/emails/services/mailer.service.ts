@@ -478,12 +478,15 @@ async function sendToMxGroup(args: MxGroupMessage & { mxHost: string }): Promise
     opportunisticTLS: true,
     name: config.mail.hostname,
     /**
-     * Timeouts stay at nodemailer's defaults (2 min setup, 10 min socket
-     * inactivity). Shorter ones are unsafe: a receiver may take minutes to
-     * answer the final `.` of DATA after it has accepted the message, and
-     * a timeout there leads to a retry and a duplicate. The queue's lease
-     * is renewed while a send runs, so long sends are fine.
+     * Setup timeouts are 60 s (#250): connecting and the greeting come
+     * before anything is sent, so a dead or tarpitting MX gives up its MX
+     * lock quickly. The socket inactivity timeout stays at nodemailer's
+     * 10 minutes: RFC 5321 4.5.3.2 has the client wait that long for the
+     * reply to the final `.` of DATA, and a shorter one risks a retry and
+     * a duplicate. The whole session is capped by {@link sendWithDeadline}.
      */
+    connectionTimeout: SMTP_SETUP_TIMEOUT_MS,
+    greetingTimeout: SMTP_SETUP_TIMEOUT_MS,
     tls: {
       rejectUnauthorized: false,
       servername: args.mxHost,
@@ -494,6 +497,50 @@ async function sendToMxGroup(args: MxGroupMessage & { mxHost: string }): Promise
 
   /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
   await withMxLock(args.mxHost, config.mail.mxConcurrency, () =>
-    transport.sendMail(mailOptions),
+    sendWithDeadline(transport, mailOptions, SMTP_SESSION_DEADLINE_MS),
   );
+}
+
+/** Connect and greeting timeout for outbound SMTP (#250). */
+const SMTP_SETUP_TIMEOUT_MS = 60_000;
+
+/**
+ * Longest one outbound SMTP session may take (#250). Every step has its
+ * own timeout, but a peer that keeps answering slowly could still hold
+ * the MX lock for hours; this caps the whole attempt.
+ */
+const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
+
+/** The part of a Nodemailer transport {@link sendWithDeadline} uses. */
+interface ClosableTransport {
+  sendMail(options: Mail.Options): Promise<unknown>;
+  close(): void;
+}
+
+/**
+ * Sends with an overall deadline (#250): past `deadlineMs` the transport
+ * is closed and the attempt fails with a plain error, which carries no
+ * SMTP reply and is therefore retried later, not treated as a bounce.
+ */
+export async function sendWithDeadline(
+  transport: ClosableTransport,
+  options: Mail.Options,
+  deadlineMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      transport.close();
+      reject(
+        new Error(
+          `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
+        ),
+      );
+    }, deadlineMs);
+  });
+  try {
+    await Promise.race([transport.sendMail(options), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
