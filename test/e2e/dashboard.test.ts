@@ -9,6 +9,7 @@ import type {
   RotatedSession,
   SessionAssurance,
   SessionClient,
+  UserRole,
 } from "../../src/modules/users/types/user.types.ts";
 
 /**
@@ -240,6 +241,9 @@ const OWNER = { userId: "usr_owner", email: "owner@example.com" };
 interface FakeSession {
   sessionId: string;
   userId: string;
+  /** The account's email and role (#222); the owner unless a test says otherwise. */
+  email: string;
+  role: UserRole;
   assurance: SessionAssurance;
   /** The token the last rotation replaced, if any. */
   previous: string | null;
@@ -265,6 +269,8 @@ function seedSession(overrides: Partial<FakeSession> = {}): string {
   fakeSessions.set(token, {
     sessionId: `ses_${fakeCounter}`,
     userId: OWNER.userId,
+    email: OWNER.email,
+    role: "owner",
     assurance: "password",
     previous: null,
     history: [],
@@ -290,6 +296,9 @@ const findActiveSession = mock((token: string): Promise<ActiveSession | null> =>
     return Promise.resolve({
       sessionId: s.sessionId,
       userId: s.userId,
+      email: s.email,
+      role: s.role,
+      assurance: s.assurance,
       matched: current === token ? "current" : "previous",
       rotationDue: s.rotationDue,
       graceOver: s.graceOver,

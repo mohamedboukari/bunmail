@@ -141,6 +141,10 @@ When adding an endpoint:
 6. Log per the Logging rules above: failure paths with context; any new background work wrapped in `runWithLogContext`.
 7. Add/extend tests.
 
+When adding a dashboard route (`src/pages/pages.plugin.tsx`):
+1. Give it a role guard as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard` from `src/pages/guards.tsx`); anything not plainly read-only or everyday sending is `adminGuard`.
+2. Add it to the `ROUTES` table in `test/integration/dashboard-route-access.integration.test.ts` (access level, minimal valid body). The test fails on any route missing from the table or carrying a different guard.
+
 When adding a data model:
 1. Create `<entity>.schema.ts` under `models/`.
 2. Register/migrate the schema.

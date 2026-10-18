@@ -9,8 +9,13 @@ import type { db } from "../../../db/index.ts";
 
 /** Exactly one `owner` (database-enforced), any number of admins and members. */
 export const USER_ROLES = ["owner", "admin", "member"] as const;
-/** @public Consumed by the login, invite and guard flows (#215 to #218); exported ahead of them. */
+/** A dashboard account's role; the guard (#222) ranks them owner > admin > member. */
 export type UserRole = (typeof USER_ROLES)[number];
+
+/** Narrows a stored `users.role` value to a known role (#222). */
+export function isUserRole(value: string): value is UserRole {
+  return USER_ROLES.some((role) => role === value);
+}
 
 /**
  * Login methods. `password` is the only one implemented; the others are
@@ -28,6 +33,11 @@ export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
  */
 export const SESSION_ASSURANCES = ["pending", "password", "mfa"] as const;
 export type SessionAssurance = (typeof SESSION_ASSURANCES)[number];
+
+/** Narrows a stored `sessions.assurance` value to a known level (#222). */
+export function isSessionAssurance(value: string): value is SessionAssurance {
+  return SESSION_ASSURANCES.some((level) => level === value);
+}
 
 /** What a one-time token is for. */
 export const TOKEN_PURPOSES = ["owner_setup", "invite", "password_reset"] as const;
@@ -104,19 +114,48 @@ export interface CreatedSession {
 /**
  * A live session found by the dashboard guard (#216). The presented token
  * matched either the session's current token or the one the last rotation
- * replaced; the flags are computed on the database clock.
+ * replaced; the flags are computed on the database clock. The account
+ * fields come from the same query (#222), so the guard needs exactly one
+ * lookup per request.
  */
 export interface ActiveSession {
   /** `sessions.id`; safe to log. */
   sessionId: string;
   /** Owner of the session. */
   userId: string;
+  /** The account's stored (lower-cased) email. PII: never log it raw. */
+  email: string;
+  /** The account's role, read on every request so a role change applies at once. */
+  role: UserRole;
+  /** How far the session got through login (`password` or `mfa` here). */
+  assurance: SessionAssurance;
   /** Which of the session's two hashes the presented token matched. */
   matched: "current" | "previous";
   /** The current token is older than `SESSION_ROTATE_SECONDS`. */
   rotationDue: boolean;
   /** The last rotation is older than `SESSION_ROTATION_GRACE_SECONDS`. */
   graceOver: boolean;
+}
+
+/**
+ * The signed-in account, as every protected dashboard handler sees it in
+ * `auth` (#222). Built from the guard's single session lookup.
+ */
+export interface DashboardAuth {
+  user: {
+    /** `users.id`; safe to log. */
+    id: string;
+    /** Stored (lower-cased) email. PII: route it through `redactEmail` before logging. */
+    email: string;
+    /** Role the route guards rank: owner > admin > member. */
+    role: UserRole;
+  };
+  session: {
+    /** `sessions.id`; safe to log, not a credential. */
+    id: string;
+    /** `password` or `mfa`; `requireAssurance` compares against it. */
+    assurance: SessionAssurance;
+  };
 }
 
 /** A rotated session token and how long the cookie may live. */

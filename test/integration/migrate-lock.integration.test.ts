@@ -12,6 +12,13 @@ import { runMigrations } from "../../src/db/migrate.ts";
 
 const base = new URL(process.env["DATABASE_URL"] ?? "");
 
+/**
+ * Every test here creates databases and runs the whole migration chain,
+ * often twice at once; that outgrew Bun's 5 s default as migrations were
+ * added (0016, 0017) and timed out intermittently. Per test, not global.
+ */
+const MIGRATION_TEST_TIMEOUT_MS = 60_000;
+
 /** URL for another database on the same server. */
 function dbUrl(name: string): string {
   const u = new URL(base.href);
@@ -48,43 +55,55 @@ afterAll(async () => {
   for (const name of created)
     await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
   await admin.close();
-});
+}, MIGRATION_TEST_TIMEOUT_MS);
 
 describe("migration advisory lock (#175)", () => {
-  test("two concurrent runs both succeed; exactly one applies everything", async () => {
-    for (let trial = 1; trial <= 5; trial++) {
-      const url = await freshDb(`bunmail_migrate_lock_${trial}`);
-      const [a, b] = await Promise.all([runMigrations(url), runMigrations(url)]);
-      const winner = Math.max(a.applied.length, b.applied.length);
-      const loser = Math.min(a.applied.length, b.applied.length);
+  test(
+    "two concurrent runs both succeed; exactly one applies everything",
+    async () => {
+      for (let trial = 1; trial <= 5; trial++) {
+        const url = await freshDb(`bunmail_migrate_lock_${trial}`);
+        const [a, b] = await Promise.all([runMigrations(url), runMigrations(url)]);
+        const winner = Math.max(a.applied.length, b.applied.length);
+        const loser = Math.min(a.applied.length, b.applied.length);
 
-      expect(loser).toBe(0);
-      expect(winner).toBeGreaterThan(0);
-      /** The loser saw every migration as already applied. */
-      expect(Math.max(a.alreadyApplied.length, b.alreadyApplied.length)).toBe(winner);
-    }
-  });
+        expect(loser).toBe(0);
+        expect(winner).toBeGreaterThan(0);
+        /** The loser saw every migration as already applied. */
+        expect(Math.max(a.alreadyApplied.length, b.alreadyApplied.length)).toBe(winner);
+      }
+    },
+    MIGRATION_TEST_TIMEOUT_MS,
+  );
 
-  test("the lock is released after a successful run", async () => {
-    const url = await freshDb("bunmail_migrate_lock_ok");
-    await runMigrations(url);
-    expect(await lockIsFree(url)).toBe(true);
-  });
+  test(
+    "the lock is released after a successful run",
+    async () => {
+      const url = await freshDb("bunmail_migrate_lock_ok");
+      await runMigrations(url);
+      expect(await lockIsFree(url)).toBe(true);
+    },
+    MIGRATION_TEST_TIMEOUT_MS,
+  );
 
-  test("the lock is released after a failed run, and a fixed database then migrates", async () => {
-    const url = await freshDb("bunmail_migrate_lock_fail");
-    /** Pre-create a table migration 0000 also creates (not api_keys, which
-     *  would trigger the legacy-schema baseline), so the run fails mid-way. */
-    const db = new SQL({ url, max: 1 });
-    await db.unsafe(`CREATE TABLE "domains" (id text)`);
+  test(
+    "the lock is released after a failed run, and a fixed database then migrates",
+    async () => {
+      const url = await freshDb("bunmail_migrate_lock_fail");
+      /** Pre-create a table migration 0000 also creates (not api_keys, which
+       *  would trigger the legacy-schema baseline), so the run fails mid-way. */
+      const db = new SQL({ url, max: 1 });
+      await db.unsafe(`CREATE TABLE "domains" (id text)`);
 
-    /** Bun's .rejects blocks until the promise settles, so the run is over here. */
-    expect(runMigrations(url)).rejects.toThrow();
-    expect(await lockIsFree(url)).toBe(true);
+      /** Bun's .rejects blocks until the promise settles, so the run is over here. */
+      expect(runMigrations(url)).rejects.toThrow();
+      expect(await lockIsFree(url)).toBe(true);
 
-    await db.unsafe(`DROP TABLE "domains"`);
-    await db.close();
-    const result = await runMigrations(url);
-    expect(result.applied.length).toBeGreaterThan(0);
-  });
+      await db.unsafe(`DROP TABLE "domains"`);
+      await db.close();
+      const result = await runMigrations(url);
+      expect(result.applied.length).toBeGreaterThan(0);
+    },
+    MIGRATION_TEST_TIMEOUT_MS,
+  );
 });

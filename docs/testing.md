@@ -68,6 +68,10 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 
 Every route needs an entry in the test's `ROUTES` table (access level, a minimal valid body for write routes, and the kind of owned resource in its path). A route without an entry, or an entry without a route, fails the test, so **a new endpoint must be added there**. Request bodies are validated before the auth hooks run, which is why write routes need a valid body to reach the auth checks.
 
+### Dashboard route table (#222)
+
+`test/integration/dashboard-route-access.integration.test.ts` does the same for the dashboard: it reads every route from `pagesPlugin` and requires an entry in its `ROUTES` table (`public`, `member`, `admin` or `owner`, plus a minimal valid body for write routes). It fails on a route missing from the table, a stale entry, a public route that runs the session guard, or a protected route that does not carry exactly the role guard its entry names. Then every protected route is called with no cookie (`302` to the login page) and with a member, an admin and an owner session (`403` when the role is too low, neither `403` nor a bounce to the login page otherwise). **A new dashboard route must be added there.**
+
 ### What the integration tier doesn't cover
 
 - **`mailer.service.ts`**: Nodemailer wrapper. Would need `mailcatcher` / `maildev` in compose. Skipped.
