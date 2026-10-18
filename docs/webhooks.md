@@ -41,7 +41,7 @@ Table: `webhooks`
 | api_key_id  | varchar(36)    | FK → api_keys, NOT NULL      |
 | url         | text           | NOT NULL                     |
 | events      | jsonb          | NOT NULL, default `[]`       |
-| secret      | varchar(64)    | NOT NULL                     |
+| secret      | varchar(255)   | NOT NULL, encrypted at rest (`v1:` AES-256-GCM with `DKIM_ENCRYPTION_KEY`, #259) |
 | is_active   | boolean        | NOT NULL, default `true`     |
 | created_at  | timestamp      | NOT NULL, default `now()`    |
 | updated_at  | timestamp      | NOT NULL, default `now()`    |
@@ -303,7 +303,7 @@ CASCADE on the parent `webhooks` row means deleting a webhook also reaps every o
 ### webhook.service.ts
 
 #### `createWebhook(input, apiKeyId, createdByUserId = null): Promise<{ webhook, secret }>`
-Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
+Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation; only its ciphertext is stored (#259), and the delivery worker decrypts it per attempt. A secret that no longer decrypts (the key changed) fails the attempt without sending. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
 
 #### `listWebhooks(apiKeyId): Promise<Webhook[]>`
 Lists webhooks scoped to the requesting API key.

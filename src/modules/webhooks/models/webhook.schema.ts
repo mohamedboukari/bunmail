@@ -33,8 +33,14 @@ export const webhooks = pgTable(
     /** Event types this webhook subscribes to (e.g. ["email.sent", "email.failed"]) */
     events: jsonb("events").$type<string[]>().notNull().default([]),
 
-    /** HMAC-SHA256 signing secret: included in X-BunMail-Signature header */
-    secret: varchar("secret", { length: 64 }).notNull(),
+    /**
+     * HMAC-SHA256 signing secret, encrypted at rest with
+     * `DKIM_ENCRYPTION_KEY` (#259, `v1:` AES-256-GCM, see
+     * `src/utils/crypto.ts`). Rows from before #259 hold the 64-character
+     * plaintext until the boot pass (`src/db/encrypt-webhook-secrets.ts`)
+     * encrypts them.
+     */
+    secret: varchar("secret", { length: 255 }).notNull(),
 
     /** Soft-disable flag */
     isActive: boolean("is_active").notNull().default(true),

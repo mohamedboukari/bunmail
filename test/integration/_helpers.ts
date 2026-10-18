@@ -188,6 +188,8 @@ export const seed = {
     secret?: string;
     /** Who created it (#219); null (default) = the owner. */
     createdByUserId?: string | null;
+    /** Store the secret in plaintext, like a row from before #259. */
+    storePlaintext?: boolean;
   }): Promise<{ id: string; secret: string }> {
     const id = generateId("whk");
     const secret = opts.secret ?? "test-secret-32-bytes-of-padding-here";
@@ -196,7 +198,10 @@ export const seed = {
       apiKeyId: opts.apiKeyId,
       url: opts.url,
       events: opts.events,
-      secret,
+      /** Encrypted at rest like `createWebhook` (#259); the plaintext is returned. */
+      secret: opts.storePlaintext
+        ? secret
+        : encryptSecret(secret, config.dkimEncryptionKey),
       createdByUserId: opts.createdByUserId ?? null,
     });
     return { id, secret };

@@ -1,0 +1,1 @@
+ALTER TABLE "webhooks" ALTER COLUMN "secret" SET DATA TYPE varchar(255);

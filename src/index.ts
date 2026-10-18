@@ -28,6 +28,7 @@ import {
   stopLoginRateLimitCleanup,
 } from "./middleware/login-rate-limit.ts";
 import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
+import { encryptWebhookSecrets } from "./db/encrypt-webhook-secrets.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
@@ -39,6 +40,9 @@ import { redactEmail } from "./utils/redact.ts";
  * restart can never read a plaintext row.
  */
 await encryptDomainKeys();
+
+/** Same for webhook signing secrets from before #259, before the webhook worker starts. */
+await encryptWebhookSecrets();
 
 /**
  * Owner bootstrap (#215): create the dashboard owner from
