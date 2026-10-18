@@ -50,7 +50,9 @@ async function runOwnerBootstrap(): Promise<void> {
   const ownerEmail = config.dashboard.ownerEmail;
   if (ownerEmail === null) {
     /** Only reachable in development: production refuses to boot (config.ts). */
-    logger.warn("BUNMAIL_OWNER_EMAIL is not set: owner bootstrap skipped");
+    logger.warn(
+      "BUNMAIL_OWNER_EMAIL is not set: owner bootstrap skipped; the dashboard has no account to sign in with until BUNMAIL_OWNER_EMAIL is set",
+    );
     return;
   }
 
@@ -108,6 +110,18 @@ async function runOwnerBootstrap(): Promise<void> {
 }
 
 await runOwnerBootstrap();
+
+/**
+ * Account login (#216) replaced the shared dashboard password and the HMAC
+ * session secret. A value left in `.env` does nothing; say so once, so the
+ * operator removes it instead of believing it still protects anything.
+ */
+if (config.dashboard.legacyAuthEnv.length > 0) {
+  logger.warn("Dashboard auth env vars are no longer used since #216, remove from .env", {
+    vars: config.dashboard.legacyAuthEnv,
+    note: "the dashboard signs in with the owner account (BUNMAIL_OWNER_EMAIL and the setup link)",
+  });
+}
 
 /**
  * Main Elysia application.

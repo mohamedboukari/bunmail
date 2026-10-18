@@ -33,13 +33,9 @@ import { SuppressionsPage } from "../../src/pages/routes/suppressions.tsx";
 import { TemplatesPage } from "../../src/pages/routes/templates.tsx";
 import { TemplateDetailPage } from "../../src/pages/routes/template-detail.tsx";
 import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
-import { LoginPage, DashboardDisabledPage } from "../../src/pages/routes/login.tsx";
+import { LoginPage } from "../../src/pages/routes/login.tsx";
 import { LandingPage } from "../../src/pages/routes/landing.tsx";
-import {
-  OwnerSetupPage,
-  OwnerSetupInvalidPage,
-  OwnerSetupDonePage,
-} from "../../src/pages/routes/setup.tsx";
+import { OwnerSetupPage, OwnerSetupInvalidPage } from "../../src/pages/routes/setup.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -366,10 +362,32 @@ describe("Dashboard page render smoke tests", () => {
     expect(typeof WebhooksPage({ webhooks: [], secret: "shown-once" })).toBe("string");
   });
 
-  test("LoginPage + DashboardDisabledPage", () => {
+  test("LoginPage renders the email and password inputs (#216)", async () => {
     expect(typeof LoginPage({})).toBe("string");
-    expect(typeof LoginPage({ error: "bad password" })).toBe("string");
-    expect(typeof DashboardDisabledPage()).toBe("string");
+    const html = await LoginPage({});
+    expect(html).toContain('action="/dashboard/login"');
+    /**
+     * Plain text with an email keyboard, not type="email": browsers refuse
+     * or rewrite addresses (accents, international domains) that
+     * BUNMAIL_OWNER_EMAIL accepts, which would lock such an owner out.
+     */
+    expect(html).toContain('type="text"');
+    expect(html).toContain('inputmode="email"');
+    expect(html).not.toContain('type="email"');
+    expect(html).toContain('name="email"');
+    expect(html).toContain('autocomplete="username"');
+    expect(html).toContain('maxlength="254"');
+    expect(html).toContain('name="password"');
+    expect(html).toContain('autocomplete="current-password"');
+    expect(html).toContain('maxlength="256"');
+    expect(html).toContain("owner setup link");
+    expect(html).not.toContain("DASHBOARD_PASSWORD");
+  });
+
+  test("LoginPage escapes the error message", async () => {
+    const html = await LoginPage({ error: "<img src=x onerror=alert(1)>" });
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
   });
 
   test("LoginPage disables the form only when rate-limited (#109)", async () => {
@@ -381,12 +399,14 @@ describe("Dashboard page render smoke tests", () => {
     const normal = await LoginPage({ error: "Invalid password" });
     expect(hasDisabledAttr.test(normal)).toBe(false);
 
-    /** Rate-limited render disables the input + button. */
+    /** Rate-limited render disables both inputs + the button. */
     const locked = await LoginPage({
       error: "Too many failed attempts.",
       disabled: true,
     });
     expect(hasDisabledAttr.test(locked)).toBe(true);
+    expect(locked.match(/<input[^>]*\sdisabled(?![:\w-])/g)).toHaveLength(2);
+    expect(locked.match(/<button[^>]*\sdisabled(?![:\w-])/g)).toHaveLength(1);
   });
 
   test("LandingPage", () => {
@@ -426,13 +446,6 @@ describe("Dashboard page render smoke tests", () => {
       expect(html).toContain("src/db/reset-owner.ts");
       expect(html).toContain('<meta name="referrer" content="strict-origin"');
       expect(html).not.toContain("<form");
-    });
-
-    test("OwnerSetupDonePage says the password is saved", async () => {
-      const html = await OwnerSetupDonePage();
-      expect(html).toContain("Owner password saved");
-      expect(html).toContain("DASHBOARD_PASSWORD");
-      expect(html).toContain('<meta name="referrer" content="strict-origin"');
     });
   });
 });

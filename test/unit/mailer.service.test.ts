@@ -31,7 +31,7 @@ void mock.module("../../src/config.ts", () => ({
     env: "test" as const,
     database: { url: "" },
     server: { port: 3000, host: "0.0.0.0" },
-    dashboard: { password: "", sessionSecret: "test", ownerEmail: null },
+    dashboard: { ownerEmail: null },
     logLevel: "error" as const,
   },
 }));

@@ -33,7 +33,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://bunmail:bunmail@localhost:5432/bunmail_test
       API_KEY_SEED: ci_test_key_not_real
-      DASHBOARD_PASSWORD: ci_test_pass
       MAIL_HOSTNAME: localhost
       # Deterministic test key for the DKIM-at-rest config check (#23).
       # Safe because the CI database has no production secrets.

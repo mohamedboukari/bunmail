@@ -32,9 +32,18 @@ BunMail targets developers who want a **programmatic transactional email API** a
 ```bash
 git clone https://github.com/mohamedboukari/bunmail.git && cd bunmail
 cp .env.example .env
-echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)" >> .env
+# docker compose runs BunMail in production mode, which refuses to start
+# without these. Later lines in .env win over the template's defaults.
+cat >> .env <<EOF
+POSTGRES_PASSWORD=$(openssl rand -hex 16)
+DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)
+MAIL_HOSTNAME=mail.yourcompany.com
+BUNMAIL_OWNER_EMAIL=you@yourcompany.com
+EOF
 docker compose up -d
 ```
+
+Replace `mail.yourcompany.com` with this server's real hostname (placeholders such as `*.example.com` are refused) and `you@yourcompany.com` with your email: it becomes the dashboard login.
 
 Then seed your first API key and send a test email:
 
@@ -53,7 +62,9 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
   }'
 ```
 
-Open the dashboard at <http://localhost:3000/dashboard> (set `DASHBOARD_PASSWORD` in `.env` to enable). Set `BUNMAIL_OWNER_EMAIL` in `.env` too (required in production): on first boot BunMail logs a one-time owner setup link (`docker compose logs app | grep 'Owner setup link'`) to claim the owner account. In this release `DASHBOARD_PASSWORD` is still the dashboard login.
+In production mode the `from` domain must first be registered and DKIM-verified (see [docs/self-hosting.md](docs/self-hosting.md#register-your-domain-generates-dkim-keys)), otherwise the send is rejected.
+
+To open the dashboard, claim the owner account: on first boot BunMail logs a one-time setup link (`docker compose logs app | grep 'Owner setup link'`). Open it, choose a password (15 characters or more), and you are signed in at <http://localhost:3000/dashboard>. After that, sign in with `BUNMAIL_OWNER_EMAIL` and that password. Lost the link? `docker compose exec app bun run src/db/reset-owner.ts` prints a new one.
 
 > Local dev without Docker? See [docs/self-hosting.md](docs/self-hosting.md).
 
@@ -101,7 +112,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Trash + auto-purge**: Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
 - **Suppression list**: per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
-- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth)
+- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth); owner account login with revocable server-side sessions
 - **OpenAPI 3.0**: interactive docs at `/api/docs`
 - **Type-safe**: strict TypeScript, Drizzle ORM, no `any`
 

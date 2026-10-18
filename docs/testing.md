@@ -53,7 +53,7 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 ### What the tier does at runtime
 
 1. **`test/integration/_preload.ts`** runs first (via the `--preload` flag in the `test:integration` script). It overrides `process.env.DATABASE_URL` to point at `bunmail_test` **before** any service module loads, so the application's `db` singleton (`src/db/index.ts`) connects to the test DB.
-2. **`test/integration/_helpers.ts`** exposes `truncateAll()` and seed factories (`seed.apiKey`, `seed.domain`, `seed.email`, `seed.suppression`, `seed.webhook`, `seed.template`).
+2. **`test/integration/_helpers.ts`** exposes `truncateAll()` and seed factories (`seed.apiKey`, `seed.domain`, `seed.email`, `seed.suppression`, `seed.webhook`, `seed.template`, `seed.owner`, plus `seed.user` and `seed.session` for dashboard accounts and sessions, #216).
 3. Each test file calls `await truncateAll()` in `beforeEach`. Tables are wiped in dependency order (`suppressions, emails, webhooks, templates, domains, api_keys`) with `CASCADE` and `RESTART IDENTITY`.
 4. Tests execute the real service functions against the real DB. No mocking unless we're stubbing **outbound HTTP** (the webhook-dispatch test stubs `globalThis.fetch`).
 

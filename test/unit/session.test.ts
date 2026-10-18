@@ -1,109 +1,83 @@
-import { describe, test, expect, spyOn } from "bun:test";
-import crypto from "crypto";
+import { describe, test, expect } from "bun:test";
 import {
-  createSessionCookie,
-  SESSION_MAX_AGE,
-  validateSessionCookie,
+  SESSION_COOKIE,
+  clearSessionCookie,
+  readSessionCookie,
+  sessionSetCookie,
 } from "../../src/pages/session.ts";
 
 /**
- * Unit tests for dashboard session cookies (#174).
+ * Unit tests for the dashboard session cookie helpers (#216).
  *
- * These exercise the real helpers in src/pages/session.ts. They used to
- * re-declare the logic locally, and that copy had already diverged: it
- * compared HMACs with `===` while the source uses `timingSafeEqual`.
+ * The cookie only carries an opaque token; the session lives in the
+ * database. The 13 tests of the old stateless HMAC cookie, and the spy
+ * that proved its `timingSafeEqual` comparison, are gone with that code:
+ * the presented token is now shape-checked, hashed and looked up through
+ * a unique index, so no secret is compared in JavaScript any more (the
+ * #186 criterion is met by construction, not by a constant-time compare).
  */
 
-const TEST_SECRET = "test-session-secret";
+const TOKEN = "A".repeat(40) + "b_c";
 
-/** A fixed clock: 2026-01-01T00:00:00Z, in milliseconds. */
-const NOW_MS = Date.UTC(2026, 0, 1);
-const NOW_S = NOW_MS / 1000;
-
-describe("session cookie", () => {
-  describe("createSessionCookie", () => {
-    test("returns a string with format timestamp.hmac", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-      expect(cookie.split(".")).toHaveLength(2);
-    });
-
-    test("timestamp part is the current Unix time in seconds", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-      expect(cookie.split(".")[0]).toBe(String(NOW_S));
-    });
-
-    test("hmac part is a 64-char hex string (SHA-256)", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-      expect(cookie.split(".")[1]).toMatch(/^[a-f0-9]{64}$/);
-    });
-
-    test("defaults to the real clock", () => {
-      const ts = Number(createSessionCookie(TEST_SECRET).split(".")[0]);
-      expect(Math.abs(Math.floor(Date.now() / 1000) - ts)).toBeLessThan(2);
-    });
+describe("readSessionCookie", () => {
+  test("reads bm_session from a lone cookie", () => {
+    expect(readSessionCookie(`bm_session=${TOKEN}`)).toBe(TOKEN);
   });
 
-  describe("validateSessionCookie", () => {
-    test("validates a freshly created cookie", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-      expect(validateSessionCookie(cookie, TEST_SECRET, NOW_MS)).toBe(true);
-    });
+  test("finds bm_session among several cookies, with spaces", () => {
+    expect(readSessionCookie(`theme=dark; bm_session=${TOKEN} ; other=1`)).toBe(TOKEN);
+  });
 
-    test("rejects a cookie with wrong secret", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-      expect(validateSessionCookie(cookie, "wrong-secret", NOW_MS)).toBe(false);
-    });
+  test("ignores a cookie whose name only ends in bm_session", () => {
+    expect(readSessionCookie(`xbm_session=${TOKEN}`)).toBeUndefined();
+    expect(readSessionCookie(`xbm_session=evil; bm_session=${TOKEN}`)).toBe(TOKEN);
+  });
 
-    test("rejects a cookie with tampered HMAC", () => {
-      const tampered = `${NOW_S}.${"0".repeat(64)}`;
-      expect(validateSessionCookie(tampered, TEST_SECRET, NOW_MS)).toBe(false);
-    });
+  test("an empty value, a missing header or no bm_session counts as missing", () => {
+    expect(readSessionCookie("bm_session=")).toBeUndefined();
+    expect(readSessionCookie("bm_session=  ; a=b")).toBeUndefined();
+    expect(readSessionCookie(null)).toBeUndefined();
+    expect(readSessionCookie("")).toBeUndefined();
+    expect(readSessionCookie("a=b; c=d")).toBeUndefined();
+    expect(readSessionCookie("bm_session")).toBeUndefined();
+  });
 
-    test("rejects an HMAC of the wrong length", () => {
-      expect(validateSessionCookie(`${NOW_S}.abc`, TEST_SECRET, NOW_MS)).toBe(false);
-    });
+  test("the first bm_session wins (the most specific path)", () => {
+    expect(readSessionCookie(`bm_session=${TOKEN}; bm_session=older`)).toBe(TOKEN);
+  });
 
-    test("rejects a cookie with no dot separator", () => {
-      expect(validateSessionCookie("nodot", TEST_SECRET, NOW_MS)).toBe(false);
-    });
+  test("returns a legacy <ts>.<hmac> value as is (the guard rejects its shape)", () => {
+    const legacy = `1700000000.${"a".repeat(64)}`;
+    expect(readSessionCookie(`bm_session=${legacy}`)).toBe(legacy);
+  });
+});
 
-    test("rejects a cookie with non-numeric timestamp", () => {
-      expect(validateSessionCookie("abc.def", TEST_SECRET, NOW_MS)).toBe(false);
-    });
+describe("sessionSetCookie / clearSessionCookie", () => {
+  test("sets the token with HttpOnly, SameSite=Lax, Path=/dashboard and Max-Age", () => {
+    const cookie = sessionSetCookie(TOKEN, false, 604800);
+    expect(cookie.startsWith(`${SESSION_COOKIE}=${TOKEN}; `)).toBe(true);
+    expect(cookie).toContain("HttpOnly");
+    expect(cookie).toContain("SameSite=Lax");
+    expect(cookie).toContain("Path=/dashboard");
+    expect(cookie).toContain("Max-Age=604800");
+    expect(cookie).not.toContain("Secure");
+  });
 
-    test("rejects an expired cookie (older than 24h)", () => {
-      const cookie = createSessionCookie(
-        TEST_SECRET,
-        NOW_MS - (SESSION_MAX_AGE + 1) * 1000,
-      );
-      expect(validateSessionCookie(cookie, TEST_SECRET, NOW_MS)).toBe(false);
-    });
+  test("adds Secure only when asked (production)", () => {
+    expect(sessionSetCookie(TOKEN, true, 60)).toContain("; Secure;");
+    expect(clearSessionCookie(true)).toContain("; Secure;");
+    expect(clearSessionCookie(false)).not.toContain("Secure");
+  });
 
-    test("accepts a cookie exactly at the 24h limit", () => {
-      const cookie = createSessionCookie(TEST_SECRET, NOW_MS - SESSION_MAX_AGE * 1000);
-      expect(validateSessionCookie(cookie, TEST_SECRET, NOW_MS)).toBe(true);
-    });
+  test("a negative or fractional lifetime becomes a whole, non-negative Max-Age", () => {
+    expect(sessionSetCookie(TOKEN, false, -5)).toContain("Max-Age=0");
+    expect(sessionSetCookie(TOKEN, false, 59.9)).toContain("Max-Age=59");
+  });
 
-    test("compares the HMAC with crypto.timingSafeEqual, not === (#174)", () => {
-      /**
-       * `===` and `timingSafeEqual` return the same boolean for every input,
-       * so only a spy can tell them apart. If the comparison regressed to
-       * `===`, timingSafeEqual would never be called and this fails.
-       */
-      const spy = spyOn(crypto, "timingSafeEqual");
-      try {
-        const cookie = createSessionCookie(TEST_SECRET, NOW_MS);
-        expect(validateSessionCookie(cookie, TEST_SECRET, NOW_MS)).toBe(true);
-        expect(spy).toHaveBeenCalledTimes(1);
-
-        /** It must also be the deciding comparison for a wrong HMAC. */
-        expect(
-          validateSessionCookie(`${NOW_S}.${"0".repeat(64)}`, TEST_SECRET, NOW_MS),
-        ).toBe(false);
-        expect(spy).toHaveBeenCalledTimes(2);
-      } finally {
-        spy.mockRestore();
-      }
-    });
+  test("clearing empties the value with the same attributes and Max-Age=0", () => {
+    const cleared = clearSessionCookie(false);
+    expect(cleared).toBe(
+      "bm_session=; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=0",
+    );
   });
 });

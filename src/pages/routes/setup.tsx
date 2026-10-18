@@ -196,24 +196,3 @@ export function OwnerSetupInvalidPage() {
     </SetupShell>
   );
 }
-
-/**
- * Shown after a successful setup when no session can be issued: the
- * dashboard is disabled because `DASHBOARD_PASSWORD` is empty.
- */
-export function OwnerSetupDonePage() {
-  return (
-    <SetupShell title="Owner password saved" subtitle="Owner setup">
-      <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
-        Owner password saved
-      </h2>
-      <p class="text-sm text-gray-600 dark:text-gray-400">
-        The owner account is ready. The dashboard is disabled on this server: set{" "}
-        <code class="bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-xs font-mono">
-          DASHBOARD_PASSWORD
-        </code>{" "}
-        to enable it. Until account login ships, sign in with that password.
-      </p>
-    </SetupShell>
-  );
-}

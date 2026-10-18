@@ -1,4 +1,3 @@
-import { randomUUID } from "crypto";
 import { isIP } from "net";
 import { MAX_ADDRESS_LENGTH, isEmailAddress } from "./utils/recipients.ts";
 
@@ -112,48 +111,16 @@ function readDkimEncryptionKey(): Buffer {
 }
 
 /**
- * Reads `DASHBOARD_PASSWORD` and refuses to boot in production with an empty
- * value. The dashboard exposes unscoped read/write across all API keys, so a
- * production instance with no password is a tenant-isolation incident waiting
- * to happen. In development the empty default still disables the dashboard.
+ * Dashboard auth env vars removed by account login (#216). A value left
+ * in `.env` no longer does anything; `readLegacyAuthEnv` reports which are
+ * still set so `src/index.ts` can warn once at boot (this file cannot
+ * log: the logger imports config).
  */
-function readDashboardPassword(env: "development" | "production"): string {
-  const password = optionalEnv("DASHBOARD_PASSWORD", "");
-  if (env === "production" && password === "") {
-    throw new Error(
-      "[config] DASHBOARD_PASSWORD must be set when BUNMAIL_ENV=production.\n" +
-        "  → The dashboard reads/writes across all API keys; an empty\n" +
-        "    password leaves it disabled but the routes still mount. Set a\n" +
-        "    strong value in your .env (or unset BUNMAIL_ENV for dev).",
-    );
-  }
-  return password;
-}
+const LEGACY_AUTH_ENV = ["DASHBOARD_PASSWORD", "SESSION_SECRET"] as const;
 
-/**
- * Reads the dashboard session-cookie HMAC secret (#133).
- *
- * In development we fall back to a random per-process UUID so `bun run dev`
- * works with zero config. In **production** that fallback is dangerous: the
- * secret would differ per process/replica (sessions silently invalidate on
- * every restart, and multi-replica deploys reject each other's cookies),
- * which pushes operators toward hardcoding a weak value. So production
- * requires an explicit `SESSION_SECRET`, mirroring the `DASHBOARD_PASSWORD`
- * guard: fail fast with a clear message instead of a silent weak default.
- */
-function readSessionSecret(env: "development" | "production"): string {
-  const secret = optionalEnv("SESSION_SECRET", "");
-  if (env === "production" && secret === "") {
-    throw new Error(
-      "[config] SESSION_SECRET must be set when BUNMAIL_ENV=production.\n" +
-        "  → It is the HMAC key for dashboard session cookies. Without a\n" +
-        "    stable value, sessions reset on every restart and multi-replica\n" +
-        "    deploys reject each other's cookies. Generate one with\n" +
-        "    `openssl rand -hex 32` and put it in your .env.",
-    );
-  }
-  /** Dev fallback: a random per-process secret (resets on restart). */
-  return secret === "" ? randomUUID() : secret;
+/** Which of `LEGACY_AUTH_ENV` are set to a non-empty value. */
+function readLegacyAuthEnv(): string[] {
+  return LEGACY_AUTH_ENV.filter((key) => (process.env[key] ?? "") !== "");
 }
 
 /**
@@ -240,9 +207,10 @@ export function ownerEmailProblem(raw: string): string | null {
  * `users.email = lower(email)` check and a case-only edit is not a
  * mismatch.
  *
- * - Unset in production: refuses to boot, mirroring the `SESSION_SECRET`
- *   and `DASHBOARD_PASSWORD` guards, so a deploy cannot come up without
- *   an owner to claim the dashboard.
+ * - Unset in production: refuses to boot. This is the production
+ *   dashboard guard since account login (#216) replaced the shared
+ *   password: a deploy cannot come up without an owner who can claim
+ *   and sign in to the dashboard.
  * - Unset in development: `null`; `src/index.ts` warns and skips the owner
  *   bootstrap (this file cannot log: the logger imports config).
  * - Set but malformed, or over 254 characters: refuses to boot in every
@@ -492,19 +460,14 @@ export const config = {
     fromLocalPart: optionalEnv("INBOUND_NOTIFY_FROM_LOCAL", "notifications"),
   },
 
-  /** Password-protected web dashboard at /dashboard */
+  /** Web dashboard at /dashboard, signed in to with dashboard accounts (#216) */
   dashboard: {
     /**
-     * Empty = dashboard disabled. In production an empty password causes
-     * `readDashboardPassword` to throw; see the helper for the rationale.
+     * Legacy dashboard auth env vars (`DASHBOARD_PASSWORD`,
+     * `SESSION_SECRET`) that are still set although #216 removed them.
+     * Only read by `src/index.ts`, which logs one warning at boot.
      */
-    password: readDashboardPassword(readAppEnv()),
-    /**
-     * HMAC secret for session cookies. Required in production; a random
-     * per-process UUID in development (resets on restart). See
-     * `readSessionSecret` (#133).
-     */
-    sessionSecret: readSessionSecret(readAppEnv()),
+    legacyAuthEnv: readLegacyAuthEnv(),
 
     /**
      * Email of the single dashboard owner account (#215), lower-cased.
@@ -529,8 +492,8 @@ export const config = {
     ),
 
     /**
-     * Brute-force protection for the login form (#109). Failed password
-     * attempts are counted per client IP in a sliding window; once
+     * Brute-force protection for the login form (#109). Failed logins
+     * (any reason) are counted per client IP in a sliding window; once
      * `maxAttempts` is reached the login POST returns HTTP 429 until the
      * window expires. A successful login clears the counter. State is
      * in-memory and per-replica (same caveat as the API rate limiter).

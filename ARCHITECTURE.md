@@ -194,7 +194,7 @@ bunmail/
 │   │   │       └── stats.serialization.ts
 │   │   ├── trash/
 │   │   │   └── services/
-│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows
+│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216)
 │   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
 │   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
 │   │   │   ├── services/
@@ -213,11 +213,14 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214) + owner bootstrap (#215)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
-│   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL)
+│   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
+│   │   │   │                               login.service.ts (email + password, one argon2id verify per branch),
+│   │   │   │                               session.service.ts (create / look up / rotate / revoke / sweep),
+│   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent)
 │   │   │   └── types/                    ← role / credential / assurance / purpose value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
@@ -235,14 +238,14 @@ bunmail/
 │   │       └── types/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
-│       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + auth
-│       ├── session.ts                    ← Session cookie sign/validate (pure, #174)
+│       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
+│       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
 │       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav
 │       ├── routes/
-│       │   ├── login.tsx                 ← Login form (standalone, no nav)
-│       │   ├── setup.tsx                 ← Owner setup form + invalid-link + done pages (standalone, #215)
+│       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
+│       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -429,6 +432,8 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 ```
 
 `TRASH_RETENTION_DAYS` is configurable via env (default `7`). The purge runs once on boot to catch anything that aged out while the server was offline.
+
+The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself.
 
 ---
 
@@ -674,9 +679,9 @@ Dashboard accounts: identity only; login methods live in `user_credentials`. Exa
 
 One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash or encrypted TOTP secret), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint), `last_used_at`, timestamps.
 
-### `sessions` (#214)
+### `sessions` (#214, #216)
 
-Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at`, `last_seen_at`, `ip`, `user_agent`. Indexes on `user_id` and `expires_at`.
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). Indexes on `user_id`, `expires_at` and `previous_token_hash`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
 
 ### `user_tokens` (#214)
 
@@ -791,9 +796,9 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 | Method | Path                               | Description             | Auth     |
 |--------|------------------------------------|-------------------------|----------|
-| GET    | /dashboard/login                   | Login form              | No       |
-| POST   | /dashboard/login                   | Validate password       | No       |
-| POST   | /dashboard/logout                  | Clear session           | No       |
+| GET    | /dashboard/login                   | Email + password login form | No   |
+| POST   | /dashboard/login                   | Check email + password, open a session | No |
+| POST   | /dashboard/logout                  | Revoke the session, clear the cookie | No |
 | GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
 | GET    | /dashboard                         | Stats overview          | Session  |
@@ -839,7 +844,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
 
-Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password and issues the same session cookie. Until account login ships (#216), `DASHBOARD_PASSWORD` remains the login. See [docs/users.md](docs/users.md#owner-bootstrap-215).
+Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
 ### Health
 
@@ -857,6 +862,7 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 - **Lookup:** Hash incoming token → match against `key_hash` column
 - **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
 - **Bootstrap:** Run `bun run src/db/seed.ts` to create the first API key (admin). The dashboard owner is created on boot from `BUNMAIL_OWNER_EMAIL` (#215); recover a lost setup link with `bun run src/db/reset-owner.ts`
+- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
 
 ---
 
@@ -871,7 +877,7 @@ Two independent in-memory fixed-window limiters:
 - **Tunable:** `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW` (seconds)
 
 **Dashboard login** (`src/middleware/login-rate-limit.ts`, #109)
-- **Default limit:** 5 failed password attempts per 15 minutes, per client IP
+- **Default limit:** 5 failed logins (any reason) per 15 minutes, per client IP; no per-account lockout
 - **Scope:** Per client IP: resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
 - **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login clears the counter
 - **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
@@ -906,36 +912,47 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 ## Deployment
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yml (abridged: the SMTP port lines are commented out until enabled)
 services:
   app:
     build: .
-    ports: ["${PORT:-3000}:${PORT:-3000}"]
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"   # HTTP API + Dashboard
+    env_file: .env                     # DKIM_ENCRYPTION_KEY, MAIL_HOSTNAME, BUNMAIL_OWNER_EMAIL, ...
     environment:
-      DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
-      DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23), `openssl rand -base64 32`
-      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}      # Required in production (#19)
-      BUNMAIL_OWNER_EMAIL: ${BUNMAIL_OWNER_EMAIL}    # Required in production (#215)
+      DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}
+      BUNMAIL_ENV: production          # always: the production config guards apply
     depends_on:
-      db: { condition: service_healthy }
+      db:
+        condition: service_healthy
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0   # non-root user may bind 25/587 (#167)
+    restart: unless-stopped
 
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: bunmail
-      POSTGRES_PASSWORD: bunmail
-      POSTGRES_DB: bunmail
-    volumes: [pgdata:/var/lib/postgresql/data]
+      POSTGRES_USER: ${POSTGRES_USER:-bunmail}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-bunmail}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bunmail"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bunmail}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   pgdata:
 ```
 
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). `docker-compose.override.yml` (merged automatically) publishes Postgres on `127.0.0.1:5432` for local development (#209).
+
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
-**Production:** `docker compose up -d` starts both the app and PostgreSQL.
+**Production:** `docker compose -f docker-compose.yml up -d --build` starts both the app and PostgreSQL without the override file, so the database stays on the compose network only. The container runs `bun run db:migrate && bun run start`, so pending migrations apply on every start.
 
 ### Optional SMTP listeners
 

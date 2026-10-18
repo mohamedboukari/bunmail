@@ -1,17 +1,22 @@
 import { and, eq, gt, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
-import { sanitizeOwnerStoreError } from "../errors.ts";
+import { withSanitizedErrors } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { users } from "../models/user.schema.ts";
 import { userCredentials } from "../models/user-credential.schema.ts";
 import { userTokens } from "../models/user-token.schema.ts";
 import type {
+  CompletedOwnerSetup,
   OwnerBootstrapResult,
   OwnerSetupLink,
+  SessionClient,
   TokenPurpose,
+  Tx,
 } from "../types/user.types.ts";
 import { setupTokenExpiry } from "./owner-setup-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
+import { createSession, revokeAllUserSessions } from "./session.service.ts";
+import { normalizeLoginEmail } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
 
 /**
@@ -20,8 +25,9 @@ import { hashToken, mintToken } from "./token.service.ts";
  * `BUNMAIL_OWNER_EMAIL` names the owner. On boot `bootstrapOwner` creates
  * the account (or replaces a pending link) and hands back a raw token for
  * the caller to log; `/dashboard/setup` reads it with `findLiveOwnerSetup`
- * and spends it with `completeOwnerSetup`; `src/db/reset-owner.ts` mints a
- * fresh link with `issueOwnerSetupLink`.
+ * and spends it with `completeOwnerSetup`, which also signs the owner in
+ * (#216); `src/db/reset-owner.ts` mints a fresh link with
+ * `issueOwnerSetupLink`, which signs the owner out everywhere.
  *
  * Every write runs in one transaction under a Postgres advisory lock, so
  * replicas, crash loops, the reset script and a setup submission all
@@ -30,8 +36,13 @@ import { hashToken, mintToken } from "./token.service.ts";
  * leave a live token next to a freshly set password (that token would work
  * as a password reset).
  *
+ * Session changes (#216) run inside the same locked transaction: setup
+ * completion and reset-owner delete every session of the owner, and
+ * completion then opens the owner's new session, so no crash can leave an
+ * old session alive next to a new password.
+ *
  * Never logs the token or its hash; callers decide what to log. Database
- * errors leave this module as `OwnerStoreError` (SQLSTATE only), never as
+ * errors leave this module as `UserStoreError` (SQLSTATE only), never as
  * drizzle's `Failed query ... params:` message, which would carry the
  * password hash, token hashes and the owner email into the logs.
  */
@@ -50,9 +61,6 @@ const OWNER_ROLE = "owner";
 
 /** The credential type the setup form writes. */
 const PASSWORD_CREDENTIAL = "password";
-
-/** The transaction handle `db.transaction` passes to its callback. */
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /** The live owner a setup token acts for. */
 interface OwnerSetupTarget {
@@ -74,23 +82,6 @@ function withOwnerLock<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
       return fn(tx);
     }),
   );
-}
-
-/**
- * Runs a query and rethrows a database error as `OwnerStoreError`, with
- * the query parameters stripped (see `sanitizeOwnerStoreError`).
- */
-async function withSanitizedErrors<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (error: unknown) {
-    throw sanitizeOwnerStoreError(error);
-  }
-}
-
-/** Normalizes an email the way `users.email` stores it. */
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
 /**
@@ -224,7 +215,7 @@ export async function bootstrapOwner(
   ownerEmail: string,
   now: Date = new Date(),
 ): Promise<OwnerBootstrapResult> {
-  const email = normalizeEmail(ownerEmail);
+  const email = normalizeLoginEmail(ownerEmail);
 
   return withOwnerLock(async (tx) => {
     const owner = await findOwner(tx);
@@ -257,11 +248,14 @@ export async function bootstrapOwner(
  * Mints a fresh owner setup link for the recovery script
  * (`src/db/reset-owner.ts`). Always replaces, never reuses:
  *
- * - Owner exists: revoke every open token of that user (any purpose) and
- *   mint a new `owner_setup` token. The stored email and the current
- *   password are kept until the new link is completed, so an abandoned
- *   reset cannot lock the owner out. The caller compares the returned
- *   email with the configured one and warns on a difference.
+ * - Owner exists: revoke every open token of that user (any purpose),
+ *   delete every dashboard session of the owner (#216: an operator who
+ *   runs reset-owner usually suspects a compromise, so it is an immediate
+ *   kill switch), and mint a new `owner_setup` token. The stored email
+ *   and the current password are kept until the new link is completed,
+ *   so an abandoned reset cannot lock the owner out; until then the old
+ *   password can still sign in. The caller compares the returned email
+ *   with the configured one and warns on a difference.
  * - No owner: create it from `ownerEmail`, as the bootstrap does.
  *
  * @throws when there is no owner and `ownerEmail` is null, or when a
@@ -285,6 +279,7 @@ export async function issueOwnerSetupLink(
             isNull(userTokens.revokedAt),
           ),
         );
+      await revokeAllUserSessions(owner.id, tx);
       return replaceSetupToken(tx, owner.id, owner.email, now);
     }
 
@@ -293,7 +288,7 @@ export async function issueOwnerSetupLink(
         "No owner account exists and BUNMAIL_OWNER_EMAIL is not set: set it and run again",
       );
     }
-    const email = normalizeEmail(ownerEmail);
+    const email = normalizeLoginEmail(ownerEmail);
     if (await emailHeldByOther(tx, email)) {
       throw new Error(
         "BUNMAIL_OWNER_EMAIL already belongs to a non-owner account; it is never promoted",
@@ -343,14 +338,21 @@ export async function findLiveOwnerSetup(
  *    re-checks the predicate after the first commits and gets no row. Then
  *    the `password` credential is replaced (one per user, enforced by
  *    `user_credentials_one_password_per_user`), every other open token of
- *    the user is revoked, and `users.updated_at` is touched.
+ *    the user is revoked, every session of the user is deleted, the new
+ *    session is created (#216: the delete runs first, so the new session
+ *    survives), and `users.updated_at` is touched.
  *
- * @returns the owner, or `null` when the token is no longer live.
+ * All or nothing: a failure rolls back every step, sessions included.
+ *
+ * @param client - Request metadata stored with the new session.
+ * @returns the owner and the raw token of the new session, or `null` when
+ *          the setup token is no longer live.
  */
 export async function completeOwnerSetup(
   token: string,
   password: string,
-): Promise<OwnerSetupTarget | null> {
+  client: SessionClient = { ip: null, userAgent: null },
+): Promise<CompletedOwnerSetup | null> {
   if (!(await findLiveOwnerSetup(token))) return null;
 
   const secretHash = await hashPassword(password);
@@ -396,11 +398,17 @@ export async function completeOwnerSetup(
         ),
       );
 
+    await revokeAllUserSessions(userId, tx);
+    const { token: sessionToken } = await createSession(
+      { userId, assurance: "password", authMethod: PASSWORD_CREDENTIAL, ...client },
+      tx,
+    );
+
     const [owner] = await tx
       .update(users)
       .set({ updatedAt: sql`now()` })
       .where(eq(users.id, userId))
       .returning({ userId: users.id, email: users.email });
-    return owner ?? null;
+    return owner ? { ...owner, sessionToken } : null;
   });
 }

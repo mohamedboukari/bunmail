@@ -6,6 +6,7 @@ import {
   deleteEmailsWithTombstones,
   purgeOldTombstones,
 } from "../../emails/services/tombstone.service.ts";
+import { purgeExpiredSessions } from "../../users/services/session.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 
@@ -83,6 +84,19 @@ export async function runTombstoneRetention(): Promise<{ deleted: number }> {
 }
 
 /**
+ * Deletes expired dashboard sessions (#216). Housekeeping only: the
+ * dashboard guard enforces expiry itself, so security never depends on
+ * this sweep; it keeps the `sessions` table small.
+ */
+export async function runSessionSweep(): Promise<{ deleted: number }> {
+  const deleted = await purgeExpiredSessions();
+  if (deleted > 0) {
+    logger.info("Expired session sweep completed", { deleted });
+  }
+  return { deleted };
+}
+
+/**
  * Starts the trash purge loop: runs once immediately, then every 6 hours.
  * Safe to call multiple times: subsequent calls are no-ops if already running.
  */
@@ -98,9 +112,14 @@ export function start(): void {
   });
 
   /** Initial run on boot: catches anything that aged out while server
-   *  was down. Runs both sweeps; tombstone retention is cheap when the
-   *  cutoff is 90 days out and the table is small. */
-  void Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then((results) => {
+   *  was down. Runs every sweep; tombstone retention is cheap when the
+   *  cutoff is 90 days out and the table is small, and the session sweep
+   *  is one indexed DELETE. */
+  void Promise.allSettled([
+    runTrashPurge(),
+    runTombstoneRetention(),
+    runSessionSweep(),
+  ]).then((results) => {
     for (const r of results) {
       if (r.status === "rejected") {
         logger.error("Initial trash purge cycle failed", {
@@ -111,17 +130,19 @@ export function start(): void {
   });
 
   purgeTimer = setInterval(() => {
-    void Promise.allSettled([runTrashPurge(), runTombstoneRetention()]).then(
-      (results) => {
-        for (const r of results) {
-          if (r.status === "rejected") {
-            logger.error("Scheduled trash purge cycle failed", {
-              error: r.reason instanceof Error ? r.reason.message : String(r.reason),
-            });
-          }
+    void Promise.allSettled([
+      runTrashPurge(),
+      runTombstoneRetention(),
+      runSessionSweep(),
+    ]).then((results) => {
+      for (const r of results) {
+        if (r.status === "rejected") {
+          logger.error("Scheduled trash purge cycle failed", {
+            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          });
         }
-      },
-    );
+      }
+    });
   }, PURGE_INTERVAL_MS);
 }
 
