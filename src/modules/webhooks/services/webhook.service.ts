@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db } from "../../../db/index.ts";
 import { webhooks } from "../models/webhook.schema.ts";
@@ -150,11 +150,17 @@ export async function findWebhooksForEvent(
   event: string,
   scope: DispatchScope,
 ): Promise<{ id: string }[]> {
-  const columns = { id: webhooks.id, events: webhooks.events };
+  const columns = { id: webhooks.id };
 
   /** A revoked key's webhooks receive nothing: revoking a leaked key must
-   *  also cut off the event feed its holder registered. */
-  const live = and(eq(webhooks.isActive, true), eq(apiKeys.isActive, true));
+   *  also cut off the event feed its holder registered. The event is
+   *  matched in SQL (#173): `events` holds real JSON since #261, and the
+   *  array is built from a plain parameter (see `src/db/jsonb.ts`). */
+  const live = and(
+    eq(webhooks.isActive, true),
+    eq(apiKeys.isActive, true),
+    sql`${webhooks.events} @> jsonb_build_array(${event}::text)`,
+  );
 
   const candidates =
     "apiKeyId" in scope
@@ -169,5 +175,5 @@ export async function findWebhooksForEvent(
           .innerJoin(apiKeys, eq(apiKeys.id, webhooks.apiKeyId))
           .where(and(live, eq(apiKeys.isAdmin, true)));
 
-  return candidates.filter((w) => w.events.includes(event)).map((w) => ({ id: w.id }));
+  return candidates;
 }

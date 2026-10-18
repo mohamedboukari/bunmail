@@ -547,7 +547,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | Column       | Type           | Constraints                     |
 |--------------|----------------|---------------------------------|
 | id           | varchar(36)    | PK, prefixed `whk_`            |
-| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL      |
+| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL, indexed (#173) |
 | url          | text           | NOT NULL                        |
 | events       | jsonb          | NOT NULL, default `[]`          |
 | secret       | varchar(255)   | NOT NULL, encrypted at rest (#259) |
@@ -604,7 +604,7 @@ Indexes: `(next_attempt_at)` partial WHERE `status='pending'` (worker hot path),
 | Column       | Type           | Constraints                     |
 |--------------|----------------|---------------------------------|
 | id           | varchar(36)    | PK, prefixed `tpl_`            |
-| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL      |
+| api_key_id   | varchar(36)    | FK → api_keys.id, NOT NULL, indexed (#173) |
 | name         | varchar(255)   | NOT NULL                        |
 | subject      | varchar(500)   | NOT NULL                        |
 | html         | text           | nullable                        |

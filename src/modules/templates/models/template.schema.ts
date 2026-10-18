@@ -48,5 +48,7 @@ export const templates = pgTable(
   (table) => [
     /** Ownership transfer and the boot backfill update by creator. */
     index("templates_created_by_user_id_idx").on(table.createdByUserId),
+    /** Per-key template lists and lookups filter by key (#173). */
+    index("templates_api_key_id_idx").on(table.apiKeyId),
   ],
 );
