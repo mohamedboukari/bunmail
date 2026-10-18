@@ -33,6 +33,7 @@ import {
   refundLoginAttempt,
 } from "../middleware/login-rate-limit.ts";
 import { isEmailStatus } from "../modules/emails/types/email.types.ts";
+import { EmailSendRejectedError } from "../modules/emails/errors.ts";
 
 /* ─── Page Components ─── */
 import { LoginPage } from "./routes/login.tsx";
@@ -71,6 +72,7 @@ import { clearSessionCookie, readSessionCookie, sessionSetCookie } from "./sessi
 import { adminGuard, memberGuard, roleAtLeast, toDashboardAuth } from "./guards.tsx";
 import { setViewerRole } from "./viewer.ts";
 import { parsePagination } from "./pagination.ts";
+import { sendSuccessFlash } from "./send-warnings.ts";
 import { assetResponse } from "./static-assets.tsx";
 
 /* ─── Services ─── */
@@ -1529,7 +1531,7 @@ export const pagesPlugin = new Elysia({
       }
 
       try {
-        await emailService.createEmail(
+        const { warnings } = await emailService.createEmail(
           {
             from: body.from,
             to: body.to,
@@ -1548,12 +1550,21 @@ export const pagesPlugin = new Elysia({
           apiKeyId: chosenKey.id,
         });
         set.status = 302;
+        /** Unverified sender-domain records are named in the flash (#245). */
         set.headers["location"] =
-          `/dashboard/send?flash=${encodeURIComponent("Email queued for delivery")}`;
+          `/dashboard/send?flash=${encodeURIComponent(sendSuccessFlash(warnings))}`;
       } catch (error) {
-        logger.error("Failed to send email via dashboard", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (error instanceof EmailSendRejectedError) {
+          /** Refused on its input (#245): expected; the service logged the email id. */
+          logger.warn("Dashboard send refused", {
+            apiKeyId: chosenKey.id,
+            code: error.code,
+          });
+        } else {
+          logger.error("Failed to send email via dashboard", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         set.status = 302;
         set.headers["location"] =
           `/dashboard/send?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to send email")}&flashType=error`;

@@ -290,3 +290,32 @@ describe("SMTP submission: recipient handling", () => {
     expect(row!.bcc).toBeNull();
   });
 });
+
+describe("SMTP submission: sender domain (#245)", () => {
+  /** Mutable view of the read-only config, restored after the test. */
+  const runtime = config as { env: "development" | "production" };
+  const originalEnv = config.env;
+
+  afterEach(() => {
+    runtime.env = originalEnv;
+  });
+
+  test("production: an unregistered From domain is refused with 550, nothing queued", async () => {
+    runtime.env = "production";
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+
+    const failure = await failureOf(
+      transport(rawKey).sendMail({
+        from: "hello@unregistered.test",
+        to: "user@example.org",
+        subject: "unregistered",
+        text: "hi",
+      }),
+    );
+
+    expect(failure).toContain("550");
+    expect(failure).toContain('Sender domain "unregistered.test" is not registered');
+    const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(rows).toHaveLength(0);
+  });
+});

@@ -339,7 +339,7 @@ directly in JSX: those run on the server and bake in the server's tz/locale.
 Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash message in query params. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
 
 **General**
-- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219)
+- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219). The success flash names the sender domain's DNS records that are not verified (DKIM, SPF, DMARC) or says the domain is unregistered (development), #245; a send refused on its sender domain or subject shows the reason as an error flash
 - Create API key → `POST /dashboard/api-keys` (form fields: `name`, `allowedSenders`, `isAdmin`; `isAdmin` is ignored for members, #219)
 - Promote / demote API key → `POST /dashboard/api-keys/:id/admin` (admins and the owner)
 - Set allowed senders → `POST /dashboard/api-keys/:id/senders`

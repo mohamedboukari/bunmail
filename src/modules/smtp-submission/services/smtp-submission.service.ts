@@ -17,6 +17,7 @@ import { findByHash } from "../../api-keys/services/api-key.service.ts";
 import { createEmail } from "../../emails/services/email.service.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
+import { EmailSendRejectedError } from "../../emails/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
 import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
@@ -491,8 +492,12 @@ export function start(portOverride?: number): void {
                   text: typeof parsed.text === "string" ? parsed.text : undefined,
                 });
 
-                /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
-                const email = await createEmail(input, apiKeyId, "smtp");
+                /**
+                 * Tag the row as SMTP-sourced so the dashboard can filter it
+                 * (#137). SMTP has no channel for the sender-domain warnings
+                 * (#245): `createEmail` logs them at `warn` with the email id.
+                 */
+                const { email } = await createEmail(input, apiKeyId, "smtp");
                 /** With a quota, the reservation already counted it. */
                 if (reservedDay === null) await recordOutcome(apiKeyId, "accepted");
                 reservedDay = null;
@@ -531,9 +536,18 @@ export function start(portOverride?: number): void {
                   callback(smtpError(error.message, 550));
                   return;
                 }
+                /**
+                 * Sender domain not registered or not DKIM-verified, missing
+                 * subject (#245): permanent, the client must fix its config.
+                 */
+                if (error instanceof EmailSendRejectedError) {
+                  logger.warn("SMTP submission rejected", { apiKeyId, code: error.code });
+                  callback(smtpError(error.message, 550));
+                  return;
+                }
                 const message = error instanceof Error ? error.message : String(error);
                 logger.warn("SMTP submission rejected", { apiKeyId, error: message });
-                /** Sender-domain / validation errors from createEmail → 550. */
+                /** Any other createEmail error → 550. */
                 callback(smtpError(message, 550));
               }
             })();

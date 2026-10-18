@@ -33,6 +33,8 @@ interface EmailResponse {
   success: boolean;
   error?: string;
   data: SerializedEmail;
+  /** Sender-domain warnings, only on the send response (#245). */
+  warnings?: string[];
 }
 
 interface EmailListResponse {
@@ -105,7 +107,7 @@ const mockTrashedEmail = {
 /* ─── Mock email service ─── */
 /** Held so tests can assert what the route passed to the service. */
 const createEmailMock = mock((_input: unknown, _apiKeyId: string) =>
-  Promise.resolve(mockEmail),
+  Promise.resolve({ email: mockEmail, warnings: ["spf_unverified"] }),
 );
 void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   createEmail: createEmailMock,
@@ -195,6 +197,8 @@ describe("Emails API E2E", () => {
       expect(body.data.to).toBe("user@test.com");
       expect(body.data.subject).toBe("Test");
       expect(body.data.status).toBe("queued");
+      /** The service's sender-domain warnings sit next to `data` (#245). */
+      expect(body.warnings).toEqual(["spf_unverified"]);
     });
 
     test("returns 422 on missing required fields", async () => {

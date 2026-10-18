@@ -43,6 +43,24 @@ export interface SendEmailInput {
 }
 
 /**
+ * Why a queued send may not authenticate at the receiver (#245), computed
+ * from the sender domain's stored DNS verification flags:
+ *   - `dkim_unverified` / `spf_unverified` / `dmarc_unverified`: that
+ *     record of a registered domain is not verified
+ *   - `domain_unregistered`: development only, the domain is not
+ *     registered, so the email goes out unsigned
+ */
+export type SendWarning =
+  "dkim_unverified" | "spf_unverified" | "dmarc_unverified" | "domain_unregistered";
+
+/** What `createEmail` returns: the queued row and its sender-domain warnings. */
+export interface CreatedEmail {
+  email: Email;
+  /** Empty when the sender domain is registered and fully verified. */
+  warnings: SendWarning[];
+}
+
+/**
  * Filters for listing emails: used by the list endpoint.
  */
 export interface ListEmailsFilters {

@@ -10,6 +10,7 @@ import {
   UnauthorizedSenderError,
 } from "./modules/api-keys/errors.ts";
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
+import { EmailSendRejectedError } from "./modules/emails/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
@@ -292,6 +293,16 @@ const app = new Elysia()
         code: "RECIPIENT_SUPPRESSED",
         suppressionId: error.suppressionId,
       };
+    }
+
+    /**
+     * Send refused on its input (#245): sender domain not registered or
+     * not DKIM-verified, template not found, subject missing. Each class
+     * carries its own status (404 or 422) and code.
+     */
+    if (error instanceof EmailSendRejectedError) {
+      set.status = error.status;
+      return { success: false, error: error.message, code: error.code };
     }
 
     /**
