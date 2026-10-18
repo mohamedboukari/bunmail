@@ -1,7 +1,8 @@
 /**
  * Pure message-mapping helpers for the SMTP submission server (#120).
  *
- * Kept dependency-free (type-only import of `SendEmailInput`) so it can be
+ * Kept dependency-free (its own error class and a type-only import of
+ * `SendEmailInput`) so it can be
  * unit-tested without pulling in the SMTPServer / config / db stack: the
  * server code in `services/smtp-submission.service.ts` extracts raw
  * addresses from the parsed message + SMTP envelope and delegates the
@@ -9,6 +10,7 @@
  * these functions.
  */
 
+import { SubmissionRejectedError } from "./errors.ts";
 import type { SendEmailInput } from "../emails/types/email.types.ts";
 
 /**
@@ -76,7 +78,9 @@ export interface SubmissionMessageParts {
 export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailInput {
   const from = parts.fromHeader?.trim() || parts.envelopeFrom?.trim();
   if (!from) {
-    throw new Error("Missing sender address (no From header or MAIL FROM)");
+    throw new SubmissionRejectedError(
+      "Missing sender address (no From header or MAIL FROM)",
+    );
   }
 
   const envelope = new Set(
@@ -93,7 +97,7 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     a?.trim(),
   );
   if (headerNamesRecipients && !hasVisibleHeader) {
-    throw new Error(
+    throw new SubmissionRejectedError(
       "None of the To/Cc addresses was sent in RCPT TO: BunMail delivers only to envelope recipients",
     );
   }
@@ -134,7 +138,7 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
   }
 
   if (!toField) {
-    throw new Error("No recipients");
+    throw new SubmissionRejectedError("No recipients");
   }
 
   return {

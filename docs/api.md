@@ -233,6 +233,9 @@ The `unsubscribeEmail` / `unsubscribeUrl` fields shape the `List-Unsubscribe` he
 
 ---
 
+
+The name is stored lowercase (DNS names are case-insensitive), and every lookup by name ignores case, also for domains registered before that. Registering a name that already exists in any case returns `409 DOMAIN_ALREADY_REGISTERED`.
+
 #### `GET /api/v1/domains`
 
 List all registered sender domains.
@@ -626,4 +629,5 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
 | 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED` |
+| 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively |
 | 429    | Rate limit exceeded                             |

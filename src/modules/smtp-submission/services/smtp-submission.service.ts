@@ -18,8 +18,10 @@ import { createEmail } from "../../emails/services/email.service.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { EmailSendRejectedError } from "../../emails/errors.ts";
+import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
+import { SubmissionRejectedError } from "../errors.ts";
 import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
 import {
   describeListenError,
@@ -469,7 +471,16 @@ export function start(portOverride?: number): void {
                 }
 
                 const rawMessage = Buffer.concat(chunks).toString("utf-8");
-                const parsed = await simpleParser(rawMessage);
+                const parsed = await simpleParser(rawMessage).catch(
+                  (parseError: unknown) => {
+                    logger.warn("SMTP submission message did not parse", {
+                      apiKeyId,
+                      error:
+                        parseError instanceof Error ? parseError.name : typeof parseError,
+                    });
+                    throw new SubmissionRejectedError("Message could not be parsed");
+                  },
+                );
 
                 const envelopeFrom =
                   session.envelope.mailFrom &&
@@ -545,10 +556,30 @@ export function start(portOverride?: number): void {
                   callback(smtpError(error.message, 550));
                   return;
                 }
-                const message = error instanceof Error ? error.message : String(error);
-                logger.warn("SMTP submission rejected", { apiKeyId, error: message });
-                /** Any other createEmail error → 550. */
-                callback(smtpError(message, 550));
+                /** Refusals the client must not retry: 550 with their (fixed) message. */
+                if (
+                  error instanceof UnauthorizedSenderError ||
+                  error instanceof InactiveApiKeyError ||
+                  error instanceof SubmissionRejectedError
+                ) {
+                  logger.warn("SMTP submission rejected", {
+                    apiKeyId,
+                    reason: error.name,
+                  });
+                  callback(smtpError(error.message, 550));
+                  return;
+                }
+                /**
+                 * Anything else is unexpected (a database error, a bug): logged
+                 * in full (the logger strips query parameters), answered with a
+                 * fixed 451 so the client retries later and no internal text
+                 * reaches it.
+                 */
+                logger.error("SMTP submission failed unexpectedly", {
+                  apiKeyId,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                callback(smtpError("Local error in processing, try again later", 451));
               }
             })();
           });

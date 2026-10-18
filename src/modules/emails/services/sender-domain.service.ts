@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
+import { domainNameIs } from "../../domains/services/domain.service.ts";
 import {
   verifyDomain,
   type VerificationResult,
@@ -152,7 +152,7 @@ export async function checkSenderDomain(
   ids: SendIds,
   deps: SenderDomainDeps = defaultDeps,
 ): Promise<SenderDomainCheck> {
-  const [domain] = await db.select().from(domains).where(eq(domains.name, name)).limit(1);
+  const [domain] = await db.select().from(domains).where(domainNameIs(name)).limit(1);
   const requireVerified = config.mail.requireVerifiedDomain;
 
   if (!domain) {

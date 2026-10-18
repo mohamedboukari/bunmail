@@ -11,6 +11,7 @@ import {
 } from "./modules/api-keys/errors.ts";
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { EmailSendRejectedError } from "./modules/emails/errors.ts";
+import { DomainAlreadyRegisteredError } from "./modules/domains/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
@@ -300,6 +301,12 @@ const app = new Elysia()
      * not DKIM-verified, template not found, subject missing. Each class
      * carries its own status (404 or 422) and code.
      */
+    /** A domain name already registered (case-insensitive) → 409. */
+    if (error instanceof DomainAlreadyRegisteredError) {
+      set.status = 409;
+      return { success: false, error: error.message, code: error.code };
+    }
+
     if (error instanceof EmailSendRejectedError) {
       set.status = error.status;
       return { success: false, error: error.message, code: error.code };

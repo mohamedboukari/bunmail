@@ -1,5 +1,5 @@
 import { generateKeyPair } from "crypto";
-import { eq } from "drizzle-orm";
+import { DrizzleQueryError, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { domains } from "../models/domain.schema.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -7,6 +7,18 @@ import { logger } from "../../../utils/logger.ts";
 import { encryptSecret } from "../../../utils/crypto.ts";
 import { config } from "../../../config.ts";
 import type { Domain, CreateDomainInput } from "../types/domain.types.ts";
+import { DomainAlreadyRegisteredError } from "../errors.ts";
+
+/** Postgres SQLSTATE for a unique constraint violation. */
+const UNIQUE_VIOLATION = "23505";
+
+/**
+ * Matches a domain row by name, case-insensitively: DNS names are, and
+ * rows created before names were stored lowercase may carry capitals.
+ */
+export function domainNameIs(name: string): SQL {
+  return sql`lower(${domains.name}) = ${name.trim().toLowerCase()}`;
+}
 
 /**
  * Generates a 2048-bit RSA keypair for DKIM signing.
@@ -52,8 +64,23 @@ function extractPublicKeyBase64(pem: string): string {
  */
 export async function createDomain(input: CreateDomainInput): Promise<Domain> {
   const id = generateId("dom");
+  /** Stored lowercase: DNS names are case-insensitive. */
+  const name = input.name.trim().toLowerCase();
 
-  logger.info("Creating domain with DKIM keys", { id, name: input.name });
+  const [existing] = await db
+    .select({ id: domains.id })
+    .from(domains)
+    .where(domainNameIs(name))
+    .limit(1);
+  if (existing) {
+    logger.warn("Domain not created: already registered", {
+      name,
+      existingId: existing.id,
+    });
+    throw new DomainAlreadyRegisteredError(name);
+  }
+
+  logger.info("Creating domain with DKIM keys", { id, name });
 
   const { privateKey, publicKey } = await generateDkimKeyPair();
 
@@ -65,20 +92,34 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
    */
   const encryptedPrivateKey = encryptSecret(privateKey, config.dkimEncryptionKey);
 
-  const [domain] = await db
-    .insert(domains)
-    .values({
-      id,
-      name: input.name,
-      dkimPrivateKey: encryptedPrivateKey,
-      dkimPublicKey: publicKey,
-      dkimSelector: "bunmail",
-      unsubscribeEmail: input.unsubscribeEmail ?? null,
-      unsubscribeUrl: input.unsubscribeUrl ?? null,
-      notifyEmail: input.notifyEmail ?? null,
-      createdByUserId: input.createdByUserId ?? null,
-    })
-    .returning();
+  let inserted: Domain[];
+  try {
+    inserted = await db
+      .insert(domains)
+      .values({
+        id,
+        name,
+        dkimPrivateKey: encryptedPrivateKey,
+        dkimPublicKey: publicKey,
+        dkimSelector: "bunmail",
+        unsubscribeEmail: input.unsubscribeEmail ?? null,
+        unsubscribeUrl: input.unsubscribeUrl ?? null,
+        notifyEmail: input.notifyEmail ?? null,
+        createdByUserId: input.createdByUserId ?? null,
+      })
+      .returning();
+  } catch (error: unknown) {
+    /** A concurrent registration of the same name won the race. */
+    const sqlState =
+      error instanceof DrizzleQueryError &&
+      typeof error.cause === "object" &&
+      error.cause !== null
+        ? Reflect.get(error.cause, "errno")
+        : undefined;
+    if (sqlState === UNIQUE_VIOLATION) throw new DomainAlreadyRegisteredError(name);
+    throw error;
+  }
+  const [domain] = inserted;
 
   logger.info("Domain created with DKIM keys", {
     id: domain!.id,
@@ -147,7 +188,7 @@ export async function getDomainById(id: string): Promise<Domain | undefined> {
 export async function getDomainByName(name: string): Promise<Domain | undefined> {
   logger.debug("Fetching domain by name", { name });
 
-  const [domain] = await db.select().from(domains).where(eq(domains.name, name)).limit(1);
+  const [domain] = await db.select().from(domains).where(domainNameIs(name)).limit(1);
 
   if (!domain) {
     logger.debug("Domain not found by name", { name });
@@ -167,7 +208,7 @@ export async function domainExistsByName(name: string): Promise<boolean> {
   const [domain] = await db
     .select({ id: domains.id })
     .from(domains)
-    .where(eq(domains.name, name))
+    .where(domainNameIs(name))
     .limit(1);
   return !!domain;
 }
