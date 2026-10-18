@@ -127,8 +127,9 @@ export function requireAssurance(min: SessionAssurance): RouteGuard {
 }
 
 /**
- * @public Exported ahead of its first use: no route is owner-only yet;
- * account management (#217, #218) and ownership transfer will be.
+ * @public No route carries it yet: the owner-only rules of invitations
+ * (#217) and account management (#218, role changes and ownership
+ * transfer) are checked inside their services against the live role.
  *
  * Owner only.
  */

@@ -216,7 +216,7 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
@@ -226,7 +226,9 @@ bunmail/
 │   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent),
 │   │   │   │                               invite.service.ts (create / resend / revoke / list / accept, per-address advisory lock),
 │   │   │   │                               invite-policy.service.ts (pure: who grants which role, name, expiry, URL),
-│   │   │   │                               invite-email.service.ts (invitation email from SYSTEM_MAIL_FROM, DKIM-signed)
+│   │   │   │                               invite-email.service.ts (invitation email from SYSTEM_MAIL_FROM, DKIM-signed),
+│   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer, owner lock),
+│   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons)
 │   │   │   └── types/                    ← role / credential / assurance / purpose / invite value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
@@ -248,14 +250,16 @@ bunmail/
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation links) bound to kind, user and session (#132, #280, #217)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
+│       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
-│       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav
+│       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav (admin-only links by viewer role, #218)
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
 │       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
+│       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -837,6 +841,12 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/invitations             | Invite an address (owner: admin or member; admin: member) | Admin |
 | POST   | /dashboard/invitations/:id/revoke  | Revoke an invitation (roles the actor may grant) | Admin |
 | POST   | /dashboard/invitations/:id/resend  | New link for the same address and role, sent again | Admin |
+| GET    | /dashboard/users                   | Every account with role, status and allowed actions (#218) | Admin |
+| POST   | /dashboard/users/:id/role          | Member to admin or back (owner only, in the service) | Admin |
+| POST   | /dashboard/users/:id/deactivate    | Disable, revoke sessions and open invitations (owner: any non-owner; admin: members) | Admin |
+| POST   | /dashboard/users/:id/reactivate    | Enable again (same rules) | Admin |
+| POST   | /dashboard/users/:id/remove        | Delete, confirmed by the account's email (same rules) | Admin |
+| POST   | /dashboard/users/:id/transfer      | Hand ownership to an active admin, confirmed by password (owner only, in the service) | Admin |
 | GET    | /dashboard/domains                 | Domains management      | Member |
 | POST   | /dashboard/domains                 | Add domain              | Admin |
 | POST   | /dashboard/domains/:id/delete      | Delete domain           | Admin |
@@ -873,7 +883,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
-Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
+Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. Account management (#218) adds owner-only and members-only rules inside `user-admin.service.ts`, checked against the live roles under the `bunmail:owner` lock; the sidebar hides admin-only links from members. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
 
 ### Health
 

@@ -61,9 +61,9 @@ The role is read on every request, so a role change applies on the next request.
 
 | Helper | Lets through | Used for |
 |---|---|---|
-| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #218), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
-| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
-| `ownerGuard` | the owner | no route yet; role management (#218) will use it |
+| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #219), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218; the owner-only and members-only rules are checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
 They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
 
@@ -115,6 +115,25 @@ Admins and the owner invite teammates at **Invitations** (`/dashboard/invitation
 
 Every response from the accept handlers sends the same auth-page headers as owner setup (`Cache-Control: no-store`, `Referrer-Policy: strict-origin` plus the meta tag, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`).
 
+### Users (#218)
+
+Admins and the owner manage accounts at **Users** (`/dashboard/users`). Internals, side effects and log lines: [docs/users.md](users.md#account-management-218).
+
+- **List:** every account with name, email, role, status (active or disabled) and creation date; the viewer's own row is marked `(you)`; a button opens Invitations. Every stored value is escaped.
+- **Buttons:** only the actions the viewer may use on that row (`allowedAccountActions`); every action is checked again in the service against the live roles, under the owner lock.
+
+| Action | Route | Who | Confirmation |
+|---|---|---|---|
+| Make admin / Make member | `POST /dashboard/users/:id/role` (`role`) | owner, on any non-owner | none |
+| Deactivate | `POST /dashboard/users/:id/deactivate` | owner on any non-owner, admin on members | browser confirm; signs the account out everywhere |
+| Reactivate | `POST /dashboard/users/:id/reactivate` | same as deactivate | none |
+| Remove | `POST /dashboard/users/:id/remove` (`confirm`) | same as deactivate | type the account's email |
+| Make owner (transfer) | `POST /dashboard/users/:id/transfer` (`password`) | owner, to an active admin | the owner's current password, throttled like login (per account and per client IP, `DASHBOARD_LOGIN_RATE_LIMIT_*`) |
+
+Nobody acts on their own account, and the owner is never demoted, deactivated or removed. A refusal that no button leads to (own account, the owner, a role too low, an unknown role) gets the `403` page; a race or a typo (already changed, wrong confirmation, wrong password, target no longer eligible, account gone) goes back to the page with an error flash, and so does an exhausted transfer budget (`Too many failed attempts, try again later.`, no password check runs). Reactivation also signs the account out of any session left over from a login that raced its deactivation. Every outcome is logged.
+
+**Sidebar by role.** Members do not see links to admin-only pages: the API Keys and Users entries (and the Invitations link on the home page) are shown to admins and the owner only. The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
+
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
@@ -150,6 +169,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
 | GET /dashboard/api-keys          | API keys list + create form                                       |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
+| GET /dashboard/users             | Every account, role and status, with the actions the viewer may take (admin, #218) |
 | GET /dashboard/domains           | Domains list + add form                                           |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
 | GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
@@ -175,14 +195,16 @@ src/pages/
 ├── guards.tsx                ← Role and assurance checks per route (#222)
 ├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation links), bound to kind, user and session (#132, #280, #217)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
+├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── layouts/
-│   └── base.tsx              ← HTML shell, Tailwind, sidebar nav
+│   └── base.tsx              ← HTML shell, Tailwind, sidebar nav (admin-only links by viewer role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
 │   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx
 │   ├── invite.tsx            ← Invitation accept form, invalid-link and account-exists pages (#217)
 │   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
+│   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -245,6 +267,10 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Invite an address → `POST /dashboard/invitations` (form fields: `email`, `role`)
 - Revoke invitation → `POST /dashboard/invitations/:id/revoke`
 - Resend invitation → `POST /dashboard/invitations/:id/resend`
+- Change an account's role → `POST /dashboard/users/:id/role` (form field: `role`)
+- Deactivate / reactivate an account → `POST /dashboard/users/:id/deactivate`, `POST /dashboard/users/:id/reactivate`
+- Remove an account → `POST /dashboard/users/:id/remove` (form field: `confirm`, the account's email)
+- Transfer ownership → `POST /dashboard/users/:id/transfer` (form field: `password`, the owner's)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)

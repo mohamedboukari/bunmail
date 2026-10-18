@@ -12,8 +12,10 @@ import {
   DocsIcon,
   ThemeIcon,
   LogoutIcon,
+  UsersIcon,
 } from "../assets/icons.tsx";
 import { TimeDisplayScript } from "../components/time-display.tsx";
+import { viewerIsAdmin } from "../viewer.ts";
 
 /**
  * Props for the base HTML layout shell.
@@ -33,7 +35,8 @@ interface BaseLayoutProps {
     | "webhooks"
     | "inbound"
     | "dmarc-reports"
-    | "suppressions";
+    | "suppressions"
+    | "users";
 }
 
 /**
@@ -106,14 +109,27 @@ export function BaseLayout({
 /**
  * Sidebar navigation component.
  * Shows nav links, theme toggle, and logout button.
+ *
+ * Links to admin-only pages (`adminOnly`) are shown to admins and the
+ * owner only (#218): the viewer's role comes from the request-scoped
+ * holder the session guard fills (`viewer.ts`). When it is unknown they
+ * are hidden (fail closed). Display only: the routes check the role.
  */
 function Nav({ activeNav }: { activeNav?: string }) {
+  const showAdminLinks = viewerIsAdmin();
+
   /** Nav items with their labels, paths, and SVG icons */
-  const links = [
+  const allLinks = [
     { id: "home", label: "Dashboard", href: "/dashboard", icon: HomeIcon },
     { id: "emails", label: "Emails", href: "/dashboard/emails", icon: EmailIcon },
     { id: "send", label: "Send Email", href: "/dashboard/send", icon: SendIcon },
-    { id: "api-keys", label: "API Keys", href: "/dashboard/api-keys", icon: KeyIcon },
+    {
+      id: "api-keys",
+      label: "API Keys",
+      href: "/dashboard/api-keys",
+      icon: KeyIcon,
+      adminOnly: true,
+    },
     {
       id: "templates",
       label: "Templates",
@@ -135,7 +151,15 @@ function Nav({ activeNav }: { activeNav?: string }) {
       href: "/dashboard/suppressions",
       icon: NoEntryIcon,
     },
+    {
+      id: "users",
+      label: "Users",
+      href: "/dashboard/users",
+      icon: UsersIcon,
+      adminOnly: true,
+    },
   ];
+  const links = allLinks.filter((link) => showAdminLinks || !link.adminOnly);
 
   return (
     <aside class="w-64 flex-shrink-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col">
