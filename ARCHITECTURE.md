@@ -219,13 +219,16 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), record ownership (#219)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), record ownership (#219)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
 │   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
 │   │   │   │                               login.service.ts (email + password, one argon2id verify per branch),
-│   │   │   │                               session.service.ts (create / look up / rotate / revoke / sweep),
+│   │   │   │                               session.service.ts (create / look up / rotate / revoke / sweep / list own sessions, #281),
+│   │   │   │                               session-location.service.ts (background location lookup after sign-in, #281),
+│   │   │   │                               geoip.service.ts (approximate location: offline .mmdb or opt-in ipinfo, #281),
+│   │   │   │                               user-agent.service.ts (pure: "Chrome on macOS" device label, #281),
 │   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent),
 │   │   │   │                               invite.service.ts (create / resend / revoke / list / accept, per-address advisory lock),
 │   │   │   │                               invite-policy.service.ts (pure: who grants which role, name, expiry, URL),
@@ -729,7 +732,7 @@ One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (C
 
 ### `sessions` (#214, #216)
 
-Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. `location` (#281, migration `0025`, nullable `varchar(128)`): the approximate location of `ip` ("City, Country" or "Country"), looked up once in the background after the session is created when GeoIP is configured. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
 
 ### `user_tokens` (#214)
 
@@ -864,6 +867,9 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard                         | Stats overview          | Member |
 | GET    | /dashboard/account/password        | Change password form (any role, #279) | Member |
 | POST   | /dashboard/account/password        | Change own password: throttled current-password check, sign out every other session, new session here (#279) | Member |
+| GET    | /dashboard/account/sessions        | Own live sessions: device, IP, approximate location, signed in, last active, this device marked (#281) | Member |
+| POST   | /dashboard/account/sessions/:id/revoke | Sign out one own session (another user's id: 404, nothing changes); the current one signs this browser out (#281) | Member |
+| POST   | /dashboard/account/sessions/revoke-others | Sign out every own session except the current one (#281) | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
 | GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Member |
@@ -1041,7 +1047,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1088,4 +1094,4 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
 - Bun-native SMTP client (subsumes #37, #42, see #60)
 - Optional Redis backing for the per-replica in-memory state (rate limits, one-time reveal store) (#185)
-- Dashboard account follow-ups: TOTP two-factor (#220), passkeys (#223), SSO (#224), an active sessions page (#281)
+- Dashboard account follow-ups: TOTP two-factor (#220), passkeys (#223), SSO (#224)

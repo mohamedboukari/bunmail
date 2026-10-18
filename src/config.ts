@@ -366,6 +366,84 @@ export function readSystemMailFrom(
   return email;
 }
 
+/** Online GeoIP providers BunMail can ask (#281). Opt-in only. */
+const GEOIP_PROVIDERS = ["ipinfo"] as const;
+type GeoipProvider = (typeof GEOIP_PROVIDERS)[number];
+
+/** Narrows a configured provider name to the supported ones. */
+function isGeoipProvider(value: string): value is GeoipProvider {
+  return (GEOIP_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * Where the approximate location of a session's IP comes from (#281):
+ * nowhere (`off`, the default), an offline `.mmdb` file, or an online
+ * provider that receives every sign-in IP.
+ */
+export type GeoipSettings =
+  | { source: "off" }
+  | { source: "mmdb"; dbPath: string }
+  | { source: "ipinfo"; token: string };
+
+/** The raw GeoIP environment variables, injectable for tests. */
+interface GeoipEnv {
+  dbPath: string | undefined;
+  provider: string | undefined;
+  token: string | undefined;
+}
+
+/**
+ * Reads the GeoIP settings (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite
+ * or GeoLite2 `.mmdb` file), else `GEOIP_PROVIDER` with `GEOIP_API_TOKEN`
+ * (online, opt-in), else off. Unset and blank mean unset. Strict, in every
+ * environment: an unknown provider, a provider without a token, a token
+ * without a provider, or a token with characters a token never has
+ * refuses to boot, so a typo cannot silently leave location off or send
+ * a malformed token. The provider is validated even when the file wins.
+ * Exported for tests.
+ */
+export function readGeoipSettings(
+  env: GeoipEnv = {
+    dbPath: process.env["GEOIP_DB_PATH"],
+    provider: process.env["GEOIP_PROVIDER"],
+    token: process.env["GEOIP_API_TOKEN"],
+  },
+): GeoipSettings {
+  const dbPath = env.dbPath?.trim() ?? "";
+  const provider = env.provider?.trim().toLowerCase() ?? "";
+  const token = env.token?.trim() ?? "";
+
+  if (provider === "" && token !== "") {
+    throw new Error(
+      "[config] GEOIP_API_TOKEN is set but GEOIP_PROVIDER is not.\n" +
+        `  → Set GEOIP_PROVIDER to one of: ${GEOIP_PROVIDERS.join(", ")}, or remove the token.`,
+    );
+  }
+  let online: GeoipSettings = { source: "off" };
+  if (provider !== "") {
+    if (!isGeoipProvider(provider)) {
+      throw new Error(
+        `[config] Invalid GEOIP_PROVIDER "${env.provider}", must be one of: ${GEOIP_PROVIDERS.join(", ")}`,
+      );
+    }
+    if (token === "") {
+      throw new Error(
+        `[config] GEOIP_PROVIDER=${provider} needs GEOIP_API_TOKEN (the provider's access token).`,
+      );
+    }
+    /** Goes into a URL query: letters, digits, `-` and `_` only. Never echoed. */
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(token)) {
+      throw new Error(
+        "[config] GEOIP_API_TOKEN must be 1 to 128 letters, digits, '-' or '_'.",
+      );
+    }
+    online = { source: provider, token };
+  }
+
+  if (dbPath !== "") return { source: "mmdb", dbPath };
+  return online;
+}
+
 /**
  * Central application configuration.
  *
@@ -616,6 +694,14 @@ export const config = {
    * once for the inviter to share. See `readSystemMailFrom`.
    */
   systemMailFrom: readSystemMailFrom(),
+
+  /**
+   * Approximate location of dashboard sessions (#281): off unless
+   * `GEOIP_DB_PATH` (offline, preferred) or `GEOIP_PROVIDER` +
+   * `GEOIP_API_TOKEN` (online, sends every sign-in IP to the provider) is
+   * set. See `readGeoipSettings`.
+   */
+  geoip: readGeoipSettings(),
 
   /** Dashboard invitations (#217). */
   invites: {

@@ -95,6 +95,9 @@ INVITE_EXPIRY_DAYS=7
 # Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
+# Optional: approximate location on the Active sessions page (#281), off when
+# unset. Offline DB-IP Lite / GeoLite2 .mmdb file (see section 5):
+# GEOIP_DB_PATH=/geoip/dbip-city-lite-2026-10.mmdb
 ```
 
 > `MAIL_HOSTNAME` is **required in production** (#242): it is the SMTP EHLO name and the Message-ID domain of every email. BunMail refuses to start if it is unset, `localhost`, an IP address, not fully qualified, or a placeholder (`*.example.com`, `*.yourdomain.com`, `.test`, `.local`). Use this server's real hostname, whose A record points at the server and which the sending IP's PTR resolves to (see the reverse DNS section below).
@@ -279,6 +282,33 @@ Open `https://mail.yourdomain.com/dashboard` (through the reverse proxy of secti
 Sessions (#216) live in the database: a session expires after 24 hours without use and 7 days after sign-in at the latest, **Log out** ends it on the server, and `reset-owner` signs the owner out everywhere. While you use the dashboard, the session cookie is replaced with a fresh one about once a minute; if an old cookie shows up again later, BunMail treats it as stolen and signs the account out of every session (details in [docs/dashboard.md](dashboard.md#auth-flow)).
 
 The dashboard lets you manage emails, domains, templates, webhooks, API keys and suppressions, and view delivery status. Admins and the owner invite teammates at **Invitations** and manage accounts at **Users** (roles, deactivation, password reset links, ownership transfer); see [docs/dashboard.md](dashboard.md).
+
+Every account sees its own signed-in devices at **Active sessions** (#281, in the Account group of the sidebar): browser and system, IP address, signed in at, last active, and, when you set up GeoIP below, an approximate location. A user can sign out one device or every other device from there.
+
+### Approximate session locations (GeoIP, #281)
+
+Optional and **off by default**: without it the Active sessions page simply has no location column. When it is on, the location of a new session's IP is looked up once, in the background, right after sign-in, and stored with the session; a slow or failing lookup never delays or breaks a sign-in (it logs a `warn` `Session location lookup failed`). Private, loopback and link-local addresses are never looked up. The result is **approximate**: a VPN or proxy shows its own location, and the IP alone cannot do better.
+
+Pick one source:
+
+**Offline database (recommended): `GEOIP_DB_PATH`.** No third party sees any address.
+
+1. Download the free **DB-IP Lite** "IP to City Lite" database in MMDB format from <https://db-ip.com/db/download/ip-to-city-lite> (no account needed, updated monthly) and unpack it: `gunzip dbip-city-lite-2026-10.mmdb.gz`. DB-IP Lite is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), which **requires attribution**: credit "IP Geolocation by DB-IP" with a link to <https://db-ip.com> wherever you show or describe the locations (for example in your internal docs or the page that lists your instance's dashboard users).
+   Alternative: **MaxMind GeoLite2 City** or **GeoLite2 Country** (`.mmdb`), free with a MaxMind account and under the GeoLite2 EULA (its own attribution terms). Both formats work; a Country database gives "Country" labels only.
+2. Make the file available to the container, readable by uid 1000 (the image runs as non-root), for example in your `docker-compose.override.yml`:
+
+   ```yaml
+   services:
+     app:
+       volumes:
+         - ./geoip:/geoip:ro
+   ```
+
+3. Set `GEOIP_DB_PATH=/geoip/dbip-city-lite-2026-10.mmdb` in `.env` and restart. The file is read into memory once, at the first sign-in (`GeoIP database loaded, session locations on`). A missing or unreadable file logs one `warn` (`GeoIP database could not be loaded, session locations off`) and location stays off until the next restart; BunMail keeps running. Replace the file monthly and restart to pick up the new data.
+
+**Online provider (opt-in): `GEOIP_PROVIDER=ipinfo` + `GEOIP_API_TOKEN`.** Uses ipinfo.io's free Lite API (`https://api.ipinfo.io/lite/<ip>`, HTTPS only, no request limit at the time of writing), which returns the **country only**. Create a free account at <https://ipinfo.io> and copy its access token. **Privacy: every sign-in IP address is then sent to ipinfo.io**, a third party; weigh that (GDPR and your own privacy notice) before turning it on. Each lookup times out after 3 seconds and its answer is size-capped and checked field by field. The token never appears in logs.
+
+`GEOIP_DB_PATH` wins when both are set. Strict at boot: an unknown `GEOIP_PROVIDER`, a provider without `GEOIP_API_TOKEN`, a token without a provider, or a token with characters other than letters, digits, `-` and `_` refuses to start.
 
 ## 6. Reverse Proxy (Recommended for HTTPS)
 

@@ -48,6 +48,7 @@ import {
 } from "../../src/pages/routes/reset.tsx";
 import { UsersPage } from "../../src/pages/routes/users.tsx";
 import { AccountPasswordPage } from "../../src/pages/routes/account-password.tsx";
+import { AccountSessionsPage } from "../../src/pages/routes/account-sessions.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -645,6 +646,64 @@ describe("Dashboard page render smoke tests", () => {
       expect(html).toContain("Change password");
       const other = await TemplatesPage({ templates: [], creators, viewer });
       expect(other).toContain('href="/dashboard/account/password"');
+    });
+  });
+
+  describe("Active sessions page (#281)", () => {
+    const signedInAt = new Date();
+    const base = {
+      ip: "203.0.113.7",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+      location: null,
+      createdAt: signedInAt,
+      lastSeenAt: signedInAt,
+    };
+
+    test("one revoke form per session, this device marked, hostile values escaped", async () => {
+      const html = await AccountSessionsPage({
+        sessions: [
+          { ...base, id: "ses_here" },
+          {
+            ...base,
+            id: "ses_other",
+            ip: "<b>1</b>",
+            userAgent: "<script>alert(1)</script>",
+            location: "<img src=x onerror=alert(2)>",
+          },
+        ],
+        currentSessionId: "ses_here",
+        flash: { message: "<i>done</i>", type: "success" },
+      });
+      expect(html).toContain('action="/dashboard/account/sessions/ses_here/revoke"');
+      expect(html).toContain('action="/dashboard/account/sessions/ses_other/revoke"');
+      expect(html).toContain('action="/dashboard/account/sessions/revoke-others"');
+      expect(html.match(/This device/g)?.length).toBe(1);
+      expect(html).toContain("Chrome on macOS");
+      expect(html).toContain("Approximate location");
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(html).not.toContain("<img src=x");
+      expect(html).not.toContain("<b>1</b>");
+      expect(html).not.toContain("<i>done</i>");
+      expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+    });
+
+    test("only this device: no sign out others button, no location column", async () => {
+      const html = await AccountSessionsPage({
+        sessions: [{ ...base, id: "ses_here" }],
+        currentSessionId: "ses_here",
+      });
+      expect(html).not.toContain("revoke-others");
+      expect(html).not.toContain("Approximate location");
+    });
+
+    test("the sidebar links every role to the page, highlighted on it", async () => {
+      const html = await AccountSessionsPage({ sessions: [], currentSessionId: "ses_x" });
+      expect(html).toContain('href="/dashboard/account/sessions"');
+      expect(html).toContain("No active sessions.");
+      const other = await TemplatesPage({ templates: [], creators, viewer });
+      expect(other).toContain('href="/dashboard/account/sessions"');
+      expect(other).toContain("Active sessions");
     });
   });
 });

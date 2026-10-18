@@ -19,7 +19,8 @@ import { setupTokenExpiry } from "./owner-setup-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { assignUnownedRecords } from "./record-ownership.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
-import { normalizeLoginEmail } from "./session-policy.service.ts";
+import { locateSession } from "./session-location.service.ts";
+import { normalizeLoginEmail, sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
 
 /**
@@ -385,6 +386,8 @@ export async function findLiveOwnerSetup(
  *    survives), and `users.updated_at` is touched.
  *
  * All or nothing: a failure rolls back every step, sessions included.
+ * Once committed, the new session's approximate location is looked up in
+ * the background (#281).
  *
  * @param client - Request metadata stored with the new session.
  * @returns the owner and the raw token of the new session, or `null` when
@@ -400,7 +403,7 @@ export async function completeOwnerSetup(
   const secretHash = await hashPassword(password);
   const tokenHash = hashToken(token);
 
-  return withOwnerLock(async (tx) => {
+  const completed = await withOwnerLock(async (tx) => {
     const liveOwnerIds = tx
       .select({ id: users.id })
       .from(users)
@@ -442,7 +445,7 @@ export async function completeOwnerSetup(
       );
 
     await revokeAllUserSessions(userId, tx);
-    const { token: sessionToken } = await createSession(
+    const { sessionId, token: sessionToken } = await createSession(
       {
         userId,
         assurance: "password",
@@ -458,6 +461,10 @@ export async function completeOwnerSetup(
       .set({ updatedAt: sql`now()` })
       .where(eq(users.id, userId))
       .returning({ userId: users.id, email: users.email });
-    return owner ? { ...owner, sessionToken } : null;
+    return owner ? { owner: { ...owner, sessionToken }, sessionId } : null;
   });
+  if (!completed) return null;
+  /** Committed: the session row exists for the background lookup to update. */
+  void locateSession(completed.sessionId, sessionIp(client.ip));
+  return completed.owner;
 }

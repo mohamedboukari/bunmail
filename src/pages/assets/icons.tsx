@@ -310,3 +310,22 @@ export function LockIcon() {
     </svg>
   );
 }
+
+/** Laptop and phone: the Active sessions link (#281) */
+export function DevicesIcon() {
+  return (
+    <svg
+      class="w-5 h-5"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      stroke-width="1.5"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M10.5 17.25H3.75A1.5 1.5 0 012.25 15.75V6.75a1.5 1.5 0 011.5-1.5h12a1.5 1.5 0 011.5 1.5v1.5M1.5 19.5h9m6-8.25h3.75a1.5 1.5 0 011.5 1.5v6.75a1.5 1.5 0 01-1.5 1.5H16.5a1.5 1.5 0 01-1.5-1.5v-6.75a1.5 1.5 0 011.5-1.5zm1.5 7.5h.75"
+      />
+    </svg>
+  );
+}

@@ -36,6 +36,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - GET  /dashboard                 → home (stats overview)
  * - GET  /dashboard/account/password → change password form (any role, #279)
  * - POST /dashboard/account/password → change own password, sign out everywhere else (any role, #279)
+ * - GET  /dashboard/account/sessions → own live sessions, this device marked (any role, #281)
+ * - POST /dashboard/account/sessions/:id/revoke → sign out one own session (any role, #281)
+ * - POST /dashboard/account/sessions/revoke-others → sign out every other own session (any role, #281)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail

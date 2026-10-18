@@ -22,6 +22,7 @@ import { readSessionCookie } from "../session.ts";
 import * as ownerService from "../../modules/users/services/owner.service.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import * as loginService from "../../modules/users/services/login.service.ts";
+import * as sessionLocation from "../../modules/users/services/session-location.service.ts";
 import * as inviteService from "../../modules/users/services/invite.service.ts";
 import * as passwordResetService from "../../modules/users/services/password-reset.service.ts";
 import { inviteNameProblem } from "../../modules/users/services/invite-policy.service.ts";
@@ -32,6 +33,7 @@ import {
 import {
   loginInputTooLong,
   normalizeLoginEmail,
+  sessionIp,
 } from "../../modules/users/services/session-policy.service.ts";
 import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
 import {
@@ -258,6 +260,9 @@ export function authPages(app: PublicDashboard) {
               sessionId,
               ip,
             });
+
+            /** Approximate location (#281): in the background, never awaited. */
+            void sessionLocation.locateSession(sessionId, sessionIp(ip));
 
             issueSession(set, token);
             return redirect(set, "/dashboard");
