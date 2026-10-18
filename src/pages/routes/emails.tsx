@@ -137,7 +137,7 @@ export function EmailsPage({
             Source
             <select
               class="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
-              onchange="location.assign(this.value)"
+              data-navigate-on-change
             >
               <option
                 value={emailsUrl(activeFilters, { source: null })}
@@ -165,7 +165,7 @@ export function EmailsPage({
             API key
             <select
               class="rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm max-w-[220px]"
-              onchange="location.assign(this.value)"
+              data-navigate-on-change
             >
               <option
                 value={emailsUrl(activeFilters, { apiKeyId: null })}
@@ -192,19 +192,28 @@ export function EmailsPage({
       ) : (
         <>
           {/* Form wraps the table so the action bar can submit selected ids */}
-          <form method="POST" action="/dashboard/emails/bulk-trash" id="emails-bulk-form">
+          <form
+            method="POST"
+            action="/dashboard/emails/bulk-trash"
+            id="emails-bulk-form"
+            data-bulk
+          >
             {/* Bulk action bar: visible only when at least one row is checked */}
             <div
               id="emails-bulk-bar"
+              data-bulk-bar
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
             >
               <span>
-                <span id="emails-bulk-count">0</span> selected
+                <span id="emails-bulk-count" data-bulk-count>
+                  0
+                </span>{" "}
+                selected
               </span>
               <button
                 type="submit"
                 class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-                onclick="return confirm('Move selected emails to trash?')"
+                data-confirm="Move selected emails to trash?"
               >
                 Move to trash
               </button>
@@ -219,6 +228,7 @@ export function EmailsPage({
                       <input
                         type="checkbox"
                         id="emails-select-all"
+                        data-bulk-all
                         class="h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                       />
                     </th>
@@ -253,6 +263,7 @@ export function EmailsPage({
                           type="checkbox"
                           name="ids"
                           value={email.id}
+                          data-bulk-row
                           class="emails-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                         />
                       </td>
@@ -292,7 +303,7 @@ export function EmailsPage({
                           type="submit"
                           form={`emails-trash-${email.id}`}
                           class="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                          onclick="return confirm('Move this email to trash?')"
+                          data-confirm="Move this email to trash?"
                         >
                           Trash
                         </button>
@@ -332,37 +343,6 @@ export function EmailsPage({
                 .join("&") || undefined
             }
           />
-
-          {/* Selection-tracking script: toggles bulk bar and select-all checkbox */}
-          <script>
-            {`
-              (function() {
-                var selectAll = document.getElementById('emails-select-all');
-                var bar = document.getElementById('emails-bulk-bar');
-                var count = document.getElementById('emails-bulk-count');
-                var rowChecks = function() {
-                  return Array.from(document.querySelectorAll('.emails-row-check'));
-                };
-                function refresh() {
-                  var checked = rowChecks().filter(function(c) { return c.checked; });
-                  count.textContent = String(checked.length);
-                  bar.classList.toggle('hidden', checked.length === 0);
-                  if (selectAll) {
-                    selectAll.checked = checked.length > 0 && checked.length === rowChecks().length;
-                  }
-                }
-                if (selectAll) {
-                  selectAll.addEventListener('change', function(e) {
-                    rowChecks().forEach(function(c) { c.checked = e.target.checked; });
-                    refresh();
-                  });
-                }
-                rowChecks().forEach(function(c) {
-                  c.addEventListener('change', refresh);
-                });
-              })();
-            `}
-          </script>
         </>
       )}
     </BaseLayout>

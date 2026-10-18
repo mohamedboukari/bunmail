@@ -9,8 +9,8 @@
  *
  *   - Server emits `<time datetime="<iso>" data-bm-time>` with a
  *     static UTC fallback as text content.
- *   - {@link TimeDisplayScript} (injected once via BaseLayout) walks
- *     every such element on load and rewrites:
+ *   - The dashboard script (`assets/dashboard.js`, "Time display")
+ *     walks every such element once the page is parsed and rewrites:
  *       • `textContent` → relative time (`5m ago`, `Yesterday 14:32`,
  *         `Jan 5, 14:32`, `Jan 5, 2024, 14:32`) in the browser's
  *         locale + timezone.
@@ -50,93 +50,5 @@ export function TimeDisplay({
     <time datetime={iso} data-bm-time="" title={iso} class={className} safe>
       {utcFallback}
     </time>
-  );
-}
-
-/**
- * Hydration script: emitted ONCE per page (via BaseLayout). Walks
- * every `<time data-bm-time>` element after parse and rewrites its
- * textContent to a relative-time phrase ("5m ago", "Yesterday 14:32",
- * "Jan 5, 14:32") in the viewer's locale + timezone, while the
- * `title` attribute carries the full absolute timestamp.
- *
- * Runs synchronously at end-of-body so the DOM is already populated;
- * no DOMContentLoaded listener needed. Locale `undefined` =
- * browser default. Timezone is inferred by `Intl.DateTimeFormat`
- * from the host machine.
- *
- * The script is also re-runnable: if future code dynamically injects
- * new `<time data-bm-time>` elements (none today), call
- * `window.bmHydrateTimes()` to refresh them.
- */
-export function TimeDisplayScript() {
-  return (
-    <script>
-      {`
-        (function() {
-          function fmtAbsolute(d, now, withYear) {
-            return new Intl.DateTimeFormat(undefined, {
-              month: 'short',
-              day: 'numeric',
-              year: withYear ? 'numeric' : undefined,
-              hour: '2-digit',
-              minute: '2-digit'
-            }).format(d);
-          }
-          function fmtTime(d) {
-            return new Intl.DateTimeFormat(undefined, {
-              hour: '2-digit', minute: '2-digit'
-            }).format(d);
-          }
-          function fmtTooltip(d) {
-            return new Intl.DateTimeFormat(undefined, {
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-              timeZoneName: 'short'
-            }).format(d);
-          }
-          function relative(d, now) {
-            var diffMs = now.getTime() - d.getTime();
-            /** Future dates: skip relative, show absolute. */
-            if (diffMs < 0) {
-              return fmtAbsolute(d, now, d.getFullYear() !== now.getFullYear());
-            }
-            var diffSec = Math.floor(diffMs / 1000);
-            if (diffSec < 60) return 'just now';
-            var diffMin = Math.floor(diffSec / 60);
-            if (diffMin < 60) return diffMin + 'm ago';
-            var diffHr = Math.floor(diffMin / 60);
-            if (diffHr < 24) return diffHr + 'h ago';
-            var diffDay = Math.floor(diffHr / 24);
-            if (diffDay === 1) return 'Yesterday ' + fmtTime(d);
-            if (diffDay < 7) {
-              return new Intl.DateTimeFormat(undefined, {
-                weekday: 'short', hour: '2-digit', minute: '2-digit'
-              }).format(d);
-            }
-            return fmtAbsolute(d, now, d.getFullYear() !== now.getFullYear());
-          }
-          function hydrate() {
-            var now = new Date();
-            document.querySelectorAll('time[data-bm-time]').forEach(function(el) {
-              var iso = el.getAttribute('datetime');
-              if (!iso) return;
-              var d = new Date(iso);
-              if (isNaN(d.getTime())) return;
-              try {
-                el.textContent = relative(d, now);
-                el.setAttribute('title', fmtTooltip(d));
-              } catch (e) { /** Locale failure: leave server fallback. */ }
-            });
-          }
-          window.bmHydrateTimes = hydrate;
-          hydrate();
-        })();
-      `}
-    </script>
   );
 }

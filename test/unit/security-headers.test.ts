@@ -2,12 +2,13 @@ import { describe, test, expect } from "bun:test";
 import { Elysia } from "elysia";
 import {
   BASELINE_CSP,
+  PAGE_CSP,
   securityHeaders,
   securityHeadersPlugin,
 } from "../../src/middleware/security-headers.ts";
 
 /**
- * Browser security headers (#255, part 1). The module is config-free, so
+ * Browser security headers (#255). The module is config-free, so
  * the test builds a small app with the real plugin and checks every kind
  * of response it can produce.
  */
@@ -27,6 +28,37 @@ describe("securityHeaders", () => {
     expect(BASELINE_CSP).toContain("base-uri 'none'");
     expect(BASELINE_CSP).toContain("form-action 'self'");
     expect(BASELINE_CSP).toContain("frame-ancestors 'none'");
+  });
+
+  test.each([
+    "/",
+    "/dashboard",
+    "/dashboard/",
+    "/dashboard/api-keys",
+    "/dashboard/login",
+  ])("%p gets the page CSP (#255, part 2)", (path) => {
+    expect(
+      securityHeaders(path, { httpsBaseUrl: false })["content-security-policy"],
+    ).toBe(PAGE_CSP);
+  });
+
+  test.each([
+    "/api/docs",
+    "/api/docs/json",
+    "/api/v1/emails",
+    "/favicon.svg",
+    "/health",
+    "/dashboardx",
+  ])("%p keeps the baseline CSP", (path) => {
+    expect(
+      securityHeaders(path, { httpsBaseUrl: false })["content-security-policy"],
+    ).toBe(BASELINE_CSP);
+  });
+
+  test("the page CSP keeps the baseline and allows no inline script", () => {
+    expect(PAGE_CSP.endsWith(BASELINE_CSP)).toBe(true);
+    expect(PAGE_CSP).toContain("script-src 'self';");
+    expect(PAGE_CSP).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 
   test.each(["/dashboard", "/dashboard/", "/dashboard/api-keys"])(
@@ -88,7 +120,7 @@ describe("securityHeadersPlugin", () => {
   ])("%p (%p) carries every header", async (path, status) => {
     const response = await app.handle(new Request(`http://localhost${path}`));
     expect(response.status).toBe(status);
-    expect(response.headers.get("content-security-policy")).toBe(BASELINE_CSP);
+    expect(response.headers.get("content-security-policy")).toBe(PAGE_CSP);
     expect(response.headers.get("x-frame-options")).toBe("DENY");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(response.headers.get("strict-transport-security")).toBe("max-age=31536000");

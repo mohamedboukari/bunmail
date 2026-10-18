@@ -79,7 +79,7 @@ function AccountActions({
           <button
             type="submit"
             class={ACTION_BUTTON}
-            onclick="return confirm('Create a one-time password reset link for this account? It is shown to you once and works for one hour; any earlier link stops working.')"
+            data-confirm="Create a one-time password reset link for this account? It is shown to you once and works for one hour; any earlier link stops working."
           >
             Reset password
           </button>
@@ -90,7 +90,7 @@ function AccountActions({
           <button
             type="submit"
             class={DANGER_BUTTON}
-            onclick="return confirm('Deactivate this account? It is signed out everywhere and cannot sign in until reactivated.')"
+            data-confirm="Deactivate this account? It is signed out everywhere and cannot sign in until reactivated."
           >
             Deactivate
           </button>

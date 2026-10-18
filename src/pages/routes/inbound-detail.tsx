@@ -1,5 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
-import { HtmlPreview, HtmlPreviewScript } from "../components/html-preview.tsx";
+import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
@@ -43,7 +43,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
           )}
         </div>
 
-        <div class="flex items-center gap-2 flex-shrink-0">
+        <div class="flex items-center gap-2 shrink-0">
           {isTrashed ? (
             <>
               <form
@@ -62,7 +62,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
                 method="POST"
                 action={`/dashboard/inbound/${email.id}/permanent`}
                 class="inline"
-                onsubmit="return confirm('Permanently delete this email? This cannot be undone.')"
+                data-confirm="Permanently delete this email? This cannot be undone."
               >
                 <button
                   type="submit"
@@ -87,7 +87,7 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
                 method="POST"
                 action={`/dashboard/inbound/${email.id}/trash`}
                 class="inline"
-                onsubmit="return confirm('Move this email to trash?')"
+                data-confirm="Move this email to trash?"
               >
                 <button
                   type="submit"
@@ -127,7 +127,6 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
           <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto">
             <HtmlPreview html={email.html} title="Inbound email HTML preview" />
           </div>
-          <HtmlPreviewScript />
         </div>
       )}
 

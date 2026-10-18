@@ -14,7 +14,7 @@ import {
   LogoutIcon,
   UsersIcon,
 } from "../assets/icons.tsx";
-import { TimeDisplayScript } from "../components/time-display.tsx";
+import { PageAssets } from "../static-assets.tsx";
 import { viewerIsAdmin } from "../viewer.ts";
 
 /**
@@ -42,8 +42,9 @@ interface BaseLayoutProps {
 /**
  * Base HTML layout: wraps every dashboard page.
  *
- * Includes Tailwind CDN, dark mode inline script (prevents flash),
- * sidebar navigation, and a main content area.
+ * Includes the self-hosted stylesheet and script (`static-assets.tsx`;
+ * the script sets the dark theme before paint, hydrates `<time>` elements
+ * and stops double submits), sidebar navigation, and a main content area.
  */
 export function BaseLayout({
   title,
@@ -57,26 +58,14 @@ export function BaseLayout({
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title safe>{`${title}: BunMail`}</title>
-        {/* Tailwind CSS via CDN */}
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
-          {`
-            tailwind.config = { darkMode: 'class' };
-          `}
-        </script>
-        {/* Inline dark mode script: runs before paint to prevent flash of wrong theme */}
-        <script>
-          {`
-            (function() {
-              var theme = localStorage.getItem('bm-theme');
-              if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                document.documentElement.classList.add('dark');
-              }
-            })();
-          `}
-        </script>
+        {/* Self-hosted stylesheet + script (#255): the script sets the theme before paint */}
+        <PageAssets />
       </head>
-      <body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+      {/* data-submit-once: dashboard.js disables a form's button once it submits */}
+      <body
+        class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100"
+        data-submit-once
+      >
         <div class="flex h-full">
           {/* Sidebar navigation */}
           <Nav activeNav={activeNav} />
@@ -84,23 +73,6 @@ export function BaseLayout({
           {/* Main content area */}
           <main class="flex-1 overflow-y-auto p-6 lg:p-8">{children}</main>
         </div>
-        {/* Prevent double form submissions: disables button + shows spinner on first click */}
-        <script>
-          {`
-            document.querySelectorAll('form').forEach(function(form) {
-              form.addEventListener('submit', function() {
-                var btn = form.querySelector('button[type="submit"]');
-                if (!btn || btn.disabled) return;
-                btn.disabled = true;
-                btn.dataset.originalText = btn.textContent;
-                btn.textContent = 'Processing\u2026';
-                btn.classList.add('opacity-60', 'cursor-not-allowed');
-              });
-            });
-          `}
-        </script>
-        {/* Hydrate every <time data-bm-time> into the viewer's locale + timezone (#104). */}
-        <TimeDisplayScript />
       </body>
     </html>
   );
@@ -161,7 +133,7 @@ function Nav({ activeNav }: { activeNav?: string }) {
   const links = allLinks.filter((link) => showAdminLinks || !link.adminOnly);
 
   return (
-    <aside class="w-64 flex-shrink-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col">
+    <aside class="w-64 shrink-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col">
       {/* Logo / Brand */}
       <div class="p-5 border-b border-gray-200 dark:border-gray-800">
         <a href="/dashboard" class="text-lg font-semibold tracking-tight">
@@ -203,20 +175,13 @@ function Nav({ activeNav }: { activeNav?: string }) {
           API Docs
         </a>
         <button
-          onclick="toggleTheme()"
+          type="button"
+          data-action="toggle-theme"
           class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-100 w-full transition-colors"
         >
           <ThemeIcon />
           <span id="theme-label">Toggle theme</span>
         </button>
-        <script>
-          {`
-            function toggleTheme() {
-              var isDark = document.documentElement.classList.toggle('dark');
-              localStorage.setItem('bm-theme', isDark ? 'dark' : 'light');
-            }
-          `}
-        </script>
 
         {/* Logout form */}
         <form method="POST" action="/dashboard/logout">

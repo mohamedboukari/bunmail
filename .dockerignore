@@ -6,3 +6,5 @@ test/
 .husky/
 .cursor/
 dist/
+# Built inside the image (css stage); a local build must not leak in.
+src/pages/assets/dashboard.css

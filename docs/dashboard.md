@@ -183,6 +183,8 @@ per-replica.
 | Route                            | Description                                                       |
 |----------------------------------|-------------------------------------------------------------------|
 | GET /dashboard/login             | Email + password login form (standalone, no nav, #216)            |
+| GET /dashboard/assets/dashboard.css | Self-hosted stylesheet, public, cached 1 year (#255)              |
+| GET /dashboard/assets/dashboard.js  | Dashboard script, public, cached 1 year (#255)                    |
 | GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
 | GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
 | GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
@@ -212,12 +214,41 @@ per-replica.
 
 ## Security headers (#255)
 
-Every response (dashboard, landing page, API, error pages) carries `Content-Security-Policy: object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` response is `Cache-Control: no-store`. `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves. A CSP with `script-src` / `style-src` follows once the Tailwind CDN script and the inline scripts are replaced (#255, part 2).
+Every response (dashboard, landing page, API, error pages) carries a `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` response is `Cache-Control: no-store` (except the static assets below). `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves.
+
+The CSP depends on the path:
+
+| Where | Policy |
+|-------|--------|
+| `/`, `/dashboard`, `/dashboard/...`, and the HTML 404 page on any path | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+| Everything else (API, `/api/docs`, `/health`, `/favicon.svg`) | `object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+
+`script-src 'self'` with no `'unsafe-inline'`: the pages load no third-party code and carry no inline script or `on*=` attribute (#255, part 2), so an injected script does not run. `style-src` keeps `'unsafe-inline'` because the email preview is a `srcdoc` iframe, which inherits the page's policy, and email HTML relies on inline styles; `img-src https: data:` keeps remote images in previews working. A previewed email's plain `http:` images, remote fonts and remote stylesheets no longer load. The OpenAPI reference at `/api/docs` (Scalar, from a CDN with inline scripts) keeps the baseline policy.
+
+## Assets and scripts (#255)
+
+The pages load exactly two files, both served by BunMail (`src/pages/static-assets.tsx`) and linked from every page's `<head>` with a content hash (`?v=<12 hex>`, computed at startup), so they are cached for a year (`Cache-Control: public, max-age=31536000, immutable`) and a deploy reaches every browser at once:
+
+- **`/dashboard/assets/dashboard.css`**: built by the Tailwind v4 CLI from `src/pages/assets/dashboard.input.css` (`bun run build:css`). It is a build artefact: gitignored, built by `bun run dev` before the server starts and by the Docker image (`css` stage). While it is missing the server logs `Dashboard asset missing` once, answers 404 for it and the pages render unstyled. In development the files are re-read on every page, so `bun run dev:css` (the Tailwind watcher, in a second terminal) shows new classes on the next reload.
+- **`/dashboard/assets/dashboard.js`**: hand-written browser JavaScript, served as committed. It is loaded synchronously in `<head>` so the dark theme is applied before the first paint; everything else waits for `DOMContentLoaded`. Markup asks for behaviour with attributes, never with inline code:
+
+| Attribute | Behaviour |
+|-----------|-----------|
+| `data-action="toggle-theme"` | Switch light / dark, remembered in `localStorage('bm-theme')` |
+| `data-confirm="..."` | On a button or link: confirm before the click; on a form: confirm before it submits |
+| `data-navigate-on-change` | On a `<select>`: open the URL of the chosen option (email filters) |
+| `data-submit-once` | On `<body>` (dashboard layout): a submitted form's button is disabled with "Processing…" |
+| `data-bulk`, `data-bulk-all`, `data-bulk-row`, `data-bulk-bar`, `data-bulk-count` | Bulk selection: select-all, row boxes, the action bar and its count |
+| `data-chip-input` | Email chip input (`email-chip-input.tsx`) |
+| `time[data-bm-time]` | Timestamp in the viewer's locale and timezone (`time-display.tsx`) |
+| `iframe.html-preview-frame`, `iframe.live-html-preview-frame` | Email / template previews: theme sync and auto height; the live preview reads its style block and sample values from a `<script type="application/json" id="bm-live-preview-data">` data block |
+
+Server data a script needs goes in a `data-*` attribute or a JSON data block, never in code. `bun run lint:xss` fails on any `on*=` attribute, inline `<script>` or Tailwind CDN reference under `src/pages`.
 
 ## Design System
 
-- **CSS:** Tailwind CSS via CDN
-- **Dark mode:** Class-based (`darkMode: 'class'`), stored in `localStorage('bm-theme')`
+- **CSS:** Tailwind CSS v4, built to a self-hosted `dashboard.css` (see Assets and scripts). The source keeps the v3 look the pages were written for: the v4 upgrade guide's compatibility base styles (gray-200 default borders, gray-400 placeholders, pointer cursor on buttons), v3's colour palette and sans-serif stack, and v3's `dark:` selector. Use v4 class names (`outline-hidden`, `shrink-0`, `border-red-500!`). Tailwind v4 needs Safari 16.4+, Chrome 111+ or Firefox 128+.
+- **Dark mode:** Class-based (`@custom-variant dark (&:is(.dark *))`, v3's `darkMode: 'class'` selector), stored in `localStorage('bm-theme')`
 - **Color palette:** Neutral grays: `gray-50` to `gray-950`
 - **Cards:** `bg-white dark:bg-gray-900` with subtle borders
 - **Status badges:** Muted colors (emerald for sent, amber for queued, blue for sending, red for failed)
@@ -232,8 +263,13 @@ src/pages/
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
 ├── landing.plugin.tsx        ← Public landing page at /
+├── static-assets.tsx         ← Serves dashboard.css / dashboard.js, content-hash URLs, 1-year cache (#255)
+├── assets/
+│   ├── dashboard.input.css   ← Tailwind v4 source of dashboard.css (`bun run build:css`, output gitignored)
+│   ├── dashboard.js          ← The only script every page loads (#255)
+│   └── icons.tsx             ← Inline SVG icons
 ├── layouts/
-│   └── base.tsx              ← HTML shell, Tailwind, sidebar nav (admin-only links by viewer role)
+│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
 │   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx and reset.tsx

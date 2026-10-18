@@ -1,4 +1,5 @@
 import { SunIcon, MoonIcon } from "../assets/icons.tsx";
+import { PageAssets } from "../static-assets.tsx";
 
 /**
  * Landing page: standalone (no sidebar navigation).
@@ -13,23 +14,7 @@ export function LandingPage() {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title>BunMail | Self-hosted Email API for Developers</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
-          {`
-            tailwind.config = { darkMode: 'class' };
-          `}
-        </script>
-        {/* Dark mode initialization: runs before paint to avoid flash */}
-        <script>
-          {`
-            (function() {
-              var theme = localStorage.getItem('bm-theme');
-              if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                document.documentElement.classList.add('dark');
-              }
-            })();
-          `}
-        </script>
+        <PageAssets />
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
         {/* ─── Nav Bar ─── */}
@@ -44,7 +29,7 @@ export function LandingPage() {
                 type="button"
                 aria-label="Toggle dark mode"
                 class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-                onclick="(function(){var d=document.documentElement.classList;d.toggle('dark');localStorage.setItem('bm-theme',d.contains('dark')?'dark':'light')})()"
+                data-action="toggle-theme"
               >
                 <SunIcon />
                 <MoonIcon />

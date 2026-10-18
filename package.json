@@ -6,9 +6,11 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run --watch src/index.ts",
+    "dev": "bun run build:css && bun run --watch src/index.ts",
+    "dev:css": "tailwindcss -i src/pages/assets/dashboard.input.css -o src/pages/assets/dashboard.css --watch",
     "start": "bun run src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "build:css": "tailwindcss -i src/pages/assets/dashboard.input.css -o src/pages/assets/dashboard.css --minify",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun run src/db/migrate.ts",
     "db:push": "drizzle-kit push",
@@ -47,6 +49,7 @@
   "devDependencies": {
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
+    "@tailwindcss/cli": "^4.3.3",
     "@types/bun": "latest",
     "@types/mailparser": "^3.9.0",
     "@types/smtp-server": "^3.5.13",
@@ -59,6 +62,7 @@
     "oxlint-tsgolint": "^7.0.2004",
     "postgres": "^3.4.9",
     "prettier": "^3.9.10",
+    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2"
   },
   "dependencies": {

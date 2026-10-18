@@ -1,21 +1,24 @@
 # ───────────────────────────────────────────────────────
 # BunMail: Multi-stage Dockerfile
 #
-# Three stages so the runtime image carries only what's needed at
+# Four stages so the runtime image carries only what's needed at
 # request time:
 #
 #   1. install: Resolves dependencies. Runs `bun install` (no
 #                   `--production` so dev deps like `drizzle-kit` and
 #                   `oxlint` are available in the build itself, even
 #                   though they don't ship to the run stage).
-#   2. prod-deps: A second `bun install --production --frozen-lockfile`
+#   2. css: Builds the dashboard stylesheet with the Tailwind CLI (a
+#                   dev dependency) from the source (#255). Only the
+#                   built `dashboard.css` reaches the run stage.
+#   3. prod-deps: A second `bun install --production --frozen-lockfile`
 #                   into a clean tree so the run stage gets node_modules
 #                   without esbuild, drizzle-kit, oxlint, knip, etc.,
 #                   then strips the TypeScript compiler (a Go binary
 #                   since TS 7) that arrives as a transitive peer.
 #                   This is what closed the ~36 esbuild and 10 tsc
 #                   Go-stdlib CVE findings in the Trivy image scan.
-#   3. run: Final image. Has Bun, the prod node_modules, the
+#   4. run: Final image. Has Bun, the prod node_modules, the
 #                   pre-generated SQL migration files (committed), and
 #                   the runtime migrator (`src/db/migrate.ts`). No
 #                   drizzle-kit at runtime.
@@ -43,7 +46,18 @@ COPY package.json bun.lock ./
 # postinstalls are allowlisted via `trustedDependencies` in package.json.
 RUN bun install --frozen-lockfile --ignore-scripts
 
-# ── Stage 2: Install production-only dependencies ──
+# ── Stage 2: Build the dashboard stylesheet ──
+# The pages link `/dashboard/assets/dashboard.css`, which BunMail serves
+# itself (no CDN, #255). It is a build artefact (gitignored, and kept out
+# of the build context by .dockerignore), so it is built here from the
+# classes in `src/pages` with the dev-only Tailwind CLI.
+FROM install AS css
+
+COPY src/ ./src/
+
+RUN bun run build:css
+
+# ── Stage 3: Install production-only dependencies ──
 # Separate stage so the run image gets node_modules without dev deps.
 # Without this stage the runtime carries drizzle-kit + esbuild, whose
 # bundled Go binaries pull ~36 (false-positive) CVEs into Trivy.
@@ -71,7 +85,7 @@ RUN bun install --frozen-lockfile --ignore-scripts --production
 RUN rm -rf node_modules/typescript node_modules/@typescript \
   node_modules/.bin/tsc node_modules/.bin/tsserver
 
-# ── Stage 3: Run ──
+# ── Stage 4: Run ──
 FROM oven/bun:1.3.14 AS run
 
 # Apply latest Debian security patches. The base image rebuilds on a
@@ -97,6 +111,8 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json drizzle.config.ts ./
 COPY src/ ./src/
 COPY drizzle/ ./drizzle/
+# The dashboard stylesheet built in the css stage.
+COPY --from=css /app/src/pages/assets/dashboard.css ./src/pages/assets/dashboard.css
 
 # Drop root (#167). `bun` (uid 1000) ships with the oven/bun image. The app
 # only READS from disk (source, migrations, optional TLS cert/key), so the

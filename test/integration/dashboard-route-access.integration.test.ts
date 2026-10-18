@@ -74,6 +74,9 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/invite": { access: "public" },
   "GET /dashboard/reset": { access: "public" },
   "POST /dashboard/reset": { access: "public" },
+  /** The self-hosted stylesheet and script every page loads, login included (#255). */
+  "GET /dashboard/assets/dashboard.css": { access: "public" },
+  "GET /dashboard/assets/dashboard.js": { access: "public" },
 
   "GET /dashboard/": { access: "member" },
   "GET /dashboard/send": { access: "member" },

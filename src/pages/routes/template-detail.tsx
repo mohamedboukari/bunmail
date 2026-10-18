@@ -1,7 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
-import { LiveHtmlPreview, LiveHtmlPreviewScript } from "../components/html-preview.tsx";
+import { LiveHtmlPreview, LiveHtmlPreviewData } from "../components/html-preview.tsx";
 import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
 import type { Template } from "../../modules/templates/types/template.types.ts";
 
@@ -78,7 +78,7 @@ export function TemplateDetailPage({
               required
               value={template.name}
               placeholder="e.g. Welcome Email"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -95,7 +95,7 @@ export function TemplateDetailPage({
               required
               value={template.subject}
               placeholder="e.g. Welcome to {{company}}"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -111,7 +111,7 @@ export function TemplateDetailPage({
                 name="html"
                 rows="12"
                 placeholder={"<p>Hello {{name}}, welcome!</p>"}
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
                 safe
               >
                 {template.html ?? ""}
@@ -140,7 +140,7 @@ export function TemplateDetailPage({
               name="text"
               rows="3"
               placeholder="Plain text fallback"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               safe
             >
               {template.textContent ?? ""}
@@ -159,7 +159,7 @@ export function TemplateDetailPage({
               name="variables"
               value={variablesValue}
               placeholder="comma-separated: name, company, link"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           {canEdit && (
@@ -183,14 +183,14 @@ export function TemplateDetailPage({
             <button
               type="submit"
               class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-              onclick="return confirm('Are you sure you want to delete this template?')"
+              data-confirm="Are you sure you want to delete this template?"
             >
               Delete Template
             </button>
           </form>
         )}
       </div>
-      <LiveHtmlPreviewScript />
+      <LiveHtmlPreviewData />
     </BaseLayout>
   );
 }

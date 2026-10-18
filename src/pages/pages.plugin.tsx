@@ -71,6 +71,7 @@ import { clearSessionCookie, readSessionCookie, sessionSetCookie } from "./sessi
 import { adminGuard, memberGuard, roleAtLeast, toDashboardAuth } from "./guards.tsx";
 import { setViewerRole } from "./viewer.ts";
 import { parsePagination } from "./pagination.ts";
+import { assetResponse } from "./static-assets.tsx";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -581,6 +582,8 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * - POST /dashboard/invite          → create the invited account, sign in (public, #217)
  * - GET  /dashboard/reset?token=    → password reset form (public, #277)
  * - POST /dashboard/reset           → set the new password, sign out everywhere, sign in (public, #277)
+ * - GET  /dashboard/assets/dashboard.css → the self-hosted stylesheet (public, #255)
+ * - GET  /dashboard/assets/dashboard.js  → the dashboard script (public, #255)
  * - GET  /dashboard                 → home (stats overview)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
@@ -643,6 +646,15 @@ export const pagesPlugin = new Elysia({
   .use(html())
 
   /* ─── Public Routes (no session required) ─── */
+
+  /**
+   * GET /dashboard/assets/dashboard.css, GET /dashboard/assets/dashboard.js
+   * The stylesheet and script every page loads (#255, part 2), public so
+   * the login and setup pages can use them. Cached for a year: the pages
+   * link them with a content-hash `?v=` (see `static-assets.tsx`).
+   */
+  .get("/assets/dashboard.css", () => assetResponse("dashboard.css"))
+  .get("/assets/dashboard.js", () => assetResponse("dashboard.js"))
 
   /**
    * GET /dashboard/login

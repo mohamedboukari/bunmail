@@ -2,7 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
-import { EmailChipInput, EmailChipInputScript } from "../components/email-chip-input.tsx";
+import { EmailChipInput } from "../components/email-chip-input.tsx";
 import { creatorLabel, type CreatorNames } from "../components/created-by.tsx";
 import type {
   ApiKey,
@@ -118,7 +118,7 @@ export function ApiKeysPage({
             name="name"
             required
             placeholder="Key name (e.g. Production)"
-            class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+            class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
           />
           <div>
             <label
@@ -311,7 +311,7 @@ export function ApiKeysPage({
                         <button
                           type="submit"
                           class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                          onclick="return confirm('Are you sure you want to revoke this key?')"
+                          data-confirm="Are you sure you want to revoke this key?"
                         >
                           Revoke
                         </button>
@@ -324,9 +324,6 @@ export function ApiKeysPage({
           </table>
         </div>
       )}
-
-      {/* Wires up the create-form + per-row allowed-senders chip inputs. */}
-      <EmailChipInputScript />
     </BaseLayout>
   );
 }

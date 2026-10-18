@@ -42,7 +42,7 @@ export function InboundTrashPage({
           <form
             method="POST"
             action="/dashboard/inbound/trash/empty"
-            onsubmit="return confirm('Permanently delete every trashed inbound email? This cannot be undone.')"
+            data-confirm="Permanently delete every trashed inbound email? This cannot be undone."
           >
             <button
               type="submit"
@@ -66,15 +66,20 @@ export function InboundTrashPage({
         <>
           <form
             id="inbound-trash-form"
+            data-bulk
             method="POST"
             action="/dashboard/inbound/trash/bulk-restore"
           >
             <div
               id="inbound-trash-bar"
+              data-bulk-bar
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
             >
               <span>
-                <span id="inbound-trash-count">0</span> selected
+                <span id="inbound-trash-count" data-bulk-count>
+                  0
+                </span>{" "}
+                selected
               </span>
               <div class="flex items-center gap-2">
                 <button
@@ -88,7 +93,7 @@ export function InboundTrashPage({
                   type="submit"
                   formaction="/dashboard/inbound/trash/bulk-permanent"
                   class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-                  onclick="return confirm('Permanently delete selected emails? This cannot be undone.')"
+                  data-confirm="Permanently delete selected emails? This cannot be undone."
                 >
                   Delete forever
                 </button>
@@ -103,6 +108,7 @@ export function InboundTrashPage({
                       <input
                         type="checkbox"
                         id="inbound-trash-select-all"
+                        data-bulk-all
                         class="h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                       />
                     </th>
@@ -128,6 +134,7 @@ export function InboundTrashPage({
                           type="checkbox"
                           name="ids"
                           value={email.id}
+                          data-bulk-row
                           class="inbound-trash-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                         />
                       </td>
@@ -168,36 +175,6 @@ export function InboundTrashPage({
             total={total}
             baseUrl="/dashboard/inbound/trash"
           />
-
-          <script>
-            {`
-              (function() {
-                var selectAll = document.getElementById('inbound-trash-select-all');
-                var bar = document.getElementById('inbound-trash-bar');
-                var count = document.getElementById('inbound-trash-count');
-                var rowChecks = function() {
-                  return Array.from(document.querySelectorAll('.inbound-trash-row-check'));
-                };
-                function refresh() {
-                  var checked = rowChecks().filter(function(c) { return c.checked; });
-                  count.textContent = String(checked.length);
-                  bar.classList.toggle('hidden', checked.length === 0);
-                  if (selectAll) {
-                    selectAll.checked = checked.length > 0 && checked.length === rowChecks().length;
-                  }
-                }
-                if (selectAll) {
-                  selectAll.addEventListener('change', function(e) {
-                    rowChecks().forEach(function(c) { c.checked = e.target.checked; });
-                    refresh();
-                  });
-                }
-                rowChecks().forEach(function(c) {
-                  c.addEventListener('change', refresh);
-                });
-              })();
-            `}
-          </script>
         </>
       )}
     </BaseLayout>

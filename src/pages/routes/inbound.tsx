@@ -43,18 +43,23 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
             method="POST"
             action="/dashboard/inbound/bulk-trash"
             id="inbound-bulk-form"
+            data-bulk
           >
             <div
               id="inbound-bulk-bar"
+              data-bulk-bar
               class="hidden mb-3 flex items-center justify-between bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 py-2 text-sm"
             >
               <span>
-                <span id="inbound-bulk-count">0</span> selected
+                <span id="inbound-bulk-count" data-bulk-count>
+                  0
+                </span>{" "}
+                selected
               </span>
               <button
                 type="submit"
                 class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-                onclick="return confirm('Move selected inbound emails to trash?')"
+                data-confirm="Move selected inbound emails to trash?"
               >
                 Move to trash
               </button>
@@ -68,6 +73,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                       <input
                         type="checkbox"
                         id="inbound-select-all"
+                        data-bulk-all
                         class="h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                       />
                     </th>
@@ -96,6 +102,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                           type="checkbox"
                           name="ids"
                           value={email.id}
+                          data-bulk-row
                           class="inbound-row-check h-4 w-4 rounded border-gray-300 dark:border-gray-700"
                         />
                       </td>
@@ -128,7 +135,7 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
                           type="submit"
                           form={`inbound-trash-${email.id}`}
                           class="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                          onclick="return confirm('Move this email to trash?')"
+                          data-confirm="Move this email to trash?"
                         >
                           Trash
                         </button>
@@ -156,36 +163,6 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
             total={total}
             baseUrl="/dashboard/inbound"
           />
-
-          <script>
-            {`
-              (function() {
-                var selectAll = document.getElementById('inbound-select-all');
-                var bar = document.getElementById('inbound-bulk-bar');
-                var count = document.getElementById('inbound-bulk-count');
-                var rowChecks = function() {
-                  return Array.from(document.querySelectorAll('.inbound-row-check'));
-                };
-                function refresh() {
-                  var checked = rowChecks().filter(function(c) { return c.checked; });
-                  count.textContent = String(checked.length);
-                  bar.classList.toggle('hidden', checked.length === 0);
-                  if (selectAll) {
-                    selectAll.checked = checked.length > 0 && checked.length === rowChecks().length;
-                  }
-                }
-                if (selectAll) {
-                  selectAll.addEventListener('change', function(e) {
-                    rowChecks().forEach(function(c) { c.checked = e.target.checked; });
-                    refresh();
-                  });
-                }
-                rowChecks().forEach(function(c) {
-                  c.addEventListener('change', refresh);
-                });
-              })();
-            `}
-          </script>
         </>
       )}
     </BaseLayout>

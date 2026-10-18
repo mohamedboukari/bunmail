@@ -30,7 +30,9 @@ bun run dev
 
 | Command               | Description                         |
 |-----------------------|-------------------------------------|
-| `bun run dev`         | Start dev server with watch mode    |
+| `bun run dev`         | Build the dashboard CSS, start dev server with watch mode |
+| `bun run dev:css`     | Rebuild the dashboard CSS on change (Tailwind watcher, 2nd terminal) |
+| `bun run build:css`   | Build `src/pages/assets/dashboard.css` once (minified) |
 | `bun test`            | Run all tests                       |
 | `bunx tsc --noEmit`   | Type-check without emitting         |
 | `bun run lint`        | Run oxlint (type-aware)             |

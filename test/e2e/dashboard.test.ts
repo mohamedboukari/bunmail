@@ -676,6 +676,8 @@ void mock.module("../../src/db/index.ts", () => ({
 /* ─── Import plugin after mocking ─── */
 const { pagesPlugin } = await import("../../src/pages/pages.plugin.tsx");
 const { withRequestContext } = await import("../../src/middleware/request-context.ts");
+const { securityHeadersPlugin } =
+  await import("../../src/middleware/security-headers.ts");
 const { UserStoreError } = await import("../../src/modules/users/errors.ts");
 
 /** Test app instance with the pages plugin */
@@ -745,6 +747,58 @@ describe("Dashboard E2E", () => {
       expect(response.status).toBe(200);
       const html = await response.text();
       expect(html).toContain("Invalid email or password.");
+    });
+  });
+
+  describe("Self-hosted assets (#255, part 2)", () => {
+    /** With the real security headers, whose `no-store` the assets must override. */
+    const withHeaders = new Elysia()
+      .use(securityHeadersPlugin({ httpsBaseUrl: false }))
+      .use(pagesPlugin);
+
+    /** The `?v=` the login page links `name` with. */
+    async function linkedVersion(name: string): Promise<string | undefined> {
+      const html = await (
+        await app.handle(new Request("http://localhost/dashboard/login"))
+      ).text();
+      return html.match(
+        new RegExp(`/dashboard/assets/${name.replace(".", "\\.")}\\?v=([0-9a-f]{12})`),
+      )?.[1];
+    }
+
+    test("the script is public, typed, cached for a year and matches its ?v= hash", async () => {
+      const response = await withHeaders.handle(
+        new Request("http://localhost/dashboard/assets/dashboard.js"),
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+      expect(response.headers.get("cache-control")).toBe(
+        "public, max-age=31536000, immutable",
+      );
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      const body = new Uint8Array(await response.arrayBuffer());
+      const hash = new Bun.CryptoHasher("sha256").update(body).digest("hex");
+      expect(await linkedVersion("dashboard.js")).toBe(hash.slice(0, 12));
+    });
+
+    test("the stylesheet is served when built, a plain 404 otherwise", async () => {
+      const built = await Bun.file(
+        new URL("../../src/pages/assets/dashboard.css", import.meta.url),
+      ).exists();
+      const response = await withHeaders.handle(
+        new Request("http://localhost/dashboard/assets/dashboard.css"),
+      );
+      if (built) {
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("text/css; charset=utf-8");
+        expect(response.headers.get("cache-control")).toBe(
+          "public, max-age=31536000, immutable",
+        );
+        expect(await linkedVersion("dashboard.css")).toMatch(/^[0-9a-f]{12}$/);
+      } else {
+        expect(response.status).toBe(404);
+        expect(await linkedVersion("dashboard.css")).toBeUndefined();
+      }
     });
   });
 
