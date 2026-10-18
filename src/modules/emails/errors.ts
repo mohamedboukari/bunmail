@@ -76,6 +76,20 @@ export class TemplateNotFoundError extends EmailSendRejectedError {
 }
 
 /** Neither the request nor the rendered template produced a subject. */
+/**
+ * A message with neither an HTML nor a text body (after the template, if
+ * any, is rendered): refused instead of sending an empty email (#250).
+ */
+export class BodyRequiredError extends EmailSendRejectedError {
+  override readonly name = "BodyRequiredError";
+  readonly status = 422;
+  readonly code = "BODY_REQUIRED";
+
+  constructor() {
+    super("A body is required: provide html or text, inline or via a template.");
+  }
+}
+
 export class SubjectRequiredError extends EmailSendRejectedError {
   override readonly name = "SubjectRequiredError";
   readonly status = 422;

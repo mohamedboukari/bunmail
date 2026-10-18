@@ -98,3 +98,43 @@ export function parseSmtpError(message: string): ParsedSmtpError | null {
 
   return null;
 }
+
+/**
+ * An SMTP reply line: a three-digit code at the start of a line, then an
+ * optional enhanced status code right after it (`550 5.1.1 ...`,
+ * `421-4.7.0 ...`).
+ */
+const REPLY_LINE_RE = /^([245]\d{2})[ -](?:([245])\.(\d{1,3})\.(\d{1,3})(?=\s|$))?.*$/m;
+
+/**
+ * Classifies a failed send from what the SMTP server actually replied
+ * (#250). Nodemailer sets `responseCode` and `response` on an error caused
+ * by an SMTP reply; without them, only a line that *starts* with a reply
+ * code counts. Anything else (a connection, DNS or TLS failure, whose
+ * message may carry IP addresses, ports or host names that look like
+ * status codes) has no reply to classify: `null`, retried as temporary.
+ */
+export function classifySendFailure(error: unknown): ParsedSmtpError | null {
+  if (!(error instanceof Error)) return null;
+  const responseCode: unknown = Reflect.get(error, "responseCode");
+  const response: unknown = Reflect.get(error, "response");
+  const reply =
+    typeof responseCode === "number"
+      ? `${responseCode} ${typeof response === "string" ? response.replace(/^\d{3}[ -]/, "") : ""}`
+      : error.message;
+
+  const line = reply.match(REPLY_LINE_RE);
+  if (!line) return null;
+  const basic = line[1] ?? "";
+  const enhanced = line[2] ? `${line[2]}.${line[3]}.${line[4]}` : null;
+  const text = line[0];
+  const cls = enhanced ? (line[2] ?? "") : basic.charAt(0);
+
+  if (cls === "4") return { kind: "soft", code: enhanced ?? "4.0.0" };
+  if (cls !== "5") return null;
+  const policy =
+    (line[3] === "7" || SENDER_BLOCK_RE.test(text)) && !RECIPIENT_UNKNOWN_RE.test(text);
+  return policy
+    ? { kind: "policy", code: enhanced ?? "5.7.0" }
+    : { kind: "hard", code: enhanced ?? "5.0.0" };
+}

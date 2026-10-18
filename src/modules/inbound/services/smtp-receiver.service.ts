@@ -342,8 +342,14 @@ export function start(): void {
             void (async () => {
               if (aborted) return;
               try {
-                const rawMessage = Buffer.concat(chunks).toString("utf-8");
-                const parsed = await simpleParser(rawMessage);
+                const rawBytes = Buffer.concat(chunks);
+                const rawMessage = rawBytes.toString("utf-8");
+                /**
+                 * MIME parsing gets the raw bytes (#250): decoding them as UTF-8
+                 * first corrupted 8-bit parts in other charsets before
+                 * mailparser could apply each part's own charset.
+                 */
+                const parsed = await simpleParser(rawBytes);
 
                 /**
                  * Bounce branch (#24). If the message is a DSN, route it to

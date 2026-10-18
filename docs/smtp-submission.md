@@ -48,7 +48,9 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 
 ### Not forwarded (v1 limitations)
 
-- **Attachments** are **not** relayed. The outbound pipeline (`createEmail` / `sendMail` / the `emails` schema) has no attachment field yet, so the submission path relays `from/to/cc/bcc/reply-to/subject/html/text` plus the custom headers above only. Fine for typical transactional mail (Infisical/Netbird/Dify invites, alerts, password resets); attachment support is a separate follow-up.
+- **Attachments** are **not supported** yet: a message with an attachment is **refused** with `550 Attachments are not supported` (#250) rather than delivered without it. The outbound pipeline (`createEmail` / `sendMail` / the `emails` schema) has no attachment field yet, so the submission path relays `from/to/cc/bcc/reply-to/subject/html/text` plus the custom headers above only. Fine for typical transactional mail (Infisical/Netbird/Dify invites, alerts, password resets); attachment support is a separate follow-up.
+- **Charsets:** the message is MIME-parsed from its raw bytes, so 8-bit parts in any declared charset (ISO-8859-1, Windows-1252, ...) are decoded correctly (#250).
+- **A body is required:** a message with neither a text nor an HTML part is refused (`550`, #250).
 
 ## Configuration
 

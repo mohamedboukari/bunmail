@@ -37,6 +37,14 @@ export interface DeliveryGroup {
    * suppressed. A sign of a reputation or DNS problem, not a bad address.
    */
   blocked?: boolean;
+  /**
+   * How the last failure was classified from the SMTP reply (#250): set by
+   * the mailer, read by the queue instead of re-parsing `lastError`. Absent
+   * on rows written before, and when the failure had no SMTP reply.
+   */
+  failureKind?: "hard" | "policy" | "soft";
+  /** The (enhanced) status code that classification came from. */
+  failureCode?: string;
   /** Per-message-id is canonical across the row, but kept here for symmetry. */
   messageId?: string;
 }

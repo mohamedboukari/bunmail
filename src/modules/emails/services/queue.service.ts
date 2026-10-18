@@ -14,7 +14,7 @@ import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
-import { parseSmtpError } from "../../../utils/smtp-error.ts";
+import { parseSmtpError, type ParsedSmtpError } from "../../../utils/smtp-error.ts";
 import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
@@ -690,7 +690,7 @@ async function sendClaimedEmail(
     for (const [mxHost, group] of Object.entries(result.deliveryState)) {
       if (group.status !== "failed") continue;
       if (priorStatuses.get(mxHost) === "failed") continue; /** Already handled. */
-      const parsed = group.lastError ? parseSmtpError(group.lastError) : undefined;
+      const parsed = failureOf(group);
       if (parsed?.kind !== "hard")
         continue; /** Synthetic DNS failures + transient exhaust handled separately. */
 
@@ -794,7 +794,7 @@ async function sendClaimedEmail(
     const finalAnySent = finalGroups.some((g) => g.status === "sent");
     const finalAnyHardBounce = Object.entries(finalState).some(([, g]) => {
       if (g.status !== "failed") return false;
-      const p = g.lastError ? parseSmtpError(g.lastError) : undefined;
+      const p = failureOf(g);
       return p?.kind === "hard";
     });
 
@@ -965,6 +965,16 @@ async function holdForUnreadableDkimKey(
     },
     { apiKeyId: email.apiKeyId },
   );
+}
+
+/**
+ * A group's failure classification: the one the mailer stored from the
+ * SMTP reply (#250), or, for rows written before, `lastError` parsed.
+ */
+function failureOf(group: DeliveryGroup): ParsedSmtpError | undefined {
+  if (group.failureKind)
+    return { kind: group.failureKind, code: group.failureCode ?? "" };
+  return group.lastError ? (parseSmtpError(group.lastError) ?? undefined) : undefined;
 }
 
 /**

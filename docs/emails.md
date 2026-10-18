@@ -300,7 +300,7 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 }
 ```
 
-**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: a hard 5xx that auto-suppressed the recipients, a sender policy block, or the email got too old to retry with this group still pending). A group refused for sender reasons (5.7.x, blocklist, authentication) has `"blocked": true` and its recipients are not suppressed (#246).
+**Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: a hard 5xx that auto-suppressed the recipients, a sender policy block, or the email got too old to retry with this group still pending). A group refused for sender reasons (5.7.x, blocklist, authentication) has `"blocked": true` and its recipients are not suppressed (#246). A failure is classified from the SMTP reply only (#250): Nodemailer's `responseCode`/`response`, or a line that starts with a reply code; a connection, DNS or TLS error has no reply and stays `retry`, so an IP address, port or host name in its message is never read as a status code. The classification is stored on the group (`failureKind`: `hard`, `policy` or `soft`; `failureCode`), and the queue reads it instead of re-parsing `lastError`.
 
 **Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
 
