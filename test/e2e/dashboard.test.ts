@@ -214,8 +214,14 @@ const deleteTemplateAs = mock(
     Promise.resolve({ ok: false, reason: "not_found" }),
 );
 
-/** Every export of template.service.ts: mock.module leaks across files. */
-void mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+/**
+ * Every export of template.service.ts: mock.module leaks across files. The
+ * factory is registered at load and again in beforeAll: when another e2e
+ * file (templates-api) registered its own template mock first, the routes
+ * could stay bound to that one, so this file re-applies its own before its
+ * tests run (CI file order, reproduced with `bun test --randomize`).
+ */
+const templateServiceMock = (): Record<string, unknown> => ({
   MAX_RENDERED_BODY_LENGTH: 5 * 1024 * 1024,
   MAX_RENDERED_SUBJECT_LENGTH: 500,
   renderTemplate: mock(() => ""),
@@ -228,7 +234,17 @@ void mock.module("../../src/modules/templates/services/template.service.ts", () 
   deleteTemplate: mock(() => Promise.resolve(undefined)),
   updateTemplateAs,
   deleteTemplateAs,
-}));
+});
+void mock.module(
+  "../../src/modules/templates/services/template.service.ts",
+  templateServiceMock,
+);
+beforeAll(() => {
+  void mock.module(
+    "../../src/modules/templates/services/template.service.ts",
+    templateServiceMock,
+  );
+});
 
 void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   createWebhook: mock(() => Promise.resolve({})),
