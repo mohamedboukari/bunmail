@@ -200,7 +200,7 @@ per-replica.
 | GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
 | GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
 | GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
-| GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
+| GET /dashboard                   | Stats overview: outbound, inbound, configuration sections; for admins and the owner, a **Server identity** card (#248): each sending IP (`MAIL_PUBLIC_IP` or the A/AAAA records of `MAIL_HOSTNAME`) with whether its PTR names `MAIL_HOSTNAME` and resolves back. The result comes from the boot check and refreshes in the background every 10 minutes, so the page never waits on DNS |
 | GET /dashboard/account/password  | Change your own password; signs out every other session (any role, #279) |
 | GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |

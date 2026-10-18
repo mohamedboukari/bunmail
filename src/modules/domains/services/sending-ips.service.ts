@@ -119,6 +119,58 @@ export async function checkReverseDns(
   return { source, checks };
 }
 
+/** A reverse DNS check result, with when it ran (for the dashboard, #248). */
+export interface ReverseDnsStatus {
+  hostname: string;
+  source: SendingIps["source"];
+  checks: ReverseDnsCheck[];
+  checkedAt: Date;
+}
+
+/** How long a reverse DNS result is shown before a background refresh. */
+const STATUS_TTL_MS = 10 * 60 * 1000;
+
+/** The latest result, shared by the boot check and the dashboard. */
+let latestStatus: ReverseDnsStatus | null = null;
+/** The refresh in flight, so concurrent page loads share one lookup. */
+let refreshing: Promise<void> | null = null;
+
+/** Runs the check and stores the result. Never throws. */
+async function refreshReverseDnsStatus(
+  deps?: ReverseDnsDeps,
+): Promise<ReverseDnsStatus | null> {
+  try {
+    const { source, checks } = await checkReverseDns(deps);
+    latestStatus = {
+      hostname: normalizeHostname(config.mail.hostname),
+      source,
+      checks,
+      checkedAt: new Date(),
+    };
+  } catch (error: unknown) {
+    logger.warn("Reverse DNS status refresh failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return latestStatus;
+}
+
+/**
+ * The latest reverse DNS result for the dashboard (#248), without waiting
+ * on DNS: returns what is cached (possibly `null` before the first check)
+ * and starts a background refresh once it is older than 10 minutes.
+ */
+export function peekReverseDnsStatus(now: number = Date.now()): ReverseDnsStatus | null {
+  const stale =
+    latestStatus === null || now - latestStatus.checkedAt.getTime() >= STATUS_TTL_MS;
+  if (stale && refreshing === null) {
+    refreshing = refreshReverseDnsStatus().then(() => {
+      refreshing = null;
+    });
+  }
+  return latestStatus;
+}
+
 /**
  * Logs the reverse DNS check once at boot (#248). Never fatal and never
  * blocks startup. Behind NAT the container cannot see its real egress
@@ -127,7 +179,9 @@ export async function checkReverseDns(
  */
 export async function logReverseDnsAtBoot(deps?: ReverseDnsDeps): Promise<void> {
   try {
-    const { source, checks } = await checkReverseDns(deps);
+    const status = await refreshReverseDnsStatus(deps);
+    if (status === null) return;
+    const { source, checks } = status;
     const failed = checks.filter((check) => !check.ok);
     if (checks.length > 0 && failed.length === 0) {
       logger.info("Reverse DNS confirmed for every sending IP", {

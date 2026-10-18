@@ -1,6 +1,8 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { StatsCard } from "../components/stats-card.tsx";
 import type { DashboardStats } from "../../modules/emails/services/stats.service.ts";
+import type { ReverseDnsStatus } from "../../modules/domains/services/sending-ips.service.ts";
+import { TimeDisplay } from "../components/time-display.tsx";
 
 /**
  * Dashboard home page: shows an overview grid of stat cards.
@@ -13,14 +15,20 @@ import type { DashboardStats } from "../../modules/emails/services/stats.service
  * Admins and the owner also get a link to the Invitations page (#217):
  * the sidebar is shared by every role and does not know the viewer's.
  *
+ * Admins and the owner also see the Server identity card (#248): the
+ * sending IPs and whether their reverse DNS names `MAIL_HOSTNAME`.
+ *
  * @param canInvite True when the viewer may open the Invitations page.
+ * @param serverIdentity The cached reverse DNS result, for admins only.
  */
 export function HomePage({
   stats,
   canInvite = false,
+  serverIdentity,
 }: {
   stats: DashboardStats;
   canInvite?: boolean;
+  serverIdentity?: { status: ReverseDnsStatus | null };
 }) {
   /** Format the success rate as a percentage with one decimal: null = no data yet */
   const successRateDisplay =
@@ -131,6 +139,72 @@ export function HomePage({
           accent="border-pink-500"
         />
       </div>
+
+      {serverIdentity !== undefined && (
+        <ServerIdentityCard status={serverIdentity.status} />
+      )}
     </BaseLayout>
+  );
+}
+
+/**
+ * Server identity (#248): forward-confirmed reverse DNS of each sending IP.
+ * Gmail rejects mail from an IP whose PTR does not name the sending host
+ * and resolve back to it; the PTR is set at the hosting provider.
+ */
+function ServerIdentityCard({ status }: { status: ReverseDnsStatus | null }) {
+  return (
+    <>
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3 mt-8">
+        Server identity
+      </h2>
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
+        {status === null ? (
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Checking reverse DNS... reload in a moment.
+          </p>
+        ) : (
+          <>
+            <p class="text-sm mb-3">
+              Sending as <code safe>{status.hostname}</code> from{" "}
+              {status.source === "MAIL_PUBLIC_IP"
+                ? "MAIL_PUBLIC_IP"
+                : "the A/AAAA records of MAIL_HOSTNAME"}
+              , checked <TimeDisplay value={status.checkedAt} />.
+            </p>
+            {status.checks.length === 0 ? (
+              <p class="text-sm text-red-600 dark:text-red-400">
+                No sending IP found: set MAIL_PUBLIC_IP or give MAIL_HOSTNAME an A or AAAA
+                record.
+              </p>
+            ) : (
+              <ul class="space-y-2">
+                {status.checks.map((check) => (
+                  <li class="text-sm flex flex-wrap items-baseline gap-2">
+                    <span
+                      class={
+                        check.ok
+                          ? "text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                          : "text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300"
+                      }
+                    >
+                      {check.ok ? "PTR ok" : "PTR problem"}
+                    </span>
+                    <code safe>{check.ip}</code>
+                    <span class="text-gray-600 dark:text-gray-400" safe>
+                      {check.reason}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
+              Behind NAT the server cannot see its real egress address: set MAIL_PUBLIC_IP
+              to it.
+            </p>
+          </>
+        )}
+      </div>
+    </>
   );
 }
