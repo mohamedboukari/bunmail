@@ -47,6 +47,7 @@ import {
   PasswordResetPage,
 } from "../../src/pages/routes/reset.tsx";
 import { UsersPage } from "../../src/pages/routes/users.tsx";
+import { AccountPasswordPage } from "../../src/pages/routes/account-password.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -616,6 +617,33 @@ describe("Dashboard page render smoke tests", () => {
       expect(html).not.toContain("/dashboard/users/usr_off/reset-password");
       expect(html).toContain("token=&lt;x&gt;");
       expect(html).not.toContain("token=<x>");
+    });
+  });
+
+  describe("Change password page (#279)", () => {
+    test("AccountPasswordPage: the fixed action, three empty password fields, hostile values escaped", async () => {
+      const html = await AccountPasswordPage({
+        email: "<script>alert(1)</script>@example.com",
+        flash: { message: "<img src=x onerror=alert(2)>", type: "error" },
+      });
+      expect(html).toContain('action="/dashboard/account/password"');
+      for (const name of ["current", "password", "confirm"]) {
+        expect(html).toMatch(new RegExp(`<input[^>]*type="password"[^>]*name="${name}"`));
+      }
+      expect(html).toContain('autocomplete="current-password"');
+      /** No field is ever refilled: no password reaches a page. */
+      expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;@example.com");
+      expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+    });
+
+    test("the sidebar links every role to the page, highlighted on it", async () => {
+      const html = await AccountPasswordPage({ email: "member@example.com" });
+      expect(html).toContain('href="/dashboard/account/password"');
+      expect(html).toContain("Change password");
+      const other = await TemplatesPage({ templates: [], creators, viewer });
+      expect(other).toContain('href="/dashboard/account/password"');
     });
   });
 });

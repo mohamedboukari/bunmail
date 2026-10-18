@@ -62,7 +62,7 @@ The role is read on every request, so a role change applies on the next request.
 
 | Helper | Lets through | Used for |
 |---|---|---|
-| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
 | `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
@@ -146,6 +146,14 @@ Nobody acts on their own account, and the owner is never demoted, deactivated, r
 2. `POST /dashboard/reset` (form fields `token`, `password`, `confirm`) checks same-origin first (`403` and a `warn` log `Password reset POST rejected: cross-origin (possible CSRF)`), then the token (the same `400` page, logged only at `debug`), then the policy (a problem re-renders the form with `200`, no hashing, no write), then, in one transaction, spends the token, replaces the password, signs the account out of every session, revokes its other open tokens and the invitations and reset links it issued (its pending invitations must be sent again), and opens a new session. A login that checked the old password while the reset ran gets the generic invalid email or password answer.
 3. On success the session the browser already presented is revoked (as at login), the new session's cookie is set and the browser goes to `/dashboard`. Logged at `warn` as `Password reset completed`.
 
+### Change password (#279)
+
+Every signed-in account, the owner included, changes its own password at **Change password** (`/dashboard/account/password`, linked from the bottom of the sidebar for every role). Internals: [docs/users.md](users.md#password-change-279).
+
+1. `GET /dashboard/account/password` renders the form (`no-store`): the account's address (escaped), the current password, a new password and its confirmation. Fields are never refilled after a refusal.
+2. `POST /dashboard/account/password` (form fields `current`, `password`, `confirm`, `memberGuard`): the session guard refuses a cross-origin POST first (`403`). Then the failed-attempt budget: the login limiter's settings (`DASHBOARD_LOGIN_RATE_LIMIT_*`) under keys of its own, `password:user:<userId>` and `password:ip:<client IP>` (IPv6 by `/64`); over budget the form comes back with `429` and `Too many attempts. Try again later.`, before any argon2id work. Then the policy, with no argon2id and no attempt counted (current password required; the new one 15 to 256 characters, confirmed, different from the current one; `200` with the message). Then the attempt is counted and the current password verified, exactly one argon2id verify; a wrong one gets `200` and the generic `Current password is incorrect.` and stays counted. A completed change clears both keys.
+3. On success, in one transaction: the password is replaced, every session of the account is signed out (this browser's too), the account's open reset links are revoked, and a fresh session bound to the new password is opened for this browser; its cookie is set and the browser goes back to the form with `Password changed. You were signed out on every other device.` If the password was reset elsewhere, or the account deactivated, between the check and the change, nothing changes (`409`). Logged at `warn` as `Password changed` (`userId`, the new `sessionId`, `previousSessionId`, `sessionsRevoked`, `resetLinksRevoked`, `ip`); a refusal is `warn` `Password change refused` with a `reason`. Never a password.
+
 **Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
 
 ### Brute-force protection (#109)
@@ -165,6 +173,10 @@ There is no per-account lockout (it would let anyone lock the owner out) and
 no global budget across addresses (it would let anyone lock everyone out);
 guessing across many IPs is slowed only by argon2id and the 15-character
 password minimum.
+The same settings budget the current-password checks of the ownership transfer
+(#218) and of the password change (#279), under keys of their own
+(`transfer:` and `password:`, per account and per client IP), so a stolen
+session cannot guess faster than a login could.
 
 The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from
 the **right** of `X-Forwarded-For` (the leftmost entry is attacker-controlled and
@@ -189,6 +201,7 @@ per-replica.
 | GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
 | GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
+| GET /dashboard/account/password  | Change your own password; signs out every other session (any role, #279) |
 | GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
@@ -261,6 +274,7 @@ src/pages/
 ├── plugins/                  ← One functional plugin per area, each with only its routes (#291)
 │   ├── auth.plugin.tsx       ← Public: login, logout, owner setup, invitation accept, password reset
 │   ├── home.plugin.tsx       ← Stats overview
+│   ├── account.plugin.tsx    ← The signed-in user's own account: change password (#279)
 │   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
@@ -291,7 +305,7 @@ src/pages/
 │   ├── dashboard.js          ← The only script every page loads (#255)
 │   └── icons.tsx             ← Inline SVG icons
 ├── layouts/
-│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role)
+│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role, Change password for every role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
 │   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx and reset.tsx
@@ -299,6 +313,7 @@ src/pages/
 │   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
 │   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
 │   ├── reset.tsx             ← Password reset form and invalid-link page (#277)
+│   ├── account-password.tsx  ← Change password form for the signed-in user (#279)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -375,6 +390,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Transfer ownership → `POST /dashboard/users/:id/transfer` (form field: `password`, the owner's)
 - Issue a password reset link → `POST /dashboard/users/:id/reset-password`
 - Reset a password → `POST /dashboard/reset` (public; form fields: `token`, `password`, `confirm`)
+- Change your own password → `POST /dashboard/account/password` (any role; form fields: `current`, `password`, `confirm`; signs out every other session, #279)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)

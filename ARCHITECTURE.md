@@ -219,7 +219,7 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), record ownership (#219)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), record ownership (#219)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
@@ -234,6 +234,8 @@ bunmail/
 │   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
 │   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
 │   │   │   │                               password-reset-policy.service.ts (pure: one-hour TTL, URL, #277),
+│   │   │   │                               password-change.service.ts (verify, then replace + sign out everywhere, owner lock, #279),
+│   │   │   │                               password-change-policy.service.ts (pure: change form rules, #279),
 │   │   │   │                               record-ownership.service.ts (owner backfill, transfer moves, disabling or downgrading a user's keys, #219)
 │   │   │   └── types/                    ← role / credential / assurance / purpose / invite value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
@@ -253,7 +255,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, emails, api-keys, invitations, users, domains, templates, webhooks, inbound, dmarc, suppressions)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, emails, api-keys, invitations, users, domains, templates, webhooks, inbound, dmarc, suppressions)
 │       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links) bound to kind, user and session (#132, #280, #217, #277)
@@ -266,7 +268,7 @@ bunmail/
 │       │   ├── dashboard.js              ← The only script: theme, confirms, bulk select, chip inputs, time display, previews (#255)
 │       │   └── icons.tsx                 ← Inline SVG icons
 │       ├── layouts/
-│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218)
+│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218; Change password for every role, #279)
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
@@ -274,6 +276,7 @@ bunmail/
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
 │       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
 │       │   ├── reset.tsx                 ← Password reset form + invalid-link page (standalone, #277)
+│       │   ├── account-password.tsx      ← Change password form for the signed-in user (#279)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -858,6 +861,8 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard/assets/dashboard.css    | Self-hosted stylesheet, cached 1 year (#255) | No |
 | GET    | /dashboard/assets/dashboard.js     | Dashboard script, cached 1 year (#255) | No |
 | GET    | /dashboard                         | Stats overview          | Member |
+| GET    | /dashboard/account/password        | Change password form (any role, #279) | Member |
+| POST   | /dashboard/account/password        | Change own password: throttled current-password check, sign out every other session, new session here (#279) | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
 | GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Member |

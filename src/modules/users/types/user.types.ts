@@ -348,6 +348,57 @@ export type CompletePasswordResetResult =
   | { ok: false; reason: "invalid" };
 
 /**
+ * Why a password change (#279) changed nothing:
+ *
+ * - `rate_limited`: the failed-attempt budget is spent; no argon2id ran.
+ * - `invalid_input`: the form failed the policy (`passwordChangeProblem`);
+ *   no argon2id ran and no attempt was counted.
+ * - `wrong_password`: the current password did not verify (or the
+ *   account has no password); counted against the budget.
+ * - `account_inactive`: the account was deactivated or removed meanwhile.
+ * - `credential_changed`: the password verified a moment ago was replaced
+ *   meanwhile (an admin-issued reset completed, or a parallel change won).
+ */
+export type PasswordChangeRefusal =
+  | "rate_limited"
+  | "invalid_input"
+  | "wrong_password"
+  | "account_inactive"
+  | "credential_changed";
+
+/** What a signed-in user submitted to change their own password (#279). */
+export interface PasswordChangeInput {
+  /** `users.id` of the signed-in account (from the guard's `auth`). */
+  userId: string;
+  /** The current password, as typed. */
+  current: string;
+  /** The new password. */
+  password: string;
+  /** The new password again. */
+  confirm: string;
+}
+
+/**
+ * Result of a password change (#279): the fresh session for this browser,
+ * or why nothing changed (`problem` carries the policy message for
+ * `invalid_input`). Never carries a password or a hash.
+ */
+export type ChangePasswordResult =
+  | {
+      ok: true;
+      /** How many sessions of the account were revoked (this browser's included). */
+      sessionsRevoked: number;
+      /** How many open password reset links for the account were revoked. */
+      resetLinksRevoked: number;
+      /** `sessions.id` of the session opened for this browser. */
+      sessionId: string;
+      /** Raw cookie value of that session. */
+      sessionToken: string;
+    }
+  | { ok: false; reason: Exclude<PasswordChangeRefusal, "invalid_input"> }
+  | { ok: false; reason: "invalid_input"; problem: string };
+
+/**
  * A freshly minted owner setup link (#215). `token` is the raw value for
  * the URL: it is shown once (log line or terminal) and never stored.
  */

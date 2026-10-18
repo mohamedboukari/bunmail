@@ -112,7 +112,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Trash + auto-purge**: Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
 - **Suppression list**: per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
-- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth); owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
+- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, queue depth); owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, a Change password page for every account (signs out every other device), and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
 - **OpenAPI 3.0**: interactive docs at `/api/docs`
 - **Type-safe**: strict TypeScript, Drizzle ORM, no `any`
 
@@ -253,7 +253,7 @@ See [docs/](docs/) for module-level documentation:
 - [docs/emails.md](docs/emails.md): Outbound module
 - [docs/inbound.md](docs/inbound.md): Inbound module
 - [docs/dmarc-reports.md](docs/dmarc-reports.md): DMARC `rua` aggregate report ingest
-- [docs/users.md](docs/users.md): Dashboard accounts, roles, invitations, sessions and password reset links
+- [docs/users.md](docs/users.md): Dashboard accounts, roles, invitations, sessions, password reset links and password change
 - [docs/logging.md](docs/logging.md): Log format, correlation IDs and tracing a request, email or SMTP session
 - [docs/self-hosting.md](docs/self-hosting.md): Production deployment with DNS records
 - [THREAT_MODEL.md](THREAT_MODEL.md): Assets, attackers, controls, and operator responsibilities
