@@ -229,8 +229,19 @@ async function sendDomainNotification(
   if (!notifyEmail) return;
 
   const from = `${config.inboundNotify.fromLocalPart}@${domain.name}`;
-  /** No usable key (none, or decrypt failed): sent unsigned rather than dropped. */
   const dkim = resolveDomainDkim(domain);
+  /**
+   * A stored key that does not decrypt (#244): in production the
+   * notification is not sent unsigned. With no key at all, or in
+   * development, it is sent unsigned rather than dropped.
+   */
+  if (!dkim && domain.dkimPrivateKey !== null && config.env === "production") {
+    logger.error("Inbound notification not sent: DKIM key unreadable", {
+      domain: domain.name,
+      inboundId: input.inboundId,
+    });
+    return;
+  }
   const messageId = `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
   const detailUrl = config.appBaseUrl
     ? `${config.appBaseUrl}/dashboard/inbound/${input.inboundId}`

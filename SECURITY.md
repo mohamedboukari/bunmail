@@ -91,7 +91,7 @@ Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_
 1. **Stop sending traffic** (drain the queue, take the API offline).
 2. With the *current* key still set, run a one-shot script that decrypts every row's `dkim_private_key` to plaintext PEM, and every `webhooks.secret` to its plaintext, writing them back unencrypted.
 3. Generate a new key (`openssl rand -base64 32`), update `.env`, set `DKIM_ENCRYPTION_KEY=<new>`.
-4. Restart: the boot-time encrypters (DKIM keys and webhook secrets) see the now-plaintext rows and re-encrypt them under the new key.
+4. Restart: the boot-time encrypters (DKIM keys and webhook secrets) see the now-plaintext rows and re-encrypt them under the new key. If any DKIM key was missed and is still encrypted under the old key, production refuses to start and names the domains (#244): nothing is ever sent unsigned.
 5. Resume traffic.
 
 A safer rolling rotation (read with old key, write with new) needs both keys to coexist briefly, see the follow-up issue for the planned design.

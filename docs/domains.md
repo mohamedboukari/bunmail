@@ -47,7 +47,7 @@ Table: `domains`
 
 When a domain is created, BunMail automatically generates a 2048-bit RSA keypair:
 
-- **Private key**: generated as PEM, then encrypted with AES-256-GCM using `DKIM_ENCRYPTION_KEY` from `.env` before insert (#23). The plaintext PEM only lives in memory inside `createDomain()` and is never logged. Decrypted on read by the queue's domain lookup; decrypt failure logs and falls through to unsigned mail (fail-open).
+- **Private key**: generated as PEM, then encrypted with AES-256-GCM using `DKIM_ENCRYPTION_KEY` from `.env` before insert (#23). The plaintext PEM only lives in memory inside `createDomain()` and is never logged. Decrypted on read by the queue's domain lookup. **A key that does not decrypt fails closed in production (#244):** the boot refuses to start, naming the domains (`findUndecryptableDomainKeys`), and the queue never sends unsigned: the email is held on the retry backoff and fails once it is too old to retry. Development warns and sends unsigned.
 - **Public key**: stored plaintext in `dkim_public_key`, provided as a DNS TXT record value
 
 The DKIM DNS record the user needs to add is returned in the API response as `dkimDnsRecord`.
@@ -94,7 +94,7 @@ Hard-deletes a domain and its keys.
 
 ### domain-dkim.service.ts
 
-- `resolveDomainDkim(domain): DkimOptions | undefined`: decrypts the domain's stored DKIM key (`DKIM_ENCRYPTION_KEY`; a plaintext key is used with a `warn`, a decrypt failure is logged at `error` and yields no key) and returns the signing options, or `undefined` when there is no usable key. Used by inbound notifications (#106, which then send unsigned) and invitation emails (#217, which then do not send). The queue keeps its own copy of the decrypt step.
+- `resolveDomainDkim(domain): DkimOptions | undefined`: decrypts the domain's stored DKIM key (`DKIM_ENCRYPTION_KEY`; a plaintext key is used with a `warn`, a decrypt failure is logged at `error` and yields no key) and returns the signing options, or `undefined` when there is no usable key. Used by inbound notifications (#106: with no key at all they send unsigned; with a stored key that does not decrypt they are not sent in production, #244) and invitation emails (#217, which then do not send). The queue keeps its own copy of the decrypt step.
 
 ### dns-verification.service.ts
 

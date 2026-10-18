@@ -21,7 +21,7 @@
 import { eq, isNotNull } from "drizzle-orm";
 import { db } from "./index.ts";
 import { domains } from "../modules/domains/models/domain.schema.ts";
-import { encryptSecret, isEncryptedSecret } from "../utils/crypto.ts";
+import { decryptSecret, encryptSecret, isEncryptedSecret } from "../utils/crypto.ts";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 
@@ -84,6 +84,32 @@ export async function encryptDomainKeys(): Promise<{
   }
 
   return { encrypted, skipped };
+}
+
+/**
+ * Names of the domains whose stored DKIM key does not decrypt with the
+ * current `DKIM_ENCRYPTION_KEY` (#244): a regenerated `.env`, or a key
+ * rotation that skipped re-encryption. Run at boot after
+ * {@link encryptDomainKeys}; production refuses to start on any (see
+ * `src/index.ts`), since every send from those domains would otherwise be
+ * held rather than signed. Never logs or returns key material.
+ */
+export async function findUndecryptableDomainKeys(): Promise<string[]> {
+  const rows = await db
+    .select({ name: domains.name, dkimPrivateKey: domains.dkimPrivateKey })
+    .from(domains)
+    .where(isNotNull(domains.dkimPrivateKey));
+
+  const unreadable: string[] = [];
+  for (const row of rows) {
+    if (row.dkimPrivateKey === null || !isEncryptedSecret(row.dkimPrivateKey)) continue;
+    try {
+      decryptSecret(row.dkimPrivateKey, config.dkimEncryptionKey);
+    } catch {
+      unreadable.push(row.name);
+    }
+  }
+  return unreadable;
 }
 
 /**
