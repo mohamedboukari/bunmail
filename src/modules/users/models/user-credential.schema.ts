@@ -26,10 +26,9 @@ import { CREDENTIAL_TYPES, literals } from "../types/user.types.ts";
  */
 /*
  * A `metadata` jsonb column was in the #214 design and is deliberately
- * deferred: the bun-sql driver stores jsonb values as JSON strings (#261),
- * so anything written to it could not be queried in SQL until that is
- * fixed. Everything the planned types need has an explicit column; if a
- * later type needs free-form data, add the column with #261 resolved.
+ * deferred: everything the planned types need has an explicit column. If
+ * a later type needs free-form data, add it with the `jsonb` column type
+ * from `src/db/jsonb.ts`, which stores real JSON (#261).
  */
 export const userCredentials = pgTable(
   "user_credentials",

@@ -1,12 +1,5 @@
-import {
-  pgTable,
-  varchar,
-  text,
-  integer,
-  timestamp,
-  jsonb,
-  index,
-} from "drizzle-orm/pg-core";
+import { pgTable, varchar, text, integer, timestamp, index } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { sql } from "drizzle-orm";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
@@ -183,7 +176,7 @@ export const emails = pgTable(
      * group that succeeded on attempt 1 never receives a duplicate on
      * attempt 2 even if Outlook 4xx'd. See `docs/emails.md`.
      */
-    deliveryState: jsonb("delivery_state").$type<DeliveryState | null>(),
+    deliveryState: jsonb<DeliveryState | null>("delivery_state"),
 
     /** When this email was first queued */
     createdAt: timestamp("created_at").notNull().defaultNow(),

@@ -1,12 +1,5 @@
-import {
-  index,
-  pgTable,
-  varchar,
-  boolean,
-  timestamp,
-  text,
-  jsonb,
-} from "drizzle-orm/pg-core";
+import { index, pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { users } from "../../users/models/user.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 
@@ -31,7 +24,7 @@ export const webhooks = pgTable(
     url: text("url").notNull(),
 
     /** Event types this webhook subscribes to (e.g. ["email.sent", "email.failed"]) */
-    events: jsonb("events").$type<string[]>().notNull().default([]),
+    events: jsonb<string[]>("events").notNull().default([]),
 
     /**
      * HMAC-SHA256 signing secret, encrypted at rest with

@@ -1,13 +1,6 @@
 import { sql } from "drizzle-orm";
-import {
-  pgTable,
-  varchar,
-  boolean,
-  timestamp,
-  jsonb,
-  index,
-  check,
-} from "drizzle-orm/pg-core";
+import { pgTable, varchar, boolean, timestamp, index, check } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { users } from "../../users/models/user.schema.ts";
 import { literals } from "../../users/types/user.types.ts";
 import { API_KEY_DISABLED_REASONS } from "../types/api-key.types.ts";
@@ -58,7 +51,7 @@ export const apiKeys = pgTable(
      * API and the SMTP submission server, since both go through
      * `createEmail`. Addresses are stored lower-cased.
      */
-    allowedSenders: jsonb("allowed_senders").$type<string[]>().notNull().default([]),
+    allowedSenders: jsonb<string[]>("allowed_senders").notNull().default([]),
 
     /** Updated on every successful API request: useful for auditing */
     lastUsedAt: timestamp("last_used_at"),
