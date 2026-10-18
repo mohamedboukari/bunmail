@@ -1,12 +1,5 @@
-import {
-  pgTable,
-  varchar,
-  text,
-  timestamp,
-  integer,
-  jsonb,
-  index,
-} from "drizzle-orm/pg-core";
+import { pgTable, varchar, text, timestamp, integer, index } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { sql } from "drizzle-orm";
 import { webhooks } from "./webhook.schema.ts";
 
@@ -88,10 +81,10 @@ export const webhookDeliveries = pgTable(
      *  from the last attempt (truncated body preview, headers we care
      *  about). Kept so operators can debug without re-running the
      *  request. Null when the attempt didn't yield a structured response. */
-    lastResponseBody: jsonb("last_response_body").$type<{
+    lastResponseBody: jsonb<{
       bodyPreview?: string;
       headers?: Record<string, string>;
-    } | null>(),
+    } | null>("last_response_body"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

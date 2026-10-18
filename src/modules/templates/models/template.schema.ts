@@ -1,4 +1,5 @@
-import { index, pgTable, varchar, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { index, pgTable, varchar, text, timestamp } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { users } from "../../users/models/user.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 
@@ -29,7 +30,7 @@ export const templates = pgTable(
     textContent: text("text_content"),
 
     /** List of variable names used in this template (for documentation/validation) */
-    variables: jsonb("variables").$type<string[]>().notNull().default([]),
+    variables: jsonb<string[]>("variables").notNull().default([]),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
