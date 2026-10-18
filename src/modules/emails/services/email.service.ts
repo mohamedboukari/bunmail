@@ -1,7 +1,6 @@
 import { eq, desc, and, sql, inArray, isNull, isNotNull } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
-import { domains } from "../../domains/models/domain.schema.ts";
 import { templates } from "../../templates/models/template.schema.ts";
 import {
   MAX_RENDERED_SUBJECT_LENGTH,
@@ -12,16 +11,19 @@ import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
+import { checkSenderDomain } from "./sender-domain.service.ts";
+import { SubjectRequiredError, TemplateNotFoundError } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
-import { config } from "../../../config.ts";
 import type {
   SendEmailInput,
   ListEmailsFilters,
   Email,
   EmailSource,
+  CreatedEmail,
+  SendWarning,
 } from "../types/email.types.ts";
 
 /**
@@ -31,7 +33,12 @@ import type {
  * 1. Direct content: subject, html, text provided inline.
  * 2. Template: templateId + variables resolved from the templates table.
  *
- * Also links the sender's domain for DKIM signing.
+ * Also links the sender's domain for DKIM signing and returns, next to
+ * the row, a warning per sender-domain DNS record that is not verified
+ * (#245): the REST response and the dashboard show them to the sender.
+ * Input it refuses throws an `EmailSendRejectedError` subclass
+ * (`../errors.ts`), never a plain `Error`, so callers get a 4xx with a
+ * stable code instead of a masked 500.
  */
 export async function createEmail(
   input: SendEmailInput,
@@ -39,7 +46,7 @@ export async function createEmail(
   /** Ingress channel (#137). REST callers use the default; the SMTP
    *  submission server passes `"smtp"`. */
   source: EmailSource = "api",
-): Promise<Email> {
+): Promise<CreatedEmail> {
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
 
@@ -125,7 +132,8 @@ export async function createEmail(
       .where(and(eq(templates.id, input.templateId), eq(templates.apiKeyId, apiKeyId)));
 
     if (!tpl) {
-      throw new Error(`Template "${input.templateId}" not found`);
+      logger.warn("Send blocked: template not found", { id, apiKeyId });
+      throw new TemplateNotFoundError();
     }
 
     const vars = input.variables ?? {};
@@ -135,28 +143,20 @@ export async function createEmail(
   }
 
   if (!subject) {
-    throw new Error("Subject is required: provide it inline or via a template.");
+    logger.warn("Send blocked: subject missing", { id, apiKeyId });
+    throw new SubjectRequiredError();
   }
 
   let domainId: string | null = null;
+  let warnings: SendWarning[] = [];
 
+  /**
+   * Sender-domain gate (#245): registration, the opt-in
+   * `REQUIRE_VERIFIED_DOMAIN` check, and the warnings for records that
+   * are not verified. See `sender-domain.service.ts`.
+   */
   if (senderDomain) {
-    const [domain] = await db
-      .select({ id: domains.id, dkimVerified: domains.dkimVerified })
-      .from(domains)
-      .where(eq(domains.name, senderDomain));
-
-    if (domain) {
-      domainId = domain.id;
-    } else if (config.env === "production") {
-      throw new Error(
-        `Domain "${senderDomain}" is not registered. Add it via the API or dashboard before sending.`,
-      );
-    }
-
-    if (config.env === "production" && domain && !domain.dkimVerified) {
-      logger.warn("Sending from unverified domain", { domain: senderDomain });
-    }
+    ({ domainId, warnings } = await checkSenderDomain(senderDomain, { id, apiKeyId }));
   }
 
   const [email] = await db
@@ -179,7 +179,22 @@ export async function createEmail(
 
   logger.debug("Email created and queued", { id, status: email!.status, domainId });
 
-  return email!;
+  /**
+   * One line per send that may fail authentication at the receiver. The
+   * REST and dashboard callers also show the warnings; SMTP submission
+   * has no channel for them, so this line is its only trace.
+   */
+  if (warnings.length > 0) {
+    logger.warn("Email queued from a sender domain with unverified DNS records", {
+      id,
+      apiKeyId,
+      source,
+      domain: senderDomain,
+      warnings,
+    });
+  }
+
+  return { email: email!, warnings };
 }
 
 /**

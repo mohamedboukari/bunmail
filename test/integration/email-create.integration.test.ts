@@ -12,6 +12,7 @@ import {
   listAllEmails,
 } from "../../src/modules/emails/services/email.service.ts";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
+import { TemplateNotFoundError } from "../../src/modules/emails/errors.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 
 beforeEach(async () => {
@@ -23,7 +24,7 @@ describe("createEmail: happy path", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: domainId, name } = await seed.domain();
 
-    const email = await createEmail(
+    const { email } = await createEmail(
       {
         from: `hello@${name}`,
         to: "user@example.org",
@@ -45,7 +46,7 @@ describe("createEmail: happy path", () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { name } = await seed.domain();
 
-    const withReplyTo = await createEmail(
+    const { email: withReplyTo } = await createEmail(
       {
         from: `no-reply@${name}`,
         to: "user@example.org",
@@ -57,7 +58,7 @@ describe("createEmail: happy path", () => {
     );
     expect(withReplyTo.replyTo).toBe("support@example.com");
 
-    const without = await createEmail(
+    const { email: without } = await createEmail(
       { from: `no-reply@${name}`, to: "user@example.org", subject: "t", text: "x" },
       apiKeyId,
     );
@@ -68,7 +69,7 @@ describe("createEmail: happy path", () => {
     const { id: apiKeyId } = await seed.apiKey();
     /** No domain row inserted: sender domain unknown. In `BUNMAIL_ENV !==
      *  'production'` (default for tests), createEmail allows this. */
-    const email = await createEmail(
+    const { email } = await createEmail(
       {
         from: "hello@unregistered.test",
         to: "user@example.org",
@@ -149,7 +150,7 @@ describe("createEmail: suppression gate (#25)", () => {
       expiresAt: new Date(Date.now() - 60_000),
     });
     /** No throw: suppression is past its expiry. */
-    const email = await createEmail(
+    const { email } = await createEmail(
       {
         from: "hello@yourdns.example",
         to: "soft@example.com",
@@ -171,7 +172,7 @@ describe("createEmail: suppression gate (#25)", () => {
     });
 
     /** B's send goes through normally. */
-    const email = await createEmail(
+    const { email } = await createEmail(
       {
         from: "hello@yourdns.example",
         to: "user@example.com",
@@ -195,7 +196,7 @@ describe("createEmail: template-based send", () => {
       variables: ["name"],
     });
 
-    const email = await createEmail(
+    const { email } = await createEmail(
       {
         from: "hello@yourdns.example",
         to: "alice@example.com",
@@ -210,7 +211,7 @@ describe("createEmail: template-based send", () => {
     expect(email.textContent).toBe("Hi Alice");
   });
 
-  test("throws when templateId belongs to a different api_key (cross-tenant lookup blocked)", async () => {
+  test("throws TemplateNotFoundError when templateId belongs to a different api_key (cross-tenant lookup blocked)", async () => {
     const { id: keyA } = await seed.apiKey();
     const { id: keyB } = await seed.apiKey();
     const { id: tplId } = await seed.template({ apiKeyId: keyA });
@@ -229,11 +230,10 @@ describe("createEmail: template-based send", () => {
     } catch (err) {
       thrown = err;
     }
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).toHaveProperty(
-      "message",
-      expect.stringMatching(/Template .* not found/),
-    );
+    /** Typed 404 (#245); the message does not echo the submitted id. */
+    expect(thrown).toBeInstanceOf(TemplateNotFoundError);
+    expect(thrown).toMatchObject({ status: 404, code: "TEMPLATE_NOT_FOUND" });
+    expect(String(thrown)).not.toContain(tplId);
   });
 });
 
@@ -268,11 +268,11 @@ describe("createEmail: source channel + filters (#137)", () => {
   test("defaults source to 'api'; SMTP path records 'smtp'", async () => {
     const { id: apiKeyId } = await seed.apiKey();
 
-    const viaApi = await createEmail(
+    const { email: viaApi } = await createEmail(
       { from: "a@example.com", to: "u@example.org", subject: "s", html: "<p>x</p>" },
       apiKeyId,
     );
-    const viaSmtp = await createEmail(
+    const { email: viaSmtp } = await createEmail(
       { from: "a@example.com", to: "u@example.org", subject: "s", html: "<p>x</p>" },
       apiKeyId,
       "smtp",

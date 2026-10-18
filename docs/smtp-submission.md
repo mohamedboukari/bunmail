@@ -30,11 +30,11 @@ Point the app's SMTP settings at BunMail:
 | **Encryption** | STARTTLS if you configured a cert (below); otherwise none / plaintext |
 | **Username** | anything: `apikey` is conventional (mirrors SendGrid) |
 | **Password** | a BunMail API key, `bm_live_…` |
-| **From** | an address on a domain **registered + DKIM-verified** in BunMail |
+| **From** | an address on a domain **registered** in BunMail, with its DKIM record published and verified (see below) |
 
 The password is treated as the API key: SHA-256 hashed and looked up exactly like a REST `Authorization: Bearer` token. Revocation also applies to sessions that are already authenticated: each message checks that the key is still active, so a revoked key's open connection is refused (`550`) at its next message. The username is ignored (any value works) so apps that force a non-empty username still work.
 
-> **Sender domain requirement.** In `BUNMAIL_ENV=production`, the `From` domain must be registered in BunMail (`POST /api/v1/domains`) or the send is rejected with SMTP `550`. In development, unregistered domains are allowed (sent unsigned). This is the same rule the REST `POST /api/v1/emails/send` path enforces.
+> **Sender domain requirement.** In `BUNMAIL_ENV=production`, the `From` domain must be registered in BunMail (`POST /api/v1/domains`) or the send is rejected with SMTP `550`. In development, unregistered domains are allowed (sent unsigned). A registered domain whose DKIM, SPF or DMARC record is not verified is still accepted: SMTP has no channel to report it, so BunMail logs `Email queued from a sender domain with unverified DNS records` at `warn` with the email id and the `warnings`. Set `REQUIRE_VERIFIED_DOMAIN=true` (#245) to refuse a domain whose DKIM record is not verified (re-checked in DNS once, a failure remembered for 5 minutes) with SMTP `550`, and an unregistered domain in every environment. These are the same rules the REST `POST /api/v1/emails/send` path enforces. A missing subject is also a `550`.
 
 ## What gets relayed
 
@@ -92,7 +92,7 @@ Already SMTP-based: switching from SendGrid/Brevo to BunMail is a `.env` change 
 EMAIL_HOST=mail.yourdomain.com   # your BunMail host
 EMAIL_USER=apikey                # any value
 EMAIL_PASSWORD=bm_live_xxxxxxxx  # a BunMail API key
-EMAIL_SENDER=hello@yourdomain.com  # domain registered + DKIM-verified in BunMail
+EMAIL_SENDER=hello@yourdomain.com  # domain registered in BunMail, DKIM record verified
 ```
 
 ```ts
@@ -118,7 +118,7 @@ SMTP host      = mail.yourdomain.com   (or the BunMail container hostname)
 SMTP port      = 587
 SMTP username  = apikey
 SMTP password  = bm_live_...
-SMTP from      = notifications@yourdomain.com   (registered + DKIM-verified)
+SMTP from      = notifications@yourdomain.com   (registered, DKIM record verified)
 TLS/STARTTLS   = on if you configured a cert, off on a trusted private network
 ```
 

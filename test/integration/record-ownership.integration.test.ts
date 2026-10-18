@@ -877,6 +877,8 @@ describe("Send page: a member sends only with its own keys (#219)", () => {
     await seed.domain({ name: "example.com" });
     const own = await page("POST", "/dashboard/send", "member", sendForm(mine));
     expect(locationOf(own)).toContain("Email queued for delivery");
+    /** The seeded domain has no verified record: the flash says so (#245). */
+    expect(locationOf(own)).toContain("DKIM, SPF and DMARC records are not verified");
     expect(await sentWith(mine)).toBe(1);
     const byAdmin = await page("POST", "/dashboard/send", "admin", sendForm(mine));
     expect(locationOf(byAdmin)).toContain("Email queued for delivery");

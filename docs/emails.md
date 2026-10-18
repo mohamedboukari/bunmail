@@ -49,6 +49,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 ```
 src/modules/emails/
 ├── emails.plugin.ts                ← Routes: send, list, get, trash/restore/permanent/empty
+├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245)
 ├── models/
 │   └── email.schema.ts             ← Drizzle pgTable + indexes
 ├── dtos/
@@ -56,13 +57,14 @@ src/modules/emails/
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
+│   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
 │   └── stats.service.ts            ← Dashboard stats aggregation
 ├── serializations/
 │   └── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
 └── types/
-    └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters
+    └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters, SendWarning, CreatedEmail
 ```
 
 ## Sending Modes
@@ -95,11 +97,22 @@ Provide `templateId` and `variables`: subject/body are rendered from the templat
 
 ## Domain Linking
 
-When an email is created, the sender's domain (from `from` address) is looked up in the `domains` table:
+When an email is created, the sender's domain (from `from` address) is looked up in the `domains` table (`checkSenderDomain` in `sender-domain.service.ts`, #245):
 
 - If found, `domain_id` is set and DKIM signing uses the domain's private key
-- In **production** mode (`BUNMAIL_ENV=production`), the domain must be registered or the request is rejected
-- In **development** mode, unregistered domains are allowed (`domain_id` stays null)
+- In **production** mode (`BUNMAIL_ENV=production`), the domain must be registered or the send is rejected with `422 SENDER_DOMAIN_NOT_REGISTERED` (SMTP `550`)
+- In **development** mode, unregistered domains are allowed (`domain_id` stays null) with the warning `domain_unregistered`
+
+**Warnings.** For a registered domain, each stored verification flag that is false adds a warning: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (in that order; `[]` when all are verified). The flags are a snapshot from the last **Verify** run (see #250). `POST /api/v1/emails/send` returns them as a top-level `warnings` array next to `data`, the dashboard send flash names them in plain words, and every send with warnings logs `Email queued from a sender domain with unverified DNS records` at `warn` (`id`, `apiKeyId`, `source`, `domain`, `warnings`): the only trace for SMTP submission, which has no channel for them. The email is queued either way.
+
+**`REQUIRE_VERIFIED_DOMAIN=true`** (default `false`) makes DKIM a requirement:
+
+- A registered domain whose stored `dkim_verified` is false is re-verified inline with `verifyDomain` (which stores the new SPF/DKIM/DMARC flags). If DKIM now passes, the send goes ahead with warnings from the fresh flags.
+- If it still fails, or the check throws, the send is rejected with `422 SENDER_DOMAIN_UNVERIFIED` (SMTP `550`), and the failure is remembered in process for 5 minutes per domain (`UNVERIFIED_RECHECK_MS`): sends in that window are refused without another DNS lookup, and concurrent sends share one lookup. The stored flag is read first, so running **Verify** after fixing the record takes effect at once. Each replica keeps its own memory.
+- An unregistered domain is rejected in every environment.
+- SPF and DMARC never block: they only warn.
+
+**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject. Messages never echo submitted content other than the sender domain name.
 
 ## List-Unsubscribe
 
@@ -126,8 +139,8 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 
 **Reads (live)**
 
-#### `createEmail(input, apiKeyId): Promise<Email>`
-Creates an email record with status `queued`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing.
+#### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
+Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
 Retrieves a non-trashed email scoped to the requesting API key.
@@ -158,6 +171,11 @@ Permanently deletes every trashed email for the key. Returns count.
 **Trash (unscoped: dashboard only)**
 
 `trashEmailUnscoped`, `trashEmailsUnscoped`, `listTrashedEmailsUnscoped`, `getTrashedEmailByIdUnscoped`, `restoreEmailUnscoped`, `permanentDeleteEmailUnscoped`, `emptyEmailsTrashUnscoped`: same semantics, no API-key filter.
+
+### sender-domain.service.ts
+
+#### `checkSenderDomain(name, ids, deps?): Promise<{ domainId, warnings }>`
+The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIED_DOMAIN` inline re-verification with its negative cache, and the warnings. `deps` (verifier, clock, cache) is injectable for tests.
 
 ### mailer.service.ts
 

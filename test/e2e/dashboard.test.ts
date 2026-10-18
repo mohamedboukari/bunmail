@@ -111,7 +111,7 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   listEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   getEmailById: mock(() => Promise.resolve(undefined)),
-  createEmail: mock(() => Promise.resolve({})),
+  createEmail: mock(() => Promise.resolve({ email: {}, warnings: [] })),
   /** Trash: included so this mock can leak into other e2e tests
    *  without stripping fields they depend on. */
   trashEmail: mock(() => Promise.resolve(undefined)),

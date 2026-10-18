@@ -62,7 +62,7 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
   }'
 ```
 
-In production mode the `from` domain must first be registered and DKIM-verified (see [docs/self-hosting.md](docs/self-hosting.md#register-your-domain-generates-dkim-keys)), otherwise the send is rejected.
+In production mode the `from` domain must first be registered (see [docs/self-hosting.md](docs/self-hosting.md#register-your-domain-generates-dkim-keys)), otherwise the send is rejected with `422 SENDER_DOMAIN_NOT_REGISTERED`. Publish and verify its DKIM, SPF and DMARC records before sending real mail: until then the response lists `warnings` such as `dkim_unverified`, and `REQUIRE_VERIFIED_DOMAIN=true` refuses the send instead.
 
 To open the dashboard, claim the owner account: on first boot BunMail logs a one-time setup link (`docker compose logs app | grep 'Owner setup link'`). Open it, choose a password (15 characters or more), and you are signed in at <http://localhost:3000/dashboard>. After that, sign in with `BUNMAIL_OWNER_EMAIL` and that password. Lost the link? `docker compose exec app bun run src/db/reset-owner.ts` prints a new one.
 

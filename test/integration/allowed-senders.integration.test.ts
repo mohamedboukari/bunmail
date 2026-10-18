@@ -40,7 +40,7 @@ beforeEach(async () => {
 describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
   test("empty allowlist (default) permits any sender", async () => {
     const { apiKey } = await createApiKey({ name: "unrestricted" });
-    const email = await createEmail(
+    const { email } = await createEmail(
       { from: "anyone@example.com", to: "user@example.org", subject: "hi" },
       apiKey.id,
     );
@@ -52,7 +52,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
       name: "restricted",
       allowedSenders: ["noreply@example.com"],
     });
-    const email = await createEmail(
+    const { email } = await createEmail(
       { from: "noreply@example.com", to: "user@example.org", subject: "hi" },
       apiKey.id,
     );
@@ -81,7 +81,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
       name: "restricted",
       allowedSenders: ["NoReply@Example.com"],
     });
-    const email = await createEmail(
+    const { email } = await createEmail(
       { from: "noreply@EXAMPLE.com", to: "user@example.org", subject: "hi" },
       apiKey.id,
     );
@@ -106,7 +106,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
     await updateApiKey(apiKey.id, {
       allowedSenders: ["noreply@example.com", "ceo@example.com"],
     });
-    const ok = await createEmail(
+    const { email: ok } = await createEmail(
       { from: "ceo@example.com", to: "user@example.org", subject: "2" },
       apiKey.id,
     );

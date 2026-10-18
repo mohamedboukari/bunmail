@@ -43,6 +43,10 @@ export const emailsPlugin = new Elysia({
    * the sendEmailDto schema, inserts it into the DB with status "queued",
    * and returns the serialized email. The queue processor will handle
    * actual SMTP delivery asynchronously.
+   *
+   * `warnings` (#245) lists the sender domain's DNS records that are not
+   * verified (`dkim_unverified`, `spf_unverified`, `dmarc_unverified`, or
+   * `domain_unregistered` in development); empty when all are verified.
    */
   .post(
     "/send",
@@ -50,11 +54,12 @@ export const emailsPlugin = new Elysia({
       logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
 
       /** Create the email record: it starts in "queued" status */
-      const email = await emailService.createEmail(body, apiKeyId);
+      const { email, warnings } = await emailService.createEmail(body, apiKeyId);
 
       return {
         success: true,
         data: serializeEmail(email),
+        warnings,
       };
     },
     {
@@ -63,7 +68,7 @@ export const emailsPlugin = new Elysia({
         tags: ["Emails"],
         summary: "Send an email",
         description:
-          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously.",
+          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are).",
         security: [{ bearerAuth: [] }],
       },
     },

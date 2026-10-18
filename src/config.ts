@@ -62,6 +62,23 @@ export function optionalBoundedInt(
   return value;
 }
 
+/**
+ * Reads an optional boolean flag strictly: `true` or `false`, unset or
+ * blank gives `fallback`. Anything else (`1`, `yes`, `TRUE`) refuses to
+ * boot, so a typo cannot silently leave a guard off. Exported for tests.
+ */
+export function optionalStrictBoolean(
+  key: string,
+  fallback: boolean,
+  raw: string | undefined = process.env[key],
+): boolean {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed === "") return fallback;
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  throw new Error(`[config] ${key} must be "true" or "false", got "${raw}"`);
+}
+
 /** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -422,6 +439,17 @@ export const config = {
      * deliver to an internal mail server on purpose.
      */
     allowPrivateMx: optionalEnv("MAIL_ALLOW_PRIVATE_MX", "false") === "true",
+
+    /**
+     * Refuse sends whose sender domain has no verified DKIM record (#245).
+     * A registered domain whose stored DKIM flag is false is re-verified
+     * inline once (a failure is remembered for 5 minutes per domain); if
+     * it is still unverified the send is rejected with
+     * `SENDER_DOMAIN_UNVERIFIED` (SMTP 550), and an unregistered domain
+     * is rejected in every environment. Off by default: the send is
+     * queued and the response carries `warnings`. SPF and DMARC only warn.
+     */
+    requireVerifiedDomain: optionalStrictBoolean("REQUIRE_VERIFIED_DOMAIN", false),
   },
 
   /** Inbound SMTP server for receiving emails */

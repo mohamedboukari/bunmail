@@ -99,9 +99,14 @@ Oversize bodies return `422 Unprocessable Entity` from the validation layer.
     "attempts": 0,
     "nextAttemptAt": "2026-03-15T12:00:00.000Z",
     "createdAt": "2026-03-15T12:00:00.000Z"
-  }
+  },
+  "warnings": ["spf_unverified", "dmarc_unverified"]
 }
 ```
+
+`warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
+
+**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
 `nextAttemptAt` is set while `status` is `queued`: the earliest time the next delivery attempt can run. After a temporary failure (for example greylisting) it moves out with the retry backoff; it is `null` once the email is sending or done.
 
@@ -618,7 +623,7 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 400    | Malformed request body, e.g. invalid JSON (`INVALID_BODY`) |
 | 401    | Missing or invalid token, or the sending key was revoked (`API_KEY_REVOKED`) |
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
-| 404    | Resource not found                              |
+| 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), or a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`) |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED` |
 | 429    | Rate limit exceeded                             |
