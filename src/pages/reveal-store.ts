@@ -6,7 +6,8 @@ import { logger } from "../utils/logger.ts";
  *
  * After the dashboard creates an API key or a webhook, the raw key or the
  * HMAC secret must be shown exactly once; so must an invitation link that
- * could not be emailed (#217) and a password reset link (#277). Putting it in the post-create
+ * could not be emailed (#217), a password reset link (#277) and a fresh
+ * set of TOTP recovery codes (#220). Putting it in the post-create
  * redirect URL would leak it into browser history, proxy access logs and
  * `Referer` headers, which would defeat the "shown once, stored hashed"
  * model. Instead it is stashed here under an opaque random token, only the
@@ -37,10 +38,12 @@ const REVEAL_MAX_ENTRIES = 1000;
  * `invite_link` (#217) is the accept link of an invitation whose email
  * did not go out, shown to the inviter on the Invitations page. A
  * `password_reset_link` (#277) is shown to the admin who issued it on the
- * Users page.
+ * Users page. `recovery_codes` (#220) are the TOTP recovery codes, one per
+ * line, shown on the Two-factor page to the user and session that
+ * enabled 2FA or regenerated them.
  */
 export type RevealKind =
-  "api_key" | "webhook_secret" | "invite_link" | "password_reset_link";
+  "api_key" | "webhook_secret" | "invite_link" | "password_reset_link" | "recovery_codes";
 
 /** The dashboard user and session a reveal belongs to (from `auth`, #222). */
 export interface RevealOwner {

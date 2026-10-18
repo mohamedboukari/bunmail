@@ -49,6 +49,9 @@ import {
 import { UsersPage } from "../../src/pages/routes/users.tsx";
 import { AccountPasswordPage } from "../../src/pages/routes/account-password.tsx";
 import { AccountSessionsPage } from "../../src/pages/routes/account-sessions.tsx";
+import { AccountTwoFactorPage } from "../../src/pages/routes/account-two-factor.tsx";
+import { LoginTwoFactorPage } from "../../src/pages/routes/login-two-factor.tsx";
+import { QrCode } from "../../src/pages/components/qr-code.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -705,6 +708,88 @@ describe("Dashboard page render smoke tests", () => {
       expect(other).toContain('href="/dashboard/account/sessions"');
       expect(other).toContain("Active sessions");
     });
+  });
+});
+
+describe("Two-factor pages (#220)", () => {
+  const off = { enabled: false, enabledAt: null, recoveryCodesLeft: 0 };
+  const on = { enabled: true, enabledAt: new Date(), recoveryCodesLeft: 2 };
+  const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  const uri = `otpauth://totp/BunMail:owner%40example.com?secret=${secret}&issuer=BunMail`;
+
+  test("LoginTwoFactorPage: the code form, a cancel that signs out, the error escaped", async () => {
+    const html = await LoginTwoFactorPage({ error: "<img src=x onerror=alert(1)>" });
+    expect(html).toContain('action="/dashboard/login/two-factor"');
+    expect(html).toContain('name="code"');
+    expect(html).toContain('autocomplete="one-time-code"');
+    expect(html).toContain('action="/dashboard/logout"');
+    expect(html).not.toContain("<img src=x");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  test("off: one button to start, the policy notice only when required", async () => {
+    const html = await AccountTwoFactorPage({
+      status: off,
+      pending: null,
+      required: false,
+    });
+    expect(html).toContain('action="/dashboard/account/two-factor/start"');
+    expect(html).not.toContain("Your role requires");
+    const required = await AccountTwoFactorPage({
+      status: off,
+      pending: null,
+      required: true,
+    });
+    expect(required).toContain("Your role requires two-factor authentication");
+  });
+
+  test("enrolment: a QR code, the key grouped, the confirm form, never the URI", async () => {
+    const html = await AccountTwoFactorPage({
+      status: off,
+      pending: { secret, uri },
+      required: false,
+    });
+    expect(html).toContain("<svg");
+    expect(html).toContain("JBSW Y3DP EHPK 3PXP");
+    expect(html).toContain('action="/dashboard/account/two-factor/confirm"');
+    expect(html).not.toContain("otpauth");
+    expect(html).not.toContain(secret);
+  });
+
+  test("on: codes left, regenerate and disable forms, recovery codes escaped when revealed", async () => {
+    const html = await AccountTwoFactorPage({
+      status: on,
+      pending: null,
+      required: false,
+      recoveryCodes: ["abcd-efgh-ijkl-mnop", "<script>alert(1)</script>"],
+      flash: { message: "<i>done</i>", type: "success" },
+    });
+    expect(html).toContain("Two-factor authentication is on.");
+    expect(html).toContain("running out of recovery codes");
+    expect(html).toContain('action="/dashboard/account/two-factor/recovery-codes"');
+    expect(html).toContain('action="/dashboard/account/two-factor/disable"');
+    expect(html).toContain("abcd-efgh-ijkl-mnop");
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).not.toContain("<i>done</i>");
+    expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+  });
+
+  test("the sidebar links every role to the page", async () => {
+    const other = await TemplatesPage({ templates: [], creators, viewer });
+    expect(other).toContain('href="/dashboard/account/two-factor"');
+    expect(other).toContain("Two-factor");
+  });
+
+  test("QrCode: integers and fixed strings only; the encoded value never appears", async () => {
+    const svg = await QrCode({ value: uri, label: "QR code" });
+    expect(svg).not.toContain("otpauth");
+    expect(svg).not.toContain(secret);
+    const path = svg.match(/<path d="([^"]*)"/)?.[1] ?? "";
+    expect(path.length).toBeGreaterThan(0);
+    expect(path).toMatch(/^(M\d+,\d+h1v1h-1z)+$/);
+    expect(svg).toMatch(/viewBox="0 0 \d+ \d+"/);
+    /** Deterministic: the same value gives the same code. */
+    expect(await QrCode({ value: uri, label: "QR code" })).toBe(svg);
   });
 });
 

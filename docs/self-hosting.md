@@ -93,6 +93,9 @@ APP_BASE_URL=https://mail.yourdomain.com
 SYSTEM_MAIL_FROM=noreply@yourdomain.com
 # Optional: days an invitation link stays valid (1 to 90, default 7)
 INVITE_EXPIRY_DAYS=7
+# Optional: require two-factor authentication (#220): none (default), owner,
+# or admin (admins and the owner)
+# REQUIRE_2FA=owner
 # Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
@@ -285,6 +288,16 @@ Sessions (#216) live in the database: a session expires after 24 hours without u
 The dashboard lets you manage emails, domains, templates, webhooks, API keys and suppressions, and view delivery status. Admins and the owner invite teammates at **Invitations** and manage accounts at **Users** (roles, deactivation, password reset links, ownership transfer); see [docs/dashboard.md](dashboard.md).
 
 Every account sees its own signed-in devices at **Active sessions** (#281, in the Account group of the sidebar): browser and system, IP address, signed in at, last active, and, when you set up GeoIP below, an approximate location. A user can sign out one device or every other device from there. With `SYSTEM_MAIL_FROM` set, a password sign-in from a browser the account has not used in the last 30 days also emails the account an alert (#282); BunMail recognizes the browser by a long-lived `bm_device` cookie, so a changing IP does not count as a new device.
+
+### Two-factor authentication (#220)
+
+Every account can turn on two-factor authentication at **Two-factor** (Account group of the sidebar): scan the QR code with an authenticator app (Aegis, 2FAS, Google Authenticator, 1Password, Bitwarden and the like), enter its 6-digit code, and keep the ten recovery codes shown once. From then on, signing in asks for a code from the app after the password. **Turn it on for the owner account**: the owner can do everything, and a leaked password alone is then not enough.
+
+`REQUIRE_2FA` makes it mandatory: `owner` for the owner, `admin` for admins and the owner (default `none`). An account it covers without 2FA is sent to its Two-factor page on every request until it enrols, so nobody is locked out, but enable 2FA on those accounts first if you want a smooth switch. Anything but `none`, `owner` or `admin` refuses to start.
+
+**Lost phone.** Sign in with a recovery code (each works once). Without one: an admin or the owner issues a **Reset password** link on the Users page; completing it sets a new password and removes the account's 2FA (enrol again afterwards). For the owner, run `docker compose exec app bun run src/db/reset-owner.ts` and complete the printed link: that removes the owner's 2FA too. Shell access is the trust boundary of that path.
+
+The TOTP secrets are stored encrypted with `DKIM_ENCRYPTION_KEY` (like DKIM keys and webhook secrets). If you rotate that key without re-encrypting, existing authenticator codes stop working (recovery codes still do; reset to re-enrol).
 
 ### Approximate session locations (GeoIP, #281)
 

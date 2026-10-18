@@ -3,7 +3,9 @@ import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
 import type {
   AttemptLimiter,
+  DashboardAuth,
   PasswordChangeRefusal,
+  TwoFactorRefusal,
 } from "../../modules/users/types/user.types.ts";
 import {
   resolveClientIp,
@@ -14,13 +16,22 @@ import {
 } from "../../middleware/login-rate-limit.ts";
 import { AccountPasswordPage } from "../routes/account-password.tsx";
 import { AccountSessionsPage } from "../routes/account-sessions.tsx";
+import { AccountTwoFactorPage } from "../routes/account-two-factor.tsx";
 import { memberGuard } from "../guards.tsx";
+import { consumeRevealSecret, stashRevealSecret } from "../reveal-store.ts";
 import * as passwordChangeService from "../../modules/users/services/password-change.service.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
+import * as twoFactorService from "../../modules/users/services/two-factor.service.ts";
+import {
+  TWO_FACTOR_PAGE,
+  twoFactorRequired,
+} from "../../modules/users/services/two-factor-policy.service.ts";
 import { clearSession, issueSession } from "../lib/session-helpers.ts";
 import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
+import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { twoFactorLimiter } from "../lib/two-factor-limiter.ts";
 
 /* ─── Password change helpers (#279) ─── */
 
@@ -104,9 +115,49 @@ function clientIp(request: Request, socketIp: string | undefined): string {
   });
 }
 
+/* ─── Two-factor helpers (#220) ─── */
+
 /**
- * The signed-in user's own account: the Change password page (#279) and
- * the Active sessions page (#281). Every role, the owner included.
+ * What the Two-factor page says for a refused action. A wrong code and a
+ * wrong password get one message where both are asked for, so the page
+ * never says which of the two was wrong.
+ */
+const TWO_FACTOR_REFUSAL: Record<TwoFactorRefusal, string> = {
+  rate_limited: "Too many attempts. Try again later.",
+  no_pending: "Start the setup again: no setup was in progress in this browser.",
+  already_enabled: "Two-factor authentication is already on.",
+  not_enabled: "Two-factor authentication is off.",
+  wrong_code: "Invalid code. Try again.",
+  wrong_password: "The password or the code is incorrect.",
+};
+
+/** Redirects to the Two-factor page with a flash banner (and a reveal token). */
+function toTwoFactorPage(
+  set: Context["set"],
+  message: string,
+  type: "success" | "error",
+  reveal?: string,
+): string {
+  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
+  return redirect(
+    set,
+    `${TWO_FACTOR_PAGE}?${query}${reveal === undefined ? "" : `&reveal=${reveal}`}`,
+  );
+}
+
+/**
+ * Stashes fresh recovery codes in the one-time reveal store (#280), bound
+ * to this user and session, and returns the reveal token for the
+ * redirect: the codes never go into a URL, a flash or a log.
+ */
+function stashRecoveryCodes(codes: string[], auth: DashboardAuth): string {
+  return stashRevealSecret(codes.join("\n"), "recovery_codes", revealOwnerOf(auth));
+}
+
+/**
+ * The signed-in user's own account: the Change password page (#279), the
+ * Active sessions page (#281) and the Two-factor page (#220). Every role,
+ * the owner included.
  */
 export function accountPages(app: GuardedDashboard) {
   return (
@@ -270,6 +321,296 @@ export function accountPages(app: GuardedDashboard) {
       )
 
       /**
+       * GET /dashboard/account/two-factor
+       * The Two-factor page (#220): status and recovery codes left when on;
+       * the QR code and key of an enrolment started in this session; the
+       * recovery codes once, when `reveal` is a live token this user and
+       * session stashed (#280). Never cached. Also where `REQUIRE_2FA` sends
+       * an account that must enrol (the guard lets this path through).
+       */
+      .get(
+        "/account/two-factor",
+        async ({ query, auth, set }) => {
+          setNoStore(set);
+          const recoveryCodes = consumeRevealSecret(
+            query.reveal,
+            "recovery_codes",
+            revealOwnerOf(auth),
+          )?.split("\n");
+          try {
+            const status = await twoFactorService.twoFactorStatus(auth.user.id);
+            const pending = status.enabled
+              ? null
+              : await twoFactorService.pendingEnrolment(
+                  auth.user.id,
+                  auth.session.id,
+                  auth.user.email,
+                );
+            return (
+              <AccountTwoFactorPage
+                status={status}
+                pending={pending}
+                required={
+                  !status.enabled &&
+                  twoFactorRequired(config.dashboard.require2fa, auth.user.role)
+                }
+                recoveryCodes={recoveryCodes}
+                flash={toFlash(query.flash, query.flashType)}
+              />
+            );
+          } catch (error: unknown) {
+            logger.error("Two-factor page failed", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              error: errorMessage(error),
+            });
+            set.status = 500;
+            return (
+              <AccountTwoFactorPage
+                status={{ enabled: false, enabledAt: null, recoveryCodesLeft: 0 }}
+                pending={null}
+                required={false}
+                flash={{
+                  message: "Failed to load your two-factor settings.",
+                  type: "error",
+                }}
+              />
+            );
+          }
+        },
+        {
+          beforeHandle: memberGuard,
+          query: t.Object({
+            flash: t.Optional(t.String()),
+            flashType: t.Optional(t.String()),
+            reveal: t.Optional(t.String()),
+          }),
+        },
+      )
+
+      /**
+       * POST /dashboard/account/two-factor/start
+       * Starts an enrolment (#220): a new secret, encrypted and kept on this
+       * session's row until confirmed (a restart or another replica keeps
+       * it; logout or expiry drops it). Starting again replaces it. The
+       * page then shows the QR code and the key; nothing secret goes in the
+       * redirect.
+       */
+      .post(
+        "/account/two-factor/start",
+        async ({ auth, set }) => {
+          try {
+            const result = await twoFactorService.startEnrolment(
+              auth.user.id,
+              auth.session.id,
+            );
+            if (!result.ok) {
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+            }
+            logger.info("Two-factor enrolment started", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+            });
+            return redirect(set, TWO_FACTOR_PAGE);
+          } catch (error: unknown) {
+            logger.error("Two-factor enrolment start failed", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              error: errorMessage(error),
+            });
+            return toTwoFactorPage(
+              set,
+              "Failed to start the setup: nothing was changed.",
+              "error",
+            );
+          }
+        },
+        { beforeHandle: memberGuard },
+      )
+
+      /**
+       * POST /dashboard/account/two-factor/confirm
+       * Confirms the enrolment with a first code (#220). On success, in one
+       * transaction: the `totp` credential is stored, ten recovery codes are
+       * created (hashes only), every other session of the account is signed
+       * out and this one becomes `mfa`. The recovery codes are revealed once
+       * on the page (one-time reveal bound to this user and session). A
+       * wrong code keeps the enrolment so the user can retry.
+       */
+      .post(
+        "/account/two-factor/confirm",
+        async ({ body, auth, set, request, server }) => {
+          const ip = clientIp(request, server?.requestIP(request)?.address);
+          try {
+            const result = await twoFactorService.confirmEnrolment(
+              auth.user.id,
+              auth.session.id,
+              body.code,
+            );
+            if (!result.ok) {
+              logger.warn("Two-factor enrolment refused", {
+                userId: auth.user.id,
+                sessionId: auth.session.id,
+                reason: result.reason,
+                ip,
+              });
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+            }
+            logger.warn("Two-factor authentication enabled", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              sessionsRevoked: result.sessionsRevoked,
+              ip,
+            });
+            return toTwoFactorPage(
+              set,
+              "Two-factor authentication is on. You were signed out on every other device.",
+              "success",
+              stashRecoveryCodes(result.recoveryCodes, auth),
+            );
+          } catch (error: unknown) {
+            logger.error("Two-factor enrolment failed", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              ip,
+              error: errorMessage(error),
+            });
+            return toTwoFactorPage(
+              set,
+              "Failed to turn on two-factor authentication: nothing was changed.",
+              "error",
+            );
+          }
+        },
+        {
+          beforeHandle: memberGuard,
+          body: t.Object({ code: t.String({ maxLength: 1024 }) }),
+        },
+      )
+
+      /**
+       * POST /dashboard/account/two-factor/recovery-codes
+       * Replaces every recovery code with ten new ones (#220). Needs a code
+       * from the authenticator app (not a recovery code), checked against
+       * the shared second-factor budget before any verification. The new
+       * codes are revealed once.
+       */
+      .post(
+        "/account/two-factor/recovery-codes",
+        async ({ body, auth, set, request, server }) => {
+          const ip = clientIp(request, server?.requestIP(request)?.address);
+          const limiter = twoFactorLimiter(auth.user.id, ip);
+          try {
+            const result = await twoFactorService.regenerateRecoveryCodes(
+              auth.user.id,
+              body.code,
+              limiter,
+            );
+            if (!result.ok) {
+              logger.warn("Recovery codes not regenerated", {
+                userId: auth.user.id,
+                sessionId: auth.session.id,
+                reason: result.reason,
+                ip,
+              });
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+            }
+            limiter.clear();
+            logger.warn("Recovery codes regenerated", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              ip,
+            });
+            return toTwoFactorPage(
+              set,
+              "New recovery codes created. The old ones no longer work.",
+              "success",
+              stashRecoveryCodes(result.recoveryCodes, auth),
+            );
+          } catch (error: unknown) {
+            logger.error("Recovery code regeneration failed", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              ip,
+              error: errorMessage(error),
+            });
+            return toTwoFactorPage(
+              set,
+              "Failed to create new recovery codes: nothing was changed.",
+              "error",
+            );
+          }
+        },
+        {
+          beforeHandle: memberGuard,
+          body: t.Object({ code: t.String({ maxLength: 1024 }) }),
+        },
+      )
+
+      /**
+       * POST /dashboard/account/two-factor/disable
+       * Turns two-factor authentication off (#220). Needs the current
+       * password AND a code (from the app, or a recovery code), with the
+       * shared second-factor budget checked and counted before the argon2id
+       * verify. The `totp` credential and its recovery codes are deleted;
+       * sessions are kept. Under `REQUIRE_2FA` the account is then sent
+       * back to this page until it enrols again.
+       */
+      .post(
+        "/account/two-factor/disable",
+        async ({ body, auth, set, request, server }) => {
+          const ip = clientIp(request, server?.requestIP(request)?.address);
+          const limiter = twoFactorLimiter(auth.user.id, ip);
+          try {
+            const result = await twoFactorService.disableTwoFactor(
+              auth.user.id,
+              body.password,
+              body.code,
+              limiter,
+            );
+            if (!result.ok) {
+              logger.warn("Two-factor disable refused", {
+                userId: auth.user.id,
+                sessionId: auth.session.id,
+                reason: result.reason,
+                ip,
+              });
+              const reason =
+                result.reason === "wrong_code" ? "wrong_password" : result.reason;
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[reason], "error");
+            }
+            limiter.clear();
+            logger.warn("Two-factor authentication disabled", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              method: result.method,
+              ip,
+            });
+            return toTwoFactorPage(set, "Two-factor authentication is off.", "success");
+          } catch (error: unknown) {
+            logger.error("Two-factor disable failed", {
+              userId: auth.user.id,
+              sessionId: auth.session.id,
+              ip,
+              error: errorMessage(error),
+            });
+            return toTwoFactorPage(
+              set,
+              "Failed to turn off two-factor authentication: nothing was changed.",
+              "error",
+            );
+          }
+        },
+        {
+          beforeHandle: memberGuard,
+          body: t.Object({
+            password: t.String({ maxLength: 1024 }),
+            code: t.String({ maxLength: 1024 }),
+          }),
+        },
+      )
+
+      /**
        * GET /dashboard/account/password
        * The change password form, with the success flash after a change.
        */
@@ -327,6 +668,7 @@ export function accountPages(app: GuardedDashboard) {
             const result = await passwordChangeService.changePassword(
               {
                 userId,
+                assurance: auth.session.assurance,
                 current: body.current,
                 password: body.password,
                 confirm: body.confirm,

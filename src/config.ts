@@ -1,5 +1,10 @@
 import { isIP } from "net";
 import { MAX_ADDRESS_LENGTH, isEmailAddress } from "./utils/recipients.ts";
+import {
+  TWO_FACTOR_POLICIES,
+  isTwoFactorPolicy,
+  type TwoFactorPolicy,
+} from "./modules/users/types/user.types.ts";
 
 /**
  * Reads a required environment variable. Throws at startup if missing
@@ -366,6 +371,27 @@ export function readSystemMailFrom(
   return email;
 }
 
+/**
+ * Reads `REQUIRE_2FA` (#220): who must set up two-factor authentication
+ * before using the dashboard. `none` (unset or empty, the default)
+ * requires it of nobody, so upgrading never locks an account out;
+ * `owner` requires it of the owner; `admin` of admins and the owner.
+ * Case and surrounding spaces are ignored. Anything else refuses to boot
+ * in every environment: a typo must not silently leave the policy off.
+ */
+export function readRequire2fa(
+  raw: string = optionalEnv("REQUIRE_2FA", ""),
+): TwoFactorPolicy {
+  const value = raw.trim().toLowerCase();
+  if (value === "") return "none";
+  if (!isTwoFactorPolicy(value)) {
+    throw new Error(
+      `[config] Invalid REQUIRE_2FA "${raw}", must be one of: ${TWO_FACTOR_POLICIES.join(", ")}`,
+    );
+  }
+  return value;
+}
+
 /** Online GeoIP providers BunMail can ask (#281). Opt-in only. */
 const GEOIP_PROVIDERS = ["ipinfo"] as const;
 type GeoipProvider = (typeof GEOIP_PROVIDERS)[number];
@@ -724,6 +750,14 @@ export const config = {
      * skips the owner bootstrap. See `readOwnerEmail`.
      */
     ownerEmail: readOwnerEmail(readAppEnv()),
+
+    /**
+     * Who must have two-factor authentication (#220): `none` (default),
+     * `owner`, or `admin` (admins and the owner). An account in scope
+     * without a second factor can open only its Two-factor page until it
+     * enrols. See `readRequire2fa`.
+     */
+    require2fa: readRequire2fa(),
 
     /**
      * Number of trusted reverse-proxy hops in front of BunMail, used to

@@ -23,6 +23,7 @@ import { withOwnerLock } from "./owner.service.ts";
 import { PASSWORD_RESET_TTL_MINUTES } from "./password-reset-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
+import { removeTwoFactor } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -211,10 +212,11 @@ export async function findLivePasswordReset(
  *    and reset links it issued; delete every session of the account; open the new session (after the
  *    delete, so it survives); touch `users.updated_at`.
  *
- * Only the `password` credential is replaced. Second factors (#220) are
- * not touched: once 2FA ships, a reset must not remove or bypass one, and
- * the session opened here must get `pending` assurance for an account
- * with a second factor (as login will), not `password`.
+ * The account's TOTP second factor and recovery codes are removed too
+ * (#220): an admin-issued reset is the recovery path for a lost
+ * authenticator, and the session opened here is a `password` session of
+ * an account without a second factor (under `REQUIRE_2FA` the user then
+ * has to enrol again before using the dashboard).
  *
  * All or nothing: a failure rolls back every step, sessions included.
  *
@@ -264,6 +266,7 @@ export async function completePasswordReset(
       type: PASSWORD_CREDENTIAL,
       secretHash,
     });
+    const twoFactorRemoved = await removeTwoFactor(tx, userId);
 
     const revokedTokens = await tx
       .update(userTokens)
@@ -316,6 +319,7 @@ export async function completePasswordReset(
       sessionsRevoked,
       tokensRevoked: revokedTokens.length,
       issuedTokensRevoked,
+      twoFactorRemoved,
       sessionId: session.sessionId,
       sessionToken: session.token,
     };

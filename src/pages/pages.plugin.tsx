@@ -24,6 +24,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * Routes:
  * - GET  /dashboard/login           → login form (email + password)
  * - POST /dashboard/login           → check email + password, open a session, set cookie
+ *                                    (`pending`, then the second step, for a 2FA account, #220)
+ * - GET  /dashboard/login/two-factor → second step form (public, needs a pending session, #220)
+ * - POST /dashboard/login/two-factor → check the TOTP or recovery code, mfa session (public, #220)
  * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
@@ -39,6 +42,11 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - GET  /dashboard/account/sessions → own live sessions, this device marked (any role, #281)
  * - POST /dashboard/account/sessions/:id/revoke → sign out one own session (any role, #281)
  * - POST /dashboard/account/sessions/revoke-others → sign out every other own session (any role, #281)
+ * - GET  /dashboard/account/two-factor → 2FA status, enrolment QR code, recovery codes once (any role, #220)
+ * - POST /dashboard/account/two-factor/start → new pending TOTP secret on this session (any role, #220)
+ * - POST /dashboard/account/two-factor/confirm → first code: 2FA on, recovery codes, other sessions out (any role, #220)
+ * - POST /dashboard/account/two-factor/recovery-codes → ten new recovery codes, app code needed (any role, #220)
+ * - POST /dashboard/account/two-factor/disable → 2FA off, password and code needed (any role, #220)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -66,7 +74,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * Auth (#216): account login with email and password against
  * `user_credentials`, then a server-side session in the `sessions` table
  * whose opaque token rides in the `bm_session` cookie and rotates every
- * minute. The owner setup, invitation accept and password reset routes
+ * minute. An account with TOTP two-factor (#220) gets a `pending` session
+ * that only the second step opens; `REQUIRE_2FA` holds accounts that must
+ * enrol on their Two-factor page. The owner setup, invitation accept and password reset routes
  * are authorized by their one-time token.
  *
  * Roles (#222): the session guard puts the signed-in account on `auth`,

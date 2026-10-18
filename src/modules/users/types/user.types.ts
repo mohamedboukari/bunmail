@@ -18,9 +18,9 @@ export function isUserRole(value: string): value is UserRole {
 }
 
 /**
- * Login methods. `password` is the only one implemented; the others are
- * reserved so 2FA (#220), passkeys (#223) and OAuth/SSO (#224) can add rows
- * without a schema change.
+ * Login methods. `password` and `totp` (the second factor, #220) are
+ * implemented; the others are reserved so passkeys (#223) and OAuth/SSO
+ * (#224) can add rows without a schema change.
  */
 export const CREDENTIAL_TYPES = ["password", "totp", "passkey", "oauth"] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
@@ -340,6 +340,8 @@ export type CompletePasswordResetResult =
       tokensRevoked: number;
       /** How many open invitations and reset links the account had issued were revoked. */
       issuedTokensRevoked: number;
+      /** The account's TOTP second factor and recovery codes were removed (#220). */
+      twoFactorRemoved: boolean;
       /** `sessions.id` of the session opened for the account. */
       sessionId: string;
       /** Raw cookie value of that session. */
@@ -370,6 +372,11 @@ export type PasswordChangeRefusal =
 export interface PasswordChangeInput {
   /** `users.id` of the signed-in account (from the guard's `auth`). */
   userId: string;
+  /**
+   * Assurance of the session the change is made from (#220): the session
+   * opened for this browser keeps it, so an `mfa` session stays `mfa`.
+   */
+  assurance: SessionAssurance;
   /** The current password, as typed. */
   current: string;
   /** The new password. */
@@ -509,6 +516,11 @@ export interface ActiveSession {
   role: UserRole;
   /** How far the session got through login (`password` or `mfa` here). */
   assurance: SessionAssurance;
+  /**
+   * The account has a confirmed `totp` credential (#220), from the same
+   * query. The guard reads it for the `REQUIRE_2FA` policy.
+   */
+  hasTotp: boolean;
   /** Which of the session's two hashes the presented token matched. */
   matched: "current" | "previous";
   /** The current token is older than `SESSION_ROTATE_SECONDS`. */
@@ -533,7 +545,7 @@ export interface DashboardAuth {
   session: {
     /** `sessions.id`; safe to log, not a credential. */
     id: string;
-    /** `password` or `mfa`; `requireAssurance` compares against it. */
+    /** `password` or `mfa` (a `pending` session never gets this far); `requireAssurance` compares against it. */
     assurance: SessionAssurance;
   };
 }
@@ -582,6 +594,118 @@ export type LoginResult =
     }
   | { ok: false; reason: LoginFailureReason };
 
+/* ─── Two-factor authentication (#220) ─── */
+
+/**
+ * Who must have a second factor before using the dashboard
+ * (`REQUIRE_2FA`): nobody (`none`, the default), the owner (`owner`), or
+ * admins and the owner (`admin`).
+ */
+export const TWO_FACTOR_POLICIES = ["none", "owner", "admin"] as const;
+/** A `REQUIRE_2FA` value. */
+export type TwoFactorPolicy = (typeof TWO_FACTOR_POLICIES)[number];
+
+/** Narrows a configured `REQUIRE_2FA` value to a known policy. */
+export function isTwoFactorPolicy(value: string): value is TwoFactorPolicy {
+  return TWO_FACTOR_POLICIES.some((policy) => policy === value);
+}
+
+/** The two-factor state of one account, for the Two-factor page. */
+export interface TwoFactorStatus {
+  /** The account has a confirmed `totp` credential. */
+  enabled: boolean;
+  /** When it was confirmed, or null when disabled. */
+  enabledAt: Date | null;
+  /** Unused recovery codes left (0 when disabled). */
+  recoveryCodesLeft: number;
+}
+
+/**
+ * An enrolment started in this session and not confirmed yet: the secret
+ * the authenticator app must be given. Never logged, never in a URL.
+ */
+export interface PendingEnrolment {
+  /** The base32 secret (RFC 4648, no padding), shown for manual entry. */
+  secret: string;
+  /** The `otpauth://` URI the QR code encodes. Never rendered as text or in an attribute. */
+  uri: string;
+}
+
+/**
+ * Why a two-factor action changed nothing:
+ *
+ * - `rate_limited`: the failed-attempt budget is spent; nothing was verified.
+ * - `no_pending`: no enrolment was started in this session (or it was confirmed meanwhile).
+ * - `already_enabled`: the account already has a `totp` credential.
+ * - `not_enabled`: the account has no `totp` credential.
+ * - `wrong_code`: the code did not verify, or was already used (replay).
+ * - `wrong_password`: the current password did not verify (disable only).
+ */
+export type TwoFactorRefusal =
+  | "rate_limited"
+  | "no_pending"
+  | "already_enabled"
+  | "not_enabled"
+  | "wrong_code"
+  | "wrong_password";
+
+/** Result of confirming an enrolment: the recovery codes, shown once. */
+export type ConfirmEnrolmentResult =
+  | {
+      ok: true;
+      /** The raw recovery codes (`xxxx-xxxx-xxxx-xxxx`); only their hashes are stored. */
+      recoveryCodes: string[];
+      /** How many other sessions of the account were signed out. */
+      sessionsRevoked: number;
+    }
+  | { ok: false; reason: TwoFactorRefusal };
+
+/** Result of regenerating the recovery codes. */
+export type RegenerateRecoveryCodesResult =
+  { ok: true; recoveryCodes: string[] } | { ok: false; reason: TwoFactorRefusal };
+
+/** How a second factor was proved: a code from the app, or a recovery code. */
+export type SecondFactorMethod = "totp" | "recovery_code";
+
+/** Result of disabling two-factor authentication. */
+export type DisableTwoFactorResult =
+  | {
+      ok: true;
+      /** Which second factor the user proved with. */
+      method: SecondFactorMethod;
+    }
+  | { ok: false; reason: TwoFactorRefusal };
+
+/**
+ * A live session that passed the password step and waits for the second
+ * one (#220): what the two-factor login page needs.
+ */
+export interface PendingSession {
+  /** `sessions.id`; safe to log. */
+  sessionId: string;
+  /** The account signing in. */
+  userId: string;
+  /** The account's stored email (for the new-device alert). PII. */
+  email: string;
+}
+
+/**
+ * Result of the second login step (#220). `session_gone` covers a pending
+ * session that expired, was revoked or was completed by another request.
+ */
+export type TwoFactorLoginResult =
+  | {
+      ok: true;
+      method: SecondFactorMethod;
+      /** Unused recovery codes left, when one was used; null for a TOTP code. */
+      recoveryCodesLeft: number | null;
+      /** The rotated session token (the pending one is dead). */
+      token: string;
+      /** Seconds left until the session's absolute cap: the cookie `Max-Age`. */
+      maxAgeSec: number;
+    }
+  | { ok: false; reason: "rate_limited" | "wrong_code" | "session_gone" };
+
 /** What a completed owner setup returns (#215, #216). */
 export interface CompletedOwnerSetup {
   /** `users.id` of the owner. */
@@ -590,6 +714,8 @@ export interface CompletedOwnerSetup {
   email: string;
   /** Raw cookie value of the session opened for the owner. */
   sessionToken: string;
+  /** The owner's TOTP second factor and recovery codes were removed (#220, reset-owner recovery). */
+  twoFactorRemoved: boolean;
 }
 
 /**

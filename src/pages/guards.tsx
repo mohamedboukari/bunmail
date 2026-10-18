@@ -32,7 +32,7 @@ import type {
 /** Role rank: a higher number may open everything a lower one can. */
 const ROLE_RANK: Record<UserRole, number> = { member: 1, admin: 2, owner: 3 };
 
-/** Assurance rank: `pending` never reaches a route (the session lookup rejects it). */
+/** Assurance rank: `pending` (#220) never reaches a route (the session lookup rejects it). */
 const ASSURANCE_RANK: Record<SessionAssurance, number> = {
   pending: 0,
   password: 1,
@@ -98,8 +98,10 @@ export function requireRole(min: UserRole): RouteGuard {
 }
 
 /**
- * @public Exported ahead of its first use: 2FA (#220) will put it on the
- * routes that need a second factor.
+ * @public No production route carries it: two-factor authentication
+ * (#220) is enforced by the `REQUIRE_2FA` policy in the session guard,
+ * which keeps sessions of accounts without a second factor working
+ * unchanged. It is there for a route that must demand an `mfa` session.
  *
  * A route check that lets through sessions whose assurance ranks at
  * least `min` (`password` < `mfa`). A weaker session gets a 403 page, and

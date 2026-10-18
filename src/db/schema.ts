@@ -24,3 +24,4 @@ export { sessions } from "../modules/users/models/session.schema.ts";
 export { sessionTokenHistory } from "../modules/users/models/session-token-history.schema.ts";
 export { userTokens } from "../modules/users/models/user-token.schema.ts";
 export { userDevices } from "../modules/users/models/user-device.schema.ts";
+export { userRecoveryCodes } from "../modules/users/models/user-recovery-code.schema.ts";

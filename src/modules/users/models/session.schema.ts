@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
+import { check, index, pgTable, text, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./user.schema.ts";
 import { userCredentials } from "./user-credential.schema.ts";
 import { CREDENTIAL_TYPES, SESSION_ASSURANCES, literals } from "../types/user.types.ts";
@@ -45,9 +45,9 @@ export const sessions = pgTable(
     rotatedAt: timestamp("rotated_at", { withTimezone: true }),
 
     /**
-     * `pending` (first factor passed, second required) | `password` |
-     * `mfa`; see `SESSION_ASSURANCES`. The auth guard (#222) can require a
-     * minimum level per route, so adding 2FA later touches no routes.
+     * `pending` (first factor passed, second required, #220) | `password`
+     * | `mfa`; see `SESSION_ASSURANCES`. The guard admits only `password`
+     * and `mfa`; a route can require a minimum level (`requireAssurance`).
      */
     assurance: varchar("assurance", { length: 10 }).notNull().default("password"),
 
@@ -83,6 +83,16 @@ export const sessions = pgTable(
      * the lookup has not finished yet. A VPN shows the VPN's location.
      */
     location: varchar("location", { length: 128 }),
+
+    /**
+     * A TOTP enrolment started in this session and not confirmed yet
+     * (#220): the new secret's base32 text, encrypted with `encryptSecret`
+     * under `DKIM_ENCRYPTION_KEY`. Bound to the session by construction:
+     * it survives a restart and works across replicas, and it dies with the
+     * session (logout, revocation, expiry). Cleared when the enrolment is
+     * confirmed; null otherwise.
+     */
+    totpPendingSecret: text("totp_pending_secret"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

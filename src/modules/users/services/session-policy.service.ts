@@ -43,6 +43,14 @@ export const SESSION_ROTATE_SECONDS = 60;
  */
 export const SESSION_ROTATION_GRACE_SECONDS = 30;
 
+/**
+ * Lifetime of a `pending` session (#220): the password step passed and
+ * the second factor is still to come. Short, and never extended: it can
+ * open only the two-factor login page, and a sign-in left half done
+ * expires on its own. The cookie `Max-Age` is the same.
+ */
+export const SESSION_PENDING_SECONDS = 10 * 60;
+
 /** Longest email the login form accepts: the RFC 5321 path limit. */
 export const LOGIN_EMAIL_MAX_LENGTH = MAX_ADDRESS_LENGTH;
 
