@@ -411,7 +411,7 @@ if (config.smtp.enabled) {
   smtpReceiver.start();
 } else {
   logger.info(
-    "Inbound SMTP receiver disabled: set SMTP_ENABLED=true (and uncomment the SMTP port line in docker-compose.yml) to enable",
+    "Inbound SMTP receiver disabled: set SMTP_ENABLED=true (and publish the SMTP port in docker-compose.override.yml, see docker-compose.override.example.yml) to enable",
   );
 }
 
@@ -425,7 +425,7 @@ if (config.smtpSubmission.enabled) {
   smtpSubmission.start();
 } else {
   logger.info(
-    "SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true (and uncomment the submission port line in docker-compose.yml) to let apps send via SMTP",
+    "SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true (and publish the submission port in docker-compose.override.yml, see docker-compose.override.example.yml) to let apps send via SMTP",
   );
 }
 

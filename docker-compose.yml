@@ -23,14 +23,13 @@ services:
     logging: *default-logging
     build: .
     ports:
-      - "${PORT:-3000}:${PORT:-3000}" # HTTP API + Dashboard
-      # Inbound SMTP is OFF by default. To enable: (1) uncomment the line below,
-      # (2) set SMTP_ENABLED=true and SMTP_PORT=25 in your .env. See docs/inbound.md.
-      # - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
-      # SMTP submission (let apps send THROUGH BunMail) is OFF by default. To enable:
-      # (1) uncomment the line below, (2) set SMTP_SUBMISSION_ENABLED=true in your .env.
-      # See docs/smtp-submission.md.
-      # - "${SMTP_SUBMISSION_PORT:-587}:${SMTP_SUBMISSION_PORT:-587}"
+      # HTTP API + Dashboard, on loopback only (#205): put a reverse proxy with
+      # TLS in front (docs/self-hosting.md). Docker-published ports bypass
+      # UFW, so a 0.0.0.0 binding would expose plain HTTP to the internet.
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+      # Host-specific ports (inbound SMTP on 25, SMTP submission, exposing the
+      # app without a proxy) go in your own docker-compose.override.yml, which
+      # is not tracked: copy docker-compose.override.example.yml.
     env_file: .env
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}

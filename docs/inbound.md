@@ -74,7 +74,7 @@ In production, set `SMTP_PORT=25` and configure your domain's MX record to point
 Inbound is **off by default**: sending-only is the common use case, and an open SMTP receiver is a footgun if it isn't configured deliberately. To turn it on with Docker Compose, three things have to agree:
 
 1. **`.env`**: set `SMTP_ENABLED=true` and `SMTP_PORT=25`.
-2. **`docker-compose.yml`**: uncomment the inbound SMTP port line under `services.app.ports`. It's commented out by default so a fresh checkout doesn't try to bind host port 25 unexpectedly.
+2. **`docker-compose.override.yml`**: publish the inbound SMTP port, using the inbound example in `docker-compose.override.example.yml` (#205). The base `docker-compose.yml` publishes no SMTP port, so a fresh checkout never binds host port 25 unexpectedly.
 3. **DNS**: add an `MX` record for your domain pointing at the host running BunMail.
 
 Then `docker compose up -d --build`. From outside the host, verify with `nc -zv <your-host> 25`: the connection should be accepted. If it isn't, check `docker compose logs app` for the line `Inbound SMTP receiver disabled`: that means step 1 wasn't picked up.

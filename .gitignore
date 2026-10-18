@@ -51,3 +51,6 @@ graphify-out/
 # still runs them from disk, they just must not be committed
 .husky/post-commit
 .husky/post-checkout
+
+# Host-local compose overrides (#205): copy docker-compose.override.example.yml
+docker-compose.override.yml

@@ -167,9 +167,10 @@ docker compose up -d --build
 ```
 
 This starts:
-- **BunMail** on port `$PORT` (HTTP API + Dashboard, default 3000)
-- **PostgreSQL**, published on `127.0.0.1:5432` only (loopback, from `docker-compose.override.yml`, for local development). To keep it on the compose network only, with nothing published, start with `docker compose -f docker-compose.yml up -d --build`, which skips the override file
-- **Inbound SMTP** on port `$SMTP_PORT` (default 2525; use 25 in production: requires `SMTP_ENABLED=true`)
+- **BunMail** on `127.0.0.1:$PORT` (HTTP API + Dashboard, default 3000): loopback only, behind the reverse proxy of section 6 (#205)
+- **PostgreSQL** on the compose network only, nothing published
+
+**Host-specific ports and mounts go in `docker-compose.override.yml`** (#205), which is not tracked by git, so `git pull` never conflicts with them. Start from the example: `cp docker-compose.override.example.yml docker-compose.override.yml`, then keep only what this host needs: inbound SMTP on 25 (`SMTP_ENABLED=true`), SMTP submission, the TLS mount, or (not recommended) the app on all interfaces without a proxy. The example's first block publishes Postgres on `127.0.0.1:5432` for local development; drop it on a server.
 
 Port mappings in `docker-compose.yml` read `PORT` and `SMTP_PORT` from `.env` automatically, if you change them in `.env`, you don't need to edit anything else.
 
@@ -330,9 +331,9 @@ certbot --nginx -d mail.yourdomain.com
 | 25   | TCP      | Inbound   | Receive inbound emails     |
 | 587  | TCP      | Inbound   | SMTP submission: apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true`; restrict to the networks your apps live on) |
 | 443  | TCP      | Inbound   | HTTPS (reverse proxy)      |
-| 3000 | TCP      | Inbound   | HTTP API (or via proxy)    |
+| 3000 | TCP      | (none)    | HTTP API + dashboard, loopback only; reached through the proxy on 443 |
 
-> **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, uncomment the submission port line in `docker-compose.yml`, and open port 587 to those apps only. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
+> **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, publish the submission port in your `docker-compose.override.yml` (see `docker-compose.override.example.yml`), and open port 587 to those apps only. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
 
 ## Runs as non-root
 
@@ -376,7 +377,7 @@ docker compose down && docker compose up -d --build
 0.10.0 replaces the shared `DASHBOARD_PASSWORD` and the `SESSION_SECRET`-signed cookie with accounts (#216) and adds two production boot guards. The full checklist is the **Upgrade guide** at the top of the 0.10.0 entry in [CHANGELOG.md](../CHANGELOG.md); in short:
 
 1. **Before you pull**, back up the database and add `BUNMAIL_OWNER_EMAIL=you@yourdomain.com` (#215), a real `MAIL_HOSTNAME` (#242) and `APP_BASE_URL` to `.env`. Production refuses to start without the first two (before any migration runs), so a `git pull` and rebuild without them crash-loops.
-2. If you edited `docker-compose.yml` or `docker-compose.override.yml`, `git stash` first. The container now runs as uid 1000 (see [Runs as non-root](#runs-as-non-root)).
+2. If you edited `docker-compose.yml` or `docker-compose.override.yml`, `git stash` first (from the release after 0.10.0, host edits live in an untracked override: see the CHANGELOG). The container now runs as uid 1000 (see [Runs as non-root](#runs-as-non-root)).
 3. Pull and rebuild as above. Migrations `0013` to `0020` (accounts, sessions, record ownership, retry leases) apply on container start.
 4. **Everyone is signed out once:** old dashboard cookies are rejected and cleared.
 5. Claim the owner: `docker compose logs app | grep 'Owner setup link'`, open the link, choose a password (15 or more characters). Setup signs you in. If the link expired or was lost, restart the container (a new link is logged while setup is pending) or run `docker compose exec app bun run src/db/reset-owner.ts`.

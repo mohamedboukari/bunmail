@@ -77,7 +77,7 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 Submission is **off by default**. To enable it:
 
 1. **`.env`**: set `SMTP_SUBMISSION_ENABLED=true` (and, for TLS, the cert/key paths).
-2. **`docker-compose.yml`**: uncomment the submission port line under `services.app.ports` (commented out by default so a fresh checkout doesn't bind 587).
+2. **`docker-compose.override.yml`**: publish the submission port, using the submission examples in `docker-compose.override.example.yml` (#205): public `587` with STARTTLS, or `127.0.0.1` only for plaintext on a trusted host. The base `docker-compose.yml` publishes no submission port.
 3. **Firewall**: allow inbound TCP on 587 from the networks your apps live on.
 
 Then `docker compose up -d --build`. When submission is off, the app logs `SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true …` at startup.
