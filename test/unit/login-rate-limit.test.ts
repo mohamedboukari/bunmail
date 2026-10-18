@@ -1,12 +1,15 @@
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, spyOn } from "bun:test";
 import {
   resolveClientIp,
   isLoginRateLimited,
+  rateLimitBucket,
   recordFailedLogin,
+  refundLoginAttempt,
   clearLoginAttempts,
   pruneExpiredLoginAttempts,
   loginAttemptMap,
 } from "../../src/middleware/login-rate-limit.ts";
+import { logger } from "../../src/utils/logger.ts";
 
 /**
  * Unit tests for the dashboard login brute-force limiter (#109).
@@ -198,5 +201,84 @@ describe("pruneExpiredLoginAttempts", () => {
     const now = 1_000_000;
     recordFailedLogin("a.b.c.d", WINDOW_MS, now);
     expect(pruneExpiredLoginAttempts(WINDOW_MS, now)).toBe(0);
+  });
+});
+
+describe("throttle buckets (#256)", () => {
+  test.each([
+    ["192.0.2.1", "192.0.2.1"],
+    ["2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"],
+    ["2001:DB8:1:2::1", "2001:db8:1:2::/64"],
+    ["::ffff:192.0.2.1", "192.0.2.1"],
+    ["::ffff:c000:201", "192.0.2.1"],
+    ["unknown", "unknown"],
+    ["transfer:user:usr_1", "transfer:user:usr_1"],
+  ])("%p counts in %p", (ip, bucket) => {
+    expect(rateLimitBucket(ip)).toBe(bucket);
+  });
+
+  test("rotating addresses inside one IPv6 /64 still hits the limit", () => {
+    const windowMs = 60_000;
+    for (let i = 1; i <= 5; i++) recordFailedLogin(`2001:db8:1:2::${i}`, windowMs, 1000);
+    expect(isLoginRateLimited("2001:db8:1:2::ffff", 5, windowMs, 1000).limited).toBe(
+      true,
+    );
+    expect(isLoginRateLimited("2001:db8:1:3::1", 5, windowMs, 1000).limited).toBe(false);
+  });
+});
+
+describe("refundLoginAttempt (#256)", () => {
+  const windowMs = 60_000;
+
+  test("a successful login keeps the earlier failures", () => {
+    for (let i = 0; i < 4; i++) recordFailedLogin("192.0.2.9", windowMs, 1000);
+    /** The login counts itself first, then refunds on success. */
+    recordFailedLogin("192.0.2.9", windowMs, 1000);
+    refundLoginAttempt("192.0.2.9", windowMs, 1000);
+    recordFailedLogin("192.0.2.9", windowMs, 1000);
+    expect(isLoginRateLimited("192.0.2.9", 5, windowMs, 1000).limited).toBe(true);
+  });
+
+  test("successful logins alone never lock an address out", () => {
+    for (let i = 0; i < 20; i++) {
+      recordFailedLogin("192.0.2.10", windowMs, 1000);
+      refundLoginAttempt("192.0.2.10", windowMs, 1000);
+    }
+    expect(isLoginRateLimited("192.0.2.10", 5, windowMs, 1000).limited).toBe(false);
+  });
+
+  test("does nothing once the window has expired", () => {
+    recordFailedLogin("192.0.2.11", windowMs, 1000);
+    refundLoginAttempt("192.0.2.11", windowMs, 1000 + windowMs);
+    expect(loginAttemptMap.get("192.0.2.11")?.count).toBe(1);
+  });
+});
+
+describe("unproxied request warning (#256)", () => {
+  test("warns at most once an hour when a request bypasses the trusted proxy", () => {
+    const warn = spyOn(logger, "warn");
+    warn.mockClear();
+    try {
+      const later = Date.now() + 2 * 60 * 60 * 1000;
+      const direct = { socketIp: "203.0.113.5", forwardedFor: null, trustedProxyHops: 1 };
+      resolveClientIp({ ...direct, now: later });
+      resolveClientIp({ ...direct, now: later + 1000 });
+      const bypass = warn.mock.calls.filter(([message]) =>
+        message.startsWith("Request bypassed the trusted proxy"),
+      );
+      expect(bypass).toHaveLength(1);
+
+      /** Through the proxy: no warning. */
+      warn.mockClear();
+      resolveClientIp({
+        socketIp: "10.0.0.2",
+        forwardedFor: "198.51.100.7",
+        trustedProxyHops: 1,
+        now: later + 3 * 60 * 60 * 1000,
+      });
+      expect(warn.mock.calls).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

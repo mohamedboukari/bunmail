@@ -237,6 +237,27 @@ describe("login", () => {
   });
 });
 
+/* ─── Login throttle (#256) ─── */
+
+describe("login throttle", () => {
+  test("signing in to your own account does not reset the failures from your address", async () => {
+    await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    await seed.user({ email: "member@example.com", role: "member", password: PASSWORD });
+
+    /** Four guesses at the owner (the default limit is five per window)... */
+    for (let i = 0; i < 4; i++) {
+      const guess = await login(OWNER_EMAIL, `wrong guess number ${i}`);
+      expect(guess.headers.get("location")).toBe("/dashboard/login?error=invalid");
+    }
+    /** ...then a real login to the attacker's own account... */
+    const own = await login("member@example.com", PASSWORD);
+    expect(cookieValue(own)).not.toBeNull();
+    /** ...leaves the count at four: one more guess, and the address is locked out. */
+    await login(OWNER_EMAIL, "wrong guess number 4");
+    expect((await login(OWNER_EMAIL, PASSWORD)).status).toBe(429);
+  });
+});
+
 /* ─── Logout ─── */
 
 describe("logout", () => {
