@@ -120,6 +120,14 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/invitations/:id/revoke": { access: "admin" },
   "POST /dashboard/invitations/:id/resend": { access: "admin" },
 
+  /** The role and owner rules are in the service (users-admin integration test). */
+  "GET /dashboard/users": { access: "admin" },
+  "POST /dashboard/users/:id/role": { access: "admin", body: { role: "member" } },
+  "POST /dashboard/users/:id/deactivate": { access: "admin" },
+  "POST /dashboard/users/:id/reactivate": { access: "admin" },
+  "POST /dashboard/users/:id/remove": { access: "admin", body: { confirm: "x" } },
+  "POST /dashboard/users/:id/transfer": { access: "admin", body: { password: "x" } },
+
   "GET /dashboard/domains": { access: "member" },
   "GET /dashboard/domains/:id": { access: "member" },
   "POST /dashboard/domains": {

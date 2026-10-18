@@ -73,9 +73,12 @@ interface OwnerSetupTarget {
 /**
  * Runs `fn` in a transaction that first takes the owner advisory lock.
  * `pg_advisory_xact_lock` is transaction-scoped: Postgres releases it on
- * commit or rollback, so no unlock path can be missed.
+ * commit or rollback, so no unlock path can be missed. Account management
+ * (#218, `user-admin.service.ts`) runs under the same lock, so a role
+ * change, a deactivation or an ownership transfer never interleaves with
+ * another one, or with the owner setup.
  */
-function withOwnerLock<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
+export function withOwnerLock<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
   return withSanitizedErrors(() =>
     db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${OWNER_LOCK_KEY}))`);

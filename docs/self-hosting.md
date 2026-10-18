@@ -206,6 +206,8 @@ docker compose exec app bun run src/db/reset-owner.ts
 
 The script prints the link to your terminal (not to `docker compose logs`) and revokes every earlier link. It also works after setup, as a password reset and a kill switch: it signs the owner out of every dashboard session at once (#216). The stored owner password stays in place until the new link is completed, so it still signs in until then; completing the link signs every session out again. If `BUNMAIL_OWNER_EMAIL` differs from the stored owner, the script warns and keeps the stored address. It exits `1` when there is no owner and `BUNMAIL_OWNER_EMAIL` is unset.
 
+To hand the instance over, the owner transfers ownership to an active admin from **Users** in the dashboard (#218, confirmed with the owner's password); the previous owner becomes an admin. Then set `BUNMAIL_OWNER_EMAIL` to the new owner's address: until you do, every boot logs that it differs from the stored owner (it never changes anything), and `reset-owner` always acts on the current owner.
+
 ### Seed your first API key
 
 ```bash

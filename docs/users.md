@@ -2,7 +2,7 @@
 
 Dashboard user accounts (#214): the first piece of the invite-only accounts epic (#225), which replaces the shared `DASHBOARD_PASSWORD` with real accounts, roles and revocable sessions.
 
-#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Role management (#218) builds on them next.
+#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Account management (#218) lets the owner and admins change roles, deactivate, reactivate and remove accounts, and the owner hand over ownership (see [Account management](#account-management-218)).
 
 ## Design
 
@@ -167,9 +167,37 @@ Every account other than the owner arrives by invitation. An admin or the owner 
 
 **Accepting.** `GET /dashboard/invite?token=` and `POST /dashboard/invite` are public routes registered before the session guard, mirroring owner setup: auth-page headers (`no-store`, `Referrer-Policy: strict-origin`, `nosniff`, `DENY`), same-origin first on the POST, then the token shape, an indexed lookup, the policy (name 1 to 100 characters with no control or format characters; password 15 to 256 characters and confirmed, the owner setup policy), and only then argon2id. An invitation counts as live only while its inviter still could send it: `invited_by` must name an existing, enabled account whose current role grants the invitation's role (the owner any, an admin `member`), so an invitation from a deleted (`invited_by` NULL), disabled or demoted inviter is dead. Every dead link (missing, malformed, unknown, expired, used, revoked, inviter no longer allowed) gets the same `400` page; `GET` never spends the token. In one transaction under the address lock: refuse when an account took the address meanwhile (`409` page, the open invitations revoked); spend the token with a conditional `UPDATE ... SET used_at = now()` on the live predicate (database clock) plus the inviter re-check, so an inviter disabled or demoted after the form was opened still makes the spend fail; insert the user with the invited role and name; insert the `password` credential (hashed before the transaction); revoke every other open invitation for the address; open the session. A unique violation on `users.email` from a writer outside the lock is reported as `account_exists` too. The route then revokes the session the browser presented, if any (like login), sets the new cookie and redirects to `/dashboard`. Logged at `warn` as `Invitation accepted` (`invitationId`, `userId`, `invitedBy`, `role`, redacted `email`, `sessionId`, `ip`). `email_verified_at` stays null: a hand-shared link proves nothing about the mailbox.
 
+## Account management (#218)
+
+Admins and the owner open **Users** (`/dashboard/users`, in the sidebar for admins and the owner): every account with its name, email, role, status (active or disabled) and creation date, the viewer's own row marked, and a link to Invitations. Each row shows only the buttons the viewer may use (`allowedAccountActions`); every action route checks the rules again in `user-admin.service.ts`.
+
+| Action | Owner | Admin | Member |
+|---|---|---|---|
+| Change role (member to admin or back; never to or from owner) | any non-owner | no | no |
+| Deactivate / reactivate | any non-owner | members only | no |
+| Remove (confirmed by typing the account's email, trimmed, case-insensitive) | any non-owner | members only | no |
+| Transfer ownership (to an active admin, confirmed with the owner's current password) | yes | no | no |
+
+Nobody acts on their own account, and the owner is never demoted, deactivated or removed (ownership moves only by transfer). Deactivate, reactivate and remove follow the invitation rule: an account manages the roles it could invite (`grantableRoles`).
+
+**Live rules, one at a time.** Every action runs in one transaction under the `bunmail:owner` advisory lock (`withOwnerLock`, shared with the owner setup), reads the actor's and the target's rows with `FOR NO KEY UPDATE`, and checks the rules against those live rows, never against the role the request's session carried. Two admins acting at once, or two transfers racing, are applied one after the other: the second sees what the first committed (a deactivated actor gets `actor_inactive`, a former owner `role_not_allowed`, an already disabled target `unchanged`).
+
+**Side effects, in the same transaction.**
+
+- Deactivate: `disabled_at` set, every session deleted (`revokeAllUserSessions`: the account's cookie gets a `302` to the login page on its next request), the open invitations it issued revoked. Reactivate clears `disabled_at` and deletes every session of the account again, so a session created by a login that raced the deactivation can never come back to life; the revoked invitations stay revoked.
+- Admin to member: the open invitations the account issued are revoked (a member can grant nothing). The new role applies on its next request, since the session guard reads the role every time; sessions are kept.
+- Remove: the open invitations it issued are revoked and its sessions deleted, then the row is deleted: `user_credentials`, `sessions` and its own `user_tokens` cascade, and `invited_by` on its past invitations becomes `NULL`.
+- Transfer: the owner is demoted to `admin` first, then the target promoted to `owner`, so `users_single_owner` holds at every statement; the previous owner's open `admin` invitations are revoked (an admin cannot grant admin), its `member` invitations stay, and every open owner setup link is revoked (a `reset-owner` link minted for the previous owner would otherwise come back to life if ownership ever returned to it). Both accounts stay signed in. The password is checked with `verifyPassword` against the owner's `password` credential, after the rules (a refused request never reaches argon2id) and outside the lock; a wrong password changes nothing. The check is throttled with the login limiter's settings (`DASHBOARD_LOGIN_RATE_LIMIT_*`) under keys of its own, `transfer:user:<actorId>` and `transfer:ip:<client IP>`: over budget, the request is refused (`rate_limited`) before any argon2id work; otherwise the attempt is counted right away, before the verify, so a parallel burst cannot run more verifies than the budget; a completed transfer clears both keys. The route builds the budget (`AttemptLimiter`) and passes it to the service. After a transfer, update `BUNMAIL_OWNER_EMAIL` to the new owner's address, or the boot logs the `differs from the stored owner` warning (it never changes anything).
+
+Revoking those invitations is housekeeping: acceptance re-checks that the inviter is enabled and may still grant the role (#217), so an invitation issued in a race is dead anyway.
+
+**Refusals.** `AccountRefusal`: `actor_inactive`, `not_found`, `self`, `target_is_owner`, `role_not_allowed`, `invalid_role`, `unchanged`, `confirm_mismatch`, `wrong_password`, `not_eligible`, `rate_limited`. Those no button leads to (`actor_inactive`, `self`, `target_is_owner`, `role_not_allowed`, `invalid_role`) get the `403` page; the others go back to the Users page with an error flash.
+
+**Logs.** One line per action, after the transaction: `info` `Account role changed` / `Account deactivated` / `Account reactivated` / `Account removed` / `Ownership transferred` with `action`, `actorId`, `actorRole`, `targetUserId`, the old and new role or status (`oldRole`, `newRole`, `oldStatus`, `newStatus`, `previousOwnerRole`) and the counts (`sessionsRevoked`, `invitesRevoked`, `setupLinksRevoked`); a removal adds the email through `redactEmail`. A refusal (including a wrong password and an exhausted transfer budget) is `warn` `Account action refused` with `action`, `actorId`, `targetUserId`, `reason` and the roles. Never a password.
+
 ## Service helpers
 
-`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts` and `invite-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts` and `invite.service.ts` touch the database, all through `withSanitizedErrors`; `invite-email.service.ts` sends mail.
+`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts`, `invite-policy.service.ts` and `user-admin-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts`, `invite.service.ts` and `user-admin.service.ts` touch the database, all through `withSanitizedErrors`; `invite-email.service.ts` sends mail.
 
 ### password.service.ts
 
@@ -214,9 +242,22 @@ Every write for an address runs in a transaction under its `bunmail:invite:<emai
 - `findLiveInvitation(token): Promise<InviteTarget | null>`: read-only lookup for the accept form (live, and the inviter re-check).
 - `acceptInvitation(token, { name, password }, client?): Promise<AcceptInvitationResult>`: the acceptance transaction above.
 
+### user-admin-policy.service.ts
+
+- `accountActionRefusal(action, actor, target): AccountRefusal | null`: the table above (who acts on whom, plus `unchanged` and `not_eligible` from the target's state); the action's own input is checked by the service.
+- `allowedAccountActions(actor, target): AccountAction[]`: the buttons the Users page shows.
+- `removalConfirmed(confirm, email)`: trimmed, lower-cased equality.
+
+### user-admin.service.ts
+
+Every action runs under the `bunmail:owner` lock with both rows locked; logs every outcome.
+
+- `listAccounts(): Promise<AccountSummary[]>`: every account, oldest first.
+- `changeAccountRole(actorId, targetId, role)`, `deactivateAccount(actorId, targetId)`, `reactivateAccount(actorId, targetId)`, `removeAccount(actorId, targetId, confirm)`, `transferOwnership(actorId, targetId, password, limiter)`: `Promise<AccountActionResult>` (`{ ok: true }` or `{ ok: false, reason }`).
+
 ### owner.service.ts
 
-Every write runs in a transaction under the `bunmail:owner` advisory lock. Never logs the token or its hash.
+Every write runs in a transaction under the `bunmail:owner` advisory lock (`withOwnerLock`, also used by account management). Never logs the token or its hash.
 
 - `bootstrapOwner(ownerEmail, now?): Promise<OwnerBootstrapResult>`: the state machine above; the result is a discriminated union on `kind` (`created` / `reissued` carry the token, email and expiry for the caller to log).
 - `issueOwnerSetupLink(ownerEmail | null, now?): Promise<OwnerSetupLink>`: always replaces the open tokens and deletes every session of an existing owner (#216); used by `reset-owner`. Throws when there is no owner and `ownerEmail` is `null`, or when a non-owner account holds `ownerEmail`.
@@ -251,9 +292,9 @@ Three roles, ranked owner > admin > member. The dashboard guard (`src/pages/page
 
 | Role | Can do |
 |---|---|
-| `member` | Read the dashboard (emails, inbound, logs and stats, the view pages of domains, webhooks, DMARC reports and suppressions), send email, restore single messages from trash, view and create templates (editing existing templates is admin until #218 adds per-member ownership) |
-| `admin` | Everything a member can, plus inviting members (#217), API keys, every domain, webhook and suppression change, template edit and delete, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
-| `owner` | Everything an admin can. No route is owner-only yet; inviting admins (and managing their invitations) is owner-only inside the invitation service (#217); role management (#218) will add owner-only routes |
+| `member` | Read the dashboard (emails, inbound, logs and stats, the view pages of domains, webhooks, DMARC reports and suppressions), send email, restore single messages from trash, view and create templates (editing existing templates is admin until #219 adds per-member ownership) |
+| `admin` | Everything a member can, plus inviting members (#217), deactivating, reactivating and removing members (#218), API keys, every domain, webhook and suppression change, template edit and delete, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
+| `owner` | Everything an admin can, plus inviting admins (#217), changing roles, deactivating, reactivating and removing admins, and transferring ownership (#218). No route carries `ownerGuard`: these owner-only rules are checked inside the invitation and account services, against the live role |
 
 A role too low gets `403` and a `warn` log line with IDs only. The full route table and the 403 behaviour are in [docs/dashboard.md](dashboard.md#roles-222). The REST API does not use these roles: it authorizes API keys (`is_admin`, `allowed_senders`).
 
@@ -280,6 +321,8 @@ A role too low gets `403` and a `warn` log line with IDs only. The full route ta
 - `test/unit/invite-policy.test.ts`, `test/unit/invite-config.test.ts`, `test/unit/invite-email.test.ts` (#217): the role matrix, address and name rules, expiry and link building; `INVITE_EXPIRY_DAYS` and `SYSTEM_MAIL_FROM` parsing; the email builder (hostile names escaped, exactly one link) and every send outcome with injected dependencies.
 - `test/integration/invitations.integration.test.ts` (#217): role rules at the service and over crafted HTTP, the database CHECK, re-invite and concurrent invites leaving one live link, acceptance (account, name, role, password, session, token spent, other links revoked, concurrent acceptances), an address taken meanwhile, every dead link getting the identical `400` without reaching argon2, revoke and resend (admin-only, role-checked), and the email path (with no system sender the link is revealed once, to the inviter's session only; when the email goes out, no reveal).
 - `test/unit/dashboard-guards.test.ts`: role ranking, `requireRole` and `requireAssurance` (pass, `403` page, `warn` line), `toDashboardAuth`.
+- `test/unit/user-admin-policy.test.ts` (#218): the account action matrix (self, owner target, role, status, transfer eligibility), the buttons per viewer, the removal confirmation, and the request-scoped viewer role (per context, fail closed, never in log fields).
+- `test/integration/users-admin.integration.test.ts` (#218): role change, deactivate, reactivate, remove and transfer by the owner, an admin and a member (service and crafted HTTP), self and owner targets refused with nothing changed, sessions and invitations revoked in the same transaction (the deactivated cookie bounces, a demoted admin gets `403` on its next request), FK cascades on removal, exactly one owner after a transfer and after two racing transfers, a wrong password changing nothing, the transfer budget (the try after it never reaches argon2id, a parallel burst runs at most the budget of verifies, success clears it), a racing login's session dying at reactivation, an old owner setup link staying dead after ownership returns, the log lines, and the sidebar per role.
 - `test/integration/dashboard-route-access.integration.test.ts` (#222): the deny-by-default route table (every plugin route listed with its access level and carrying the matching role guard; no cookie, member, admin and owner requests per route), a role change applying on the next request, `requireAssurance("mfa")` on a test-only route, and one session lookup per request.
 - `test/integration/dashboard-session.integration.test.ts`: login against real Postgres (only the hash stored, `last_used_at`, distinct cookies, session replacement, one argon2id verify on every failure branch), logout, the guard (expired, disabled user, `pending` assurance, tampered token, old HMAC cookie), rotation (after 60 s, the absolute cap, grace, exactly one winner among concurrent requests), reuse detection (every session of the user revoked; a token two rotations old only rejected) and the service helpers (sweep, per-user revoke, IP cleaning).
 - `test/integration/owner-setup.integration.test.ts`: fresh install, restart before setup (including a changed email and `email-taken`), concurrency (parallel bootstraps, parallel completions, bootstrap racing completion, completion and recovery provably waiting on the held owner lock, lock released after commit), expiry, single use and a disabled owner (including one disabled while completion waits on the lock), behaviour after setup, sessions (completion deletes the owner's sessions and opens exactly one; a failed completion leaves them; `issueOwnerSetupLink` signs out only the owner), recovery, and a spawned `reset-owner.ts` smoke test (exit `0` with a live link and the sign-out line, also under `LOG_LEVEL=error`; exit `1` with no owner and no email).

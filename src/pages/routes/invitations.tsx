@@ -42,7 +42,7 @@ export function InvitationsPage({
   revealedLink,
 }: InvitationsPageProps) {
   return (
-    <BaseLayout title="Invitations">
+    <BaseLayout title="Invitations" activeNav="users">
       <h1 class="text-xl font-semibold mb-6">Invitations</h1>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
