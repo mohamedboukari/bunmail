@@ -12,9 +12,9 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
  * Per-(API key, UTC day) submission usage counters (#123).
  *
  * Powers two features of the SMTP submission server (#120):
- * 1. **Per-key daily quota**: `getAcceptedToday` reads today's `accepted`
- *    count and the submission path rejects once it reaches the configured
- *    `SMTP_SUBMISSION_DAILY_QUOTA`.
+ * 1. **Per-key daily quota**: `reserveAccepted` takes one of today's
+ *    `SMTP_SUBMISSION_DAILY_QUOTA` slots atomically before each send, and
+ *    `releaseReservation` hands it back when the message is rejected (#190).
  * 2. **Stats endpoint**: `GET /api/v1/smtp-submission/stats` aggregates
  *    these rows for the calling key.
  *
