@@ -10,7 +10,8 @@ CREATE TABLE "sessions" (
 	"user_agent" varchar(255),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "sessions_token_hash_unique" UNIQUE("token_hash"),
-	CONSTRAINT "sessions_assurance_check" CHECK ("sessions"."assurance" IN ('pending', 'password', 'mfa'))
+	CONSTRAINT "sessions_assurance_check" CHECK ("sessions"."assurance" IN ('pending', 'password', 'mfa')),
+	CONSTRAINT "sessions_auth_method_check" CHECK ("sessions"."auth_method" IN ('password', 'totp', 'passkey', 'oauth'))
 );
 --> statement-breakpoint
 CREATE TABLE "user_credentials" (
@@ -18,10 +19,11 @@ CREATE TABLE "user_credentials" (
 	"user_id" varchar(36) NOT NULL,
 	"type" varchar(16) NOT NULL,
 	"provider" varchar(100),
-	"provider_account_id" varchar(255),
+	"provider_account_id" text,
+	"name" varchar(100),
 	"secret_hash" text,
 	"public_key" text,
-	"counter" integer,
+	"counter" bigint,
 	"last_used_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,

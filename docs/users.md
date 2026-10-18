@@ -6,7 +6,7 @@ This issue ships the **schema and the pure helpers only**. Nothing reads these t
 
 ## Design
 
-- **Identity and credentials are separate.** `users` holds who someone is; `user_credentials` holds one row per way they can log in. A password is the first credential type; TOTP (#220), passkeys (#223) and OAuth/SSO (#224) are further rows, not new columns.
+- **Identity and credentials are separate.** `users` holds who someone is; `user_credentials` holds one row per way they can log in. A password is the first credential type; TOTP (#220), passkeys (#223) and OAuth/SSO (#224) are further rows with the columns they need already present (`provider`, `provider_account_id`, `public_key`, `counter`, `name`). The `metadata` jsonb column from the original design is deliberately deferred: the bun-sql driver stores jsonb as JSON strings (#261), so it could not be queried until that is fixed; a later type that needs free-form data adds the column once #261 is resolved. TOTP recovery codes (#220) are expected to be stored hashed in `secret_hash` of their own rows, or in a small table of their own if several per user are needed.
 - **Sessions carry an assurance level.** `pending` (first factor passed, second required), `password`, `mfa`. The auth guard (#222) can require a minimum per route, so adding 2FA later touches no routes.
 - **Invariants live in the database.** Exactly one owner, lower-cased unique emails, and every enum column limited to its value set by a `CHECK` constraint, so a typo can never become a privilege.
 - **Secrets are never stored.** Session cookies and one-time links carry a random 256-bit token; only its SHA-256 hash is in the database. Passwords are argon2id hashes from `Bun.password`.
@@ -19,7 +19,7 @@ This issue ships the **schema and the pure helpers only**. Nothing reads these t
 | Column            | Type           | Constraints                                          |
 |-------------------|----------------|------------------------------------------------------|
 | id                | varchar(36)    | PK, `usr_` prefix                                    |
-| email             | varchar(36)    | NOT NULL, UNIQUE, `CHECK (email = lower(email))`     |
+| email             | varchar(255)   | NOT NULL, UNIQUE, `CHECK (email = lower(email))`     |
 | email_verified_at | timestamptz    | nullable                                             |
 | name              | varchar(100)   | nullable                                             |
 | role              | varchar(10)    | NOT NULL, default `member`, `CHECK IN (owner, admin, member)` |
@@ -37,10 +37,11 @@ Indexes: `users_single_owner`, a unique index on `(role) WHERE role = 'owner'`: 
 | user_id             | varchar(36)    | NOT NULL, FK `users` ON DELETE CASCADE                  |
 | type                | varchar(16)    | NOT NULL, `CHECK IN (password, totp, passkey, oauth)`   |
 | provider            | varchar(100)   | nullable: `google`, `oidc:<issuer>`, passkey authenticator |
-| provider_account_id | varchar(255)   | nullable: id at the provider, or passkey credential id |
+| provider_account_id | text           | nullable: id at the provider, or passkey credential id (up to 1023 bytes) |
+| name                | varchar(100)   | nullable: user-chosen label for a passkey or linked account |
 | secret_hash         | text           | nullable: argon2id hash, or encrypted TOTP secret      |
 | public_key          | text           | nullable: passkey public key                           |
-| counter             | integer        | nullable: passkey signature counter                    |
+| counter             | bigint         | nullable: passkey signature counter (unsigned 32-bit)  |
 | last_used_at        | timestamptz    | nullable                                               |
 | created_at          | timestamptz    | NOT NULL, default `now()`                              |
 | updated_at          | timestamptz    | NOT NULL, default `now()`                              |
@@ -55,11 +56,11 @@ Indexes: `user_credentials_one_password_per_user` (unique on `user_id WHERE type
 | user_id      | varchar(36)    | NOT NULL, FK `users` ON DELETE CASCADE                     |
 | token_hash   | varchar(64)    | NOT NULL, UNIQUE: SHA-256 of the cookie token              |
 | assurance    | varchar(10)    | NOT NULL, default `password`, `CHECK IN (pending, password, mfa)` |
-| auth_method  | varchar(16)    | NOT NULL, default `password`                               |
+| auth_method  | varchar(16)    | NOT NULL, default `password`, `CHECK IN` the credential types |
 | expires_at   | timestamptz    | NOT NULL                                                   |
 | last_seen_at | timestamptz    | NOT NULL, default `now()`: sliding refresh                 |
 | ip           | varchar(45)    | nullable                                                   |
-| user_agent   | varchar(255)   | nullable                                                   |
+| user_agent   | varchar(255)   | nullable: writers truncate to 255                          |
 | created_at   | timestamptz    | NOT NULL, default `now()`                                  |
 
 Indexes: `sessions_user_id_idx` (revoke all of a user's sessions), `sessions_expires_at_idx` (purge).
@@ -86,7 +87,7 @@ Checks: `user_tokens_target_check` (`user_id` or `email` must be set). Index: `u
 
 ## Types
 
-`src/modules/users/types/user.types.ts` exports the value sets as constants and unions: `USER_ROLES` / `UserRole`, `CREDENTIAL_TYPES` / `CredentialType`, `SESSION_ASSURANCES` / `SessionAssurance`, `TOKEN_PURPOSES` / `TokenPurpose`. The same constants render the `CHECK` constraints (`literals()`), so the TypeScript and database value sets cannot drift.
+`src/modules/users/types/user.types.ts` exports the value sets as constants and unions: `USER_ROLES` / `UserRole`, `CREDENTIAL_TYPES` / `CredentialType`, `SESSION_ASSURANCES` / `SessionAssurance`, `TOKEN_PURPOSES` / `TokenPurpose`. The same constants render the `CHECK` constraints (`literals()`), and an integration test reads the live constraint definitions back from Postgres and checks every value is present, so a constant changed without `bun run db:generate` fails the test instead of silently diverging.
 
 ## Service helpers
 
@@ -95,14 +96,14 @@ Pure, no I/O, no config.
 ### password.service.ts
 
 - `hashPassword(password): Promise<string>`: argon2id via `Bun.password`, fresh salt per hash, parameters encoded in the hash so they can be raised later.
-- `verifyPassword(password, hash): Promise<boolean>`: constant-time; a malformed stored hash yields `false` rather than throwing.
+- `verifyPassword(password, hash): Promise<boolean>`: constant-time for a well-formed hash; a stored value that is not a supported hash yields `false` rather than throwing, while any other error propagates (a programming error must not read as "wrong password").
 
 ### token.service.ts
 
 - `mintToken(): { token, hash }`: 32 random bytes as base64url (give to the user), plus its SHA-256 hex (store).
 - `hashToken(token): string`: hash a presented token for lookup.
 
-Both files are listed in `knip.json`'s `ignore` until #216 imports them; remove them from that list then.
+Both files are listed in `knip.json`'s `ignoreFiles` (unused-file check only) until #216 imports them; remove them from that list then.
 
 ## Migration
 

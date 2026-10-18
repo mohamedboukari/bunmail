@@ -13,6 +13,12 @@
  */
 import { describe, test, expect, beforeEach } from "bun:test";
 import { eq, sql } from "drizzle-orm";
+import {
+  CREDENTIAL_TYPES,
+  SESSION_ASSURANCES,
+  TOKEN_PURPOSES,
+  USER_ROLES,
+} from "../../src/modules/users/types/user.types.ts";
 import { users } from "../../src/modules/users/models/user.schema.ts";
 import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
 import { sessions } from "../../src/modules/users/models/session.schema.ts";
@@ -312,5 +318,42 @@ describe("sessions and user_tokens", () => {
       "user_tokens",
       "users",
     ]);
+  });
+});
+
+describe("passkey-sized values and value-set drift", () => {
+  test("a long credential id, a uint32 counter and a name fit", async () => {
+    const user = await createUser("ann@example.org");
+    await db.insert(userCredentials).values({
+      id: generateId("crd"),
+      userId: user,
+      type: "passkey",
+      provider: "authenticator",
+      providerAccountId: "x".repeat(1364),
+      name: "YubiKey 5",
+      publicKey: "pk",
+      counter: 4_294_967_295,
+    });
+    const [row] = await db.select().from(userCredentials);
+    expect(row?.counter).toBe(4_294_967_295);
+    expect(row?.name).toBe("YubiKey 5");
+  });
+
+  test("the CHECK constraints in the database list every TypeScript value", async () => {
+    const rows = await db.execute(
+      sql`SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname IN ('users_role_check','user_credentials_type_check','sessions_assurance_check','sessions_auth_method_check','user_tokens_purpose_check','user_tokens_role_check')`,
+    );
+    const defs = new Map(rows.map((r) => [String(r["conname"]), String(r["def"])]));
+    const expectAll = (name: string, values: readonly string[]) => {
+      const def = defs.get(name);
+      expect(def).toBeDefined();
+      for (const v of values) expect(def).toContain(`'${v}'`);
+    };
+    expectAll("users_role_check", USER_ROLES);
+    expectAll("user_tokens_role_check", USER_ROLES);
+    expectAll("user_credentials_type_check", CREDENTIAL_TYPES);
+    expectAll("sessions_auth_method_check", CREDENTIAL_TYPES);
+    expectAll("sessions_assurance_check", SESSION_ASSURANCES);
+    expectAll("user_tokens_purpose_check", TOKEN_PURPOSES);
   });
 });

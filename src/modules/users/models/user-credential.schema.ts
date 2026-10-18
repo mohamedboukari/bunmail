@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   check,
-  integer,
+  bigint,
   pgTable,
   text,
   timestamp,
@@ -24,6 +24,13 @@ import { CREDENTIAL_TYPES, literals } from "../types/user.types.ts";
  * | passkey    |                         | credential id                  | COSE key, sign count |
  * | oauth      |                         | `google`, `oidc:<issuer>`, id  |                      |
  */
+/*
+ * A `metadata` jsonb column was in the #214 design and is deliberately
+ * deferred: the bun-sql driver stores jsonb values as JSON strings (#261),
+ * so anything written to it could not be queried in SQL until that is
+ * fixed. Everything the planned types need has an explicit column; if a
+ * later type needs free-form data, add the column with #261 resolved.
+ */
 export const userCredentials = pgTable(
   "user_credentials",
   {
@@ -42,7 +49,11 @@ export const userCredentials = pgTable(
     provider: varchar("provider", { length: 100 }),
 
     /** The user's id at that provider, or the passkey credential id. */
-    providerAccountId: varchar("provider_account_id", { length: 255 }),
+    /** `text`: WebAuthn credential ids may be up to 1023 bytes (base64url). */
+    providerAccountId: text("provider_account_id"),
+
+    /** User-chosen label for a passkey or linked account, shown on the profile page. */
+    name: varchar("name", { length: 100 }),
 
     /** Password hash (argon2id, from `Bun.password`) or encrypted TOTP secret. */
     secretHash: text("secret_hash"),
@@ -51,7 +62,8 @@ export const userCredentials = pgTable(
     publicKey: text("public_key"),
 
     /** Passkey signature counter, for clone detection. */
-    counter: integer("counter"),
+    /** `bigint`: the WebAuthn signature counter is an unsigned 32-bit value. */
+    counter: bigint("counter", { mode: "number" }),
 
     /** Last successful use, for the profile page and stale-credential cleanup. */
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),

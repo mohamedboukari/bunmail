@@ -1,5 +1,5 @@
 {
-  "id": "d03afad5-a159-44b1-a119-96e4e4283511",
+  "id": "59b2288c-d9b6-4fcd-ae43-abdcc629af4a",
   "prevId": "609b0f11-2f57-4eee-ba35-9f871c3572f6",
   "version": "7",
   "dialect": "postgresql",
@@ -1075,6 +1075,10 @@
         "sessions_assurance_check": {
           "name": "sessions_assurance_check",
           "value": "\"sessions\".\"assurance\" IN ('pending', 'password', 'mfa')"
+        },
+        "sessions_auth_method_check": {
+          "name": "sessions_auth_method_check",
+          "value": "\"sessions\".\"auth_method\" IN ('password', 'totp', 'passkey', 'oauth')"
         }
       },
       "isRLSEnabled": false
@@ -1426,7 +1430,13 @@
         },
         "provider_account_id": {
           "name": "provider_account_id",
-          "type": "varchar(255)",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(100)",
           "primaryKey": false,
           "notNull": false
         },
@@ -1444,7 +1454,7 @@
         },
         "counter": {
           "name": "counter",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": false
         },

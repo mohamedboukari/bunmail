@@ -668,7 +668,7 @@ Dashboard accounts: identity only; login methods live in `user_credentials`. Exa
 
 ### `user_credentials` (#214)
 
-One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash or encrypted TOTP secret), `provider`, `provider_account_id`, `public_key`, `counter`, `last_used_at`, timestamps.
+One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash or encrypted TOTP secret), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint), `last_used_at`, timestamps.
 
 ### `sessions` (#214)
 

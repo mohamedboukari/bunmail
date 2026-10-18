@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./user.schema.ts";
-import { SESSION_ASSURANCES, literals } from "../types/user.types.ts";
+import { CREDENTIAL_TYPES, SESSION_ASSURANCES, literals } from "../types/user.types.ts";
 
 /**
  * Dashboard sessions (#214), replacing the stateless HMAC cookie (#216).
@@ -55,6 +55,12 @@ export const sessions = pgTable(
     check(
       "sessions_assurance_check",
       sql`${table.assurance} IN (${literals(SESSION_ASSURANCES)})`,
+    ),
+
+    /** The session started with one of the credential types. */
+    check(
+      "sessions_auth_method_check",
+      sql`${table.authMethod} IN (${literals(CREDENTIAL_TYPES)})`,
     ),
   ],
 );

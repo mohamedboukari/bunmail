@@ -8,23 +8,27 @@
  * to the login and invite flows (#216, #217), not here.
  */
 
-/** Hashes a password for storage in `user_credentials.secret_hash`. */
-// Consumed by the login and invite flows (#216, #217); exported ahead of them.
+/**
+ * Hashes a password for storage in `user_credentials.secret_hash`.
+ * Consumed by the login and invite flows (#216, #217); exported ahead of them.
+ */
 /** @public */
 export function hashPassword(password: string): Promise<string> {
   return Bun.password.hash(password, { algorithm: "argon2id" });
 }
 
+/** Hash strings `Bun.password.verify` understands (argon2 variants, bcrypt). */
+const SUPPORTED_HASH_RE = /^\$(?:argon2(?:id|i|d)|2[abxy])\$/;
+
 /**
- * Checks a password against a stored hash. Constant-time inside Bun; a
- * malformed hash yields `false` rather than throwing, so a corrupt row
- * cannot turn into a 500 on the login form.
+ * Checks a password against a stored hash. Constant-time inside Bun for a
+ * well-formed hash. A stored value that is not a supported hash (a corrupt
+ * or legacy row) yields `false` instead of throwing, so it cannot turn into
+ * a 500 on the login form; any other error is a programming error and
+ * propagates rather than being reported as "wrong password".
  */
 /** @public */
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  try {
-    return await Bun.password.verify(password, hash);
-  } catch {
-    return false;
-  }
+export function verifyPassword(password: string, hash: string): Promise<boolean> {
+  if (!SUPPORTED_HASH_RE.test(hash)) return Promise.resolve(false);
+  return Bun.password.verify(password, hash);
 }
