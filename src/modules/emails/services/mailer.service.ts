@@ -3,7 +3,7 @@ import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
-import { redactEmail } from "../../../utils/redact.ts";
+import { redactEmail, redactEmailsInText } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
 import { parseSmtpError } from "../../../utils/smtp-error.ts";
@@ -226,7 +226,8 @@ export async function sendMail(options: {
         mxHost,
         recipientCount: group.recipients.length,
         nextStatus,
-        error,
+        /** The remote reply often quotes the recipient address (#260). */
+        error: redactEmailsInText(error),
         messageId: options.messageId,
       });
     }

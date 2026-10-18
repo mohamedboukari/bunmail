@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Log hygiene: no webhook credentials, seed keys, query parameters or quoted recipients in logs (#260).** Webhook URLs are logged as their origin only (scheme, host and port): services such as Slack and Discord put the credential in the path, so log access was enough to post to those channels. The seed script prints the new admin API key straight to the terminal instead of through the structured logger, so seed output shipped to a log system (CI, a Kubernetes Job) no longer carries a full key. The logger's safety net now also cuts the bound values from any drizzle query error message (`Failed query: <sql>\nparams: [REDACTED]`), wherever a call site logs `error.message`; those values can be account emails, token hashes or an encrypted DKIM key (for example a failed dashboard domain insert). With `LOG_REDACT_PII` on, the suppressions list filter and the email addresses quoted in remote SMTP replies on `MX group send failed` are masked like any other address. Nothing to configure, no new dependency. Docs: `docs/logging.md`, `docs/self-hosting.md`.
+
 ## [0.10.0] - 2026-10-18
 
 ### Upgrade guide (from 0.9.x)

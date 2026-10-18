@@ -67,7 +67,12 @@ export const suppressionsPlugin = new Elysia({
   .get(
     "/",
     async ({ query, apiKeyId }) => {
-      logger.info("GET /api/v1/suppressions", { apiKeyId, ...query });
+      logger.info("GET /api/v1/suppressions", {
+        apiKeyId,
+        ...query,
+        /** The exact-match filter is an address: redact it like any other (#260). */
+        ...(query.email !== undefined ? { email: redactEmail(query.email) } : {}),
+      });
 
       const { data, total } = await suppressionService.listSuppressions(apiKeyId, {
         page: query.page ?? 1,

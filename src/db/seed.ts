@@ -40,17 +40,26 @@ async function seed() {
   logger.info("Test API key created", { id: key!.id, name: key!.name, prefix });
 
   /**
-   * Log the raw key clearly: this is the ONLY time it will be shown.
-   * Copy it and use as: Authorization: Bearer <raw key>
+   * Print the raw key to the terminal: this is the ONLY time it is shown.
+   * Written to stdout directly, never through the structured logger
+   * (#260): when seed output is shipped to a log system (CI, a Kubernetes
+   * Job), a logged line would leave a full admin key there.
    */
-  logger.info("========================================");
-  logger.info("  YOUR API KEY (save it: shown once!)");
-  logger.info("========================================");
-  logger.info("  Raw key", { key: raw });
-  logger.info("========================================");
-  logger.info("Usage example", {
-    curl: `curl -H "Authorization: Bearer ${raw}" http://localhost:3000/api/v1/emails`,
-  });
+  process.stdout.write(
+    [
+      "",
+      "========================================",
+      "  YOUR API KEY (save it: shown once!)",
+      "  Do not paste it into tickets or logs.",
+      "========================================",
+      `  ${raw}`,
+      "========================================",
+      "Usage example:",
+      `  curl -H "Authorization: Bearer ${raw}" http://localhost:3000/api/v1/emails`,
+      "",
+      "",
+    ].join("\n"),
+  );
 
   process.exit(0);
 }

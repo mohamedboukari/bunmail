@@ -27,6 +27,7 @@ import {
 } from "./webhook-delivery.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
+import { redactUrl } from "../../../utils/redact.ts";
 import { config } from "../../../config.ts";
 
 /** How often the worker checks for due deliveries. 5s is a balance:
@@ -138,14 +139,14 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
         if (outcome.ok) {
           logger.debug("Webhook delivered", {
             deliveryId: row.id,
-            url: row.url,
+            url: redactUrl(row.url),
             event: row.event,
             status: outcome.status,
           });
         } else {
           logger.warn("Webhook delivery attempt failed", {
             deliveryId: row.id,
-            url: row.url,
+            url: redactUrl(row.url),
             event: row.event,
             attempt: row.attempts + 1,
             httpStatus: outcome.status,

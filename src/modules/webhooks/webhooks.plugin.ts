@@ -11,6 +11,7 @@ import * as webhookDeliveryService from "./services/webhook-delivery.service.ts"
 import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
+import { redactUrl } from "../../utils/redact.ts";
 
 /**
  * Webhooks plugin: registers webhook management routes under /api/v1/webhooks.
@@ -30,7 +31,10 @@ export const webhooksPlugin = new Elysia({
   .post(
     "/",
     async ({ body, apiKeyId, apiKeyCreatedByUserId }) => {
-      logger.info("POST /api/v1/webhooks", { url: body.url, events: body.events });
+      logger.info("POST /api/v1/webhooks", {
+        url: redactUrl(body.url),
+        events: body.events,
+      });
 
       const { webhook, secret } = await webhookService.createWebhook(
         { url: body.url, events: body.events },
