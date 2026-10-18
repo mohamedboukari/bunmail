@@ -2,18 +2,32 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
 import { LiveHtmlPreview, LiveHtmlPreviewScript } from "../components/html-preview.tsx";
 import type { Template } from "../../modules/templates/types/template.types.ts";
 
 interface TemplatesPageProps {
   templates: Template[];
   flash?: { message: string; type: "success" | "error" };
+  /** Display names of accounts, for the "Created by" column (#219). */
+  creators: CreatorNames;
+  /**
+   * `users.id` of the viewer and whether it may change any template
+   * (admins, owner). A member gets the delete button on its own
+   * templates only (#219); the server checks it again.
+   */
+  viewer: { id: string; canManageAll: boolean };
 }
 
 /**
  * Templates page: shows a create form and table of all email templates.
  */
-export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
+export function TemplatesPage({
+  templates,
+  flash,
+  creators,
+  viewer,
+}: TemplatesPageProps) {
   return (
     <BaseLayout title="Templates" activeNav="templates">
       <h1 class="text-xl font-semibold mb-6">Templates</h1>
@@ -135,6 +149,9 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                   Variables
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created by
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Created
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
@@ -164,22 +181,27 @@ export function TemplatesPage({ templates, flash }: TemplatesPageProps) {
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400" safe>
                     {template.variables.join(", ") || "n/a"}
                   </td>
+                  <td class="px-4 py-3 whitespace-nowrap">
+                    <CreatedBy userId={template.createdByUserId} creators={creators} />
+                  </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={template.createdAt} />
                   </td>
                   <td class="px-4 py-3">
-                    <form
-                      method="POST"
-                      action={`/dashboard/templates/${template.id}/delete`}
-                    >
-                      <button
-                        type="submit"
-                        class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                        onclick="return confirm('Are you sure you want to delete this template?')"
+                    {(viewer.canManageAll || template.createdByUserId === viewer.id) && (
+                      <form
+                        method="POST"
+                        action={`/dashboard/templates/${template.id}/delete`}
                       >
-                        Delete
-                      </button>
-                    </form>
+                        <button
+                          type="submit"
+                          class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
+                          onclick="return confirm('Are you sure you want to delete this template?')"
+                        >
+                          Delete
+                        </button>
+                      </form>
+                    )}
                   </td>
                 </tr>
               ))}

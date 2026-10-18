@@ -25,6 +25,7 @@ describe("serializeDomain", () => {
     notifyEmail: null as string | null,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
+    createdByUserId: null,
   };
 
   test("includes public fields", () => {

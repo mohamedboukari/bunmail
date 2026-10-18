@@ -44,6 +44,7 @@ Table: `webhooks`
 | is_active   | boolean        | NOT NULL, default `true`     |
 | created_at  | timestamp      | NOT NULL, default `now()`    |
 | updated_at  | timestamp      | NOT NULL, default `now()`    |
+| created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed: who created it (#219, attribution only; NULL = the owner) |
 
 Table: `webhook_deliveries` (#30): persisted retry queue.
 
@@ -299,8 +300,8 @@ CASCADE on the parent `webhooks` row means deleting a webhook also reaps every o
 
 ### webhook.service.ts
 
-#### `createWebhook(input, apiKeyId): Promise<{ webhook, secret }>`
-Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation.
+#### `createWebhook(input, apiKeyId, createdByUserId = null): Promise<{ webhook, secret }>`
+Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only.
 
 #### `listWebhooks(apiKeyId): Promise<Webhook[]>`
 Lists webhooks scoped to the requesting API key.

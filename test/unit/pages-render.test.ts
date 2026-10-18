@@ -66,8 +66,15 @@ const apiKey = {
   isAdmin: false,
   allowedSenders: [] as string[],
   lastUsedAt: null,
+  createdByUserId: null,
+  disabledReason: null,
   createdAt: now,
 };
+
+/** No accounts: every record reads as the owner's (#219). */
+const creators: ReadonlyMap<string, string> = new Map();
+/** An admin viewer: sees every edit and delete control (#219). */
+const viewer = { id: "usr_admin", canManageAll: true };
 
 const domain = {
   id: "dom_x",
@@ -84,6 +91,7 @@ const domain = {
   notifyEmail: null,
   createdAt: now,
   updatedAt: now,
+  createdByUserId: null,
 };
 
 const email = {
@@ -109,6 +117,7 @@ const email = {
   sentAt: now,
   createdAt: now,
   updatedAt: now,
+  createdByUserId: null,
   deletedAt: null,
   deliveryState: null,
 };
@@ -136,6 +145,7 @@ const template = {
   variables: ["name"],
   createdAt: now,
   updatedAt: now,
+  createdByUserId: null,
 };
 
 const webhook = {
@@ -147,11 +157,17 @@ const webhook = {
   isActive: true,
   createdAt: now,
   updatedAt: now,
+  createdByUserId: null,
 };
 
 describe("Dashboard page render smoke tests", () => {
   test("ApiKeysPage with empty list renders", async () => {
-    const html = await ApiKeysPage({ keys: [] });
+    const html = await ApiKeysPage({
+      keys: [],
+      creators,
+      adminCreatorIds: new Set(),
+      canManageAll: true,
+    });
     expect(typeof html).toBe("string");
     expect(html.length).toBeGreaterThan(100);
   });
@@ -159,6 +175,9 @@ describe("Dashboard page render smoke tests", () => {
   test("ApiKeysPage with keys + flash + rawKey", async () => {
     const html = await ApiKeysPage({
       keys: [apiKey],
+      creators,
+      adminCreatorIds: new Set(),
+      canManageAll: true,
       flash: { message: "ok", type: "success" },
       rawKey: "bm_live_xxx",
     });
@@ -166,9 +185,13 @@ describe("Dashboard page render smoke tests", () => {
   });
 
   test("DomainsPage", () => {
-    expect(typeof DomainsPage({ domains: [domain] })).toBe("string");
+    expect(typeof DomainsPage({ domains: [domain], creators })).toBe("string");
     expect(
-      typeof DomainsPage({ domains: [], flash: { message: "x", type: "error" } }),
+      typeof DomainsPage({
+        domains: [],
+        flash: { message: "x", type: "error" },
+        creators,
+      }),
     ).toBe("string");
   });
 
@@ -353,24 +376,32 @@ describe("Dashboard page render smoke tests", () => {
   });
 
   test("TemplatesPage", async () => {
-    expect(typeof TemplatesPage({ templates: [template] })).toBe("string");
-    expect(typeof TemplatesPage({ templates: [] })).toBe("string");
+    expect(typeof TemplatesPage({ templates: [template], creators, viewer })).toBe(
+      "string",
+    );
+    expect(typeof TemplatesPage({ templates: [], creators, viewer })).toBe("string");
     /** Create form ships the live HTML preview iframe + its driver script. */
-    expect(await TemplatesPage({ templates: [] })).toContain("live-html-preview-frame");
+    expect(await TemplatesPage({ templates: [], creators, viewer })).toContain(
+      "live-html-preview-frame",
+    );
   });
 
   test("TemplateDetailPage", async () => {
-    expect(typeof TemplateDetailPage({ template })).toBe("string");
+    expect(typeof TemplateDetailPage({ template, creators, canEdit: true })).toBe(
+      "string",
+    );
     /** Edit form seeds the preview from the saved HTML with sample-rendered
      *  variables ({{name}} -> Alex Doe), not the raw placeholder. */
-    const html = await TemplateDetailPage({ template });
+    const html = await TemplateDetailPage({ template, creators, canEdit: true });
     expect(html).toContain("live-html-preview-frame");
     expect(html).toContain("Alex Doe");
   });
 
   test("WebhooksPage", () => {
-    expect(typeof WebhooksPage({ webhooks: [webhook] })).toBe("string");
-    expect(typeof WebhooksPage({ webhooks: [], secret: "shown-once" })).toBe("string");
+    expect(typeof WebhooksPage({ webhooks: [webhook], creators })).toBe("string");
+    expect(typeof WebhooksPage({ webhooks: [], secret: "shown-once", creators })).toBe(
+      "string",
+    );
   });
 
   test("LoginPage renders the email and password inputs (#216)", async () => {
@@ -638,5 +669,112 @@ describe("Component render smoke tests", () => {
     }
     /** Unknown status, should still render. */
     expect(typeof StatusBadge({ status: "unknown" })).toBe("string");
+  });
+});
+
+describe("Record ownership on the pages (#219)", () => {
+  const names: ReadonlyMap<string, string> = new Map([["usr_ann", "Ann"]]);
+
+  test("a member's API keys page has no admin checkbox, toggle or Created by column", async () => {
+    const html = await ApiKeysPage({
+      keys: [{ ...apiKey, createdByUserId: "usr_ann" }],
+      creators: names,
+      adminCreatorIds: new Set(),
+      canManageAll: false,
+    });
+    expect(html).toContain("The keys you created");
+    expect(html).not.toContain('name="isAdmin"');
+    expect(html).not.toContain("/dashboard/api-keys/key_x/admin");
+    expect(html).not.toContain("Created by");
+    /** Revoke and senders stay: they act on the member's own key. */
+    expect(html).toContain("/dashboard/api-keys/key_x/revoke");
+  });
+
+  test("an admin's API keys page names each key's creator and why it is disabled", async () => {
+    const html = await ApiKeysPage({
+      keys: [
+        { ...apiKey, id: "key_a", createdByUserId: "usr_ann" },
+        { ...apiKey, id: "key_b", createdByUserId: null },
+        {
+          ...apiKey,
+          id: "key_c",
+          isActive: false,
+          disabledReason: "creator_deactivated",
+          createdByUserId: "usr_ann",
+        },
+        { ...apiKey, id: "key_d", isActive: false, disabledReason: "creator_removed" },
+        { ...apiKey, id: "key_e", isActive: false, disabledReason: null },
+      ],
+      creators: names,
+      adminCreatorIds: new Set(),
+      canManageAll: true,
+    });
+    expect(html).toContain("Created by");
+    expect(html).toContain("Ann");
+    expect(html).toContain("Owner");
+    expect(html).toContain("Disabled: creator deactivated");
+    expect(html).toContain("Disabled: creator removed");
+    expect(html).toContain("Removed account");
+    expect(html).toContain("Revoked");
+    expect(html).toContain('name="isAdmin"');
+  });
+
+  test("a member sees the delete button on its own templates only", async () => {
+    const html = await TemplatesPage({
+      templates: [
+        { ...template, id: "tpl_own", createdByUserId: "usr_ann" },
+        { ...template, id: "tpl_other", createdByUserId: "usr_bob" },
+      ],
+      creators: names,
+      viewer: { id: "usr_ann", canManageAll: false },
+    });
+    expect(html).toContain("/dashboard/templates/tpl_own/delete");
+    expect(html).not.toContain("/dashboard/templates/tpl_other/delete");
+    /** An id missing from the accounts reads as a removed account. */
+    expect(html).toContain("Removed account");
+  });
+
+  test("a read-only template detail has no save or delete", async () => {
+    const html = await TemplateDetailPage({ template, creators: names, canEdit: false });
+    expect(html).toContain("Read-only");
+    expect(html).not.toContain("Save Changes");
+    expect(html).not.toContain("/dashboard/templates/tpl_x/delete");
+  });
+
+  test("domains and webhooks lists name the creator", async () => {
+    const domainsHtml = await DomainsPage({
+      domains: [{ ...domain, createdByUserId: "usr_ann" }],
+      creators: names,
+    });
+    expect(domainsHtml).toContain("Created by");
+    expect(domainsHtml).toContain("Ann");
+    const hooksHtml = await WebhooksPage({ webhooks: [webhook], creators: names });
+    expect(hooksHtml).toContain("Owner");
+  });
+});
+
+describe("API keys page: the Make admin button (#219)", () => {
+  test("only keys of an active admin or the owner (or with no creator) can be promoted", async () => {
+    const html = await ApiKeysPage({
+      keys: [
+        { ...apiKey, id: "key_admins", createdByUserId: "usr_admin" },
+        { ...apiKey, id: "key_members", createdByUserId: "usr_member" },
+        { ...apiKey, id: "key_owners", createdByUserId: null },
+        {
+          ...apiKey,
+          id: "key_member_admin",
+          isAdmin: true,
+          createdByUserId: "usr_member",
+        },
+      ],
+      creators: new Map(),
+      adminCreatorIds: new Set(["usr_admin"]),
+      canManageAll: true,
+    });
+    expect(html).toContain("/dashboard/api-keys/key_admins/admin");
+    expect(html).toContain("/dashboard/api-keys/key_owners/admin");
+    expect(html).not.toContain("/dashboard/api-keys/key_members/admin");
+    /** Making an admin key restricted always stays possible. */
+    expect(html).toContain("/dashboard/api-keys/key_member_admin/admin");
   });
 });

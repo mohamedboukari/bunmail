@@ -14,6 +14,10 @@ export interface SerializedApiKey {
   isAdmin: boolean;
   /** Allowlist of From addresses this key may send from; `[]` = unrestricted (#126). */
   allowedSenders: string[];
+  /** The dashboard user the key belongs to; `null` = the owner (#219). */
+  createdByUserId: string | null;
+  /** Why an inactive key is inactive (`revoked`, `creator_deactivated`, `creator_removed`), else `null` (#219). */
+  disabledReason: string | null;
   lastUsedAt: Date | null;
   createdAt: Date;
 }
@@ -30,6 +34,8 @@ export function serializeApiKey(apiKey: ApiKey): SerializedApiKey {
     isActive: apiKey.isActive,
     isAdmin: apiKey.isAdmin,
     allowedSenders: apiKey.allowedSenders,
+    createdByUserId: apiKey.createdByUserId,
+    disabledReason: apiKey.disabledReason,
     lastUsedAt: apiKey.lastUsedAt,
     createdAt: apiKey.createdAt,
   };

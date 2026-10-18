@@ -3,6 +3,7 @@ import { VerificationBadge } from "../components/status-badge.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
 import type { Domain } from "../../modules/domains/types/domain.types.ts";
 
 /**
@@ -13,13 +14,15 @@ interface DomainsPageProps {
   domains: Domain[];
   /** Optional flash message (e.g. after adding or deleting a domain) */
   flash?: { message: string; type: "success" | "error" };
+  /** Display names of accounts, for the "Created by" column (#219). */
+  creators: CreatorNames;
 }
 
 /**
  * Domains page: shows an add form and table of all registered sender domains.
  * Each domain shows SPF/DKIM/DMARC verification status.
  */
-export function DomainsPage({ domains, flash }: DomainsPageProps) {
+export function DomainsPage({ domains, flash, creators }: DomainsPageProps) {
   return (
     <BaseLayout title="Domains" activeNav="domains">
       <h1 class="text-xl font-semibold mb-6">Domains</h1>
@@ -67,6 +70,9 @@ export function DomainsPage({ domains, flash }: DomainsPageProps) {
                   DMARC
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created by
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Created
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
@@ -94,6 +100,9 @@ export function DomainsPage({ domains, flash }: DomainsPageProps) {
                   </td>
                   <td class="px-4 py-3">
                     <VerificationBadge verified={domain.dmarcVerified} label="DMARC" />
+                  </td>
+                  <td class="px-4 py-3 whitespace-nowrap">
+                    <CreatedBy userId={domain.createdByUserId} creators={creators} />
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={domain.createdAt} />

@@ -2,6 +2,7 @@ import { and, eq, gt, inArray, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
+import { logger } from "../../../utils/logger.ts";
 import { users } from "../models/user.schema.ts";
 import { userCredentials } from "../models/user-credential.schema.ts";
 import { userTokens } from "../models/user-token.schema.ts";
@@ -9,12 +10,14 @@ import type {
   CompletedOwnerSetup,
   OwnerBootstrapResult,
   OwnerSetupLink,
+  RecordCounts,
   SessionClient,
   TokenPurpose,
   Tx,
 } from "../types/user.types.ts";
 import { setupTokenExpiry } from "./owner-setup-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
+import { assignUnownedRecords } from "./record-ownership.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
 import { normalizeLoginEmail } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -196,6 +199,40 @@ async function createOwner(tx: Tx, email: string, now: Date): Promise<OwnerSetup
 }
 
 /**
+ * The owner decision of the bootstrap (#215), inside the locked
+ * transaction. See `bootstrapOwner`.
+ */
+async function bootstrapOwnerRow(
+  tx: Tx,
+  email: string,
+  now: Date,
+): Promise<OwnerBootstrapResult> {
+  const owner = await findOwner(tx);
+
+  if (!owner) {
+    if (await emailHeldByOther(tx, email)) return { kind: "email-taken" };
+    return { kind: "created", ...(await createOwner(tx, email, now)) };
+  }
+
+  if (await hasPassword(tx, owner.id)) {
+    return owner.email === email
+      ? { kind: "complete" }
+      : { kind: "mismatch", storedEmail: owner.email };
+  }
+
+  /** Setup pending: follow an edited env email before reissuing. */
+  if (owner.email !== email) {
+    if (await emailHeldByOther(tx, email, owner.id)) return { kind: "email-taken" };
+    await tx
+      .update(users)
+      .set({ email, updatedAt: sql`now()` })
+      .where(eq(users.id, owner.id));
+  }
+
+  return { kind: "reissued", ...(await replaceSetupToken(tx, owner.id, email, now)) };
+}
+
+/**
  * Boot-time owner bootstrap (#215), idempotent across restarts and safe
  * across replicas. See `OwnerBootstrapResult` for the outcomes:
  *
@@ -207,6 +244,12 @@ async function createOwner(tx: Tx, email: string, now: Date): Promise<OwnerSetup
  * - Owner with a password: `complete` when the email matches, `mismatch`
  *   otherwise. Nothing changes after setup; the database is the source of
  *   truth.
+ *
+ * Then, in the same transaction and whatever the outcome, once an owner
+ * row exists: every API key, template, domain and webhook with no creator
+ * is assigned to the owner (#219, `assignUnownedRecords`). This is the
+ * upgrade backfill: migrations run before the owner exists, so it cannot
+ * live in one. Logged with the counts when anything changed.
  *
  * The caller logs the link only after this resolves, i.e. after commit, so
  * a rolled-back token is never printed.
@@ -220,31 +263,27 @@ export async function bootstrapOwner(
 ): Promise<OwnerBootstrapResult> {
   const email = normalizeLoginEmail(ownerEmail);
 
-  return withOwnerLock(async (tx) => {
+  const { result, ownerId, assigned } = await withOwnerLock(async (tx) => {
+    const outcome = await bootstrapOwnerRow(tx, email, now);
     const owner = await findOwner(tx);
-
-    if (!owner) {
-      if (await emailHeldByOther(tx, email)) return { kind: "email-taken" };
-      return { kind: "created", ...(await createOwner(tx, email, now)) };
-    }
-
-    if (await hasPassword(tx, owner.id)) {
-      return owner.email === email
-        ? { kind: "complete" }
-        : { kind: "mismatch", storedEmail: owner.email };
-    }
-
-    /** Setup pending: follow an edited env email before reissuing. */
-    if (owner.email !== email) {
-      if (await emailHeldByOther(tx, email, owner.id)) return { kind: "email-taken" };
-      await tx
-        .update(users)
-        .set({ email, updatedAt: sql`now()` })
-        .where(eq(users.id, owner.id));
-    }
-
-    return { kind: "reissued", ...(await replaceSetupToken(tx, owner.id, email, now)) };
+    const counts: RecordCounts | null = owner
+      ? await assignUnownedRecords(tx, owner.id)
+      : null;
+    return { result: outcome, ownerId: owner?.id ?? null, assigned: counts };
   });
+
+  /** After commit: a rolled-back backfill is never logged as applied. */
+  if (assigned && ownerId) {
+    const total =
+      assigned.keys + assigned.templates + assigned.domains + assigned.webhooks;
+    if (total > 0) {
+      logger.info("Records without a creator assigned to the owner", {
+        ownerId,
+        records: assigned,
+      });
+    }
+  }
+  return result;
 }
 
 /**

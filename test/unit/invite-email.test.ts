@@ -104,6 +104,7 @@ const DOMAIN: Domain = {
   notifyEmail: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  createdByUserId: null,
 };
 
 const DKIM: DkimOptions = {

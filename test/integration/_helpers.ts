@@ -83,7 +83,16 @@ export const seed = {
    * suppressions / webhooks / templates → api_keys is a real one in
    * the test DB.
    */
-  async apiKey(opts: { name?: string; isAdmin?: boolean } = {}): Promise<{
+  async apiKey(
+    opts: {
+      name?: string;
+      isAdmin?: boolean;
+      /** The dashboard user it belongs to (#219); null (default) = the owner. */
+      createdByUserId?: string | null;
+      isActive?: boolean;
+      disabledReason?: "revoked" | "creator_deactivated" | "creator_removed" | null;
+    } = {},
+  ): Promise<{
     id: string;
     rawKey: string;
     keyPrefix: string;
@@ -96,6 +105,9 @@ export const seed = {
       keyHash: hash,
       keyPrefix: prefix,
       isAdmin: opts.isAdmin ?? false,
+      createdByUserId: opts.createdByUserId ?? null,
+      isActive: opts.isActive ?? true,
+      disabledReason: opts.disabledReason ?? null,
     });
     return { id, rawKey: raw, keyPrefix: prefix };
   },
@@ -114,6 +126,8 @@ export const seed = {
       selector?: string;
       unsubscribeEmail?: string | null;
       unsubscribeUrl?: string | null;
+      /** Who added it (#219); null (default) = the owner. */
+      createdByUserId?: string | null;
     } = {},
   ): Promise<{ id: string; name: string }> {
     const id = generateId("dom");
@@ -132,6 +146,7 @@ export const seed = {
       dkimSelector: opts.selector ?? "bunmail",
       unsubscribeEmail: opts.unsubscribeEmail ?? null,
       unsubscribeUrl: opts.unsubscribeUrl ?? null,
+      createdByUserId: opts.createdByUserId ?? null,
     });
     return { id, name };
   },
@@ -171,6 +186,8 @@ export const seed = {
     url: string;
     events: string[];
     secret?: string;
+    /** Who created it (#219); null (default) = the owner. */
+    createdByUserId?: string | null;
   }): Promise<{ id: string; secret: string }> {
     const id = generateId("whk");
     const secret = opts.secret ?? "test-secret-32-bytes-of-padding-here";
@@ -180,6 +197,7 @@ export const seed = {
       url: opts.url,
       events: opts.events,
       secret,
+      createdByUserId: opts.createdByUserId ?? null,
     });
     return { id, secret };
   },
@@ -194,6 +212,8 @@ export const seed = {
     html?: string;
     text?: string;
     variables?: string[];
+    /** Who created it (#219); null (default) = the owner. */
+    createdByUserId?: string | null;
   }): Promise<{ id: string }> {
     const id = generateId("tpl");
     await db.insert(templates).values({
@@ -204,6 +224,7 @@ export const seed = {
       html: opts.html ?? "<p>Hi {{name}}</p>",
       textContent: opts.text ?? "Hi {{name}}",
       variables: opts.variables ?? ["name"],
+      createdByUserId: opts.createdByUserId ?? null,
     });
     return { id };
   },

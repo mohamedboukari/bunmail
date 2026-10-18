@@ -2,17 +2,31 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import { LiveHtmlPreview, LiveHtmlPreviewScript } from "../components/html-preview.tsx";
+import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
 import type { Template } from "../../modules/templates/types/template.types.ts";
 
 interface TemplateDetailPageProps {
   template: Template;
   flash?: { message: string; type: "success" | "error" };
+  /** Display names of accounts, for the "Created by" line (#219). */
+  creators: CreatorNames;
+  /**
+   * The viewer may edit and delete this template (#219): admins and the
+   * owner always, a member when it created it. Without it the page is
+   * read-only; the server checks it again.
+   */
+  canEdit: boolean;
 }
 
 /**
  * Template detail page: view and edit a single email template.
  */
-export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps) {
+export function TemplateDetailPage({
+  template,
+  flash,
+  creators,
+  canEdit,
+}: TemplateDetailPageProps) {
   const variablesValue =
     template.variables && template.variables.length > 0
       ? template.variables.join(", ")
@@ -28,9 +42,18 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
         Back to templates
       </a>
 
-      <h1 class="text-xl font-semibold mb-6" safe>
+      <h1 class="text-xl font-semibold mb-1" safe>
         {template.name}
       </h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        Created by <CreatedBy userId={template.createdByUserId} creators={creators} />
+        {!canEdit && (
+          <span class="block mt-1">
+            Read-only: only its creator, admins and the owner can edit or delete this
+            template.
+          </span>
+        )}
+      </p>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
@@ -139,29 +162,33 @@ export function TemplateDetailPage({ template, flash }: TemplateDetailPageProps)
               class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
-          <div class="flex gap-3">
-            <button
-              type="submit"
-              class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
-            >
-              Save Changes
-            </button>
-          </div>
+          {canEdit && (
+            <div class="flex gap-3">
+              <button
+                type="submit"
+                class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+              >
+                Save Changes
+              </button>
+            </div>
+          )}
         </form>
 
-        <form
-          method="POST"
-          action={`/dashboard/templates/${template.id}/delete`}
-          class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800"
-        >
-          <button
-            type="submit"
-            class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-            onclick="return confirm('Are you sure you want to delete this template?')"
+        {canEdit && (
+          <form
+            method="POST"
+            action={`/dashboard/templates/${template.id}/delete`}
+            class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800"
           >
-            Delete Template
-          </button>
-        </form>
+            <button
+              type="submit"
+              class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
+              onclick="return confirm('Are you sure you want to delete this template?')"
+            >
+              Delete Template
+            </button>
+          </form>
+        )}
       </div>
       <LiveHtmlPreviewScript />
     </BaseLayout>

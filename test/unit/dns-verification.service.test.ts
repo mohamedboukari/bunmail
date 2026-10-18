@@ -57,6 +57,7 @@ const baseDomain = {
   notifyEmail: null as string | null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  createdByUserId: null,
 };
 
 const expectedPubKey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA";

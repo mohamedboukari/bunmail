@@ -5,6 +5,7 @@ import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
 import {
+  ApiKeyCreatorInactiveError,
   InactiveApiKeyError,
   UnauthorizedSenderError,
 } from "./modules/api-keys/errors.ts";
@@ -276,6 +277,15 @@ const app = new Elysia()
     if (error instanceof InactiveApiKeyError) {
       set.status = 401;
       return { success: false, error: error.message, code: "API_KEY_REVOKED" };
+    }
+
+    /**
+     * The new key's creator (#219: the calling key's user) is deactivated
+     * or gone → 403; nothing was created.
+     */
+    if (error instanceof ApiKeyCreatorInactiveError) {
+      set.status = 403;
+      return { success: false, error: error.message, code: "API_KEY_CREATOR_INACTIVE" };
     }
 
     /**

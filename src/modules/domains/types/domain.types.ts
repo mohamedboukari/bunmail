@@ -23,4 +23,9 @@ export interface CreateDomainInput {
   unsubscribeUrl?: string;
   /** Address notified when inbound mail arrives for this domain (#106). Optional. */
   notifyEmail?: string;
+  /**
+   * Who added the domain (#219): the dashboard user, or the calling key's
+   * user over REST. Attribution only; null (the default) means the owner.
+   */
+  createdByUserId?: string | null;
 }

@@ -439,6 +439,8 @@ All API key endpoints are prefixed with `/api/v1/api-keys`.
 
 > **Admin-only (#130).** Every route here requires an **admin** key; a restricted key gets `403 ADMIN_REQUIRED`. The same gate applies to `/api/v1/domains`, `/api/v1/inbound` and `/api/v1/dmarc-reports`. `is_admin` is shown in responses but is **not settable via the API**, only from the dashboard. See [docs/api-keys.md](api-keys.md#admin-vs-restricted-keys-130).
 
+> **Ownership (#219).** Keys, templates, webhooks and domains created through the API belong to the dashboard user who owns the calling key (its `createdByUserId`; `null` = the owner). Key responses carry `createdByUserId` and `disabledReason` (`revoked`, `creator_deactivated`, `creator_removed`, or `null` while active). A key disabled because its user was deactivated or removed, or whose user is deactivated, is rejected with `401` like a revoked one. `POST /api/v1/api-keys` with a calling key whose user is deactivated or gone is refused with `403` and `code: "API_KEY_CREATOR_INACTIVE"`.
+
 #### `POST /api/v1/api-keys`
 
 Create a new API key. The raw key is returned **once**: store it securely.
@@ -450,7 +452,7 @@ Create a new API key. The raw key is returned **once**: store it securely.
 | `name`           | string   | Yes      | Human-readable label (1-100 chars) |
 | `allowedSenders` | string[] | No       | Allowlist of `From` addresses this key may send from (#126). Omit or `[]` = unrestricted. Each must be a valid email; max 100. |
 
-The response includes `allowedSenders`.
+The response includes `allowedSenders`, and `createdByUserId` (the calling key's, #219).
 
 ---
 

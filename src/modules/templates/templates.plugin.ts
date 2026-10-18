@@ -25,7 +25,7 @@ export const templatesPlugin = new Elysia({
 
   .post(
     "/",
-    async ({ body, apiKeyId }) => {
+    async ({ body, apiKeyId, apiKeyCreatedByUserId }) => {
       logger.info("POST /api/v1/templates", { name: body.name });
 
       const template = await templateService.createTemplate(
@@ -37,6 +37,8 @@ export const templatesPlugin = new Elysia({
           variables: body.variables,
         },
         apiKeyId,
+        /** Belongs to the calling key's user (#219). */
+        apiKeyCreatedByUserId,
       );
 
       return { success: true, data: serializeTemplate(template) };

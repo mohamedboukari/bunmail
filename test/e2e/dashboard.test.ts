@@ -129,52 +129,46 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   getTrashedEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
 }));
 
+/** A key row as the fake api-key service returns it. */
+function fakeKey(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: "key_test123",
+    name: "Test Key",
+    keyHash: "abc",
+    keyPrefix: "bm_live_test",
+    isActive: true,
+    isAdmin: false,
+    allowedSenders: [],
+    createdByUserId: null,
+    disabledReason: null,
+    lastUsedAt: null,
+    createdAt: new Date(),
+    ...overrides,
+  };
+}
+
+/** Every export of api-key.service.ts: mock.module leaks across files (#121). */
+const listApiKeys = mock((_actor?: unknown) => Promise.resolve([]));
+const createApiKey = mock((_input: unknown, _actor?: unknown) =>
+  Promise.resolve({
+    apiKey: fakeKey(),
+    rawKey: "bm_live_test1234567890abcdef12345678",
+  }),
+);
 void mock.module("../../src/modules/api-keys/services/api-key.service.ts", () => ({
-  listApiKeys: mock(() => Promise.resolve([])),
-  createApiKey: mock(() =>
-    Promise.resolve({
-      apiKey: {
-        id: "key_test123",
-        name: "Test Key",
-        keyHash: "abc",
-        keyPrefix: "bm_live_test",
-        isActive: true,
-        allowedSenders: [],
-        lastUsedAt: null,
-        createdAt: new Date(),
-      },
-      rawKey: "bm_live_test1234567890abcdef12345678",
-    }),
-  ),
-  revokeApiKey: mock(() =>
-    Promise.resolve({
-      id: "key_test123",
-      name: "Test Key",
-      keyHash: "abc",
-      keyPrefix: "bm_live_test",
-      isActive: false,
-      allowedSenders: [],
-      lastUsedAt: null,
-      createdAt: new Date(),
-    }),
-  ),
+  listApiKeys,
+  createApiKey,
+  revokeApiKey: mock(() => Promise.resolve(fakeKey({ isActive: false }))),
   /**
    * Included so a cross-file `mock.module` leak (this mock shadowing
    * api-keys-api.test.ts under CI's file order) can't leave `updateApiKey`
    * undefined. See #126 / the redact.test.ts leak fix (#121).
    */
-  updateApiKey: mock(() =>
-    Promise.resolve({
-      id: "key_test123",
-      name: "Test Key",
-      keyHash: "abc",
-      keyPrefix: "bm_live_test",
-      isActive: true,
-      allowedSenders: [],
-      lastUsedAt: null,
-      createdAt: new Date(),
-    }),
-  ),
+  updateApiKey: mock(() => Promise.resolve(fakeKey())),
+  findByHash: mock(() => Promise.resolve(undefined)),
+  findById: mock(() => Promise.resolve(undefined)),
+  setApiKeyAdmin: mock(() => Promise.resolve({ ok: false, reason: "not_found" })),
+  findDashboardKeyFor: mock(() => Promise.resolve(undefined)),
 }));
 
 void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
@@ -209,7 +203,27 @@ void mock.module(
   }),
 );
 
-void mock.module("../../src/modules/templates/services/template.service.ts", () => ({
+/** What the fake ownership-checked template changes answer (#219); tests swap it. */
+type FakeTemplateChange = { ok: false; reason: "not_found" | "forbidden" };
+const updateTemplateAs = mock(
+  (_id: string, _actor: unknown, _input: unknown): Promise<FakeTemplateChange> =>
+    Promise.resolve({ ok: false, reason: "not_found" }),
+);
+const deleteTemplateAs = mock(
+  (_id: string, _actor: unknown): Promise<FakeTemplateChange> =>
+    Promise.resolve({ ok: false, reason: "not_found" }),
+);
+
+/**
+ * Every export of template.service.ts: mock.module leaks across files. The
+ * factory is registered at load and again in beforeAll: when another e2e
+ * file (templates-api) registered its own template mock first, the routes
+ * could stay bound to that one, so this file re-applies its own before its
+ * tests run (CI file order, reproduced with `bun test --randomize`).
+ */
+const templateServiceMock = (): Record<string, unknown> => ({
+  MAX_RENDERED_BODY_LENGTH: 5 * 1024 * 1024,
+  MAX_RENDERED_SUBJECT_LENGTH: 500,
   renderTemplate: mock(() => ""),
   createTemplate: mock(() => Promise.resolve({})),
   listTemplates: mock(() => Promise.resolve([])),
@@ -218,7 +232,19 @@ void mock.module("../../src/modules/templates/services/template.service.ts", () 
   getTemplateById: mock(() => Promise.resolve(undefined)),
   updateTemplate: mock(() => Promise.resolve({})),
   deleteTemplate: mock(() => Promise.resolve(undefined)),
-}));
+  updateTemplateAs,
+  deleteTemplateAs,
+});
+void mock.module(
+  "../../src/modules/templates/services/template.service.ts",
+  templateServiceMock,
+);
+beforeAll(() => {
+  void mock.module(
+    "../../src/modules/templates/services/template.service.ts",
+    templateServiceMock,
+  );
+});
 
 void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () => ({
   createWebhook: mock(() => Promise.resolve({})),
@@ -2384,6 +2410,112 @@ describe("Dashboard E2E", () => {
     });
   });
 
+  describe("Key and template ownership in the routes (#219)", () => {
+    /** Form-POSTs `fields` to `path` with the session behind `token`. */
+    const post = (
+      path: string,
+      token: string,
+      fields: Record<string, string>,
+    ): Promise<Response> =>
+      app.handle(
+        new Request(`http://localhost${path}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            origin: "http://localhost",
+            cookie: `bm_session=${token}`,
+          },
+          body: new URLSearchParams(fields).toString(),
+        }),
+      );
+
+    test("a member's key list is asked for its own keys, without admin controls", async () => {
+      listApiKeys.mockClear();
+      const member = seedSession({ userId: "usr_member", role: "member" });
+      const response = await getWithSession("/dashboard/api-keys", member);
+      expect(response.status).toBe(200);
+      expect(listApiKeys.mock.calls[0]?.[0]).toEqual({
+        id: "usr_member",
+        role: "member",
+      });
+      const html = await response.text();
+      expect(html).toContain("The keys you created");
+      expect(html).not.toContain('name="isAdmin"');
+    });
+
+    test("the send page and a send ask for the member's own keys only", async () => {
+      listApiKeys.mockClear();
+      const member = seedSession({ userId: "usr_member", role: "member" });
+      expect((await getWithSession("/dashboard/send", member)).status).toBe(200);
+      const response = await post("/dashboard/send", member, {
+        apiKeyId: "key_someone_else",
+        from: "hello@example.com",
+        to: "user@example.org",
+        subject: "hi",
+      });
+      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+        "Selected API key is not available",
+      );
+      const actors = listApiKeys.mock.calls.map((call) => call[0]);
+      expect(actors).toEqual([
+        { id: "usr_member", role: "member" },
+        { id: "usr_member", role: "member" },
+      ]);
+    });
+
+    test("an admin's key list shows the admin checkbox", async () => {
+      const admin = seedSession({ userId: "usr_admin", role: "admin" });
+      const html = await (await getWithSession("/dashboard/api-keys", admin)).text();
+      expect(html).toContain('name="isAdmin"');
+      expect(html).toContain("Every key on this server");
+    });
+
+    test("a member's create passes the member as actor; the service drops isAdmin", async () => {
+      createApiKey.mockClear();
+      const member = seedSession({ userId: "usr_member", role: "member" });
+      const response = await post("/dashboard/api-keys", member, {
+        name: "Mine",
+        isAdmin: "on",
+      });
+      expect(response.status).toBe(302);
+      expect(createApiKey.mock.calls[0]?.[1]).toEqual({
+        id: "usr_member",
+        role: "member",
+      });
+    });
+
+    test("a member's crafted admin toggle is refused by the guard", async () => {
+      const member = seedSession({ userId: "usr_member", role: "member" });
+      const response = await post("/dashboard/api-keys/key_test123/admin", member, {
+        isAdmin: "true",
+      });
+      expect(response.status).toBe(403);
+    });
+
+    test("a refused template edit or delete is the 403 page", async () => {
+      const forbidden: FakeTemplateChange = { ok: false, reason: "forbidden" };
+      const member = seedSession({ userId: "usr_member", role: "member" });
+
+      updateTemplateAs.mockResolvedValueOnce(forbidden);
+      const edit = await post("/dashboard/templates/tpl_x/edit", member, { name: "x" });
+      expect(edit.status).toBe(403);
+      expect(await edit.text()).toContain("admins and the owner can edit or delete it");
+
+      deleteTemplateAs.mockResolvedValueOnce(forbidden);
+      const del = await post("/dashboard/templates/tpl_x/delete", member, {});
+      expect(del.status).toBe(403);
+    });
+
+    test("a template that is gone redirects with a not-found flash", async () => {
+      const member = seedSession({ userId: "usr_member", role: "member" });
+      const response = await post("/dashboard/templates/tpl_gone/delete", member, {});
+      expect(response.status).toBe(302);
+      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+        "Template not found",
+      );
+    });
+  });
+
   describe("Sidebar by role (#218)", () => {
     /** The app as `src/index.ts` mounts it: with the per-request context. */
     const wrapped = new Elysia().wrap(withRequestContext).use(pagesPlugin);
@@ -2400,7 +2532,8 @@ describe("Dashboard E2E", () => {
     test("a member's page has no link to an admin-only page", async () => {
       const html = await home(seedSession({ userId: "usr_member", role: "member" }));
       expect(html).toContain('href="/dashboard/emails"');
-      expect(html).not.toContain('href="/dashboard/api-keys"');
+      /** A member's own keys (#219). */
+      expect(html).toContain('href="/dashboard/api-keys"');
       expect(html).not.toContain('href="/dashboard/users"');
       expect(html).not.toContain('href="/dashboard/invitations"');
     });
@@ -2416,7 +2549,6 @@ describe("Dashboard E2E", () => {
 
     test("without the per-request context the admin links are hidden (fail closed)", async () => {
       const html = await (await getWithSession("/dashboard", seedSession())).text();
-      expect(html).not.toContain('href="/dashboard/api-keys"');
       expect(html).not.toContain('href="/dashboard/users"');
     });
   });

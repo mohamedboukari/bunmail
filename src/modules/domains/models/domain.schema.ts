@@ -1,4 +1,5 @@
-import { pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core";
+import { index, pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core";
+import { users } from "../../users/models/user.schema.ts";
 
 /**
  * Domains table: tracks sender domains and their email authentication status.
@@ -7,67 +8,84 @@ import { pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core"
  * (SPF, DKIM TXT, DMARC) and then trigger verification. Emails sent from a
  * verified domain get signed with DKIM for better deliverability.
  */
-export const domains = pgTable("domains", {
-  /** Unique identifier, prefixed with `dom_` (e.g. dom_a1b2c3...) */
-  id: varchar("id", { length: 36 }).primaryKey(),
+export const domains = pgTable(
+  "domains",
+  {
+    /** Unique identifier, prefixed with `dom_` (e.g. dom_a1b2c3...) */
+    id: varchar("id", { length: 36 }).primaryKey(),
 
-  /** The domain name (e.g. "example.com"), must be unique */
-  name: varchar("name", { length: 255 }).notNull().unique(),
+    /** The domain name (e.g. "example.com"), must be unique */
+    name: varchar("name", { length: 255 }).notNull().unique(),
 
-  /** RSA 2048-bit private key for DKIM signing (PEM format, stored in DB) */
-  dkimPrivateKey: text("dkim_private_key"),
+    /** RSA 2048-bit private key for DKIM signing (PEM format, stored in DB) */
+    dkimPrivateKey: text("dkim_private_key"),
 
-  /** Corresponding public key: provided to the user for DNS TXT record setup */
-  dkimPublicKey: text("dkim_public_key"),
+    /** Corresponding public key: provided to the user for DNS TXT record setup */
+    dkimPublicKey: text("dkim_public_key"),
 
-  /** DKIM selector (subdomain prefix for the TXT record, default "bunmail") */
-  dkimSelector: varchar("dkim_selector", { length: 63 }).notNull().default("bunmail"),
+    /** DKIM selector (subdomain prefix for the TXT record, default "bunmail") */
+    dkimSelector: varchar("dkim_selector", { length: 63 }).notNull().default("bunmail"),
 
-  /** Whether the SPF DNS record has been verified for this domain */
-  spfVerified: boolean("spf_verified").notNull().default(false),
+    /** Whether the SPF DNS record has been verified for this domain */
+    spfVerified: boolean("spf_verified").notNull().default(false),
 
-  /** Whether the DKIM DNS record has been verified for this domain */
-  dkimVerified: boolean("dkim_verified").notNull().default(false),
+    /** Whether the DKIM DNS record has been verified for this domain */
+    dkimVerified: boolean("dkim_verified").notNull().default(false),
 
-  /** Whether the DMARC DNS record has been verified for this domain */
-  dmarcVerified: boolean("dmarc_verified").notNull().default(false),
+    /** Whether the DMARC DNS record has been verified for this domain */
+    dmarcVerified: boolean("dmarc_verified").notNull().default(false),
 
-  /** When DNS verification last succeeded (null if never verified) */
-  verifiedAt: timestamp("verified_at"),
+    /** When DNS verification last succeeded (null if never verified) */
+    verifiedAt: timestamp("verified_at"),
 
-  /**
-   * Mailbox that receives `List-Unsubscribe` mailto requests for messages
-   * sent from this domain. When null the mailer defaults to
-   * `unsubscribe@<domain>` so a `List-Unsubscribe` header is always
-   * emitted (Gmail/Yahoo Feb-2024 sender requirements). Operators
-   * override this when they don't operate the default mailbox.
-   */
-  unsubscribeEmail: varchar("unsubscribe_email", { length: 255 }),
+    /**
+     * Mailbox that receives `List-Unsubscribe` mailto requests for messages
+     * sent from this domain. When null the mailer defaults to
+     * `unsubscribe@<domain>` so a `List-Unsubscribe` header is always
+     * emitted (Gmail/Yahoo Feb-2024 sender requirements). Operators
+     * override this when they don't operate the default mailbox.
+     */
+    unsubscribeEmail: varchar("unsubscribe_email", { length: 255 }),
 
-  /**
-   * One-click HTTPS unsubscribe endpoint per RFC 8058. When set, the
-   * mailer emits `List-Unsubscribe: <mailto:...>, <https://...>` plus
-   * `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, which Gmail
-   * requires for high-volume bulk senders. Leave null for transactional
-   * mail: the mailto-only form is enough.
-   */
-  unsubscribeUrl: text("unsubscribe_url"),
+    /**
+     * One-click HTTPS unsubscribe endpoint per RFC 8058. When set, the
+     * mailer emits `List-Unsubscribe: <mailto:...>, <https://...>` plus
+     * `List-Unsubscribe-Post: List-Unsubscribe=One-Click`, which Gmail
+     * requires for high-volume bulk senders. Leave null for transactional
+     * mail: the mailto-only form is enough.
+     */
+    unsubscribeUrl: text("unsubscribe_url"),
 
-  /**
-   * Address notified when inbound mail is received for this domain (#106).
-   * When set, every message accepted by the SMTP receiver for a recipient
-   * on this domain triggers a "you have new mail" summary email, sent from
-   * `<INBOUND_NOTIFY_FROM_LOCAL>@<name>` and DKIM-signed with this domain's
-   * own key. Null disables inbound notifications for the domain (the
-   * default). Point this at an EXTERNAL mailbox: an address on a domain
-   * BunMail itself receives for would loop (and is skipped by the
-   * sender-domain loop guard).
-   */
-  notifyEmail: varchar("notify_email", { length: 255 }),
+    /**
+     * Address notified when inbound mail is received for this domain (#106).
+     * When set, every message accepted by the SMTP receiver for a recipient
+     * on this domain triggers a "you have new mail" summary email, sent from
+     * `<INBOUND_NOTIFY_FROM_LOCAL>@<name>` and DKIM-signed with this domain's
+     * own key. Null disables inbound notifications for the domain (the
+     * default). Point this at an EXTERNAL mailbox: an address on a domain
+     * BunMail itself receives for would loop (and is skipped by the
+     * sender-domain loop guard).
+     */
+    notifyEmail: varchar("notify_email", { length: 255 }),
 
-  /** When this domain was added */
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+    /** When this domain was added */
+    createdAt: timestamp("created_at").notNull().defaultNow(),
 
-  /** Last modification timestamp */
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+    /** Last modification timestamp */
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+
+    /**
+     * The dashboard user who created it (#219), or, through the REST API,
+     * the creator of the calling key. Null means the owner (legacy rows are
+     * assigned to the owner at boot; a removed user's rows become null).
+     */
+    createdByUserId: varchar("created_by_user_id", { length: 36 }).references(
+      () => users.id,
+      { onDelete: "set null" },
+    ),
+  },
+  (table) => [
+    /** Ownership transfer and the boot backfill update by creator. */
+    index("domains_created_by_user_id_idx").on(table.createdByUserId),
+  ],
+);

@@ -233,7 +233,7 @@ describe("Role change (#218)", () => {
   test("demotion revokes the demoted admin's open invitations, and the next request sees the new role", async () => {
     const invite = await insertInvite(ids.admin, "member");
     const other = await insertInvite(ids.admin2, "member");
-    expect((await call("GET", "/dashboard/api-keys", tokens.admin)).status).toBe(200);
+    expect((await call("GET", "/dashboard/users", tokens.admin)).status).toBe(200);
 
     const response = await call(
       "POST",
@@ -249,7 +249,7 @@ describe("Role change (#218)", () => {
     );
 
     expect(await openInvites([invite, other])).toEqual([other]);
-    const after = await call("GET", "/dashboard/api-keys", tokens.admin);
+    const after = await call("GET", "/dashboard/users", tokens.admin);
     expect(after.status).toBe(403);
     /** Still signed in: demotion keeps the sessions. */
     expect(await sessionCount(ids.admin)).toBe(1);
@@ -743,6 +743,7 @@ describe("Account action log lines (#218)", () => {
         sessionsRevoked: 1,
         invitesRevoked: 0,
         resetLinksRevoked: 0,
+        keysDisabled: 0,
       });
       const removed = info.mock.calls.find(([m]) => m === "Account removed");
       expect(removed?.[1]).toMatchObject({
@@ -798,11 +799,9 @@ describe("Users page and sidebar (#218)", () => {
   test("a member's pages have no link to an admin-only page; an admin's have them", async () => {
     const memberHome = await (await call("GET", "/dashboard", tokens.member)).text();
     expect(memberHome).toContain('href="/dashboard/emails"');
-    for (const href of [
-      "/dashboard/api-keys",
-      "/dashboard/users",
-      "/dashboard/invitations",
-    ]) {
+    /** API keys are a member page since #219 (a member's own keys). */
+    expect(memberHome).toContain('href="/dashboard/api-keys"');
+    for (const href of ["/dashboard/users", "/dashboard/invitations"]) {
       expect(memberHome).not.toContain(`href="${href}"`);
     }
     const adminHome = await (await call("GET", "/dashboard", tokens.admin)).text();
@@ -818,7 +817,7 @@ describe("Users page and sidebar (#218)", () => {
   test("after a demotion the next page has no admin links", async () => {
     await changeAccountRole(ids.owner, ids.admin, "member");
     const html = await (await call("GET", "/dashboard/emails", tokens.admin)).text();
-    expect(html).not.toContain('href="/dashboard/api-keys"');
+    expect(html).not.toContain('href="/dashboard/invitations"');
     expect(html).not.toContain('href="/dashboard/users"');
   });
 });

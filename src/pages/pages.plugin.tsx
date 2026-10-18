@@ -19,9 +19,11 @@ import type {
   InviteRefusal,
   IssueInvitationResult,
   IssuePasswordResetResult,
+  UserRole,
 } from "../modules/users/types/user.types.ts";
-import { redactEmail } from "../utils/redact.ts";
+import { maskEmail, redactEmail } from "../utils/redact.ts";
 import { UserStoreError } from "../modules/users/errors.ts";
+import { ApiKeyCreatorInactiveError } from "../modules/api-keys/errors.ts";
 import {
   resolveClientIp,
   isLoginRateLimited,
@@ -42,6 +44,7 @@ import { PasswordResetInvalidPage, PasswordResetPage } from "./routes/reset.tsx"
 import { InvitationsPage } from "./routes/invitations.tsx";
 import { UsersPage } from "./routes/users.tsx";
 import { ForbiddenPage } from "./routes/forbidden.tsx";
+import type { CreatorNames } from "./components/created-by.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
 import { EmailTombstonesPage } from "./routes/email-tombstones.tsx";
@@ -273,6 +276,66 @@ function setNoStore(set: Context["set"]): void {
 function revealOwnerOf(auth: DashboardAuth): RevealOwner {
   return { userId: auth.user.id, sessionId: auth.session.id };
 }
+
+/* ─── Record ownership helpers (#219) ─── */
+
+/** The 403 page text for a member changing someone else's template (#219). */
+const TEMPLATE_FORBIDDEN_TEXT =
+  "Only the template's creator, admins and the owner can edit or delete it.";
+
+/**
+ * The signed-in account acting on API keys and templates (#219): id and
+ * role from the guard's `auth`. The services scope a member to its own
+ * records; admins and the owner act on all of them.
+ */
+function recordActorOf(auth: DashboardAuth): { id: string; role: UserRole } {
+  return { id: auth.user.id, role: auth.user.role };
+}
+
+/** Admins and the owner manage every key and template (#219). */
+function managesAll(auth: DashboardAuth): boolean {
+  return roleAtLeast(auth.user.role, "admin");
+}
+
+/** What the pages need to know about the accounts that created records (#219). */
+interface CreatorDirectory {
+  /** "Created by" labels by `users.id`. */
+  names: CreatorNames;
+  /** Active admins and the owner: only their keys may be made admin. */
+  adminIds: ReadonlySet<string>;
+}
+
+/**
+ * Every account, for the "Created by" columns and the admin toggle
+ * (#219). The label is the account's name; without one, admins and the
+ * owner see the email and a member a masked one (`a***@example.com`), so
+ * members do not learn teammates' full addresses.
+ */
+async function creatorDirectory(auth: DashboardAuth): Promise<CreatorDirectory> {
+  const accounts = await userAdminService.listAccounts();
+  const fullEmails = managesAll(auth);
+  return {
+    names: new Map(
+      accounts.map((account) => [
+        account.id,
+        account.name ?? (fullEmails ? account.email : maskEmail(account.email)),
+      ]),
+    ),
+    adminIds: new Set(
+      accounts
+        .filter((account) => !account.disabled && account.role !== "member")
+        .map((account) => account.id),
+    ),
+  };
+}
+
+/** The "Created by" labels alone (see `creatorDirectory`). */
+async function creatorNames(auth: DashboardAuth): Promise<CreatorNames> {
+  return (await creatorDirectory(auth)).names;
+}
+
+/** Flash text when a dashboard create needs an API key the user may use (#219). */
+const NO_USABLE_KEY_TEXT = "Create an API key first";
 
 /* ─── Invitation helpers (#217) ─── */
 
@@ -516,11 +579,14 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * - GET  /dashboard/reset?token=    → password reset form (public, #277)
  * - POST /dashboard/reset           → set the new password, sign out everywhere, sign in (public, #277)
  * - GET  /dashboard                 → home (stats overview)
+ * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
- * - GET  /dashboard/api-keys        → API keys list + create form
- * - POST /dashboard/api-keys        → create API key (form action)
- * - POST /dashboard/api-keys/:id/revoke → revoke API key (form action)
+ * - GET  /dashboard/api-keys        → API keys list + create form (members: their own keys, #219)
+ * - POST /dashboard/api-keys        → create API key (members: restricted only, #219)
+ * - POST /dashboard/api-keys/:id/admin → promote/demote a key (admin)
+ * - POST /dashboard/api-keys/:id/senders → set allowed senders (members: own keys, #219)
+ * - POST /dashboard/api-keys/:id/revoke → revoke API key (members: own keys, #219)
  * - GET  /dashboard/invitations     → pending invitations + invite form (admin, #217)
  * - POST /dashboard/invitations     → invite an address (admin, #217)
  * - POST /dashboard/invitations/:id/revoke → revoke an invitation (admin, #217)
@@ -1387,8 +1453,9 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/send",
-    async ({ query }) => {
-      const keys = await apiKeyService.listApiKeys();
+    async ({ query, auth }) => {
+      /** A member picks only from the keys it created (#219); admins and the owner from every key. */
+      const keys = await apiKeyService.listApiKeys(recordActorOf(auth));
       /** Only active keys are eligible: disabled keys are filtered out
        *  so the dropdown reflects what's actually usable. */
       const activeKeys = keys.filter((k) => k.isActive);
@@ -1418,16 +1485,23 @@ export const pagesPlugin = new Elysia({
    * Sends an email via form submission. The operator picks the api key
    * explicitly via the form (#89). We re-validate that the key is
    * still active before sending so a stale form fails loud instead of
-   * silently falling back to a different key.
+   * silently falling back to a different key. A member may send only with
+   * a key it created (#219): any other key id, an admin's or the owner's
+   * included, is "not available" like a missing key, and nothing is sent.
    */
   .post(
     "/send",
-    async ({ body, set }) => {
-      const keys = await apiKeyService.listApiKeys();
+    async ({ body, set, auth }) => {
+      const keys = await apiKeyService.listApiKeys(recordActorOf(auth));
       /** Match exactly what the form submitted: no implicit fallback. */
       const chosenKey = keys.find((k) => k.id === body.apiKeyId);
 
       if (!chosenKey || !chosenKey.isActive) {
+        logger.warn("Dashboard send refused: API key not available to the user", {
+          apiKeyId: body.apiKeyId,
+          userId: auth.user.id,
+          role: auth.user.role,
+        });
         set.status = 302;
         set.headers["location"] =
           `/dashboard/send?flash=${encodeURIComponent("Selected API key is not available. Pick an active one and try again.")}&flashType=error`;
@@ -1497,7 +1571,7 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/emails",
-    async ({ query }) => {
+    async ({ query, auth }) => {
       const { page, limit } = parsePagination(query);
       const status = isEmailStatus(query.status) ? query.status : undefined;
       /** Source + API-key filters (#137). Only pass through valid values. */
@@ -1513,8 +1587,8 @@ export const pagesPlugin = new Elysia({
           source,
           apiKeyId,
         }),
-        /** Populate the API-key dropdown (operator/cross-key view, #137). */
-        apiKeyService.listApiKeys(),
+        /** Populate the API-key dropdown (#137): a member's own keys only (#219). */
+        apiKeyService.listApiKeys(recordActorOf(auth)),
       ]);
 
       const flash = toFlash(query.flash, query.flashType);
@@ -1826,12 +1900,17 @@ export const pagesPlugin = new Elysia({
   /**
    * GET /dashboard/api-keys
    * API keys list with create form. Shows flash messages from query params.
+   * Any signed-in account (#219): a member sees only the keys it created
+   * (scoped in the service), admins and the owner every key.
    */
   .get(
     "/api-keys",
     async ({ query, auth, set }) => {
       setNoStore(set);
-      const keys = await apiKeyService.listApiKeys();
+      const [keys, directory] = await Promise.all([
+        apiKeyService.listApiKeys(recordActorOf(auth)),
+        creatorDirectory(auth),
+      ]);
 
       /** Parse flash message from query params (set after create/revoke) */
       const flash = toFlash(query.flash, query.flashType);
@@ -1843,10 +1922,19 @@ export const pagesPlugin = new Elysia({
        */
       const rawKey = consumeRevealSecret(query.reveal, "api_key", revealOwnerOf(auth));
 
-      return <ApiKeysPage keys={keys} flash={flash} rawKey={rawKey} />;
+      return (
+        <ApiKeysPage
+          keys={keys}
+          creators={directory.names}
+          adminCreatorIds={directory.adminIds}
+          canManageAll={managesAll(auth)}
+          flash={flash}
+          rawKey={rawKey}
+        />
+      );
     },
     {
-      beforeHandle: adminGuard,
+      beforeHandle: memberGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -1859,22 +1947,29 @@ export const pagesPlugin = new Elysia({
    * POST /dashboard/api-keys
    * Creates a new API key via form submission.
    * Redirects back to the list with the raw key shown once.
+   * Any signed-in account (#219): the key belongs to the creator, and a
+   * member's key is always restricted (the service ignores `isAdmin`).
    */
   .post(
     "/api-keys",
     async ({ body, set, auth }) => {
       try {
-        const { rawKey } = await apiKeyService.createApiKey({
-          name: body.name,
-          /** Chip input submits a comma-joined string; split to an array. */
-          allowedSenders: parseSenderList(body.allowedSenders),
-          /** Checkbox → "on" when ticked; operator-only admin grant (#130). */
-          isAdmin: body.isAdmin === "on",
-        });
+        const { apiKey, rawKey } = await apiKeyService.createApiKey(
+          {
+            name: body.name,
+            /** Chip input submits a comma-joined string; split to an array. */
+            allowedSenders: parseSenderList(body.allowedSenders),
+            /** Checkbox → "on" when ticked; admin grant for admins and the owner only (#130, #219). */
+            isAdmin: body.isAdmin === "on",
+          },
+          recordActorOf(auth),
+        );
 
         logger.info("API key created via dashboard", {
+          id: apiKey.id,
           name: body.name,
-          isAdmin: body.isAdmin === "on",
+          isAdmin: apiKey.isAdmin,
+          userId: auth.user.id,
         });
 
         /**
@@ -1887,6 +1982,13 @@ export const pagesPlugin = new Elysia({
         set.headers["location"] =
           `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&reveal=${reveal}`;
       } catch (error) {
+        if (error instanceof ApiKeyCreatorInactiveError) {
+          /** The service logged the refusal (#219). */
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/api-keys?flash=${encodeURIComponent("Your account can no longer create API keys")}&flashType=error`;
+          return "";
+        }
         logger.error("Failed to create API key via dashboard", {
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1897,7 +1999,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
-      beforeHandle: adminGuard,
+      beforeHandle: memberGuard,
       body: t.Object({
         name: t.String(),
         allowedSenders: t.Optional(t.String()),
@@ -1911,18 +2013,30 @@ export const pagesPlugin = new Elysia({
    * Promotes/demotes a key's admin flag (#130). Operator-only: this route
    * lives on the dashboard (session auth), and `setApiKeyAdmin` is not
    * reachable from any REST DTO, so an API key can never grant itself admin.
+   * Admins and the owner only. A key is promoted only when its creator is
+   * an active admin or the owner (or it has none), checked in the same
+   * UPDATE (#219): a member's key stays restricted.
    */
   .post(
     "/api-keys/:id/admin",
     async ({ params, body, set }) => {
       const isAdmin = body.isAdmin === "true";
-      const updated = await apiKeyService.setApiKeyAdmin(params.id, isAdmin);
+      const result = await apiKeyService.setApiKeyAdmin(params.id, isAdmin);
 
-      set.status = 302;
-      set.headers["location"] = updated
-        ? `/dashboard/api-keys?flash=${encodeURIComponent(isAdmin ? "Key promoted to admin" : "Key set to restricted")}`
-        : `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
-      return "";
+      if (result.ok) {
+        return redirect(
+          set,
+          `/dashboard/api-keys?flash=${encodeURIComponent(isAdmin ? "Key promoted to admin" : "Key set to restricted")}`,
+        );
+      }
+      const message =
+        result.reason === "not_found"
+          ? "API key not found"
+          : "Only keys of an active admin or the owner can be made admin";
+      return redirect(
+        set,
+        `/dashboard/api-keys?flash=${encodeURIComponent(message)}&flashType=error`,
+      );
     },
     {
       beforeHandle: adminGuard,
@@ -1935,14 +2049,18 @@ export const pagesPlugin = new Elysia({
    * POST /dashboard/api-keys/:id/senders
    * Updates a key's allowed-senders allowlist via form submission (#126).
    * The chip editor submits the full desired list (comma-joined); an empty
-   * value clears the list (back to unrestricted).
+   * value clears the list (back to unrestricted). A member may update only
+   * its own keys (#219): anyone else's answers "not found", like a key
+   * that does not exist.
    */
   .post(
     "/api-keys/:id/senders",
-    async ({ params, body, set }) => {
-      const updated = await apiKeyService.updateApiKey(params.id, {
-        allowedSenders: parseSenderList(body.allowedSenders),
-      });
+    async ({ params, body, set, auth }) => {
+      const updated = await apiKeyService.updateApiKey(
+        params.id,
+        { allowedSenders: parseSenderList(body.allowedSenders) },
+        recordActorOf(auth),
+      );
 
       set.status = 302;
       set.headers["location"] = updated
@@ -1951,7 +2069,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
-      beforeHandle: adminGuard,
+      beforeHandle: memberGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({ allowedSenders: t.Optional(t.String()) }),
     },
@@ -1959,12 +2077,13 @@ export const pagesPlugin = new Elysia({
 
   /**
    * POST /dashboard/api-keys/:id/revoke
-   * Revokes an API key via form submission.
+   * Revokes an API key via form submission. A member may revoke only its
+   * own keys (#219): anyone else's answers "not found".
    */
   .post(
     "/api-keys/:id/revoke",
-    async ({ params, set }) => {
-      const apiKey = await apiKeyService.revokeApiKey(params.id);
+    async ({ params, set, auth }) => {
+      const apiKey = await apiKeyService.revokeApiKey(params.id, recordActorOf(auth));
 
       if (!apiKey) {
         set.status = 302;
@@ -1973,14 +2092,17 @@ export const pagesPlugin = new Elysia({
         return "";
       }
 
-      logger.info("API key revoked via dashboard", { id: params.id });
+      logger.info("API key revoked via dashboard", {
+        id: params.id,
+        userId: auth.user.id,
+      });
       set.status = 302;
       set.headers["location"] =
         `/dashboard/api-keys?flash=${encodeURIComponent("API key revoked")}`;
       return "";
     },
     {
-      beforeHandle: adminGuard,
+      beforeHandle: memberGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -2291,12 +2413,15 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/domains",
-    async ({ query }) => {
-      const domainList = await domainService.listDomains();
+    async ({ query, auth }) => {
+      const [domainList, creators] = await Promise.all([
+        domainService.listDomains(),
+        creatorNames(auth),
+      ]);
 
       const flash = toFlash(query.flash, query.flashType);
 
-      return <DomainsPage domains={domainList} flash={flash} />;
+      return <DomainsPage domains={domainList} flash={flash} creators={creators} />;
     },
     {
       beforeHandle: memberGuard,
@@ -2313,11 +2438,18 @@ export const pagesPlugin = new Elysia({
    */
   .post(
     "/domains",
-    async ({ body, set }) => {
+    async ({ body, set, auth }) => {
       try {
-        await domainService.createDomain({ name: body.name });
+        /** Attributed to the signed-in account (#219). */
+        await domainService.createDomain({
+          name: body.name,
+          createdByUserId: auth.user.id,
+        });
 
-        logger.info("Domain added via dashboard", { name: body.name });
+        logger.info("Domain added via dashboard", {
+          name: body.name,
+          userId: auth.user.id,
+        });
         set.status = 302;
         set.headers["location"] =
           `/dashboard/domains?flash=${encodeURIComponent("Domain added successfully")}`;
@@ -2540,10 +2672,20 @@ export const pagesPlugin = new Elysia({
 
   .get(
     "/templates",
-    async ({ query }) => {
-      const list = await templateService.listAllTemplates();
+    async ({ query, auth }) => {
+      const [list, creators] = await Promise.all([
+        templateService.listAllTemplates(),
+        creatorNames(auth),
+      ]);
       const flash = toFlash(query.flash, query.flashType);
-      return <TemplatesPage templates={list} flash={flash} />;
+      return (
+        <TemplatesPage
+          templates={list}
+          flash={flash}
+          creators={creators}
+          viewer={{ id: auth.user.id, canManageAll: managesAll(auth) }}
+        />
+      );
     },
     {
       beforeHandle: memberGuard,
@@ -2556,14 +2698,17 @@ export const pagesPlugin = new Elysia({
 
   .post(
     "/templates",
-    async ({ body, set }) => {
+    async ({ body, set, auth }) => {
       try {
-        const keys = await apiKeyService.listApiKeys();
-        const activeKey = keys.find((k) => k.isActive);
+        /**
+         * The key the template is attached to (#219): the user's own active key;
+         * admins and the owner fall back to anyone's, a member never does.
+         */
+        const activeKey = await apiKeyService.findDashboardKeyFor(recordActorOf(auth));
         if (!activeKey) {
           set.status = 302;
           set.headers["location"] =
-            `/dashboard/templates?flash=${encodeURIComponent("No active API key")}&flashType=error`;
+            `/dashboard/templates?flash=${encodeURIComponent(NO_USABLE_KEY_TEXT)}&flashType=error`;
           return "";
         }
         const variables = body.variables
@@ -2581,6 +2726,8 @@ export const pagesPlugin = new Elysia({
             variables,
           },
           activeKey.id,
+          /** The template belongs to the signed-in account (#219). */
+          auth.user.id,
         );
         set.status = 302;
         set.headers["location"] =
@@ -2606,14 +2753,24 @@ export const pagesPlugin = new Elysia({
 
   .get(
     "/templates/:id",
-    async ({ params, set, query }) => {
+    async ({ params, set, query, auth }) => {
       const template = await templateService.getTemplateByIdUnscoped(params.id);
       if (!template) {
         set.status = 404;
         return "Template not found";
       }
+      const creators = await creatorNames(auth);
       const flash = toFlash(query.flash, query.flashType);
-      return <TemplateDetailPage template={template} flash={flash} />;
+      /** Display only: the edit and delete routes check ownership again (#219). */
+      const canEdit = managesAll(auth) || template.createdByUserId === auth.user.id;
+      return (
+        <TemplateDetailPage
+          template={template}
+          flash={flash}
+          creators={creators}
+          canEdit={canEdit}
+        />
+      );
     },
     {
       beforeHandle: memberGuard,
@@ -2625,30 +2782,43 @@ export const pagesPlugin = new Elysia({
     },
   )
 
+  /**
+   * POST /dashboard/templates/:id/edit
+   * Any signed-in account (#219); the service lets a member change only
+   * the templates it created (admins and the owner any). Someone else's
+   * template answers the 403 page: the detail page offers no form for it.
+   */
   .post(
     "/templates/:id/edit",
-    async ({ params, body, set }) => {
+    async ({ params, body, set, auth }) => {
       try {
-        const existing = await templateService.getTemplateByIdUnscoped(params.id);
-        if (!existing) {
-          set.status = 302;
-          set.headers["location"] =
-            `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
-          return "";
-        }
         const variables = body.variables
           ? body.variables
               .split(",")
               .map((v: string) => v.trim())
               .filter(Boolean)
           : undefined;
-        await templateService.updateTemplate(params.id, existing.apiKeyId, {
-          name: body.name || undefined,
-          subject: body.subject || undefined,
-          html: body.html || undefined,
-          text: body.text || undefined,
-          variables,
-        });
+        const result = await templateService.updateTemplateAs(
+          params.id,
+          recordActorOf(auth),
+          {
+            name: body.name || undefined,
+            subject: body.subject || undefined,
+            html: body.html || undefined,
+            text: body.text || undefined,
+            variables,
+          },
+        );
+        if (!result.ok && result.reason === "forbidden") {
+          set.status = 403;
+          return <ForbiddenPage message={TEMPLATE_FORBIDDEN_TEXT} />;
+        }
+        if (!result.ok) {
+          set.status = 302;
+          set.headers["location"] =
+            `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
+          return "";
+        }
         set.status = 302;
         set.headers["location"] =
           `/dashboard/templates/${params.id}?flash=${encodeURIComponent("Template updated")}`;
@@ -2660,7 +2830,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
-      beforeHandle: adminGuard,
+      beforeHandle: memberGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({
         name: t.Optional(t.String()),
@@ -2672,18 +2842,29 @@ export const pagesPlugin = new Elysia({
     },
   )
 
+  /**
+   * POST /dashboard/templates/:id/delete
+   * Any signed-in account (#219); a member may delete only the templates
+   * it created (checked in the service), anything else is the 403 page.
+   */
   .post(
     "/templates/:id/delete",
-    async ({ params, set }) => {
+    async ({ params, set, auth }) => {
       try {
-        const existing = await templateService.getTemplateByIdUnscoped(params.id);
-        if (!existing) {
+        const result = await templateService.deleteTemplateAs(
+          params.id,
+          recordActorOf(auth),
+        );
+        if (!result.ok && result.reason === "forbidden") {
+          set.status = 403;
+          return <ForbiddenPage message={TEMPLATE_FORBIDDEN_TEXT} />;
+        }
+        if (!result.ok) {
           set.status = 302;
           set.headers["location"] =
             `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
           return "";
         }
-        await templateService.deleteTemplate(params.id, existing.apiKeyId);
         set.status = 302;
         set.headers["location"] =
           `/dashboard/templates?flash=${encodeURIComponent("Template deleted")}`;
@@ -2694,7 +2875,7 @@ export const pagesPlugin = new Elysia({
       }
       return "";
     },
-    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /* ─── Webhooks ─── */
@@ -2703,7 +2884,10 @@ export const pagesPlugin = new Elysia({
     "/webhooks",
     async ({ query, auth, set }) => {
       setNoStore(set);
-      const hooks = await webhookService.listAllWebhooks();
+      const [hooks, creators] = await Promise.all([
+        webhookService.listAllWebhooks(),
+        creatorNames(auth),
+      ]);
       const flash = toFlash(query.flash, query.flashType);
       /** One-time reveal of the webhook HMAC secret (#132): never in URL. */
       const secret = consumeRevealSecret(
@@ -2712,7 +2896,14 @@ export const pagesPlugin = new Elysia({
         revealOwnerOf(auth),
       );
 
-      return <WebhooksPage webhooks={hooks} flash={flash} secret={secret} />;
+      return (
+        <WebhooksPage
+          webhooks={hooks}
+          flash={flash}
+          secret={secret}
+          creators={creators}
+        />
+      );
     },
     {
       beforeHandle: memberGuard,
@@ -2728,12 +2919,15 @@ export const pagesPlugin = new Elysia({
     "/webhooks",
     async ({ body, set, auth }) => {
       try {
-        const keys = await apiKeyService.listApiKeys();
-        const activeKey = keys.find((k) => k.isActive);
+        /**
+         * The key the webhook is attached to (#219): the user's own active key;
+         * admins and the owner fall back to anyone's, a member never does.
+         */
+        const activeKey = await apiKeyService.findDashboardKeyFor(recordActorOf(auth));
         if (!activeKey) {
           set.status = 302;
           set.headers["location"] =
-            `/dashboard/webhooks?flash=${encodeURIComponent("No active API key")}&flashType=error`;
+            `/dashboard/webhooks?flash=${encodeURIComponent(NO_USABLE_KEY_TEXT)}&flashType=error`;
           return "";
         }
         const events = Array.isArray(body.events)
@@ -2742,6 +2936,8 @@ export const pagesPlugin = new Elysia({
         const { secret } = await webhookService.createWebhook(
           { url: body.url, events },
           activeKey.id,
+          /** Attributed to the signed-in account (#219). */
+          auth.user.id,
         );
         /** One-time reveal token in the URL (#132): never the secret. */
         const reveal = stashRevealSecret(secret, "webhook_secret", revealOwnerOf(auth));
@@ -3181,7 +3377,7 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/inbound/:id/reply",
-    async ({ params, set }) => {
+    async ({ params, set, auth }) => {
       const inbound =
         (await inboundService.getInboundEmailById(params.id)) ??
         (await inboundService.getTrashedInboundEmailById(params.id));
@@ -3230,7 +3426,8 @@ export const pagesPlugin = new Elysia({
             .join("\n")}`
         : undefined;
 
-      const keys = await apiKeyService.listApiKeys();
+      /** Keys the viewer may send with (#219): a member's own, or every key. */
+      const keys = await apiKeyService.listApiKeys(recordActorOf(auth));
       const activeKeys = keys.filter((k) => k.isActive);
 
       return (
@@ -3318,7 +3515,7 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/suppressions",
-    async ({ query }) => {
+    async ({ query, auth }) => {
       const { page, limit } = parsePagination(query, 25);
 
       const [{ data, total }, allKeys] = await Promise.all([
@@ -3328,7 +3525,8 @@ export const pagesPlugin = new Elysia({
           email: query.email || undefined,
           apiKeyId: query.apiKeyId || undefined,
         }),
-        apiKeyService.listApiKeys(),
+        /** Filter dropdown and row labels: a member's own keys only (#219). */
+        apiKeyService.listApiKeys(recordActorOf(auth)),
       ]);
 
       /** Pre-build the id→name lookup once so the page component

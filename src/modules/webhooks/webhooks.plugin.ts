@@ -29,12 +29,14 @@ export const webhooksPlugin = new Elysia({
 
   .post(
     "/",
-    async ({ body, apiKeyId }) => {
+    async ({ body, apiKeyId, apiKeyCreatedByUserId }) => {
       logger.info("POST /api/v1/webhooks", { url: body.url, events: body.events });
 
       const { webhook, secret } = await webhookService.createWebhook(
         { url: body.url, events: body.events },
         apiKeyId,
+        /** Belongs to the calling key's user (#219). */
+        apiKeyCreatedByUserId,
       );
 
       return {

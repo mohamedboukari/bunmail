@@ -101,6 +101,11 @@ void mock.module("../../src/modules/templates/services/template.service.ts", () 
   deleteTemplate: mock((id: string) =>
     Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
   ),
+  /** Complete the module (mock.module leaks across files): dashboard-only helpers. */
+  updateTemplateAs: mock(() => Promise.resolve({ ok: false, reason: "not_found" })),
+  deleteTemplateAs: mock(() => Promise.resolve({ ok: false, reason: "not_found" })),
+  MAX_RENDERED_BODY_LENGTH: 5 * 1024 * 1024,
+  MAX_RENDERED_SUBJECT_LENGTH: 500,
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */

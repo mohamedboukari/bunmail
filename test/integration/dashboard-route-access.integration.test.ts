@@ -105,14 +105,15 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   "POST /dashboard/emails/trash/empty": { access: "admin" },
 
-  "GET /dashboard/api-keys": { access: "admin" },
-  "POST /dashboard/api-keys": { access: "admin", body: { name: "route-access" } },
+  /** A member sees and manages its own keys, scoped in the service (#219). */
+  "GET /dashboard/api-keys": { access: "member" },
+  "POST /dashboard/api-keys": { access: "member", body: { name: "route-access" } },
   "POST /dashboard/api-keys/:id/admin": { access: "admin", body: { isAdmin: "false" } },
   "POST /dashboard/api-keys/:id/senders": {
-    access: "admin",
+    access: "member",
     body: { allowedSenders: "" },
   },
-  "POST /dashboard/api-keys/:id/revoke": { access: "admin" },
+  "POST /dashboard/api-keys/:id/revoke": { access: "member" },
 
   "GET /dashboard/invitations": { access: "admin" },
   "POST /dashboard/invitations": {
@@ -151,8 +152,9 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },
   "POST /dashboard/templates": { access: "member", body: { name: "t", subject: "s" } },
-  "POST /dashboard/templates/:id/edit": { access: "admin", body: { name: "t" } },
-  "POST /dashboard/templates/:id/delete": { access: "admin" },
+  /** A member may change its own templates; the service checks the creator (#219). */
+  "POST /dashboard/templates/:id/edit": { access: "member", body: { name: "t" } },
+  "POST /dashboard/templates/:id/delete": { access: "member" },
 
   "GET /dashboard/webhooks": { access: "member" },
   "GET /dashboard/webhooks/:id/deliveries": { access: "member" },
@@ -342,7 +344,7 @@ describe("Role denial (#222)", () => {
   test("a member on an admin route gets the 403 page and a warn line with IDs only", async () => {
     const warn = spyOn(logger, "warn");
     try {
-      const response = await call("GET", "/dashboard/api-keys", tokens.member);
+      const response = await call("GET", "/dashboard/users", tokens.member);
       track("member", response);
       expect(response.status).toBe(403);
       const page = await response.text();
@@ -353,7 +355,7 @@ describe("Role denial (#222)", () => {
         role: "member",
         required: "admin",
         method: "GET",
-        path: "/dashboard/api-keys",
+        path: "/dashboard/users",
       });
     } finally {
       warn.mockRestore();
@@ -363,9 +365,9 @@ describe("Role denial (#222)", () => {
   test("a role change applies on the next request: the role is read with the session", async () => {
     const { id } = await seed.user({ email: "promoted@example.com", role: "member" });
     const { token } = await seed.session({ userId: id });
-    expect((await call("GET", "/dashboard/api-keys", token)).status).toBe(403);
+    expect((await call("GET", "/dashboard/users", token)).status).toBe(403);
     await db.update(users).set({ role: "admin" }).where(eq(users.id, id));
-    expect((await call("GET", "/dashboard/api-keys", token)).status).toBe(200);
+    expect((await call("GET", "/dashboard/users", token)).status).toBe(200);
   });
 });
 

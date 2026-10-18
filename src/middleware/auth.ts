@@ -2,6 +2,7 @@ import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.ts";
 import { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
+import { users } from "../modules/users/models/user.schema.ts";
 import { hashApiKey } from "../utils/crypto.ts";
 import { logger } from "../utils/logger.ts";
 
@@ -17,6 +18,12 @@ interface AuthenticatedKey {
   name: string;
   /** Admin keys may call the management plane (#130). */
   isAdmin: boolean;
+  /**
+   * The dashboard user the key belongs to (#219); null means the owner.
+   * Records created through this key (keys, templates, domains, webhooks)
+   * inherit it.
+   */
+  createdByUserId: string | null;
 }
 const authCache = new WeakMap<Request, AuthenticatedKey>();
 
@@ -90,8 +97,12 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
         name: apiKeys.name,
         isActive: apiKeys.isActive,
         isAdmin: apiKeys.isAdmin,
+        createdByUserId: apiKeys.createdByUserId,
+        /** The creator's deactivation (#219); null when active or no creator. */
+        creatorDisabledAt: users.disabledAt,
       })
       .from(apiKeys)
+      .leftJoin(users, eq(users.id, apiKeys.createdByUserId))
       .where(eq(apiKeys.keyHash, tokenHash));
 
     /** Reject if no matching key found */
@@ -101,9 +112,27 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
       return { success: false, error: "Invalid API key" };
     }
 
-    /** Reject if the key has been revoked */
+    /**
+     * Reject if the key has been revoked, or disabled because its user was
+     * deactivated or removed (#219): every inactive key is refused alike.
+     */
     if (!apiKey.isActive) {
       logger.warn("Auth failed: API key is revoked", { apiKeyId: apiKey.id });
+      set.status = 401;
+      return { success: false, error: "API key has been revoked" };
+    }
+
+    /**
+     * Reject a key whose creator exists but is deactivated (#219). The
+     * deactivation already disabled the key; this holds even if
+     * `is_active` were somehow true again. A key with no creator (the
+     * owner's) is unaffected.
+     */
+    if (apiKey.creatorDisabledAt !== null) {
+      logger.warn("Auth failed: the API key's account is deactivated", {
+        apiKeyId: apiKey.id,
+        createdByUserId: apiKey.createdByUserId,
+      });
       set.status = 401;
       return { success: false, error: "API key has been revoked" };
     }
@@ -113,6 +142,7 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
       id: apiKey.id,
       name: apiKey.name,
       isAdmin: apiKey.isAdmin,
+      createdByUserId: apiKey.createdByUserId,
     });
   })
   /**
@@ -161,6 +191,8 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
       apiKeyId: cached.id,
       apiKeyName: cached.name,
       apiKeyIsAdmin: cached.isAdmin,
+      /** Recorded as the creator of anything this request creates (#219). */
+      apiKeyCreatedByUserId: cached.createdByUserId,
     };
   })
   /**

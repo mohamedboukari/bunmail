@@ -76,10 +76,15 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
       unsubscribeEmail: input.unsubscribeEmail ?? null,
       unsubscribeUrl: input.unsubscribeUrl ?? null,
       notifyEmail: input.notifyEmail ?? null,
+      createdByUserId: input.createdByUserId ?? null,
     })
     .returning();
 
-  logger.info("Domain created with DKIM keys", { id: domain!.id, name: domain!.name });
+  logger.info("Domain created with DKIM keys", {
+    id: domain!.id,
+    name: domain!.name,
+    createdByUserId: domain!.createdByUserId,
+  });
 
   return domain!;
 }

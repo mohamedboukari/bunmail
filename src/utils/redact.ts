@@ -19,7 +19,16 @@ import { config } from "../config.ts";
 export function redactEmail(value: string | null | undefined): string {
   if (value === null || value === undefined) return "";
   if (!config.logRedactPii) return value;
+  return maskEmail(value);
+}
 
+/**
+ * Masks an email address whatever `LOG_REDACT_PII` says: the same
+ * `a***@example.com` form as `redactEmail`, for display to someone who
+ * should not see the full address (#219: account emails shown to members
+ * on "Created by" labels). Input without `@` is returned unchanged.
+ */
+export function maskEmail(value: string): string {
   const at = value.indexOf("@");
   if (at < 0) return value;
 
