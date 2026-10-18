@@ -10,8 +10,9 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 | BUNMAIL_OWNER_EMAIL                | **Prod** | _(empty)_     | Email of the dashboard owner account (#215), stored lowercased. **Required when `BUNMAIL_ENV=production`** (app refuses to start when it is unset); a malformed address or one over 254 characters is refused in every environment; unset in dev skips the owner bootstrap with a warning, which leaves the dashboard without an account to sign in with (#216). See [Owner setup](#owner-setup-215). |
 | DASHBOARD_TRUSTED_PROXY_HOPS       | No       | `0`           | Trusted reverse-proxy hops in front of BunMail, used to resolve the real client IP for login rate limiting. `0` = trust only the raw socket IP. Set to `1` behind a single nginx/Caddy/Cloudflare (`N` for `N` chained proxies). |
 | DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
-| DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout |
-| DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes) |
+| DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout: a whole number from 1 to 100; anything else (not a number, 0, a decimal, out of range) refuses to boot (#220). Also budgets the password checks of the ownership transfer, the password change and the 2FA enrolment start. Two-factor code checks have a fixed budget of their own (5 per 15 minutes), whatever this says |
+| DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes): 60 to 86400; anything else refuses to boot (#220) |
+| REQUIRE_2FA                        | No       | `none`        | Who must set up two-factor authentication before using the dashboard (#220): `none` (nobody), `owner` (the owner), `admin` (admins and the owner). Case-insensitive; anything else refuses to boot. An account it covers without a second factor can open only its Two-factor page until it enrols. The default `none` means upgrading never locks anyone out. See [Two-factor authentication](#two-factor-authentication-220). |
 | INVITE_EXPIRY_DAYS                 | No       | `7`           | Days an invitation link stays valid (#217): a whole number from 1 to 90; anything else refuses to boot. |
 | SYSTEM_MAIL_FROM                   | No       | _(empty)_     | Sender of invitation emails (#217) and new-device sign-in alerts (#282): one bare address on a domain registered and DKIM-verified in BunMail; malformed refuses to boot. Unset, or its domain unusable: the inviter gets the link once on the Invitations page instead, and a sign-in from a new device is only logged. See [Invitations](#invitations-217) and [New-device alerts](#new-device-alerts-282). |
 
@@ -30,6 +31,7 @@ Account login (#216): email and password against the `users` and `user_credentia
 5. `verifyPasswordLogin` runs exactly one argon2id verify on every branch (a missing account or credential is verified against a dummy hash), so the response time does not reveal whether an account exists.
 6. Failure, whatever the reason: counted against the IP, `warn` log `Dashboard login failed` with `ip`, `reason` (`unknown`, `no_password`, `disabled`, `bad_password`, `too_long`) and the email through `redactEmail` (none for `too_long`), and a `302` to `/dashboard/login?error=invalid`, which shows `Invalid email or password.`. The email never goes in the URL.
 7. Success: the IP's failure count is cleared; a well-formed session cookie the browser already sent is revoked first (no session stacking, no planted cookie survives login); a new session is created (`info` log `Dashboard login successful` with `userId`, `sessionId`, `ip`) and the browser is sent to the fixed `/dashboard` (no `next` parameter, no open redirect). The response also sets the `bm_device` cookie and the new-device check starts in the background (#282, see [New-device alerts](#new-device-alerts-282)). A database error answers `503` `Dashboard temporarily unavailable`.
+8. Success for an account with two-factor authentication (#220): the session is created `pending` instead, for 10 minutes (cookie `Max-Age=600`), `info` log `Dashboard login: password accepted, second factor required`, and a `302` to `/dashboard/login/two-factor`. A pending session opens no other page. The `bm_device` cookie, the new-device check and the location lookup wait for the second step. See [Two-factor authentication](#two-factor-authentication-220).
 
 **Cookie:** `bm_session=<token>`, where the token is 32 random bytes as base64url (43 characters); only its SHA-256 is stored. `HttpOnly; SameSite=Lax; Path=/dashboard`, plus `Secure` in production (#133), so over plain HTTP the browser drops it (most browsers make an exception for `localhost`). `Max-Age` is 7 days at login; after a rotation it is what is left of the 7 days.
 
@@ -39,11 +41,12 @@ Account login (#216): email and password against the `users` and `user_credentia
 
 1. No cookie: `302` to `/dashboard/login`.
 2. A value that is not a 43-character token, including a pre-#216 `<timestamp>.<hmac>` cookie: cleared and `302`, with no database query.
-3. One query (`findActiveSession`) matches the token's hash against the current and the previous token hash of an unexpired session whose user is not disabled and whose assurance is `password` or `mfa`. No row: cookie cleared, `302`. A database error: `503` `Dashboard temporarily unavailable` (fail closed, and no false logout).
+3. One query (`findActiveSession`) matches the token's hash against the current and the previous token hash of an unexpired session whose user is not disabled and whose assurance is `mfa`, or `password` while the account has no TOTP second factor (#220: so a password-level session, even one a login opened while a 2FA confirmation was committing, stops working the moment the account has 2FA); the same row says whether the account has a TOTP second factor. A `pending` session (password passed, second factor still to come) is no session here, on every protected route: it opens only the public second login step. No row: cookie cleared, `302`. A database error: `503` `Dashboard temporarily unavailable` (fail closed, and no false logout).
 4. Reuse detection (see below): every session of the user is revoked, cookie cleared, `302`.
 5. A cross-origin `POST`: `403` (CSRF second layer, #133). It runs before rotation, so a rejected request never carries a new token.
 6. Rotation, when due (see below).
-7. The request goes on with `auth` (#222), then the route's role check (see [Roles](#roles-222)).
+7. `REQUIRE_2FA` (#220): an account whose role the policy covers and that has no second factor gets a `302` to `/dashboard/account/two-factor` from every route except that page and its actions (logout and the assets are public routes, so they stay reachable). Logged at `debug` (`Two-factor enrolment required: redirected to the Two-factor page`).
+8. The request goes on with `auth` (#222), then the route's role check (see [Roles](#roles-222)).
 
 The guard is an Elysia `resolve`, so its result is typed on every handler registered after it. A `resolve` can only stop a request by returning `status()`, so each refusal above sets its headers (`location`, `set-cookie`) on `set` and returns `status(302 | 403 | 503, body)`.
 
@@ -62,11 +65,11 @@ The role is read on every request, so a role change applies on the next request.
 
 | Helper | Lets through | Used for |
 |---|---|---|
-| `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), active sessions (the page and both sign-out actions, own sessions only, #281), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), active sessions (the page and both sign-out actions, own sessions only, #281), two-factor authentication (the page and its four actions, own account only, #220), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
 | `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
-They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
+They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it: two-factor authentication (#220) is enforced by the login (a `pending` session until the code) and by the `REQUIRE_2FA` policy in the guard, so accounts without a second factor keep working unchanged.
 
 A denial answers `403` with a small "Forbidden" page in the dashboard layout (it names the required and the current role, nothing else) and logs `warn` `Dashboard access denied: role too low` with `userId`, `role`, `required`, `method` and `path` (`Dashboard access denied: session assurance too low` with `userId`, `sessionId`, `assurance`, `required`, `method`, `path` for `requireAssurance`). The navigation is not filtered by role yet: a member still sees links to admin pages and gets the 403 page there. The Invitations page has no sidebar entry for that reason (the shared sidebar does not know the viewer's role); admins and the owner get an **Invite teammates** link on the dashboard home instead.
 
@@ -144,7 +147,9 @@ Nobody acts on their own account, and the owner is never demoted, deactivated, r
 
 1. `GET /dashboard/reset?token=...` only reads the token. Missing, malformed, unknown, expired, used and revoked tokens, and links whose account was since disabled, or whose issuer was since deleted, disabled or demoted (or no longer manages the account's role), all get the same `400` "This password reset link is not valid" page, which never echoes the token. A live token renders the form (`200`): the account's address (escaped), a hidden token field, a new password with confirmation (15 to 256 characters, the owner setup policy).
 2. `POST /dashboard/reset` (form fields `token`, `password`, `confirm`) checks same-origin first (`403` and a `warn` log `Password reset POST rejected: cross-origin (possible CSRF)`), then the token (the same `400` page, logged only at `debug`), then the policy (a problem re-renders the form with `200`, no hashing, no write), then, in one transaction, spends the token, replaces the password, signs the account out of every session, revokes its other open tokens and the invitations and reset links it issued (its pending invitations must be sent again), and opens a new session. A login that checked the old password while the reset ran gets the generic invalid email or password answer.
-3. On success the session the browser already presented is revoked (as at login), the new session's cookie is set and the browser goes to `/dashboard`. Logged at `warn` as `Password reset completed`.
+3. On success the session the browser already presented is revoked (as at login), the new session's cookie is set and the browser goes to `/dashboard`. Logged at `warn` as `Password reset completed` (with `twoFactorRemoved`).
+
+A completed reset also removes the account's two-factor authentication and recovery codes (#220): it is the recovery path when the authenticator app is lost. The new session is a `password` one; under `REQUIRE_2FA` the user is then sent to enrol again.
 
 ### Change password (#279)
 
@@ -152,7 +157,7 @@ Every signed-in account, the owner included, changes its own password at **Chang
 
 1. `GET /dashboard/account/password` renders the form (`no-store`): the account's address (escaped), the current password, a new password and its confirmation. Fields are never refilled after a refusal.
 2. `POST /dashboard/account/password` (form fields `current`, `password`, `confirm`, `memberGuard`): the session guard refuses a cross-origin POST first (`403`). Then the failed-attempt budget: the login limiter's settings (`DASHBOARD_LOGIN_RATE_LIMIT_*`) under keys of its own, `password:user:<userId>` and `password:ip:<client IP>` (IPv6 by `/64`); over budget the form comes back with `429` and `Too many attempts. Try again later.`, before any argon2id work. Then the policy, with no argon2id and no attempt counted (current password required; the new one 15 to 256 characters, confirmed, different from the current one; `200` with the message). Then the attempt is counted and the current password verified, exactly one argon2id verify; a wrong one gets `200` and the generic `Current password is incorrect.` and stays counted. A completed change clears both keys.
-3. On success, in one transaction: the password is replaced, every session of the account is signed out (this browser's too), the account's open reset links are revoked, and a fresh session bound to the new password is opened for this browser; its cookie is set and the browser goes back to the form with `Password changed. You were signed out on every other device.` If the password was reset elsewhere, or the account deactivated, between the check and the change, nothing changes (`409`). Logged at `warn` as `Password changed` (`userId`, the new `sessionId`, `previousSessionId`, `sessionsRevoked`, `resetLinksRevoked`, `ip`); a refusal is `warn` `Password change refused` with a `reason`. Never a password.
+3. On success, in one transaction: the password is replaced, every session of the account is signed out (this browser's too), the account's open reset links are revoked, and a fresh session bound to the new password is opened for this browser; its cookie is set and the browser goes back to the form with `Password changed. You were signed out on every other device.` If the password was reset elsewhere, or the account deactivated, between the check and the change, nothing changes (`409`). Two-factor authentication (#220) is kept, and the new session has the assurance of the one the change was made from (an `mfa` session stays `mfa`). Logged at `warn` as `Password changed` (`userId`, the new `sessionId`, `previousSessionId`, `sessionsRevoked`, `resetLinksRevoked`, `ip`); a refusal is `warn` `Password change refused` with a `reason`. Never a password.
 
 ### Active sessions (#281)
 
@@ -174,7 +179,41 @@ A successful `POST /dashboard/login` sets `bm_device` (32 random bytes as base64
 2. Seen by this account within the last 30 days: nothing more. The account's first browser ever: recorded without an alert.
 3. Otherwise (new to the account, or not seen for over 30 days): "New sign-in to your BunMail account" goes to the account's address from `SYSTEM_MAIL_FROM` (DKIM-signed), with the masked address, browser and OS, IP, approximate location when known, the time (UTC) and what to do (sign in, **Account > Active sessions > Sign out all other devices**, change the password, tell an administrator). The email contains **no links** at all. Without a usable `SYSTEM_MAIL_FROM` nothing is sent and the event is logged (`New-device sign-in`, `info`).
 
+For an account with two-factor authentication (#220) all of this happens at the second step (`POST /dashboard/login/two-factor`), once the code is accepted: the password alone sets no `bm_device` cookie and sends no alert.
+
 Owner setup, invitation accept, password reset and password change never send this alert. Internals and log lines: [docs/users.md](users.md#new-device-alerts-282).
+
+### Two-factor authentication (#220)
+
+Every account, the owner included, can protect its sign-in with a time-based code (TOTP, RFC 6238: 6 digits, 30 seconds, SHA-1) from an authenticator app, at **Two-factor** (`/dashboard/account/two-factor`, in the Account group of the sidebar). Internals: [docs/users.md](users.md#two-factor-authentication-220).
+
+**Turning it on** (all `memberGuard`, own account only; the session guard refuses cross-origin `POST`s):
+
+1. `GET /dashboard/account/two-factor` (`no-store`) shows the state: off (a **Set up** button), an enrolment in progress, or on (since when, recovery codes left, with a warning at 3 or fewer).
+2. `POST /dashboard/account/two-factor/start` (form field `password`): the **current password** first, so a stolen session cookie alone cannot turn 2FA on (which would sign the owner's other devices out and lock the account behind a code only the thief has). It uses the password change's budget (`password:user:<userId>`, `password:ip:<client IP>`, `DASHBOARD_LOGIN_RATE_LIMIT_*`): over budget `Too many attempts. Try again later.` before any argon2id work, then exactly one argon2id verify; a wrong password gets `Current password is incorrect.` and nothing is written (`warn` `Two-factor enrolment start refused` with `reason`). Then a new random secret (20 bytes), kept encrypted on this session until confirmed (only this step writes it, so confirming cannot happen without a start that passed the password); `302` back to the page, which shows a QR code (inline SVG drawn on the server, no script, no image request) and the key in groups of four for typing in by hand. The `otpauth://` URI is never written into the page, a URL or a log. Starting again replaces the secret. `info` log `Two-factor enrolment started`.
+3. `POST /dashboard/account/two-factor/confirm` (form field `code`): the first code from the app. Wrong: back to the page with `Invalid code. Try again.` (the enrolment stays). Right, in one transaction: the second factor is stored, ten recovery codes are created, **every other session of the account is signed out**, and this one counts as verified with a second factor (`mfa`). The page then shows the recovery codes **once** (one-time reveal bound to this user and session, kind `recovery_codes`, 60 seconds, #280). `warn` log `Two-factor authentication enabled` (`userId`, `sessionId`, `sessionsRevoked`, `ip`). The account is emailed (see **Security emails** below).
+
+**Signing in** with it on:
+
+1. `POST /dashboard/login` with the right password opens a `pending` session (10 minutes) and redirects to `/dashboard/login/two-factor` (see [Auth Flow](#auth-flow) step 8).
+2. `GET /dashboard/login/two-factor` (public, auth-page headers) shows the code form when the browser holds a pending session; anything else goes to `/dashboard`, where the guard decides.
+3. `POST /dashboard/login/two-factor` (form field `code`): same-origin first (`403`), then the pending session (none: `302` to `/dashboard`, cookie untouched, so a double click cannot sign out the winner). The field takes the 6-digit code or a recovery code (case, spaces and dashes ignored). Then the failed-attempt budget (below), then, in one transaction, the code is checked and spent and the session becomes `mfa` with a **new token** (the pending token stops working at once). Success: `302` to `/dashboard`, `info` log `Dashboard login successful` with `method` (`totp` or `recovery_code`); a recovery code adds `warn` `Recovery code used` with `recoveryCodesLeft`. Then the `bm_device` cookie, the new-device check (#282) and the location lookup (#281), as for a password-only sign-in. A wrong code: the form again with `Invalid code. Try again.` (`warn` `Two-factor sign-in failed: invalid code`). **Cancel and use another account** signs the pending session out (`POST /dashboard/logout`).
+4. **Replay protection:** a code is accepted only once. Its time step must be newer than the last accepted one (window: the current step and one either side), and the new step is stored by a compare-and-swap in the same transaction, so even two simultaneous submissions of one code cannot both pass.
+
+**Failed-attempt budgets.** Every check of a code is budgeted with fixed numbers, **5 failures per 15 minutes** per key (`TWO_FACTOR_MAX_FAILURES`, `TWO_FACTOR_WINDOW_SECONDS`), **always on**, whatever `DASHBOARD_LOGIN_RATE_LIMIT_*` says (a 6-digit code needs a budget). The attempt is counted before the code is checked, so a parallel burst checks at most the budget. Two budgets, so neither can be spent to block the other:
+
+- **The second login step**: `totp:user:<userId>` and `totp:ip:<client IP>` (IPv6 by `/64`). Once spent the pending session is revoked and the browser goes back to the login page (`/dashboard/login?error=two_factor_locked`: `Too many invalid codes. Wait a few minutes, then sign in again.`; `warn` `Two-factor sign-in blocked: too many attempts, pending session revoked`); the account stays blocked until the window ends, from any address. The account key is reached only through this step, which needs the password, so blocking it costs an attacker the password first; when it runs out the account is emailed (once per window, see below). A success clears the account key and gives back its own count on the address key.
+- **Checks inside a session** (turning 2FA off, new recovery codes): `totp:session:<sessionId>` and the same address key, **never** the account key, so a stolen session cannot lock the real user's sign-in. Wrong codes and, on the disable form, wrong passwords count. Once the session's own key is spent the session is **revoked** (`warn` `Two-factor code budget spent in a session: session revoked`, with `action`) and the browser goes to the login page.
+
+**Recovery codes.** Ten codes (`xxxx-xxxx-xxxx-xxxx`, 80 random bits each), each works once in place of a code from the app. `POST /dashboard/account/two-factor/recovery-codes` (form field `code`, a code **from the app**, not a recovery code) replaces all of them with ten new ones, shown once (`warn` `Recovery codes regenerated`); the account is emailed.
+
+**Turning it off.** `POST /dashboard/account/two-factor/disable` (form fields `password`, `code`): on an account without 2FA the answer is `Two-factor authentication is off.` at once, before any password work, so the form never says whether a password is right. Otherwise the current password **and** a code (from the app, or a recovery code), under the session's budget; a wrong one gets `The password or the code is incorrect.` The second factor and every recovery code are deleted; sessions are kept. `warn` `Two-factor authentication disabled` (with `method`); the account is emailed. Under `REQUIRE_2FA` the account is then sent back to the page until it enrols again.
+
+**Lost authenticator.** Use a recovery code. Without one: an admin (or the owner) issues a password reset link (#277) for the account, which removes its two-factor authentication when completed; the owner runs `reset-owner`, whose link does the same when completed (issuing it changes nothing). A password change keeps 2FA, and an ownership transfer keeps both accounts' 2FA.
+
+**Security emails.** Like the new-device alert (#282): from `SYSTEM_MAIL_FROM`, DKIM-signed, never unsigned, **no links**, in the background (never delays or fails the action), each with the masked address, the IP and the time (UTC) and the advice to change the password, check Two-factor and sign out other devices. Sent when 2FA is turned on, turned off, when the recovery codes are replaced, when a completed reset link or `reset-owner` link removed it, and when the second login step's account budget runs out (password right, codes failing: a likely password compromise; at most once per account per 15 minutes, per replica). Logged `warn` `Two-factor security alert sent` (redacted address) or `Two-factor security alert not sent` (`info` with `reason: not_configured` when `SYSTEM_MAIL_FROM` is unset, `warn` otherwise), always with `event` and `userId`.
+
+**Policy.** `REQUIRE_2FA` (`none` by default, `owner`, or `admin` for admins and the owner) holds an account it covers on its Two-factor page until it enrols (see the guard above); the page says `Your role requires two-factor authentication`. It applies to every session of such an account, including those opened by owner setup, invitation accept and a password reset.
 
 ### Brute-force protection (#109)
 
@@ -194,9 +233,13 @@ no global budget across addresses (it would let anyone lock everyone out);
 guessing across many IPs is slowed only by argon2id and the 15-character
 password minimum.
 The same settings budget the current-password checks of the ownership transfer
-(#218) and of the password change (#279), under keys of their own
-(`transfer:` and `password:`, per account and per client IP), so a stolen
-session cannot guess faster than a login could.
+(#218), of the password change (#279) and of the 2FA enrolment start (#220),
+under keys of their own (`transfer:` and `password:`, per account and per
+client IP), so a stolen session cannot guess faster than a login could. Both
+numbers are validated at boot (1 to 100 attempts, 60 to 86400 seconds; anything
+else refuses to start). Two-factor code checks (#220, `totp:`) have a fixed
+budget of their own, 5 per 15 minutes, always on (see
+[Two-factor authentication](#two-factor-authentication-220)).
 
 The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from
 the **right** of `X-Forwarded-For` (the leftmost entry is attacker-controlled and
@@ -215,6 +258,7 @@ per-replica.
 | Route                            | Description                                                       |
 |----------------------------------|-------------------------------------------------------------------|
 | GET /dashboard/login             | Email + password login form (standalone, no nav, #216)            |
+| GET /dashboard/login/two-factor  | Second login step: the authenticator or recovery code (standalone, public, needs a pending session, #220) |
 | GET /dashboard/assets/dashboard.css | Self-hosted stylesheet, public, cached 1 year (#255)              |
 | GET /dashboard/assets/dashboard.js  | Dashboard script, public, cached 1 year (#255)                    |
 | GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
@@ -223,6 +267,7 @@ per-replica.
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections; for admins and the owner, a **Server identity** card (#248): each sending IP (`MAIL_PUBLIC_IP` or the A/AAAA records of `MAIL_HOSTNAME`) with whether its PTR names `MAIL_HOSTNAME` and resolves back. The result comes from the boot check and refreshes in the background every 10 minutes, so the page never waits on DNS |
 | GET /dashboard/account/password  | Change your own password; signs out every other session (any role, #279) |
 | GET /dashboard/account/sessions  | Your own live sessions: device, IP, approximate location, signed in, last active, this device marked; sign out one or all others (any role, #281) |
+| GET /dashboard/account/two-factor | Your own two-factor authentication: set up (QR code and key), recovery codes left, new recovery codes, turn off; recovery codes shown once (any role, #220) |
 | GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
@@ -293,9 +338,9 @@ Server data a script needs goes in a `data-*` attribute or a JSON data block, ne
 src/pages/
 ├── pages.plugin.tsx          ← Parent plugin: public routes, then the session guard, then the area plugins (#291)
 ├── plugins/                  ← One functional plugin per area, each with only its routes (#291)
-│   ├── auth.plugin.tsx       ← Public: login, logout, owner setup, invitation accept, password reset
+│   ├── auth.plugin.tsx       ← Public: login (both steps, #220), logout, owner setup, invitation accept, password reset
 │   ├── home.plugin.tsx       ← Stats overview
-│   ├── account.plugin.tsx    ← The signed-in user's own account: active sessions (#281), change password (#279)
+│   ├── account.plugin.tsx    ← The signed-in user's own account: active sessions (#281), change password (#279), two-factor (#220)
 │   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
@@ -313,10 +358,11 @@ src/pages/
 │   ├── responses.ts          ← `redirect`, `setNoStore`, `toFlash`
 │   ├── record-ownership.ts   ← Record actor, "Created by" names (#219)
 │   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
+│   ├── two-factor-limiter.ts ← Failed-attempt budget of every two-factor code check (#220)
 │   ├── error-message.ts      ← Error text for a log line
 │   └── form.ts               ← Repeated form field to `string[]`
 ├── guards.tsx                ← Role and assurance checks per route (#222)
-├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation and password reset links), bound to kind, user and session (#132, #280, #217, #277)
+├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation and password reset links, recovery codes), bound to kind, user and session (#132, #280, #217, #277, #220)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
 ├── landing.plugin.tsx        ← Public landing page at /
@@ -326,9 +372,10 @@ src/pages/
 │   ├── dashboard.js          ← The only script every page loads (#255)
 │   └── icons.tsx             ← Inline SVG icons
 ├── layouts/
-│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role; the Account group, Active sessions and Change password, for every role)
+│   └── base.tsx              ← HTML shell, self-hosted CSS + JS, sidebar nav (admin-only links by viewer role; the Account group, Active sessions, Change password and Two-factor, for every role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
+│   ├── login-two-factor.tsx  ← Second login step: the code form (#220)
 │   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx and reset.tsx
 │   ├── invite.tsx            ← Invitation accept form, invalid-link and account-exists pages (#217)
 │   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
@@ -336,6 +383,7 @@ src/pages/
 │   ├── reset.tsx             ← Password reset form and invalid-link page (#277)
 │   ├── account-password.tsx  ← Change password form for the signed-in user (#279)
 │   ├── account-sessions.tsx  ← Active sessions page for the signed-in user (#281)
+│   ├── account-two-factor.tsx ← Two-factor page for the signed-in user: QR code, recovery codes, disable (#220)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -365,6 +413,7 @@ src/pages/
     ├── pagination.tsx        ← Page navigation
     ├── flash-message.tsx     ← Success/error banners
     ├── empty-state.tsx       ← Empty table placeholder
+    ├── qr-code.tsx           ← QR code as inline SVG, drawn on the server from the `uqr` module matrix (#220)
     └── time-display.tsx      ← <TimeDisplay> + hydration script (#104)
 ```
 
@@ -415,6 +464,11 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Change your own password → `POST /dashboard/account/password` (any role; form fields: `current`, `password`, `confirm`; signs out every other session, #279)
 - Sign out one of your sessions → `POST /dashboard/account/sessions/:id/revoke` (any role, own sessions only; the current one signs this browser out, #281)
 - Sign out all your other sessions → `POST /dashboard/account/sessions/revoke-others` (any role, #281)
+- Start two-factor setup → `POST /dashboard/account/two-factor/start` (any role; form field: `password`, the current one, #220)
+- Turn two-factor on → `POST /dashboard/account/two-factor/confirm` (form field: `code`; signs out every other session, #220)
+- New recovery codes → `POST /dashboard/account/two-factor/recovery-codes` (form field: `code`, from the app, #220)
+- Turn two-factor off → `POST /dashboard/account/two-factor/disable` (form fields: `password`, `code`, #220)
+- Second login step → `POST /dashboard/login/two-factor` (public, needs a pending session; form field: `code`, #220)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)

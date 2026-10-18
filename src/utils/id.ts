@@ -16,7 +16,8 @@ type IdPrefix =
   | "crd" // user credential: password, TOTP, passkey, OAuth link (#214)
   | "ses" // dashboard session (#214)
   | "utk" // one-time token: owner setup, invite, password reset (#214)
-  | "udv"; // browser an account signed in from (#282)
+  | "udv" // browser an account signed in from (#282)
+  | "rcv"; // TOTP recovery code (#220)
 
 /**
  * Generates a prefixed unique ID.

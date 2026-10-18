@@ -93,6 +93,9 @@ APP_BASE_URL=https://mail.yourdomain.com
 SYSTEM_MAIL_FROM=noreply@yourdomain.com
 # Optional: days an invitation link stays valid (1 to 90, default 7)
 INVITE_EXPIRY_DAYS=7
+# Optional: require two-factor authentication (#220): none (default), owner,
+# or admin (admins and the owner)
+# REQUIRE_2FA=owner
 # Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
@@ -115,7 +118,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
-> `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed logins per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
+> `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed logins per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`, 1 to 100) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`, 60 to 86400); a value outside those bounds, or not a whole number, refuses to start (#220). Two-factor code checks keep their own fixed budget (5 per 15 minutes). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
 
 > `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`: per-API-key request limit on the REST API (default `100` requests per `60` seconds, then `429` with `Retry-After`). Raise it if one key legitimately makes more calls than that, for example a high-volume sender. Boot fails on a non-positive or non-integer value.
 
@@ -285,6 +288,18 @@ Sessions (#216) live in the database: a session expires after 24 hours without u
 The dashboard lets you manage emails, domains, templates, webhooks, API keys and suppressions, and view delivery status. Admins and the owner invite teammates at **Invitations** and manage accounts at **Users** (roles, deactivation, password reset links, ownership transfer); see [docs/dashboard.md](dashboard.md).
 
 Every account sees its own signed-in devices at **Active sessions** (#281, in the Account group of the sidebar): browser and system, IP address, signed in at, last active, and, when you set up GeoIP below, an approximate location. A user can sign out one device or every other device from there. With `SYSTEM_MAIL_FROM` set, a password sign-in from a browser the account has not used in the last 30 days also emails the account an alert (#282); BunMail recognizes the browser by a long-lived `bm_device` cookie, so a changing IP does not count as a new device.
+
+### Two-factor authentication (#220)
+
+Every account can turn on two-factor authentication at **Two-factor** (Account group of the sidebar): scan the QR code with an authenticator app (Aegis, 2FAS, Google Authenticator, 1Password, Bitwarden and the like), enter its 6-digit code, and keep the ten recovery codes shown once. From then on, signing in asks for a code from the app after the password. **Turn it on for the owner account**: the owner can do everything, and a leaked password alone is then not enough.
+
+`REQUIRE_2FA` makes it mandatory: `owner` for the owner, `admin` for admins and the owner (default `none`). An account it covers without 2FA is sent to its Two-factor page on every request until it enrols, so nobody is locked out, but enable 2FA on those accounts first if you want a smooth switch. Anything but `none`, `owner` or `admin` refuses to start.
+
+Turning it on asks for the current password. With `SYSTEM_MAIL_FROM` set, the account gets an email (no links) when 2FA is turned on or off, its recovery codes are replaced, a reset removes it, or someone enters the right password and then keeps entering wrong codes (change the password if that was not you).
+
+**Lost phone.** Sign in with a recovery code (each works once). Without one: an admin or the owner issues a **Reset password** link on the Users page; completing it sets a new password and removes the account's 2FA (enrol again afterwards). For the owner, run `docker compose exec app bun run src/db/reset-owner.ts` and complete the printed link: that removes the owner's 2FA too. Shell access is the trust boundary of that path.
+
+The TOTP secrets are stored encrypted with `DKIM_ENCRYPTION_KEY` (like DKIM keys and webhook secrets). If you rotate that key without re-encrypting, existing authenticator codes stop working (recovery codes still do; reset to re-enrol).
 
 ### Approximate session locations (GeoIP, #281)
 

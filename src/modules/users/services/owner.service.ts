@@ -19,6 +19,7 @@ import { setupTokenExpiry } from "./owner-setup-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { assignUnownedRecords } from "./record-ownership.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
+import { removeTwoFactor } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { normalizeLoginEmail, sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -380,10 +381,14 @@ export async function findLiveOwnerSetup(
  *    live predicate, `RETURNING` the user. A concurrent second submission
  *    re-checks the predicate after the first commits and gets no row. Then
  *    the `password` credential is replaced (one per user, enforced by
- *    `user_credentials_one_password_per_user`), every other open token of
- *    the user is revoked, every session of the user is deleted, the new
- *    session is created (#216: the delete runs first, so the new session
- *    survives), and `users.updated_at` is touched.
+ *    `user_credentials_one_password_per_user`), the owner's TOTP second
+ *    factor and recovery codes are removed (#220: this is the owner's
+ *    recovery path when the authenticator is lost, via `reset-owner`;
+ *    issuing the link alone removes nothing, so an abandoned reset does
+ *    not weaken the account), every other open token of the user is
+ *    revoked, every session of the user is deleted, the new session is
+ *    created (#216: the delete runs first, so the new session survives),
+ *    and `users.updated_at` is touched.
  *
  * All or nothing: a failure rolls back every step, sessions included.
  * Once committed, the new session's approximate location is looked up in
@@ -432,6 +437,7 @@ export async function completeOwnerSetup(
       type: PASSWORD_CREDENTIAL,
       secretHash,
     });
+    const twoFactorRemoved = await removeTwoFactor(tx, userId);
 
     await tx
       .update(userTokens)
@@ -461,7 +467,9 @@ export async function completeOwnerSetup(
       .set({ updatedAt: sql`now()` })
       .where(eq(users.id, userId))
       .returning({ userId: users.id, email: users.email });
-    return owner ? { owner: { ...owner, sessionToken }, sessionId } : null;
+    return owner
+      ? { owner: { ...owner, sessionToken, twoFactorRemoved }, sessionId }
+      : null;
   });
   if (!completed) return null;
   /** Committed: the session row exists for the background lookup to update. */

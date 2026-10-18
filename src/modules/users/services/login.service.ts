@@ -3,7 +3,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { users } from "../models/user.schema.ts";
-import { userCredentials } from "../models/user-credential.schema.ts";
+import { hasTotpCredential, userCredentials } from "../models/user-credential.schema.ts";
 import type { LoginResult, SessionAssurance } from "../types/user.types.ts";
 import { hashPassword, verifyPassword } from "./password.service.ts";
 import { normalizeLoginEmail } from "./session-policy.service.ts";
@@ -40,13 +40,13 @@ function getDummyHash(): Promise<string> {
 }
 
 /**
- * The assurance a session gets after the password step. `password` today;
- * when 2FA ships (#220) this returns `pending` for users with a second
- * factor, and the login route sends them to the second step instead of
- * the dashboard. The single place that decision will live.
+ * The assurance a session gets after the password step: `pending` for an
+ * account with a TOTP second factor (#220), whose login route then sends
+ * the browser to the second step instead of the dashboard; `password`
+ * otherwise. The single place that decision lives.
  */
-function firstFactorAssurance(): SessionAssurance {
-  return "password";
+function firstFactorAssurance(hasTotp: boolean): SessionAssurance {
+  return hasTotp ? "pending" : "password";
 }
 
 /**
@@ -68,6 +68,7 @@ export async function verifyPasswordLogin(
         disabledAt: users.disabledAt,
         credentialId: userCredentials.id,
         secretHash: userCredentials.secretHash,
+        hasTotp: hasTotpCredential(users.id),
       })
       .from(users)
       .leftJoin(
@@ -103,7 +104,7 @@ export async function verifyPasswordLogin(
   return {
     ok: true,
     userId: row.userId,
-    assurance: firstFactorAssurance(),
+    assurance: firstFactorAssurance(row.hasTotp),
     credentialId,
   };
 }

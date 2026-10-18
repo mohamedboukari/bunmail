@@ -346,6 +346,8 @@ const findActiveSession = mock((token: string): Promise<ActiveSession | null> =>
       email: s.email,
       role: s.role,
       assurance: s.assurance,
+      /** No second factor (#220): its SQL and the 2FA flows are integration-tested. */
+      hasTotp: false,
       matched: current === token ? "current" : "previous",
       rotationDue: s.rotationDue,
       graceOver: s.graceOver,
@@ -419,6 +421,13 @@ void mock.module("../../src/modules/users/services/session.service.ts", () => ({
   revokeUserSession: mock(() => Promise.resolve(false)),
   revokeOtherUserSessions: mock(() => Promise.resolve(0)),
   setSessionLocation: mock(() => Promise.resolve()),
+  /** Two-factor (#220); covered by the integration test. */
+  findPendingSession: mock(() => Promise.resolve(null)),
+  lockPendingSession: mock(() => Promise.resolve(false)),
+  elevatePendingSession: mock(() => Promise.reject(new Error("not in e2e"))),
+  setTotpPendingSecret: mock(() => Promise.resolve(false)),
+  totpPendingSecretOf: mock(() => Promise.resolve(null)),
+  markSessionMfa: mock(() => Promise.resolve()),
 }));
 
 /** The one account the fake login service knows. */
@@ -450,6 +459,16 @@ void mock.module("../../src/modules/users/services/login.service.ts", () => ({
  */
 const recognizeSignInDevice = mock((_event: SignInDeviceEvent) => Promise.resolve());
 
+/**
+ * The 2FA security emails (#220): their contents and sending are covered
+ * by the unit and integration tests. Mocked here so the dashboard does not
+ * load the system mail path (and the domain service) in this file.
+ */
+void mock.module("../../src/modules/users/services/two-factor-alert.service.ts", () => ({
+  sendTwoFactorAlert: mock(() => Promise.resolve({ sent: true })),
+  buildTwoFactorAlertEmail: mock(() => ({ subject: "", text: "", html: "" })),
+}));
+
 /** Every export of sign-in-device.service.ts. */
 void mock.module("../../src/modules/users/services/sign-in-device.service.ts", () => ({
   recognizeSignInDevice,
@@ -470,7 +489,11 @@ const completeOwnerSetup = mock(
   ): Promise<CompletedOwnerSetup | null> => {
     if (token !== LIVE_TOKEN) return Promise.resolve(null);
     lastSetupSessionToken = seedSession();
-    return Promise.resolve({ ...OWNER, sessionToken: lastSetupSessionToken });
+    return Promise.resolve({
+      ...OWNER,
+      sessionToken: lastSetupSessionToken,
+      twoFactorRemoved: false,
+    });
   },
 );
 
@@ -653,6 +676,7 @@ const completePasswordReset = mock(
       sessionsRevoked: 2,
       tokensRevoked: 0,
       issuedTokensRevoked: 1,
+      twoFactorRemoved: false,
       sessionId: `ses_${fakeCounter}`,
       sessionToken,
     });

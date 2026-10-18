@@ -219,8 +219,8 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), record ownership (#219)
-│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens, user_devices (#282)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), TOTP two-factor (#220), record ownership (#219)
+│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens, user_devices (#282), user_recovery_codes (#220)
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
 │   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
@@ -238,6 +238,11 @@ bunmail/
 │   │   │   │                               user-device.service.ts (record a sign-in's browser in user_devices, sweep, #282),
 │   │   │   │                               sign-in-device.service.ts (background new-device check after login, #282),
 │   │   │   │                               new-device-alert.service.ts (new sign-in alert email, no links, #282),
+│   │   │   │                               totp.service.ts (pure: RFC 6238 / 4226 on node:crypto, base32, window + replay rule, otpauth URI, #220),
+│   │   │   │                               recovery-code.service.ts (pure: generate / normalize / SHA-256 recovery codes, #220),
+│   │   │   │                               two-factor-policy.service.ts (pure: REQUIRE_2FA coverage, enrolment paths, #220),
+│   │   │   │                               two-factor.service.ts (enrol / confirm / second login step / disable / regenerate / remove, #220),
+│   │   │   │                               two-factor-alert.service.ts (2FA security emails via system-mail, no links, #220),
 │   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer / reset link, owner lock),
 │   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
 │   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
@@ -264,9 +269,9 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
 │       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, emails, api-keys, invitations, users, domains, templates, webhooks, inbound, dmarc, suppressions)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
-│       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links) bound to kind, user and session (#132, #280, #217, #277)
+│       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
 │       ├── landing.plugin.tsx            ← Public landing page at /
@@ -276,15 +281,18 @@ bunmail/
 │       │   ├── dashboard.js              ← The only script: theme, confirms, bulk select, chip inputs, time display, previews (#255)
 │       │   └── icons.tsx                 ← Inline SVG icons
 │       ├── layouts/
-│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218; Change password for every role, #279)
+│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218; Active sessions, Change password and Two-factor for every role, #281, #279, #220)
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
+│       │   ├── login-two-factor.tsx      ← Second login step: TOTP or recovery code (standalone, #220)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
 │       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
 │       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
 │       │   ├── reset.tsx                 ← Password reset form + invalid-link page (standalone, #277)
 │       │   ├── account-password.tsx      ← Change password form for the signed-in user (#279)
+│       │   ├── account-sessions.tsx      ← Active sessions of the signed-in user (#281)
+│       │   ├── account-two-factor.tsx    ← Two-factor page: QR code enrolment, recovery codes, disable (#220)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -313,6 +321,7 @@ bunmail/
 │           ├── status-badge.tsx          ← Status + verification badges
 │           ├── pagination.tsx            ← Prev/Next page links
 │           ├── flash-message.tsx         ← Success/error banner
+│           ├── qr-code.tsx               ← QR code as server-drawn inline SVG from the `uqr` matrix (#220)
 │           └── empty-state.tsx           ← "No data yet" placeholder
 ├── test/
 │   ├── setup.ts                          ← Global preload (env vars, mocks)
@@ -733,11 +742,15 @@ Dashboard accounts: identity only; login methods live in `user_credentials`. Exa
 
 ### `user_credentials` (#214)
 
-One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash or encrypted TOTP secret), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint), `last_used_at`, timestamps.
+One row per login method: `password`, and `totp` (the second factor, #220); `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; one `totp` row per user (#220, migration `0027`); `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash, or the TOTP secret encrypted with `DKIM_ENCRYPTION_KEY`), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint: passkey sign count, or the last accepted TOTP step for replay protection), `last_used_at`, timestamps. A `totp` row exists only once confirmed.
+
+### `user_recovery_codes` (#220)
+
+TOTP recovery codes (migration `0027`): `id` (`rcv_`), `user_id` (FK `users` ON DELETE CASCADE), `credential_id` (FK `user_credentials` ON DELETE CASCADE: the codes go with the `totp` credential), `code_hash` (SHA-256 of the normalized code; the code is never stored), `used_at` (nullable: single use), `created_at`. UNIQUE `(user_id, code_hash)`; index on `credential_id`. Ten per account. Rules: [docs/users.md](docs/users.md#two-factor-authentication-220).
 
 ### `sessions` (#214, #216)
 
-Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. `location` (#281, migration `0025`, nullable `varchar(128)`): the approximate location of `ip` ("City, Country" or "Country"), looked up once in the background after the session is created when GeoIP is configured. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`) (#220: `pending` after the password of an account with a second factor, 10 minutes, never admitted by the guard; `mfa` after the code), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. `location` (#281, migration `0025`, nullable `varchar(128)`): the approximate location of `ip` ("City, Country" or "Country"), looked up once in the background after the session is created when GeoIP is configured. `totp_pending_secret` (#220, migration `0027`, nullable `text`): the encrypted secret of a TOTP enrolment started in this session and not confirmed yet. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
 
 ### `user_tokens` (#214)
 
@@ -761,8 +774,9 @@ api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
 users     ──1:N──▶ api_keys, templates, domains, webhooks  (created_by_user_id, SET NULL on delete, #219)
-users     ──1:N──▶ user_credentials, sessions, user_tokens, user_devices  (CASCADE on user delete; user_tokens.invited_by SET NULL)
+users     ──1:N──▶ user_credentials, sessions, user_tokens, user_devices, user_recovery_codes  (CASCADE on user delete; user_tokens.invited_by SET NULL)
 user_credentials ──1:N──▶ sessions  (credential_id, CASCADE, #277)
+user_credentials ──1:N──▶ user_recovery_codes  (credential_id of the totp row, CASCADE, #220)
 sessions  ──1:N──▶ session_token_history  (CASCADE, #216)
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
 dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
@@ -863,7 +877,9 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | Method | Path                               | Description             | Auth     |
 |--------|------------------------------------|-------------------------|----------|
 | GET    | /dashboard/login                   | Email + password login form | No   |
-| POST   | /dashboard/login                   | Check email + password, open a session | No |
+| POST   | /dashboard/login                   | Check email + password, open a session (`pending` for a 2FA account, #220) | No |
+| GET    | /dashboard/login/two-factor        | Second login step form (#220) | Pending session |
+| POST   | /dashboard/login/two-factor        | Check the TOTP or recovery code (throttled, replay-proof), `mfa` session with a new token (#220) | Pending session |
 | POST   | /dashboard/logout                  | Revoke the session, clear the cookie | No |
 | GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
@@ -879,6 +895,11 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard/account/sessions        | Own live sessions: device, IP, approximate location, signed in, last active, this device marked (#281) | Member |
 | POST   | /dashboard/account/sessions/:id/revoke | Sign out one own session (another user's id: 404, nothing changes); the current one signs this browser out (#281) | Member |
 | POST   | /dashboard/account/sessions/revoke-others | Sign out every own session except the current one (#281) | Member |
+| GET    | /dashboard/account/two-factor      | Own 2FA status, enrolment QR code and key, recovery codes shown once (#220) | Member |
+| POST   | /dashboard/account/two-factor/start | New TOTP secret, kept encrypted on this session until confirmed (#220) | Member |
+| POST   | /dashboard/account/two-factor/confirm | First code: 2FA on, ten recovery codes, every other session signed out, this one `mfa` (#220) | Member |
+| POST   | /dashboard/account/two-factor/recovery-codes | Ten new recovery codes, needs an app code (#220) | Member |
+| POST   | /dashboard/account/two-factor/disable | 2FA off, needs the password and a code (#220) | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
 | GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Member |
@@ -942,7 +963,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |
 | POST   | /dashboard/suppressions/:id/delete | Remove a suppression (#89) | Admin |
 
-Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. A password login also sets the long-lived `bm_device` cookie (#282, 400 days, not a credential, only its SHA-256 stored in `user_devices`); a sign-in from a browser the account has not used in 30 days emails it a "New sign-in to your BunMail account" alert from `SYSTEM_MAIL_FROM` (no links), checked in the background so it never delays the login. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
+Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. A password login also sets the long-lived `bm_device` cookie (#282, 400 days, not a credential, only its SHA-256 stored in `user_devices`); a sign-in from a browser the account has not used in 30 days emails it a "New sign-in to your BunMail account" alert from `SYSTEM_MAIL_FROM` (no links), checked in the background so it never delays the login. Two-factor authentication (#220): an account with a TOTP second factor gets a `pending` session (10 minutes, admitted nowhere) after the password, and an `mfa` session with a new token after a valid code from its authenticator app or one of its ten recovery codes; codes are single-use (the last accepted time step is stored with a compare-and-swap) and every code check has a fixed budget (5 failures per 15 minutes, always on): the login step per account and per client IP, checks inside a session per session (a stolen session cannot lock the account's sign-in, and is revoked when its budget runs out). Turning 2FA on needs the current password; a `password`-level session stops working once its account has 2FA; the account is emailed (no links) when 2FA is turned on or off, recovery codes are replaced, a reset removes it, or its login code budget runs out. `REQUIRE_2FA` (`none` by default, `owner`, `admin`) holds an account it covers on its Two-factor page until it enrols. A completed reset link or `reset-owner` link removes the account's second factor (the lost-phone path). See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
 Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. Account management (#218) adds owner-only and members-only rules inside `user-admin.service.ts`, checked against the live roles under the `bunmail:owner` lock; the sidebar hides admin-only links from members. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
 
@@ -962,7 +983,7 @@ Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in acco
 - **Lookup:** Hash incoming token → match against `key_hash` column
 - **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
 - **Bootstrap:** Run `bun run src/db/seed.ts` to create the first API key (admin). The dashboard owner is created on boot from `BUNMAIL_OWNER_EMAIL` (#215); recover a lost setup link with `bun run src/db/reset-owner.ts`
-- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Every protected route requires a minimum account role (owner > admin > member, #222). Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
+- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Optional TOTP two-factor authentication with recovery codes, mandatory for the owner or admins with `REQUIRE_2FA` (#220). Every protected route requires a minimum account role (owner > admin > member, #222). Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
 
 ---
 
@@ -980,7 +1001,7 @@ Two independent in-memory fixed-window limiters:
 - **Default limit:** 5 failed logins (any reason) per 15 minutes, per client IP; no per-account lockout
 - **Scope:** Per client IP: resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
 - **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login gives back only its own attempt, earlier failures stay until the window ends (#256); IPv6 clients counted per `/64`
-- **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
+- **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}` (MAX 1 to 100, WINDOW 60 to 86400 seconds, validated at boot, #220; two-factor code checks keep a fixed 5 per 15 minutes)
 
 Both maps reset on server restart and are per-replica (single-instance only; optional Redis backing is tracked in #185).
 
@@ -1056,7 +1077,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1103,4 +1124,4 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
 - Bun-native SMTP client (subsumes #37, #42, see #60)
 - Optional Redis backing for the per-replica in-memory state (rate limits, one-time reveal store) (#185)
-- Dashboard account follow-ups: TOTP two-factor (#220), passkeys (#223), SSO (#224)
+- Dashboard account follow-ups: passkeys (#223), SSO (#224)

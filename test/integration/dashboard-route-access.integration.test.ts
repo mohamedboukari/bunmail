@@ -20,7 +20,11 @@
  * "not found" and change nothing.
  *
  * Also covers `requireAssurance` on a test-only route (no production
- * route uses it until 2FA, #220), and that `auth` costs one lookup.
+ * route uses it: 2FA, #220, is enforced by the `REQUIRE_2FA` policy in
+ * the guard), that `auth` costs one lookup, and over the same table that
+ * a `pending` session (#220) opens no protected route and that
+ * `REQUIRE_2FA` holds an account without a second factor on its
+ * Two-factor page.
  */
 import { describe, test, expect, beforeAll, spyOn } from "bun:test";
 import { Elysia } from "elysia";
@@ -45,6 +49,11 @@ import { readSessionCookie } from "../../src/pages/session.ts";
 import * as sessionService from "../../src/modules/users/services/session.service.ts";
 import type { UserRole } from "../../src/modules/users/types/user.types.ts";
 import { logger } from "../../src/utils/logger.ts";
+import { config } from "../../src/config.ts";
+import {
+  TWO_FACTOR_PAGE,
+  isTwoFactorEnrolmentPath,
+} from "../../src/modules/users/services/two-factor-policy.service.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -74,6 +83,9 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/invite": { access: "public" },
   "GET /dashboard/reset": { access: "public" },
   "POST /dashboard/reset": { access: "public" },
+  /** The second login step (#220): authorized by a `pending` session, checked in the handler. */
+  "GET /dashboard/login/two-factor": { access: "public" },
+  "POST /dashboard/login/two-factor": { access: "public" },
   /** The self-hosted stylesheet and script every page loads, login included (#255). */
   "GET /dashboard/assets/dashboard.css": { access: "public" },
   "GET /dashboard/assets/dashboard.js": { access: "public" },
@@ -89,6 +101,21 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /dashboard/account/sessions": { access: "member" },
   "POST /dashboard/account/sessions/revoke-others": { access: "member" },
   "POST /dashboard/account/sessions/:id/revoke": { access: "member" },
+  /** Every role manages its own second factor (#220); a dummy code changes nothing. */
+  "GET /dashboard/account/two-factor": { access: "member" },
+  "POST /dashboard/account/two-factor/start": {
+    access: "member",
+    body: { password: "x" },
+  },
+  "POST /dashboard/account/two-factor/confirm": { access: "member", body: { code: "x" } },
+  "POST /dashboard/account/two-factor/recovery-codes": {
+    access: "member",
+    body: { code: "x" },
+  },
+  "POST /dashboard/account/two-factor/disable": {
+    access: "member",
+    body: { password: "x", code: "x" },
+  },
   "GET /dashboard/send": { access: "member" },
   "POST /dashboard/send": {
     access: "member",
@@ -351,6 +378,64 @@ describe("Dashboard route table (#222)", () => {
       }
     });
   }
+});
+
+describe("Two-factor (#220) over the route table", () => {
+  const guardedRoutes = Object.entries(ROUTES).filter(([, s]) => s.access !== "public");
+
+  test("a pending session (password passed, no second factor yet) opens no protected route", async () => {
+    const { id } = await seed.user({ email: "pending@example.com", role: "admin" });
+    const pending = await seed.session({ userId: id, assurance: "pending" });
+    const opened: string[] = [];
+    for (const [key, spec] of guardedRoutes) {
+      const [method = "", path = ""] = key.split(" ");
+      const body = typeof spec.body === "function" ? spec.body("pending") : spec.body;
+      const response = await call(method, path, pending.token, body);
+      if (
+        response.status !== 302 ||
+        response.headers.get("location") !== "/dashboard/login"
+      ) {
+        opened.push(
+          `${key}: ${response.status} ${response.headers.get("location") ?? ""}`,
+        );
+      }
+    }
+    expect(opened).toEqual([]);
+  });
+
+  test("REQUIRE_2FA=admin sends an admin without a second factor to its Two-factor page from every other route", async () => {
+    const original = config.dashboard.require2fa;
+    expect(Reflect.set(config.dashboard, "require2fa", "admin")).toBe(true);
+    try {
+      const wrong: string[] = [];
+      for (const [key, spec] of guardedRoutes) {
+        const [method = "", path = ""] = key.split(" ");
+        const body = typeof spec.body === "function" ? spec.body("admin") : spec.body;
+        const response = await call(method, path, tokens.admin, body);
+        track("admin", response);
+        const location = response.headers.get("location") ?? "";
+        if (isTwoFactorEnrolmentPath(concretePath(path))) {
+          if (
+            response.status === 403 ||
+            response.status >= 500 ||
+            location.includes("/dashboard/login")
+          ) {
+            wrong.push(`${key}: ${response.status} ${location}`);
+          }
+        } else if (response.status !== 302 || location !== TWO_FACTOR_PAGE) {
+          wrong.push(`${key}: ${response.status} ${location}`);
+        }
+      }
+      expect(wrong).toEqual([]);
+
+      /** A member is outside the policy: unaffected. */
+      const member = await call("GET", "/dashboard/emails", tokens.member);
+      track("member", member);
+      expect(member.status).toBe(200);
+    } finally {
+      expect(Reflect.set(config.dashboard, "require2fa", original)).toBe(true);
+    }
+  });
 });
 
 describe("Role denial (#222)", () => {

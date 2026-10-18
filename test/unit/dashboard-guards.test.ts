@@ -137,6 +137,7 @@ describe("toDashboardAuth", () => {
         email: "a@example.com",
         role: "admin",
         assurance: "mfa",
+        hasTotp: true,
         matched: "current",
         rotationDue: false,
         graceOver: false,

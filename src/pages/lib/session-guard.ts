@@ -8,6 +8,11 @@ import { toDashboardAuth } from "../guards.tsx";
 import { setViewerRole } from "../viewer.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
+import {
+  TWO_FACTOR_PAGE,
+  isTwoFactorEnrolmentPath,
+  twoFactorRequired,
+} from "../../modules/users/services/two-factor-policy.service.ts";
 import { redirect } from "./responses.ts";
 import { errorMessage } from "./error-message.ts";
 import { isSameOrigin } from "./same-origin.ts";
@@ -35,8 +40,11 @@ export type PublicDashboard = Elysia<"/dashboard">;
  *    query.
  * 3. One indexed lookup (`findActiveSession`): the session must exist,
  *    be unexpired, belong to an enabled user and have `password` or
- *    `mfa` assurance. No row: cookie cleared, 302. A database error:
- *    503, never a pass-through (fail closed) and never a false logout.
+ *    `mfa` assurance. A `pending` session (#220: password passed, second
+ *    factor not yet) is no session here, on every route: only the public
+ *    two-factor login page opens it. No row: cookie cleared, 302. A
+ *    database error: 503, never a pass-through (fail closed) and never a
+ *    false logout.
  * 4. The token replaced by the last rotation, presented after the grace
  *    period, or any older superseded token (`session_token_history`):
  *    reuse detected. Two parties hold the session, so every session of
@@ -46,7 +54,12 @@ export type PublicDashboard = Elysia<"/dashboard">;
  *    out with this response; when a parallel request rotated first, this
  *    one is served without a new cookie. A rotation error is logged and
  *    the request is served (the old token stays current).
- * 7. The request goes on with `auth` (#222): the account (id, email,
+ * 7. The `REQUIRE_2FA` policy (#220): an account whose role must have a
+ *    second factor and has none (`hasTotp`, from the same lookup) is
+ *    sent to its Two-factor page (302) from every route but that page
+ *    and its actions, until it enrols. Logout and the assets are public
+ *    routes, so they stay reachable.
+ * 8. The request goes on with `auth` (#222): the account (id, email,
  *    role) and the session (id, assurance), all from the lookup in step
  *    3, so a request costs exactly one session query. Each route's own
  *    `beforeHandle` (`memberGuard`, `adminGuard`, `ownerGuard` from
@@ -167,6 +180,25 @@ export function withSessionGuard(app: PublicDashboard) {
 
     /** Every later log line of this request names the user (#222, #284). */
     setLogContextUser(session.userId);
+
+    /**
+     * `REQUIRE_2FA` (#220): no dashboard until a required second factor is
+     * set up. After the rotation, so a held-back session still slides.
+     */
+    if (
+      !session.hasTotp &&
+      twoFactorRequired(config.dashboard.require2fa, session.role) &&
+      !isTwoFactorEnrolmentPath(path)
+    ) {
+      logger.debug("Two-factor enrolment required: redirected to the Two-factor page", {
+        sessionId: session.sessionId,
+        role: session.role,
+        path,
+      });
+      redirect(set, TWO_FACTOR_PAGE);
+      return status(302, "");
+    }
+
     /** The sidebar hides admin-only links from members (#218). */
     setViewerRole(session.role);
     return { auth: toDashboardAuth(session) };

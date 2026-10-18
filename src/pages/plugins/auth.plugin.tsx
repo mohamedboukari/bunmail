@@ -18,6 +18,7 @@ import {
   InviteInvalidPage,
 } from "../routes/invite.tsx";
 import { PasswordResetInvalidPage, PasswordResetPage } from "../routes/reset.tsx";
+import { LoginTwoFactorPage } from "../routes/login-two-factor.tsx";
 import { readDeviceCookie, readSessionCookie } from "../session.ts";
 import * as ownerService from "../../modules/users/services/owner.service.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
@@ -26,12 +27,15 @@ import * as sessionLocation from "../../modules/users/services/session-location.
 import * as signInDevice from "../../modules/users/services/sign-in-device.service.ts";
 import * as inviteService from "../../modules/users/services/invite.service.ts";
 import * as passwordResetService from "../../modules/users/services/password-reset.service.ts";
+import * as twoFactorService from "../../modules/users/services/two-factor.service.ts";
+import { TWO_FACTOR_LOGIN_PAGE } from "../../modules/users/services/two-factor-policy.service.ts";
 import { inviteNameProblem } from "../../modules/users/services/invite-policy.service.ts";
 import {
   isWellFormedSetupToken,
   setupPasswordProblem,
 } from "../../modules/users/services/owner-setup-policy.service.ts";
 import {
+  SESSION_PENDING_SECONDS,
   loginInputTooLong,
   normalizeLoginEmail,
   sessionIp,
@@ -51,6 +55,11 @@ import { redirect } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
+import {
+  shouldAlertCodesExhausted,
+  twoFactorLoginLimiter,
+} from "../lib/two-factor-limiter.ts";
+import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 
 /**
  * SQLSTATE of a foreign-key violation: a login's session insert naming a
@@ -78,9 +87,67 @@ function setAuthPageHeaders(set: Context["set"]): void {
 }
 
 /**
- * Public dashboard pages (#291): login, logout, owner setup, invitation
- * accept and password reset. Mounted before the session guard, so none of
- * these routes runs it; each checks same-origin and its token itself.
+ * What the login page says for each `?error=` value; anything else shows
+ * nothing. A `Map`, so a query value such as `constructor` finds nothing.
+ */
+const LOGIN_ERRORS = new Map<string, string>([
+  ["invalid", "Invalid email or password."],
+  /** Too many wrong second-factor codes: the pending session was revoked (#220). */
+  [
+    "two_factor_locked",
+    "Too many invalid codes. Wait a few minutes, then sign in again.",
+  ],
+]);
+
+/** The client IP of a request (the login limiter's resolution). */
+function requestIp(request: Request, socketIp: string | undefined): string {
+  return resolveClientIp({
+    socketIp,
+    forwardedFor: request.headers.get("x-forwarded-for"),
+    trustedProxyHops: config.dashboard.trustedProxyHops,
+  });
+}
+
+/**
+ * What runs once a password sign-in is complete (#281, #282): after the
+ * password for an account without a second factor, after the code
+ * (#220) for one with it. The approximate location is looked up and the
+ * new-device check runs, both in the background (never awaited: they
+ * never delay or fail a login); the browser keeps its `bm_device` cookie
+ * when it presents a well-formed one, else it gets a new one (a malformed
+ * or oversized value counts as absent), and the cookie is set again
+ * either way, which refreshes its lifetime. Call after `issueSession`:
+ * the device cookie is appended to the session cookie.
+ */
+function completeSignIn(
+  set: Context["set"],
+  request: Request,
+  signIn: { userId: string; email: string; sessionId: string; ip: string },
+): void {
+  /** The new-device check waits on it for at most 2 s. */
+  const located = sessionLocation.locateSession(signIn.sessionId, sessionIp(signIn.ip));
+  const presentedDevice = readDeviceCookie(request.headers.get("cookie"));
+  const deviceToken =
+    presentedDevice && isWellFormedToken(presentedDevice)
+      ? presentedDevice
+      : mintToken().token;
+  void signInDevice.recognizeSignInDevice({
+    userId: signIn.userId,
+    email: signIn.email,
+    deviceToken,
+    ip: sessionIp(signIn.ip),
+    userAgent: request.headers.get("user-agent"),
+    location: located,
+    at: new Date(),
+  });
+  issueDeviceCookie(set, deviceToken);
+}
+
+/**
+ * Public dashboard pages (#291): login (both steps, #220), logout, owner
+ * setup, invitation accept and password reset. Mounted before the session
+ * guard, so none of these routes runs it; each checks same-origin and its
+ * token itself.
  */
 export function authPages(app: PublicDashboard) {
   return (
@@ -96,7 +163,7 @@ export function authPages(app: PublicDashboard) {
         ({ query, set }) => {
           setAuthPageHeaders(set);
           const error =
-            query.error === "invalid" ? "Invalid email or password." : undefined;
+            query.error === undefined ? undefined : LOGIN_ERRORS.get(query.error);
           return <LoginPage error={error} />;
         },
         {
@@ -130,6 +197,12 @@ export function authPages(app: PublicDashboard) {
        * background; only this route does (owner setup, invitation accept,
        * password reset and password change are link or credential flows
        * the user just performed).
+       *
+       * Two-factor (#220): for an account with a TOTP second factor the
+       * session is opened `pending` instead (10 minutes, opens nothing but
+       * the second step), and the browser goes to `/dashboard/login/two-factor`;
+       * the location lookup, the new-device check and the device cookie wait
+       * for the second step.
        *
        * The body schema is deliberately loose (only generous length caps): a
        * schema failure answers 422 JSON from the global handler, not a page,
@@ -264,44 +337,31 @@ export function authPages(app: PublicDashboard) {
              */
             if (loginRateLimit.enabled) refundLoginAttempt(ip, windowMs);
 
+            /** Second factor required (#220): only the second step opens this session. */
+            if (result.assurance === "pending") {
+              logger.info("Dashboard login: password accepted, second factor required", {
+                userId: result.userId,
+                sessionId,
+                ip,
+              });
+              issueSession(set, token, SESSION_PENDING_SECONDS);
+              return redirect(set, TWO_FACTOR_LOGIN_PAGE);
+            }
+
             logger.info("Dashboard login successful", {
               userId: result.userId,
               sessionId,
               ip,
             });
 
-            /**
-             * Approximate location (#281): in the background, never awaited
-             * here (the new-device check below waits on it for at most 2 s).
-             */
-            const located = sessionLocation.locateSession(sessionId, sessionIp(ip));
-
-            /**
-             * New-device alert (#282). The browser keeps its `bm_device`
-             * cookie when it presents a well-formed one, else it gets a new
-             * one (a malformed or oversized value counts as absent); the
-             * cookie is set again either way, which refreshes its lifetime.
-             * The check (record the device, alert when it is new to the
-             * account) runs in the background, after the response is
-             * decided: it never delays or fails the login.
-             */
-            const presentedDevice = readDeviceCookie(request.headers.get("cookie"));
-            const deviceToken =
-              presentedDevice && isWellFormedToken(presentedDevice)
-                ? presentedDevice
-                : mintToken().token;
-            void signInDevice.recognizeSignInDevice({
+            /** Location (#281) and the new-device alert (#282), in the background. */
+            issueSession(set, token);
+            completeSignIn(set, request, {
               userId: result.userId,
               email,
-              deviceToken,
-              ip: sessionIp(ip),
-              userAgent: request.headers.get("user-agent"),
-              location: located,
-              at: new Date(),
+              sessionId,
+              ip,
             });
-
-            issueSession(set, token);
-            issueDeviceCookie(set, deviceToken);
             return redirect(set, "/dashboard");
           } catch (error: unknown) {
             logger.error("Dashboard login failed: session store error", {
@@ -316,6 +376,184 @@ export function authPages(app: PublicDashboard) {
           body: t.Object({
             email: t.String({ maxLength: 320 }),
             password: t.String({ maxLength: 1024 }),
+          }),
+        },
+      )
+
+      /**
+       * GET /dashboard/login/two-factor
+       * The second login step (#220): the code form, for a browser holding
+       * a `pending` session (the password was right, a second factor is
+       * required). Auth-page headers. Anything else (no cookie, a full
+       * session, an expired or revoked pending one) is sent to `/dashboard`,
+       * where the session guard lets a live session in and sends everything
+       * else to the login page; the cookie is not touched here.
+       */
+      .get("/login/two-factor", async ({ set, request }) => {
+        setAuthPageHeaders(set);
+        const token = readSessionCookie(request.headers.get("cookie"));
+        try {
+          const pending =
+            token && isWellFormedToken(token)
+              ? await sessionService.findPendingSession(token)
+              : null;
+          if (!pending) return redirect(set, "/dashboard");
+          return <LoginTwoFactorPage />;
+        } catch (error: unknown) {
+          logger.error("Two-factor sign-in page: session lookup failed", {
+            error: errorMessage(error),
+          });
+          set.status = 503;
+          return SESSION_STORE_DOWN;
+        }
+      })
+
+      /**
+       * POST /dashboard/login/two-factor
+       * Checks the second factor (#220): a 6-digit code from the
+       * authenticator app, or a recovery code. In order: auth-page headers;
+       * same-origin; the pending session (none: to `/dashboard`, cookie
+       * untouched, see below); then `completeTwoFactorLogin`, which checks the
+       * failed-attempt budget (`totp:user:<id>` and `totp:ip:<bucket>`) and
+       * counts the attempt before any verification, and in one transaction
+       * spends the code (replay-proof) and turns the session into an `mfa`
+       * session with a fresh token (the pending one dies).
+       *
+       * A wrong, expired or reused code gets one generic message. Once the
+       * budget is spent the pending session is revoked and the browser is
+       * sent back to the login page. On success the budget is cleared, the
+       * new cookie is set, and the post-login steps run: the location
+       * lookup (#281) and the new-device check (#282), only now that the
+       * sign-in is complete. A recovery code is logged at `warn` with the
+       * codes left.
+       */
+      .post(
+        "/login/two-factor",
+        async ({ body, set, request, server }) => {
+          setAuthPageHeaders(set);
+          const ip = requestIp(request, server?.requestIP(request)?.address);
+
+          if (!isSameOrigin(request)) {
+            logger.warn(
+              "Two-factor sign-in POST rejected: cross-origin (possible CSRF)",
+              {
+                ip,
+                origin:
+                  request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+              },
+            );
+            set.status = 403;
+            return "Forbidden: cross-origin request rejected";
+          }
+
+          const token = readSessionCookie(request.headers.get("cookie"));
+          try {
+            const pending =
+              token && isWellFormedToken(token)
+                ? await sessionService.findPendingSession(token)
+                : null;
+            /**
+             * No pending session: expired, revoked, or already completed by a
+             * parallel submission (a double click). The cookie is left alone,
+             * since it may be the fresh one that submission just set: the
+             * guard behind `/dashboard` lets a live session in and sends
+             * anything else to the login page.
+             */
+            if (!token || !pending) {
+              logger.debug("Two-factor sign-in refused: no pending session", { ip });
+              return redirect(set, "/dashboard");
+            }
+
+            const limiter = twoFactorLoginLimiter(pending.userId, ip);
+            const result = await twoFactorService.completeTwoFactorLogin(
+              pending,
+              token,
+              body.code,
+              limiter,
+            );
+
+            if (!result.ok) {
+              if (result.reason === "session_gone") {
+                logger.debug("Two-factor sign-in refused: pending session gone", {
+                  userId: pending.userId,
+                  sessionId: pending.sessionId,
+                  ip,
+                });
+                return redirect(set, "/dashboard");
+              }
+              if (result.reason === "wrong_code") {
+                logger.warn("Two-factor sign-in failed: invalid code", {
+                  userId: pending.userId,
+                  sessionId: pending.sessionId,
+                  ip,
+                });
+              }
+              /** Budget spent (now or before): the pending session ends here. */
+              if (result.reason === "rate_limited" || limiter.isLimited()) {
+                await sessionService.revokeSessionByToken(token);
+                logger.warn(
+                  "Two-factor sign-in blocked: too many attempts, pending session revoked",
+                  { userId: pending.userId, sessionId: pending.sessionId, ip },
+                );
+                /**
+                 * The account's own budget ran out: the password was right
+                 * and the codes kept failing, a likely password compromise.
+                 * Email the account, at most once per window.
+                 */
+                if (
+                  limiter.ownKeyLimited() &&
+                  shouldAlertCodesExhausted(pending.userId)
+                ) {
+                  void sendTwoFactorAlert({
+                    event: "login_codes_exhausted",
+                    userId: pending.userId,
+                    email: pending.email,
+                    ip: sessionIp(ip),
+                  });
+                }
+                clearSession(set);
+                return redirect(set, "/dashboard/login?error=two_factor_locked");
+              }
+              return <LoginTwoFactorPage error="Invalid code. Try again." />;
+            }
+
+            limiter.clear();
+            issueSession(set, result.token, result.maxAgeSec);
+            logger.info("Dashboard login successful", {
+              userId: pending.userId,
+              sessionId: pending.sessionId,
+              method: result.method,
+              ip,
+            });
+            if (result.method === "recovery_code") {
+              logger.warn("Recovery code used", {
+                userId: pending.userId,
+                sessionId: pending.sessionId,
+                recoveryCodesLeft: result.recoveryCodesLeft,
+                ip,
+              });
+            }
+
+            completeSignIn(set, request, {
+              userId: pending.userId,
+              email: pending.email,
+              sessionId: pending.sessionId,
+              ip,
+            });
+            return redirect(set, "/dashboard");
+          } catch (error: unknown) {
+            logger.error("Two-factor sign-in failed: session store error", {
+              ip,
+              error: errorMessage(error),
+            });
+            set.status = 503;
+            return SESSION_STORE_DOWN;
+          }
+        },
+        {
+          /** Loose on purpose (a schema failure is 422 JSON, not a page); the service checks the shape. */
+          body: t.Object({
+            code: t.String({ maxLength: 1024 }),
           }),
         },
       )
@@ -462,7 +700,20 @@ export function authPages(app: PublicDashboard) {
             return <OwnerSetupInvalidPage />;
           }
 
-          logger.warn("Owner setup completed", { owner: redactEmail(owner.email), ip });
+          logger.warn("Owner setup completed", {
+            owner: redactEmail(owner.email),
+            twoFactorRemoved: owner.twoFactorRemoved,
+            ip,
+          });
+          /** A `reset-owner` link removed the owner's 2FA (#220): tell the owner. */
+          if (owner.twoFactorRemoved) {
+            void sendTwoFactorAlert({
+              event: "removed_by_reset",
+              userId: owner.userId,
+              email: owner.email,
+              ip: sessionIp(ip),
+            });
+          }
 
           issueSession(set, owner.sessionToken);
           return redirect(set, "/dashboard");
@@ -778,9 +1029,19 @@ export function authPages(app: PublicDashboard) {
             sessionsRevoked: result.sessionsRevoked,
             tokensRevoked: result.tokensRevoked,
             issuedTokensRevoked: result.issuedTokensRevoked,
+            twoFactorRemoved: result.twoFactorRemoved,
             sessionId: result.sessionId,
             ip,
           });
+          /** The reset removed the account's 2FA (#220): tell the account. */
+          if (result.twoFactorRemoved) {
+            void sendTwoFactorAlert({
+              event: "removed_by_reset",
+              userId: result.userId,
+              email: result.email,
+              ip: sessionIp(ip),
+            });
+          }
 
           issueSession(set, result.sessionToken);
           return redirect(set, "/dashboard");

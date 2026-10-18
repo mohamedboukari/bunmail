@@ -18,7 +18,7 @@ export const OWNER_SETUP_TTL_MS = 24 * 60 * 60 * 1000;
 /**
  * Shortest owner password accepted. 15 characters is the NIST SP 800-63B-4
  * minimum for a password used as the only factor, which is the owner's
- * situation until 2FA ships (#220).
+ * situation unless two-factor authentication is enabled (#220, optional).
  */
 export const SETUP_PASSWORD_MIN_LENGTH = 15;
 

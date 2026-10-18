@@ -90,10 +90,10 @@ async function passwordCredentialOf(
  *
  * All or nothing: a failure inside the transaction rolls back every step.
  *
- * Only the `password` credential is replaced. Second factors (#220) are
- * not touched; once they ship, the session opened here must carry the
- * assurance of the session it replaces (an `mfa` session stays `mfa`),
- * not a fixed `password` level.
+ * Only the `password` credential is replaced. A TOTP second factor (#220)
+ * is not touched, and the session opened here carries the assurance of
+ * the session the change was made from (`input.assurance`: an `mfa`
+ * session stays `mfa`).
  *
  * @param client - Request metadata stored with the new session.
  */
@@ -102,7 +102,7 @@ export async function changePassword(
   limiter: AttemptLimiter,
   client: SessionClient = { ip: null, userAgent: null },
 ): Promise<ChangePasswordResult> {
-  const { userId, current, password, confirm } = input;
+  const { userId, assurance, current, password, confirm } = input;
 
   /** Steps 1 to 3: checked and counted with no await in between. */
   if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
@@ -178,7 +178,8 @@ export async function changePassword(
     const session = await createSession(
       {
         userId,
-        assurance: "password",
+        /** Never `pending`: only an admitted session can change the password. */
+        assurance: assurance === "mfa" ? "mfa" : "password",
         authMethod: PASSWORD_CREDENTIAL,
         credentialId,
         ...client,
