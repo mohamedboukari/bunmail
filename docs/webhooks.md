@@ -7,7 +7,8 @@ Sends real-time event notifications to registered HTTP endpoints when email stat
 Because BunMail fetches webhook URLs server-side (and the response is readable via the delivery API), URLs are validated at **creation** and re-validated **before every delivery attempt**:
 
 - Must be **`https`**. To allow plaintext `http` targets, set `WEBHOOK_ALLOW_INSECURE_HTTP=true` (the private-range block below still applies).
-- The host is **DNS-resolved**, and the URL is **rejected if any resolved address is private/loopback/link-local/ULA/CGNAT/metadata**: `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16` (incl. `169.254.169.254`), `100.64/10`, `::1`, `fc00::/7`, `fe80::/10`, and v4-mapped equivalents.
+- The host is **DNS-resolved**, and the URL is **rejected if any resolved address is private/loopback/link-local/ULA/CGNAT/metadata**: `127.0.0.0/8`, `10/8`, `172.16/12`, `192.168/16`, `169.254/16` (incl. `169.254.169.254`), `100.64/10`, `::1`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `ff00::/8`, the local-use NAT64 prefix `64:ff9b:1::/48`, scoped addresses (with a zone id), and IPv6 addresses that embed one of these IPv4 ranges (IPv4-mapped, IPv4-compatible, NAT64 `64:ff9b::/96`, 6to4 `2002::/16`; dotted or hex-group notation alike).
+- **The request goes to the validated address.** At delivery the host is resolved once, and the POST is sent to the address that passed the check, not to the name; if the request URL cannot carry exactly that address, the attempt fails. The receiver still sees its own host name: the `Host` header carries the configured host (and port), and for `https` the host name is sent as SNI and the certificate is verified against it before the request is sent. When a name has both IPv4 and IPv6 addresses, IPv4 is used. Each attempt opens a fresh connection.
 - **Redirects are not followed** (`redirect: "manual"`): a 3xx counts as a failed delivery, so it can't bounce into an internal address.
 
 A rejected URL at create time returns **HTTP 422** `{ "code": "WEBHOOK_URL_BLOCKED" }`. A URL that only becomes internal later (DNS rebinding, or a row created before this guard) is caught at delivery time and recorded as a failed attempt.
@@ -269,7 +270,8 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
 | **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
 | **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
-| **Headers** | `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
+| **Connection** | Sent to the address the SSRF guard validated for this attempt (see [URL requirements](#url-requirements--ssrf-guard-128)), one fresh connection per attempt; `Host`, SNI and the certificate check use the configured host name |
+| **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
 | **Signing** | Re-computed per attempt with a fresh timestamp so a 6-hour-old retry still passes the consumer's freshness window |
 
 ### Delivery row lifecycle

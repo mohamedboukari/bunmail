@@ -182,7 +182,8 @@ describe("dispatchEvent: end-to-end", () => {
 
     expect(captured).toHaveLength(2);
     const urls = captured.map((c) => c.url).toSorted();
-    expect(urls).toEqual(["https://93.184.216.34", "https://93.184.216.35"]);
+    /** The request URL is rebuilt from the validated address (normalized: `/` path). */
+    expect(urls).toEqual(["https://93.184.216.34/", "https://93.184.216.35/"]);
 
     /** Both deliveries share the same JSON body (same event payload). */
     const body1 = JSON.parse(captured[0]!.body);
@@ -252,7 +253,7 @@ describe("dispatch is scoped to the owning API key", () => {
     );
     await waitForDispatch();
 
-    expect(captured.map((c) => c.url)).toEqual(["https://93.184.216.34"]);
+    expect(captured.map((c) => c.url)).toEqual(["https://93.184.216.34/"]);
   });
 
   test("lookup returns nothing for a key without matching webhooks", async () => {
