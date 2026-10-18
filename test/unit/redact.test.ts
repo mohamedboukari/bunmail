@@ -30,7 +30,8 @@ void mock.module("../../src/config.ts", () => ({
   },
 }));
 
-const { redactEmail, redactEmailList } = await import("../../src/utils/redact.ts");
+const { redactEmail, redactEmailList, redactEmailsInText, redactUrl } =
+  await import("../../src/utils/redact.ts");
 
 describe("redactEmail (redaction enabled)", () => {
   test("masks the local part except the first character", () => {
@@ -89,5 +90,53 @@ describe("redactEmailList", () => {
   test("passthrough when redaction disabled", () => {
     redactPiiFlag = false;
     expect(redactEmailList("alice@x.com, bob@y.com")).toBe("alice@x.com, bob@y.com");
+  });
+});
+
+describe("redactEmailsInText (#260)", () => {
+  test("masks every address in a remote SMTP reply, keeping the reply readable", () => {
+    redactPiiFlag = true;
+    expect(
+      redactEmailsInText("550 5.1.1 <user@example.org>: Recipient address rejected"),
+    ).toBe("550 5.1.1 <u***@example.org>: Recipient address rejected");
+    expect(redactEmailsInText("452 too many: a@x.com, bob.smith@y.co.uk")).toBe(
+      "452 too many: *@x.com, b***@y.co.uk",
+    );
+  });
+
+  test("text without an address is unchanged", () => {
+    redactPiiFlag = true;
+    expect(redactEmailsInText("421 4.7.0 Try again later")).toBe(
+      "421 4.7.0 Try again later",
+    );
+  });
+
+  test("passthrough when redaction disabled", () => {
+    redactPiiFlag = false;
+    expect(redactEmailsInText("550 <user@example.org> rejected")).toBe(
+      "550 <user@example.org> rejected",
+    );
+  });
+});
+
+describe("redactUrl (#260)", () => {
+  test("keeps only scheme, host and port: path, query and user info carry credentials", () => {
+    expect(redactUrl("https://hooks.slack.com/services/T000/B000/XXXXSECRET")).toBe(
+      "https://hooks.slack.com",
+    );
+    expect(redactUrl("https://user:pass@example.com:8443/hook?token=abc#frag")).toBe(
+      "https://example.com:8443",
+    );
+  });
+
+  test("applies whatever LOG_REDACT_PII says: the URL is a secret, not PII", () => {
+    redactPiiFlag = false;
+    expect(redactUrl("https://discord.com/api/webhooks/1/abc")).toBe(
+      "https://discord.com",
+    );
+  });
+
+  test("unparsable input is not echoed", () => {
+    expect(redactUrl("not a url /secret")).toBe("[invalid url]");
   });
 });

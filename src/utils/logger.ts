@@ -69,14 +69,31 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEYS.some((name) => normalized === name || normalized.endsWith(name));
 }
 
+/** What drizzle puts between the SQL and its bound values in a query error message. */
+const QUERY_PARAMS_MARKER = "\nparams: ";
+
+/**
+ * Drops the bound values from a drizzle query error message (#260).
+ * `DrizzleQueryError` reads `Failed query: <sql>\nparams: <values>`, and
+ * call sites log it through `error.message`; the values can be account
+ * emails, token hashes or an encrypted DKIM key. The SQL stays, which is
+ * enough to tell which query failed.
+ */
+function stripQueryParams(value: string): string {
+  const at = value.indexOf(QUERY_PARAMS_MARKER);
+  return at < 0 ? value : `${value.slice(0, at)}${QUERY_PARAMS_MARKER}${REDACTED}`;
+}
+
 /**
  * Central safety net (#284): returns `value` with every secret-named field
- * replaced by `[REDACTED]`, at any depth, in plain objects and arrays.
- * Other values (strings, numbers, dates, errors) pass through unchanged.
+ * replaced by `[REDACTED]`, at any depth, in plain objects and arrays, and
+ * the bound values cut from any drizzle query error message (#260).
+ * Other values (numbers, dates, errors) pass through unchanged.
  * Call sites still decide what to log; this only stops a secret that slips
  * into a log call from reaching the output. Exported for tests.
  */
 export function redactSecrets(value: unknown, depth: number = 0): unknown {
+  if (typeof value === "string") return stripQueryParams(value);
   if (Array.isArray(value)) {
     if (depth >= REDACT_MAX_DEPTH) return REDACTED;
     return value.map((item) => redactSecrets(item, depth + 1));

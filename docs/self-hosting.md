@@ -214,7 +214,7 @@ To hand the instance over, the owner transfers ownership to an active admin from
 docker compose exec app bun run src/db/seed.ts
 ```
 
-**Save the key from the output: it's shown once!**
+**Save the key from the output: it's shown once!** It is printed to the terminal only, never to the logs.
 
 ### Register your domain (generates DKIM keys)
 

@@ -129,6 +129,23 @@ describe("redactSecrets", () => {
     for (let i = 0; i < 10; i++) deep = { next: deep };
     expect(JSON.stringify(redactSecrets(deep))).toContain("[REDACTED]");
   });
+
+  test("drizzle query errors keep the SQL and lose the bound values (#260)", () => {
+    const message =
+      'Failed query: insert into "domains" ("name", "dkim_private_key") values ($1, $2)\nparams: example.com,v1:enc:secret';
+    const out = redactSecrets({ error: message, nested: [{ error: message }] });
+    const expected =
+      'Failed query: insert into "domains" ("name", "dkim_private_key") values ($1, $2)\nparams: [REDACTED]';
+    expect(out).toEqual({ error: expected, nested: [{ error: expected }] });
+    expect(JSON.stringify(out)).not.toContain("v1:enc:secret");
+  });
+
+  test("ordinary strings mentioning params pass through", () => {
+    expect(redactSecrets("params: a,b")).toBe("params: a,b");
+    expect(redactSecrets({ note: "query params: none" })).toEqual({
+      note: "query params: none",
+    });
+  });
 });
 
 describe("logger output", () => {

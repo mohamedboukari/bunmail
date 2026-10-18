@@ -6,6 +6,7 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { InboundEventsRequireAdminError } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactUrl } from "../../../utils/redact.ts";
 import { assertPublicWebhookUrl } from "../../../utils/ssrf-guard.ts";
 import { config } from "../../../config.ts";
 import type { Webhook, CreateWebhookInput } from "../types/webhook.types.ts";
@@ -52,7 +53,7 @@ export async function createWebhook(
 
   logger.info("Creating webhook", {
     id,
-    url: input.url,
+    url: redactUrl(input.url),
     events: input.events,
     apiKeyId,
     createdByUserId,
