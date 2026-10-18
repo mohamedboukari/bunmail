@@ -1,13 +1,17 @@
+import type { CustomHeaderProblem } from "./services/custom-headers.ts";
+
 /**
  * Rejections `email.service.createEmail` raises for a send it refuses on
- * its input (#245): the sender domain, the template or the subject. Each
+ * its input (#245): the sender domain, the template, the subject or a
+ * custom header (#177). Each
  * class carries its own HTTP status and stable `code`, so the global
  * `.onError` handler in `src/index.ts` maps them all with one branch
  * instead of letting them fall through to a masked 500. The SMTP
  * submission server answers every one of them with SMTP `550`.
  *
- * Messages never echo submitted content beyond the sender domain name:
- * they reach API callers, dashboard flash messages and SMTP replies.
+ * Messages never echo submitted content beyond the sender domain name or
+ * a syntactically valid custom header name: they reach API callers,
+ * dashboard flash messages and SMTP replies.
  */
 export abstract class EmailSendRejectedError extends Error {
   /** HTTP status the REST API answers with. */
@@ -79,5 +83,28 @@ export class SubjectRequiredError extends EmailSendRejectedError {
 
   constructor() {
     super("Subject is required: provide it inline or via a template.");
+  }
+}
+
+/**
+ * A custom header (#177) breaks a rule of `services/custom-headers.ts`:
+ * invalid name, a line break or control character in the value, too
+ * long, reserved, duplicated, or over the count or total size cap. The
+ * message names the header only when its name is valid, and never
+ * includes the value.
+ */
+export class InvalidCustomHeaderError extends EmailSendRejectedError {
+  override readonly name = "InvalidCustomHeaderError";
+  readonly status = 422;
+  readonly code = "INVALID_CUSTOM_HEADER";
+  /** Which rule the header broke. */
+  readonly problem: CustomHeaderProblem;
+  /** The refused header's name, or `null` when the name itself is invalid. */
+  readonly header: string | null;
+
+  constructor(problem: CustomHeaderProblem, header: string | null, message: string) {
+    super(message);
+    this.problem = problem;
+    this.header = header;
   }
 }

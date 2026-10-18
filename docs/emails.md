@@ -16,6 +16,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
 | `bcc`           | text           | nullable                | Comma-separated BCC recipients              |
 | `reply_to`      | text           | nullable                | Comma-separated Reply-To address(es) (#169). Sets the `Reply-To:` header on every MX group's message; the envelope sender stays `from_address`. |
+| `headers`       | jsonb          | nullable                | Custom headers set on the send (#177), name to value, stored as a jsonb object. Null when none. See [Custom Headers](#custom-headers). |
 | `subject`       | varchar(500)   | NOT NULL                | Email subject line                          |
 | `html`          | text           | nullable                | HTML body                                   |
 | `text_content`  | text           | nullable                | Plain text body                             |
@@ -49,7 +50,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 ```
 src/modules/emails/
 ├── emails.plugin.ts                ← Routes: send, list, get, trash/restore/permanent/empty
-├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245)
+├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
 │   └── email.schema.ts             ← Drizzle pgTable + indexes
 ├── dtos/
@@ -58,6 +59,7 @@ src/modules/emails/
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
+│   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
 │   └── stats.service.ts            ← Dashboard stats aggregation
@@ -112,7 +114,27 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - An unregistered domain is rejected in every environment.
 - SPF and DMARC never block: they only warn.
 
-**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject. Messages never echo submitted content other than the sender domain name.
+**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)). Messages never echo submitted content other than the sender domain name or a valid custom header name.
+
+## Custom Headers
+
+`POST /api/v1/emails/send` takes an optional `headers` object, name to value (#177): application headers such as `X-Correlation-Id` or `X-Entity-Ref-ID`, and the threading headers `In-Reply-To` and `References`. They are a header-injection surface, so one set of rules (`services/custom-headers.ts`) is applied by `createEmail` (every ingress), and again by the mailer before sending:
+
+| Rule | Limit |
+|---|---|
+| Name | RFC 5322 field name: printable ASCII except `:` (`\x21` to `\x39` and `\x3b` to `\x7e`), 1 to 64 characters |
+| Value | No CR, LF, NUL or other control character (C0 except HTAB, DEL, C1, U+2028, U+2029); at most 998 characters |
+| Count | At most 20 headers |
+| Total size | At most 8 KB (8192 bytes, UTF-8) of names plus values |
+| Duplicates | Names compare case-insensitively; a second spelling of the same name is refused |
+| Reserved (any case) | `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, and any name starting with `Content-`, `ARC-` or `X-BunMail-` |
+
+- **Refusal:** name/value syntax and the count are checked by the DTO first (`422 VALIDATION_ERROR`); reserved names, duplicates and the total size by `createEmail` (`422 INVALID_CUSTOM_HEADER`, SMTP `550`). Nothing is queued. The message names the header when its name is valid, never the value.
+- **Storage:** `emails.headers` (jsonb object, the caller's spelling of each name). Returned as `headers` on email responses (`null` when none). Retries resend the same set.
+- **Sending:** the queue passes the stored set to `sendMail`, which re-applies the rules (dropping, with a `warn` naming the header, anything a row written another way might hold) and hands the rest to Nodemailer's `headers` option before BunMail's own `List-Unsubscribe` pair, so a custom header can never replace `Message-ID`, `From`, `List-Unsubscribe` or any other header BunMail sets. Nodemailer may normalize the case of a name (`X-Correlation-Id` is written `X-Correlation-ID`) and MIME-encodes non-ASCII values.
+- **DKIM:** `In-Reply-To` and `References` are in the signed header list (`DKIM_SIGNED_HEADERS`); `X-*` headers are not signed.
+- **SMTP submission** relays `In-Reply-To`, `References` and `X-*` from the submitted message through the same rules, dropping (not refusing) any that fail: see [smtp-submission.md](smtp-submission.md).
+- **Logs** carry header names, counts and the rule broken, never values.
 
 ## List-Unsubscribe
 
@@ -140,7 +162,7 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 **Reads (live)**
 
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
-Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
 Retrieves a non-trashed email scoped to the requesting API key.
@@ -180,7 +202,21 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 ### mailer.service.ts
 
 #### `sendMail(options): Promise<{ messageId }>`
-Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key.
+Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message.
+
+#### `buildMailOptions(args): Mail.Options`
+Pure: builds one MX group's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe`, DKIM). Tests render it with a stream transport.
+
+### custom-headers.ts
+
+#### `validateCustomHeaders(headers): CustomHeaders`
+Strict check for the send API: returns the headers or throws `InvalidCustomHeaderError` for the first that breaks a rule.
+
+#### `filterCustomHeaders(entries): { headers, dropped }`
+Applies the same rules but keeps what passes and reports the rest (`{ name, problem }`, `name` null for an invalid name). Used by SMTP submission and the mailer.
+
+#### `isReservedHeaderName(name): boolean`
+Reserved name or prefix, case-insensitive.
 
 ### queue.service.ts
 

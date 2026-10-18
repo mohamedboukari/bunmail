@@ -8,7 +8,12 @@ import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
 import { parseSmtpError } from "../../../utils/smtp-error.ts";
 import { resolveMxAddress } from "./mx-address.ts";
-import type { DeliveryGroup, DeliveryState } from "../models/email.schema.ts";
+import { filterCustomHeaders } from "./custom-headers.ts";
+import type {
+  CustomHeaders,
+  DeliveryGroup,
+  DeliveryState,
+} from "../models/email.schema.ts";
 
 /**
  * Result of a `sendMail` call. The `messageId` is the canonical
@@ -140,6 +145,12 @@ export async function sendMail(options: {
   text?: string | null;
   /** Canonical Message-ID, set by the caller so retries reuse it. */
   messageId: string;
+  /**
+   * Custom headers stored on the email (#177). Re-checked here (see
+   * {@link safeCustomHeaders}) so a row that bypassed `createEmail` can
+   * never override BunMail's own headers or split a header line.
+   */
+  headers?: CustomHeaders | null;
   /** Prior delivery state when this is a retry pass; undefined on first send. */
   existingState?: DeliveryState | null;
   dkim?: DkimOptions;
@@ -172,6 +183,8 @@ export async function sendMail(options: {
     retry: options.existingState ? "yes" : "no",
   });
 
+  const customHeaders = safeCustomHeaders(options.headers, options.messageId);
+
   /** Attempt every group still in `retry` state. Order is insertion-
    *  order, which keeps logs stable across runs even if Maps were
    *  rebuilt from JSONB. */
@@ -192,6 +205,7 @@ export async function sendMail(options: {
         html: options.html ?? null,
         text: options.text ?? null,
         messageId: options.messageId,
+        headers: customHeaders,
         dkim: options.dkim,
         unsubscribe: options.unsubscribe,
       });
@@ -280,16 +294,9 @@ async function buildInitialState(
   return state;
 }
 
-/**
- * Submits the message to a single destination MX. The transport is
- * built per-call (we always want the right MX for the right group)
- * and the `envelope.to` override pins RCPT TO to *only* the
- * recipients on this MX, even when `mailOptions.to` lists the full
- * original set. That's the trick that makes cross-domain CC visible
- * to all recipients without delivering to the wrong server.
- */
-async function sendToMxGroup(args: {
-  mxHost: string;
+/** Everything one MX group's message is built from. */
+interface MxGroupMessage {
+  /** RCPT TO for this group only. */
   recipients: string[];
   from: string;
   headerTo: string;
@@ -299,9 +306,109 @@ async function sendToMxGroup(args: {
   html: string | null;
   text: string | null;
   messageId: string;
+  /** Custom headers (#177), already passed through {@link safeCustomHeaders}. */
+  headers: CustomHeaders;
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
-}): Promise<void> {
+}
+
+/**
+ * Re-applies the custom-header rules (#177) to the headers stored on a
+ * row: the send API already refused anything invalid, so this only drops
+ * something when a row was written another way (a manual insert, a future
+ * bug). It is what guarantees a custom header never overrides
+ * `Message-ID`, `List-Unsubscribe` or any other reserved header, whatever
+ * its case. Logs the dropped names only, never values.
+ */
+function safeCustomHeaders(
+  headers: CustomHeaders | null | undefined,
+  messageId: string,
+): CustomHeaders {
+  if (!headers) return {};
+  const { headers: kept, dropped } = filterCustomHeaders(Object.entries(headers));
+  if (dropped.length > 0) {
+    logger.warn("Stored custom headers dropped before sending", {
+      messageId,
+      dropped: dropped.map((d) => ({ name: d.name, problem: d.problem })),
+    });
+  }
+  return kept;
+}
+
+/**
+ * Builds the Nodemailer options for one MX group's message: headers,
+ * envelope, the custom headers (#177), `List-Unsubscribe`, DKIM. Pure, so
+ * tests can render the exact message with a stream transport.
+ */
+export function buildMailOptions(args: MxGroupMessage): Mail.Options {
+  const mailOptions: Mail.Options = {
+    from: args.from,
+    /** Headers carry the *original* recipient lists so each recipient
+     *  sees who else was addressed. The actual RCPT TO list is the
+     *  envelope override below. */
+    to: args.headerTo,
+    cc: args.headerCc ?? undefined,
+    replyTo: args.replyTo ?? undefined,
+    subject: args.subject,
+    html: args.html ?? undefined,
+    text: args.text ?? undefined,
+    messageId: args.messageId,
+    envelope: {
+      from: args.from,
+      to: args.recipients,
+    },
+  };
+
+  /**
+   * Extra headers: the custom ones (#177) first, then BunMail's own
+   * `List-Unsubscribe` pair, which is written last so it wins on the same
+   * key. The reserved-name filter already keeps every name BunMail sets
+   * (in any case) out of the custom set, and Nodemailer's own options
+   * (`messageId`, `from`, ...) take precedence over `headers` anyway.
+   */
+  const headers: Record<string, string> = { ...args.headers };
+
+  /** `List-Unsubscribe` (+ optional `One-Click` POST). Same content
+   *  across groups: the header is about the message, not the
+   *  recipient set. */
+  const senderDomain = args.from.split("@")[1];
+  if (senderDomain) {
+    /**
+     * Strip any CR/LF from the unsubscribe mailto/url before they go into a
+     * header value (#133, header-injection defense-in-depth). These come
+     * from the operator-set domain record, so this is belt-and-braces, but
+     * a stray newline must never split the header.
+     */
+    const stripCrlf = (v: string): string => v.replace(/[\r\n]/g, "");
+    const mailto = stripCrlf(args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`);
+    const url = args.unsubscribe?.url ? stripCrlf(args.unsubscribe.url) : undefined;
+    const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
+    headers["List-Unsubscribe"] = headerValue;
+    if (url) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+  }
+  if (Object.keys(headers).length > 0) mailOptions.headers = headers;
+
+  if (args.dkim) {
+    mailOptions.dkim = {
+      domainName: args.dkim.domainName,
+      keySelector: args.dkim.keySelector,
+      privateKey: args.dkim.privateKey,
+      headerFieldNames: DKIM_SIGNED_HEADERS,
+    };
+  }
+
+  return mailOptions;
+}
+
+/**
+ * Submits the message to a single destination MX. The transport is
+ * built per-call (we always want the right MX for the right group)
+ * and the `envelope.to` override pins RCPT TO to *only* the
+ * recipients on this MX, even when `mailOptions.to` lists the full
+ * original set. That's the trick that makes cross-domain CC visible
+ * to all recipients without delivering to the wrong server.
+ */
+async function sendToMxGroup(args: MxGroupMessage & { mxHost: string }): Promise<void> {
   /**
    * Connect to a checked address, not the name: the name's DNS answer is
    * controlled by whoever owns the recipient domain, and resolving it
@@ -330,53 +437,7 @@ async function sendToMxGroup(args: {
     },
   });
 
-  const mailOptions: Mail.Options = {
-    from: args.from,
-    /** Headers carry the *original* recipient lists so each recipient
-     *  sees who else was addressed. The actual RCPT TO list is the
-     *  envelope override below. */
-    to: args.headerTo,
-    cc: args.headerCc ?? undefined,
-    replyTo: args.replyTo ?? undefined,
-    subject: args.subject,
-    html: args.html ?? undefined,
-    text: args.text ?? undefined,
-    messageId: args.messageId,
-    envelope: {
-      from: args.from,
-      to: args.recipients,
-    },
-  };
-
-  /** `List-Unsubscribe` (+ optional `One-Click` POST). Same content
-   *  across groups: the header is about the message, not the
-   *  recipient set. */
-  const senderDomain = args.from.split("@")[1];
-  if (senderDomain) {
-    /**
-     * Strip any CR/LF from the unsubscribe mailto/url before they go into a
-     * header value (#133, header-injection defense-in-depth). These come
-     * from the operator-set domain record, so this is belt-and-braces, but
-     * a stray newline must never split the header.
-     */
-    const stripCrlf = (v: string): string => v.replace(/[\r\n]/g, "");
-    const mailto = stripCrlf(args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`);
-    const url = args.unsubscribe?.url ? stripCrlf(args.unsubscribe.url) : undefined;
-    const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
-    mailOptions.headers = {
-      "List-Unsubscribe": headerValue,
-      ...(url && { "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }),
-    };
-  }
-
-  if (args.dkim) {
-    mailOptions.dkim = {
-      domainName: args.dkim.domainName,
-      keySelector: args.dkim.keySelector,
-      privateKey: args.dkim.privateKey,
-      headerFieldNames: DKIM_SIGNED_HEADERS,
-    };
-  }
+  const mailOptions = buildMailOptions(args);
 
   /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
   await withMxLock(args.mxHost, config.mail.mxConcurrency, () =>

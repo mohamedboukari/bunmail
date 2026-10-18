@@ -1,8 +1,8 @@
 /**
  * Pure message-mapping helpers for the SMTP submission server (#120).
  *
- * Kept dependency-free (its own error class and a type-only import of
- * `SendEmailInput`) so it can be
+ * Kept dependency-free (its own error class, a type-only import of
+ * `SendEmailInput` and the pure custom-header rules) so it can be
  * unit-tested without pulling in the SMTPServer / config / db stack: the
  * server code in `services/smtp-submission.service.ts` extracts raw
  * addresses from the parsed message + SMTP envelope and delegates the
@@ -12,6 +12,10 @@
 
 import { SubmissionRejectedError } from "./errors.ts";
 import type { SendEmailInput } from "../emails/types/email.types.ts";
+import {
+  filterCustomHeaders,
+  type DroppedHeader,
+} from "../emails/services/custom-headers.ts";
 
 /**
  * De-duplicates a list of addresses (case-insensitive, first-occurrence
@@ -50,6 +54,63 @@ export interface SubmissionMessageParts {
   subject?: string;
   html?: string;
   text?: string;
+  /** Custom headers to relay, from {@link selectRelayHeaders} (#177). */
+  headers?: Record<string, string>;
+}
+
+/** One raw header line of a parsed message (mailparser's `headerLines`). */
+interface RawHeaderLine {
+  /** Header name, lowercase. */
+  key: string;
+  /** The whole raw line, `Name: value`, folding line breaks included. */
+  line: string;
+}
+
+/**
+ * Whether a submitted header is a candidate for relaying (#177): the
+ * threading headers `In-Reply-To` and `References`, and `X-*` application
+ * headers. Everything else in the message (`From`, `To`, `Received`,
+ * `Content-*`, ...) is rebuilt by BunMail and never copied. `X-BunMail-*`
+ * passes this check but is reserved, so the validator drops it.
+ */
+function isRelayCandidate(lowerName: string): boolean {
+  return (
+    lowerName === "in-reply-to" ||
+    lowerName === "references" ||
+    lowerName.startsWith("x-")
+  );
+}
+
+/**
+ * Picks the custom headers to relay from a submitted message (#177):
+ * `In-Reply-To`, `References` and `X-*`, run through the same rules and
+ * caps as the send API (`emails/services/custom-headers.ts`).
+ *
+ * Values are read from the raw lines, unfolded as RFC 5322 says (a line
+ * break followed by a space or tab is removed) and trimmed; a value that
+ * still holds a line break is refused by the validator. Unlike the send
+ * API, a header that fails is **dropped**, not a reason to refuse the
+ * message: mail clients add many `X-` headers of their own, and losing
+ * one is safer than bouncing the mail. The caller logs `dropped` (names only).
+ */
+export function selectRelayHeaders(lines: readonly RawHeaderLine[]): {
+  headers?: Record<string, string>;
+  dropped: DroppedHeader[];
+} {
+  const entries: [string, string][] = [];
+  for (const { key, line } of lines) {
+    if (!isRelayCandidate(key.toLowerCase())) continue;
+    const colon = line.indexOf(":");
+    if (colon < 0) continue;
+    const name = line.slice(0, colon).trim();
+    const value = line
+      .slice(colon + 1)
+      .replace(/\r?\n(?=[ \t])/g, "")
+      .trim();
+    entries.push([name, value]);
+  }
+  const { headers, dropped } = filterCustomHeaders(entries);
+  return { headers: Object.keys(headers).length > 0 ? headers : undefined, dropped };
 }
 
 /**
@@ -151,5 +212,6 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     subject: parts.subject ?? "",
     html: parts.html,
     text: parts.text,
+    headers: parts.headers,
   };
 }

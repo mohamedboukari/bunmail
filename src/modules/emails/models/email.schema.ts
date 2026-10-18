@@ -51,6 +51,13 @@ export interface DeliveryGroup {
 export type DeliveryState = Record<string, DeliveryGroup>;
 
 /**
+ * Shape of `emails.headers` (#177): custom header name to value, as the
+ * caller spelled the name. Validated by `services/custom-headers.ts`
+ * before it is stored and again before it is sent.
+ */
+export type CustomHeaders = Record<string, string>;
+
+/**
  * Emails table: every email sent through BunMail gets a row here.
  *
  * Lifecycle: an email is inserted with status `queued`, picked up by the
@@ -95,6 +102,15 @@ export const emails = pgTable(
     /** Reply-To address(es), comma-separated (nullable). Header only: the
      *  envelope sender is still `fromAddress` (#169). */
     replyTo: text("reply_to"),
+
+    /**
+     * Custom headers set by the caller (#177), e.g. `X-Correlation-Id`,
+     * `In-Reply-To`, `References`. Null when none. Reserved names
+     * (`From`, `DKIM-Signature`, `List-Unsubscribe`, ...) and values with
+     * line breaks never get here: see `services/custom-headers.ts`.
+     * Retries resend the same set.
+     */
+    headers: jsonb<CustomHeaders | null>("headers"),
 
     /** Email subject line */
     subject: varchar("subject", { length: 500 }).notNull(),

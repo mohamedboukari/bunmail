@@ -104,6 +104,7 @@ const email = {
   cc: null,
   bcc: null,
   replyTo: null,
+  headers: null,
   subject: "test",
   html: "<p>hello</p>",
   textContent: null,

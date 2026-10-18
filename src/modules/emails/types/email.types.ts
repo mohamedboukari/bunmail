@@ -40,6 +40,12 @@ export interface SendEmailInput {
   text?: string;
   templateId?: string;
   variables?: Record<string, string>;
+  /**
+   * Custom headers (#177), name to value. Validated by `createEmail`
+   * (`services/custom-headers.ts`); a violation throws
+   * `InvalidCustomHeaderError`.
+   */
+  headers?: Record<string, string>;
 }
 
 /**

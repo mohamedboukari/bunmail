@@ -20,7 +20,7 @@ import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { EmailSendRejectedError } from "../../emails/errors.ts";
 import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
-import { buildSubmissionInput } from "../message-mapper.ts";
+import { buildSubmissionInput, selectRelayHeaders } from "../message-mapper.ts";
 import { SubmissionRejectedError } from "../errors.ts";
 import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
 import {
@@ -54,6 +54,13 @@ const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
  * transactional mail rarely exceeds a handful.
  */
 const MAX_RECIPIENTS_PER_TRANSACTION = 50;
+
+/**
+ * Dropped custom headers named in one log line (#177); `droppedCount`
+ * still has the total. A client adding hundreds of `X-` headers must not
+ * produce a huge log line.
+ */
+const MAX_LOGGED_DROPPED_HEADERS = 20;
 
 /** The running server instance, or null when stopped. */
 let server: SMTPServer | null = null;
@@ -488,6 +495,20 @@ export function start(portOverride?: number): void {
                     ? session.envelope.mailFrom.address
                     : undefined;
 
+                /**
+                 * Custom headers to relay (#177): `In-Reply-To`, `References`
+                 * and `X-*`, checked by the send API's rules. Failing ones are
+                 * dropped, not refused; the log names them, never the values.
+                 */
+                const relayed = selectRelayHeaders(parsed.headerLines);
+                if (relayed.dropped.length > 0) {
+                  logger.warn("SMTP submission dropped custom headers", {
+                    apiKeyId,
+                    droppedCount: relayed.dropped.length,
+                    dropped: relayed.dropped.slice(0, MAX_LOGGED_DROPPED_HEADERS),
+                  });
+                }
+
                 /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
                 const input: SendEmailInput = buildSubmissionInput({
                   fromHeader: parsed.from?.value?.[0]?.address,
@@ -501,6 +522,7 @@ export function start(portOverride?: number): void {
                   subject: parsed.subject ?? "",
                   html: typeof parsed.html === "string" ? parsed.html : undefined,
                   text: typeof parsed.text === "string" ? parsed.text : undefined,
+                  headers: relayed.headers,
                 });
 
                 /**

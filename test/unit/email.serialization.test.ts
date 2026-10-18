@@ -18,6 +18,7 @@ describe("serializeEmail", () => {
     cc: "cc@test.com",
     bcc: null,
     replyTo: null,
+    headers: null,
     subject: "Test Subject",
     html: "<p>Hello</p>",
     textContent: "Hello",
@@ -81,5 +82,11 @@ describe("serializeEmail", () => {
   test("exposes replyTo when set (#169)", () => {
     const result = serializeEmail({ ...email, replyTo: "support@example.com" });
     expect(result.replyTo).toBe("support@example.com");
+  });
+
+  test("exposes custom headers, null when none (#177)", () => {
+    expect(serializeEmail(email).headers).toBeNull();
+    const result = serializeEmail({ ...email, headers: { "X-Correlation-Id": "abc" } });
+    expect(result.headers).toEqual({ "X-Correlation-Id": "abc" });
   });
 });
