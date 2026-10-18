@@ -252,7 +252,9 @@ bunmail/
 │   │       └── types/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
-│       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
+│       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, emails, api-keys, invitations, users, domains, templates, webhooks, inbound, dmarc, suppressions)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links) bound to kind, user and session (#132, #280, #217, #277)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
