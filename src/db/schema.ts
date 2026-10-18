@@ -18,3 +18,7 @@ export { suppressions } from "../modules/suppressions/models/suppression.schema.
 export { smtpSubmissionUsage } from "../modules/smtp-submission/models/smtp-submission-usage.schema.ts";
 export { dmarcReports } from "../modules/dmarc-reports/models/dmarc-report.schema.ts";
 export { dmarcRecords } from "../modules/dmarc-reports/models/dmarc-record.schema.ts";
+export { users } from "../modules/users/models/user.schema.ts";
+export { userCredentials } from "../modules/users/models/user-credential.schema.ts";
+export { sessions } from "../modules/users/models/session.schema.ts";
+export { userTokens } from "../modules/users/models/user-token.schema.ts";

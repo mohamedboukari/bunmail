@@ -212,6 +212,10 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
+│   │   ├── users/                        ← Dashboard accounts schema + pure auth helpers (#214)
+│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
+│   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens)
+│   │   │   └── types/                    ← role / credential / assurance / purpose value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
 │   │       ├── services/
@@ -646,6 +650,33 @@ Indexes: `UNIQUE (org_email, report_id)` (dedup hot-path), `(domain, date_end DE
 | dkim_result       | varchar(20)     | nullable                                       |
 | spf_auth_domain   | varchar(255)    | nullable                                       |
 | spf_result        | varchar(20)     | nullable                                       |
+
+### `users` (#214)
+
+Dashboard accounts: identity only; login methods live in `user_credentials`. Exactly one `owner`, enforced by `users_single_owner` (unique on `role WHERE role = 'owner'`). See [docs/users.md](docs/users.md) for every column, index and check.
+
+| Column            | Type         | Constraints                                                   |
+|-------------------|--------------|---------------------------------------------------------------|
+| id                | varchar(36)  | PK, prefixed `usr_`                                           |
+| email             | varchar(255) | NOT NULL, UNIQUE, CHECK lower-cased                           |
+| email_verified_at | timestamptz  | nullable                                                      |
+| name              | varchar(100) | nullable                                                      |
+| role              | varchar(10)  | NOT NULL, default `member`, CHECK IN (`owner`,`admin`,`member`) |
+| disabled_at       | timestamptz  | nullable                                                      |
+| created_at        | timestamptz  | NOT NULL, default `now()`                                     |
+| updated_at        | timestamptz  | NOT NULL, default `now()`                                     |
+
+### `user_credentials` (#214)
+
+One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash or encrypted TOTP secret), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint), `last_used_at`, timestamps.
+
+### `sessions` (#214)
+
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at`, `last_seen_at`, `ip`, `user_agent`. Indexes on `user_id` and `expires_at`.
+
+### `user_tokens` (#214)
+
+One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives; `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`.
 
 ### `__bunmail_migrations`
 

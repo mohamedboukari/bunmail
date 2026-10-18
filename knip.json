@@ -8,5 +8,9 @@
     "unlisted": "error",
     "exports": "error",
     "types": "error"
-  }
+  },
+  "ignoreFiles": [
+    "src/modules/users/services/password.service.ts",
+    "src/modules/users/services/token.service.ts"
+  ]
 }

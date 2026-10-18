@@ -113,6 +113,13 @@
       "when": 1792267480932,
       "tag": "0015_sour_saracen",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792273873082,
+      "tag": "0016_gifted_guardian",
+      "breakpoints": true
     }
   ]
 }
