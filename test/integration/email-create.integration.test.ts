@@ -12,7 +12,10 @@ import {
   listAllEmails,
 } from "../../src/modules/emails/services/email.service.ts";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
-import { TemplateNotFoundError } from "../../src/modules/emails/errors.ts";
+import {
+  BodyRequiredError,
+  TemplateNotFoundError,
+} from "../../src/modules/emails/errors.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 
 beforeEach(async () => {
@@ -345,5 +348,42 @@ describe("createEmail: source channel + filters (#137)", () => {
     /** Unfiltered → both. */
     const all = await listAllEmails({ page: 1, limit: 20 });
     expect(all.total).toBe(2);
+  });
+});
+
+describe("createEmail: a body is required (#250)", () => {
+  test("no html and no text is refused, nothing queued", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    let caught: unknown;
+    try {
+      await createEmail(
+        {
+          from: "hello@example.com",
+          to: "user@example.org",
+          subject: "empty",
+          html: "  ",
+          text: "",
+        },
+        apiKeyId,
+      );
+    } catch (error: unknown) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BodyRequiredError);
+    expect(await db.select().from(emails)).toHaveLength(0);
+  });
+
+  test("a text-only email is fine", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { email } = await createEmail(
+      {
+        from: "hello@example.com",
+        to: "user@example.org",
+        subject: "plain",
+        text: "hello",
+      },
+      apiKeyId,
+    );
+    expect(email.textContent).toBe("hello");
   });
 });

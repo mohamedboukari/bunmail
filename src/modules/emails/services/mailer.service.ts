@@ -6,7 +6,7 @@ import { logger } from "../../../utils/logger.ts";
 import { redactEmail, redactEmailsInText } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
-import { parseSmtpError } from "../../../utils/smtp-error.ts";
+import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { resolveMxAddress } from "./mx-address.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
 import type {
@@ -226,7 +226,8 @@ export async function sendMail(options: {
       /** Hard 5xx and policy blocks → terminal `failed` (a block won't
        *  clear within the retry window). Soft errors (4xx, transport)
        *  stay `retry` and follow the queue's backoff. */
-      const parsed = parseSmtpError(error);
+      /** From the SMTP reply only, never from a transport error's text (#250). */
+      const parsed = classifySendFailure(err);
       const nextStatus: DeliveryGroup["status"] =
         parsed?.kind === "hard" || parsed?.kind === "policy" ? "failed" : "retry";
       state[mxHost] = {
@@ -234,6 +235,7 @@ export async function sendMail(options: {
         status: nextStatus,
         attempts: group.attempts + 1,
         lastError: error,
+        ...(parsed ? { failureKind: parsed.kind, failureCode: parsed.code } : {}),
         ...(parsed?.kind === "policy" ? { blocked: true } : {}),
       };
       logger.warn("MX group send failed", {

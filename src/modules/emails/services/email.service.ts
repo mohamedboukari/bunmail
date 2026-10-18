@@ -17,6 +17,7 @@ import {
   InvalidCustomHeaderError,
   SubjectRequiredError,
   TemplateNotFoundError,
+  BodyRequiredError,
 } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -174,6 +175,12 @@ export async function createEmail(
   if (!subject) {
     logger.warn("Send blocked: subject missing", { id, apiKeyId });
     throw new SubjectRequiredError();
+  }
+
+  /** Neither part has content: an empty email is refused (#250). */
+  if (!htmlContent?.trim() && !textContent?.trim()) {
+    logger.warn("Send blocked: body missing", { id, apiKeyId });
+    throw new BodyRequiredError();
   }
 
   let domainId: string | null = null;

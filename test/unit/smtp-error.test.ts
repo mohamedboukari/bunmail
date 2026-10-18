@@ -1,5 +1,9 @@
 import { describe, test, expect } from "bun:test";
-import { parseSmtpError } from "../../src/utils/smtp-error.ts";
+import {
+  parseSmtpError,
+  classifySendFailure,
+  type ParsedSmtpError,
+} from "../../src/utils/smtp-error.ts";
 
 /**
  * Unit tests for the SMTP error classifier. Pure function: fixture in,
@@ -135,5 +139,46 @@ describe("parseSmtpError: addresses and ports are not status codes", () => {
     "connect EHOSTUNREACH 203.0.113.250:465",
   ])("%s → null (network error)", (message) => {
     expect(parseSmtpError(message)).toBeNull();
+  });
+});
+
+describe("classifySendFailure (#250)", () => {
+  /** A Nodemailer-style error carrying the SMTP reply. */
+  function smtpReject(responseCode: number, response: string): Error {
+    return Object.assign(new Error(`Can't send mail: ${response}`), {
+      responseCode,
+      response,
+    });
+  }
+
+  const classified: Array<[Error, ParsedSmtpError["kind"], string]> = [
+    [
+      smtpReject(550, "550 5.1.1 <a@example.org>: Recipient address rejected"),
+      "hard",
+      "5.1.1",
+    ],
+    [smtpReject(550, "550 5.7.1 Client host blocked using Spamhaus"), "policy", "5.7.1"],
+    [smtpReject(421, "421 4.7.0 Try again later"), "soft", "4.7.0"],
+    [smtpReject(554, "554 Message rejected: sender blocked"), "policy", "5.7.0"],
+    [smtpReject(550, "550 Mailbox unavailable"), "hard", "5.0.0"],
+    [smtpReject(451, "451-4.3.0 first line\n451 4.3.0 second line"), "soft", "4.3.0"],
+    [new Error("550 5.1.1 User unknown"), "hard", "5.1.1"],
+  ];
+  test.each(classified)("%p classified from the SMTP reply", (error, kind, code) => {
+    expect(classifySendFailure(error)).toEqual({ kind, code });
+  });
+
+  test.each([
+    new Error("connect ETIMEDOUT 203.0.113.5:25"),
+    new Error("getaddrinfo ENOTFOUND 550mail.example"),
+    new Error("Connection closed by mx2.5.7.10.example after greeting"),
+    new Error("Greeting never received from 45.2.1.9"),
+    Object.assign(new Error("Client network socket disconnected"), { code: "ESOCKET" }),
+  ])("no SMTP reply, nothing to classify: %p", (error) => {
+    expect(classifySendFailure(error)).toBeNull();
+  });
+
+  test("a non-Error is never classified", () => {
+    expect(classifySendFailure("550 5.1.1 not an error object")).toBeNull();
   });
 });

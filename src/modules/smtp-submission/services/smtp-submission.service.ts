@@ -477,8 +477,8 @@ export function start(portOverride?: number): void {
                   }
                 }
 
-                const rawMessage = Buffer.concat(chunks).toString("utf-8");
-                const parsed = await simpleParser(rawMessage).catch(
+                /** Raw bytes, not a UTF-8 string: each part keeps its charset (#250). */
+                const parsed = await simpleParser(Buffer.concat(chunks)).catch(
                   (parseError: unknown) => {
                     logger.warn("SMTP submission message did not parse", {
                       apiKeyId,
@@ -488,6 +488,21 @@ export function start(portOverride?: number): void {
                     throw new SubmissionRejectedError("Message could not be parsed");
                   },
                 );
+
+                /**
+                 * Attachments are not supported yet: refuse the message rather
+                 * than deliver it without them (#250). A recipient silently
+                 * missing an attachment is worse than a clear rejection.
+                 */
+                if (parsed.attachments.length > 0) {
+                  logger.warn("SMTP submission rejected: attachments not supported", {
+                    apiKeyId,
+                    attachments: parsed.attachments.length,
+                  });
+                  throw new SubmissionRejectedError(
+                    "Attachments are not supported: send the message without them",
+                  );
+                }
 
                 const envelopeFrom =
                   session.envelope.mailFrom &&

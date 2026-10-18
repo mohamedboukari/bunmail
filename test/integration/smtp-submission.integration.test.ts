@@ -319,3 +319,45 @@ describe("SMTP submission: sender domain (#245)", () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe("SMTP submission: message content (#250)", () => {
+  test("a message with an attachment is refused, nothing queued", async () => {
+    const { rawKey } = await seed.apiKey();
+    const reply = await failureOf(
+      transport(rawKey).sendMail({
+        from: "hello@unregistered.test",
+        to: "user@example.org",
+        subject: "with attachment",
+        text: "see attached",
+        attachments: [{ filename: "a.txt", content: "attached" }],
+      }),
+    );
+    expect(reply).toContain("550");
+    expect(reply).toContain("Attachments are not supported");
+    expect(await db.select().from(emails)).toHaveLength(0);
+  });
+
+  test("an 8-bit ISO-8859-1 body keeps its characters", async () => {
+    const { rawKey } = await seed.apiKey();
+    const head = [
+      "From: hello@unregistered.test",
+      "To: user@example.org",
+      "Subject: latin1",
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=ISO-8859-1",
+      "Content-Transfer-Encoding: 8bit",
+      "",
+      "",
+    ].join("\r\n");
+    const raw = Buffer.concat([
+      Buffer.from(head, "ascii"),
+      Buffer.from("Caf\xe9 cr\xe8me\r\n", "latin1"),
+    ]);
+    await transport(rawKey).sendMail({
+      envelope: { from: "hello@unregistered.test", to: ["user@example.org"] },
+      raw,
+    });
+    const [row] = await db.select().from(emails);
+    expect(row?.textContent?.trim()).toBe("Café crème");
+  });
+});

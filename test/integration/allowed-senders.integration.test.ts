@@ -41,7 +41,12 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
   test("empty allowlist (default) permits any sender", async () => {
     const { apiKey } = await createApiKey({ name: "unrestricted" });
     const { email } = await createEmail(
-      { from: "anyone@example.com", to: "user@example.org", subject: "hi" },
+      {
+        from: "anyone@example.com",
+        to: "user@example.org",
+        subject: "hi",
+        text: "hello",
+      },
       apiKey.id,
     );
     expect(email.fromAddress).toBe("anyone@example.com");
@@ -53,7 +58,12 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
       allowedSenders: ["noreply@example.com"],
     });
     const { email } = await createEmail(
-      { from: "noreply@example.com", to: "user@example.org", subject: "hi" },
+      {
+        from: "noreply@example.com",
+        to: "user@example.org",
+        subject: "hi",
+        text: "hello",
+      },
       apiKey.id,
     );
     expect(email.fromAddress).toBe("noreply@example.com");
@@ -66,7 +76,12 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
     });
     expect(
       createEmail(
-        { from: "ceo@example.com", to: "user@example.org", subject: "spoof" },
+        {
+          from: "ceo@example.com",
+          to: "user@example.org",
+          subject: "spoof",
+          text: "hello",
+        },
         apiKey.id,
       ),
     ).rejects.toBeInstanceOf(UnauthorizedSenderError);
@@ -82,7 +97,12 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
       allowedSenders: ["NoReply@Example.com"],
     });
     const { email } = await createEmail(
-      { from: "noreply@EXAMPLE.com", to: "user@example.org", subject: "hi" },
+      {
+        from: "noreply@EXAMPLE.com",
+        to: "user@example.org",
+        subject: "hi",
+        text: "hello",
+      },
       apiKey.id,
     );
     expect(email.status).toBe("queued");
@@ -97,7 +117,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
     /** Blocked before adding. */
     expect(
       createEmail(
-        { from: "ceo@example.com", to: "user@example.org", subject: "1" },
+        { from: "ceo@example.com", to: "user@example.org", subject: "1", text: "hello" },
         apiKey.id,
       ),
     ).rejects.toBeInstanceOf(UnauthorizedSenderError);
@@ -107,7 +127,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
       allowedSenders: ["noreply@example.com", "ceo@example.com"],
     });
     const { email: ok } = await createEmail(
-      { from: "ceo@example.com", to: "user@example.org", subject: "2" },
+      { from: "ceo@example.com", to: "user@example.org", subject: "2", text: "hello" },
       apiKey.id,
     );
     expect(ok.status).toBe("queued");
@@ -116,7 +136,7 @@ describe("createEmail: allowed-senders gate (covers REST + SMTP)", () => {
     await updateApiKey(apiKey.id, { allowedSenders: ["noreply@example.com"] });
     expect(
       createEmail(
-        { from: "ceo@example.com", to: "user@example.org", subject: "3" },
+        { from: "ceo@example.com", to: "user@example.org", subject: "3", text: "hello" },
         apiKey.id,
       ),
     ).rejects.toBeInstanceOf(UnauthorizedSenderError);
