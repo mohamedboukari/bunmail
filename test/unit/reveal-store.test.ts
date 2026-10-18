@@ -34,8 +34,12 @@ describe("reveal store", () => {
         consumeRevealSecret(token, "webhook_secret", ANN_OTHER_DEVICE),
       ).toBeUndefined();
       expect(consumeRevealSecret(token, "api_key", ANN)).toBeUndefined();
-      expect(warn).toHaveBeenCalledTimes(3);
-      const logged = JSON.stringify(warn.mock.calls);
+      /** Only our refusals: other files' background work may log too (shared process). */
+      const refusals = warn.mock.calls.filter(([message]) =>
+        message.startsWith("One-time reveal refused"),
+      );
+      expect(refusals).toHaveLength(3);
+      const logged = JSON.stringify(refusals);
       expect(logged).not.toContain(token);
       expect(logged).not.toContain("whsec_value");
       /** Still there for its owner. */
