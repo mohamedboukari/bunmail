@@ -11,7 +11,7 @@ import type {
 /**
  * Per-route access checks for the dashboard (#222).
  *
- * The session guard in `pages.plugin.tsx` (an Elysia `resolve`) proves who
+ * The session guard in `lib/session-guard.ts` (an Elysia `resolve`) proves who
  * is signed in and puts `auth` on the context. These helpers then decide
  * whether that account may open a given route. They run as the route's
  * own `beforeHandle`, after the session guard, so `auth` is always set:

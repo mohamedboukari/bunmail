@@ -338,7 +338,7 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 
 ## Roles enforcement (#222)
 
-Three roles, ranked owner > admin > member. The dashboard guard (`src/pages/pages.plugin.tsx`) exposes the signed-in account to every protected handler as `auth: DashboardAuth` (`{ user: { id, email, role }, session: { id, assurance } }`, type in `user.types.ts`), and each route carries one check from `src/pages/guards.tsx`:
+Three roles, ranked owner > admin > member. The dashboard session guard (`src/pages/lib/session-guard.ts`, mounted by `src/pages/pages.plugin.tsx`) exposes the signed-in account to every protected handler as `auth: DashboardAuth` (`{ user: { id, email, role }, session: { id, assurance } }`, type in `user.types.ts`), and each route carries one check from `src/pages/guards.tsx`:
 
 | Role | Can do |
 |---|---|

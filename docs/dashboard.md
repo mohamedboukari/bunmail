@@ -257,7 +257,29 @@ Server data a script needs goes in a `data-*` attribute or a JSON data block, ne
 
 ```
 src/pages/
-├── pages.plugin.tsx          ← Plugin with all routes + session guard
+├── pages.plugin.tsx          ← Parent plugin: public routes, then the session guard, then the area plugins (#291)
+├── plugins/                  ← One functional plugin per area, each with only its routes (#291)
+│   ├── auth.plugin.tsx       ← Public: login, logout, owner setup, invitation accept, password reset
+│   ├── home.plugin.tsx       ← Stats overview
+│   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
+│   ├── api-keys.plugin.tsx   ← API keys
+│   ├── invitations.plugin.tsx ← Invitations
+│   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
+│   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), detail
+│   ├── templates.plugin.tsx  ← Templates
+│   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
+│   ├── inbound.plugin.tsx    ← Inbound list, trash, detail, reply
+│   ├── dmarc.plugin.tsx      ← DMARC reports
+│   └── suppressions.plugin.tsx ← Suppressions
+├── lib/                      ← Helpers shared by the area plugins (#291)
+│   ├── session-guard.ts      ← The session guard (`resolve` putting `auth` on the context) and the `PublicDashboard` / `GuardedDashboard` types
+│   ├── session-helpers.ts    ← Issue / clear the session cookie, token-reuse revoke
+│   ├── same-origin.ts        ← CSRF same-origin check
+│   ├── responses.ts          ← `redirect`, `setNoStore`, `toFlash`
+│   ├── record-ownership.ts   ← Record actor, "Created by" names (#219)
+│   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
+│   ├── error-message.ts      ← Error text for a log line
+│   └── form.ts               ← Repeated form field to `string[]`
 ├── guards.tsx                ← Role and assurance checks per route (#222)
 ├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation and password reset links), bound to kind, user and session (#132, #280, #217, #277)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
