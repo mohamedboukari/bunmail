@@ -74,6 +74,8 @@ import { setViewerRole } from "./viewer.ts";
 import { parsePagination } from "./pagination.ts";
 import { sendSuccessFlash } from "./send-warnings.ts";
 import { assetResponse } from "./static-assets.tsx";
+import { flashMessageFor } from "./flash-errors.ts";
+import { DomainAlreadyRegisteredError } from "../modules/domains/errors.ts";
 
 /* ─── Services ─── */
 import * as statsService from "../modules/emails/services/stats.service.ts";
@@ -1567,7 +1569,7 @@ export const pagesPlugin = new Elysia({
         }
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/send?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to send email")}&flashType=error`;
+          `/dashboard/send?flash=${encodeURIComponent(flashMessageFor(error, "Failed to send email"))}&flashType=error`;
       }
       return "";
     },
@@ -2485,12 +2487,16 @@ export const pagesPlugin = new Elysia({
         set.headers["location"] =
           `/dashboard/domains?flash=${encodeURIComponent("Domain added successfully")}`;
       } catch (error) {
-        logger.error("Failed to add domain via dashboard", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (error instanceof DomainAlreadyRegisteredError) {
+          logger.warn("Domain not added via dashboard: already registered");
+        } else {
+          logger.error("Failed to add domain via dashboard", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/domains?flash=${encodeURIComponent("Failed to add domain")}&flashType=error`;
+          `/dashboard/domains?flash=${encodeURIComponent(flashMessageFor(error, "Failed to add domain"))}&flashType=error`;
       }
       return "";
     },
@@ -2766,7 +2772,7 @@ export const pagesPlugin = new Elysia({
       } catch (error) {
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/templates?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create template")}&flashType=error`;
+          `/dashboard/templates?flash=${encodeURIComponent(flashMessageFor(error, "Failed to create template"))}&flashType=error`;
       }
       return "";
     },
@@ -2856,7 +2862,7 @@ export const pagesPlugin = new Elysia({
       } catch (error) {
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/templates/${params.id}?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to update")}&flashType=error`;
+          `/dashboard/templates/${params.id}?flash=${encodeURIComponent(flashMessageFor(error, "Failed to update"))}&flashType=error`;
       }
       return "";
     },
@@ -2978,7 +2984,7 @@ export const pagesPlugin = new Elysia({
       } catch (error) {
         set.status = 302;
         set.headers["location"] =
-          `/dashboard/webhooks?flash=${encodeURIComponent(error instanceof Error ? error.message : "Failed to create webhook")}&flashType=error`;
+          `/dashboard/webhooks?flash=${encodeURIComponent(flashMessageFor(error, "Failed to create webhook"))}&flashType=error`;
       }
       return "";
     },

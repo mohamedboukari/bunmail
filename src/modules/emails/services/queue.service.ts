@@ -19,6 +19,7 @@ import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
+import { domainNameIs } from "../../domains/services/domain.service.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -142,7 +143,7 @@ async function queryDomainByName(name: string): Promise<DomainLookupRow | undefi
       unsubscribeUrl: domains.unsubscribeUrl,
     })
     .from(domains)
-    .where(eq(domains.name, name));
+    .where(domainNameIs(name));
   if (!row) return undefined;
   return { ...row, ...readDkimPrivateKey(row.dkimPrivateKey, row.name) };
 }
