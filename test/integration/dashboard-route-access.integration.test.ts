@@ -79,6 +79,12 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /dashboard/assets/dashboard.js": { access: "public" },
 
   "GET /dashboard/": { access: "member" },
+  /** Every role changes its own password (#279); a policy failure changes nothing. */
+  "GET /dashboard/account/password": { access: "member" },
+  "POST /dashboard/account/password": {
+    access: "member",
+    body: { current: "x", password: "x", confirm: "x" },
+  },
   "GET /dashboard/send": { access: "member" },
   "POST /dashboard/send": {
     access: "member",

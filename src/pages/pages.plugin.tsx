@@ -4,6 +4,7 @@ import { assetResponse } from "./static-assets.tsx";
 import { withSessionGuard } from "./lib/session-guard.ts";
 import { authPages } from "./plugins/auth.plugin.tsx";
 import { homePages } from "./plugins/home.plugin.tsx";
+import { accountPages } from "./plugins/account.plugin.tsx";
 import { emailPages } from "./plugins/emails.plugin.tsx";
 import { apiKeyPages } from "./plugins/api-keys.plugin.tsx";
 import { invitationPages } from "./plugins/invitations.plugin.tsx";
@@ -33,6 +34,8 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - GET  /dashboard/assets/dashboard.css → the self-hosted stylesheet (public, #255)
  * - GET  /dashboard/assets/dashboard.js  → the dashboard script (public, #255)
  * - GET  /dashboard                 → home (stats overview)
+ * - GET  /dashboard/account/password → change password form (any role, #279)
+ * - POST /dashboard/account/password → change own password, sign out everywhere else (any role, #279)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -113,6 +116,7 @@ export const pagesPlugin = new Elysia({
   /* ─── Protected Routes (each with its own role guard) ─── */
 
   .use(homePages)
+  .use(accountPages)
   .use(emailPages)
   .use(apiKeyPages)
   .use(invitationPages)
