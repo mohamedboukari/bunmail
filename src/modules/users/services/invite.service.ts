@@ -105,6 +105,33 @@ function openInvite(): SQL | undefined {
 }
 
 /**
+ * Revokes the open (unspent, unrevoked) invitations `inviterId` issued,
+ * or only those granting `role` when it is given. Housekeeping for
+ * account management (#218) and a completed password reset (#277):
+ * acceptance re-checks the inviter anyway (`inviterStillGrants`).
+ *
+ * @returns how many invitations were revoked.
+ */
+export async function revokeInvitesIssuedBy(
+  executor: DbExecutor,
+  inviterId: string,
+  role?: InviteRole,
+): Promise<number> {
+  const rows = await executor
+    .update(userTokens)
+    .set({ revokedAt: sql`now()` })
+    .where(
+      and(
+        openInvite(),
+        eq(userTokens.invitedBy, inviterId),
+        role === undefined ? undefined : eq(userTokens.role, role),
+      ),
+    )
+    .returning({ id: userTokens.id });
+  return rows.length;
+}
+
+/**
  * A live invitation: open and not expired. Expiry is checked against the
  * database clock (`now()`), so replicas with skewed clocks agree.
  */
@@ -597,8 +624,9 @@ export async function acceptInvitation(
 
         const userId = generateId("usr");
         await tx.insert(users).values({ id: userId, email, name, role });
+        const credentialId = generateId("crd");
         await tx.insert(userCredentials).values({
-          id: generateId("crd"),
+          id: credentialId,
           userId,
           type: PASSWORD_CREDENTIAL,
           secretHash,
@@ -606,7 +634,13 @@ export async function acceptInvitation(
         await revokeOpenInvites(tx, email);
 
         const session = await createSession(
-          { userId, assurance: "password", authMethod: PASSWORD_CREDENTIAL, ...client },
+          {
+            userId,
+            assurance: "password",
+            authMethod: PASSWORD_CREDENTIAL,
+            credentialId,
+            ...client,
+          },
           tx,
         );
         return {

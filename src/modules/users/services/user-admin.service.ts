@@ -1,4 +1,5 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { config } from "../../../config.ts";
 import { db } from "../../../db/index.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -14,12 +15,15 @@ import {
   type AccountRefusal,
   type AccountSummary,
   type AttemptLimiter,
-  type DbExecutor,
-  type InviteRole,
+  type IssuedPasswordReset,
+  type IssuePasswordResetResult,
   type Tx,
   type UserRole,
 } from "../types/user.types.ts";
+import { revokeInvitesIssuedBy } from "./invite.service.ts";
 import { withOwnerLock } from "./owner.service.ts";
+import { buildPasswordResetUrl } from "./password-reset-policy.service.ts";
+import { replaceResetToken, revokeResetLinks } from "./password-reset.service.ts";
 import { verifyPassword } from "./password.service.ts";
 import { revokeAllUserSessions } from "./session.service.ts";
 import {
@@ -30,7 +34,8 @@ import {
 
 /**
  * Account management for the Users page (#218): change a role, deactivate,
- * reactivate, remove, transfer ownership. Who may do what lives in
+ * reactivate, remove, transfer ownership, issue a password reset link
+ * (#277). Who may do what lives in
  * `user-admin-policy.service.ts`; this module applies it to the live rows.
  *
  * Every action runs in one transaction under the `bunmail:owner` advisory
@@ -46,14 +51,22 @@ import {
  * Side effects run in the same transaction as the change:
  *
  * - deactivate and remove: every session of the target is deleted, and
- *   the open invitations the target issued are revoked;
+ *   the open invitations the target issued are revoked; deactivation also
+ *   revokes the open password reset links for the target and those the
+ *   target issued (#277: reactivation must not revive them);
  * - reactivate: every session of the target is deleted (a login that
  *   raced the deactivation cannot leave one behind);
- * - admin to member: the open invitations the target issued are revoked
- *   (a member can grant nothing);
+ * - admin to member: the open invitations and password reset links the
+ *   target issued are revoked (a member can grant or manage nothing);
+ *   member to admin: the target's own open reset links are revoked (#277);
+ * - password reset (#277): the account's earlier open reset links are
+ *   revoked and a new one is minted (`replaceResetToken`); sessions are
+ *   untouched until the link is used;
  * - ownership transfer: the previous owner's open `admin` invitations are
  *   revoked (an admin cannot grant admin), and every open owner setup link
- *   too; both accounts stay signed in. Its password check is throttled.
+ *   too, the open password reset links it issued for admins (#277: an
+ *   admin cannot manage an admin) and the new owner's own open reset links,
+ *   whoever issued them; both accounts stay signed in. Its password check is throttled.
  *
  * Revoking those invitations is housekeeping: acceptance re-checks that
  * the inviter is enabled and may still grant the role (#217), so an
@@ -91,6 +104,12 @@ interface AccountChange {
   setupLinksRevoked?: number;
   /** The target's email, redacted: only for a removal, whose row is gone. */
   email?: string;
+  /** Open password reset links revoked (#277). */
+  resetLinksRevoked?: number;
+  /** `user_tokens.id` of a new password reset link (#277); never the token. */
+  resetId?: string;
+  /** When that link expires, ISO 8601. */
+  expiresAt?: string;
 }
 
 /** Outcome of the locked part of an action. */
@@ -105,6 +124,7 @@ const APPLIED_MESSAGE: Record<AccountAction, string> = {
   reactivate: "Account reactivated",
   remove: "Account removed",
   transfer_ownership: "Ownership transferred",
+  reset_password: "Password reset link issued",
 };
 
 /** `active` or `disabled`, from the row. */
@@ -149,33 +169,6 @@ async function lockAccount(tx: Tx, id: string): Promise<AccountRow | null> {
     .limit(1)
     .for("no key update");
   return toAccountRow(row);
-}
-
-/**
- * Revokes the open (unspent, unrevoked) invitations `inviterId` issued,
- * or only those granting `role` when it is given.
- *
- * @returns how many invitations were revoked.
- */
-async function revokeInvitesIssuedBy(
-  executor: DbExecutor,
-  inviterId: string,
-  role?: InviteRole,
-): Promise<number> {
-  const rows = await executor
-    .update(userTokens)
-    .set({ revokedAt: sql`now()` })
-    .where(
-      and(
-        eq(userTokens.purpose, "invite"),
-        isNull(userTokens.usedAt),
-        isNull(userTokens.revokedAt),
-        eq(userTokens.invitedBy, inviterId),
-        role === undefined ? undefined : eq(userTokens.role, role),
-      ),
-    )
-    .returning({ id: userTokens.id });
-  return rows.length;
 }
 
 /** Logs a refused action at `warn`: IDs, roles and the reason only. */
@@ -277,8 +270,10 @@ export async function listAccounts(): Promise<AccountSummary[]> {
  * Changes an account's role between `member` and `admin` (owner only).
  * `rawRole` is the submitted value: `owner` or anything unknown is
  * `invalid_role`. Demoting an admin revokes the open invitations it
- * issued. The new role applies on the target's next request (the session
- * guard reads it every time).
+ * issued, and the password reset links it issued (#277); promoting a
+ * member revokes its own open reset links (#277). The new role
+ * applies on the target's next request (the session guard reads it every
+ * time).
  */
 export async function changeAccountRole(
   actorId: string,
@@ -300,9 +295,18 @@ export async function changeAccountRole(
         .update(users)
         .set({ role: newRole, updatedAt: sql`now()` })
         .where(eq(users.id, target.id));
-      const invitesRevoked =
-        newRole === "member" ? await revokeInvitesIssuedBy(tx, target.id) : 0;
-      return { oldRole: target.role, newRole, invitesRevoked };
+      if (newRole !== "member") {
+        /**
+         * Promotion: the account's open reset links are revoked (#277). One
+         * issued while it was a member would otherwise come back to life
+         * if it were demoted again within the hour.
+         */
+        const resetLinksRevoked = await revokeResetLinks(tx, { userId: target.id });
+        return { oldRole: target.role, newRole, invitesRevoked: 0, resetLinksRevoked };
+      }
+      const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
+      const resetLinksRevoked = await revokeResetLinks(tx, { issuedBy: target.id });
+      return { oldRole: target.role, newRole, invitesRevoked, resetLinksRevoked };
     },
   );
 }
@@ -310,7 +314,8 @@ export async function changeAccountRole(
 /**
  * Deactivates an account: `disabled_at` is set (no login, the session
  * guard rejects it), every session is deleted, and the open invitations
- * it issued are revoked.
+ * it issued are revoked, as are the open password reset links for it and
+ * those it issued (#277), so reactivating it revives none of them.
  */
 export async function deactivateAccount(
   actorId: string,
@@ -323,11 +328,15 @@ export async function deactivateAccount(
       .where(eq(users.id, target.id));
     const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
     const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
+    const resetLinksRevoked =
+      (await revokeResetLinks(tx, { userId: target.id })) +
+      (await revokeResetLinks(tx, { issuedBy: target.id }));
     return {
       oldStatus: statusOf(target),
       newStatus: "disabled",
       sessionsRevoked,
       invitesRevoked,
+      resetLinksRevoked,
     };
   });
 }
@@ -417,7 +426,10 @@ async function readAccount(id: string): Promise<AccountRow | null> {
  * 3. The password, checked outside the lock so it is never held during
  *    argon2id. Wrong (or no password credential): refused, nothing changes.
  * 4. Under the owner lock, the rules again on the locked live rows (a
- *    concurrent transfer or deactivation may have won), then: demote the
+ *    concurrent transfer or deactivation may have won), then: revoke the
+ *    open password reset links the owner issued for admins and every open
+ *    reset link of the target, whoever issued it (#277; they would
+ *    otherwise come back to life if ownership returned), demote the
  *    owner to admin, promote the target to owner (in that order, so the
  *    single-owner index holds at every statement), revoke the previous
  *    owner's open `admin` invitations, and revoke every open owner setup
@@ -482,6 +494,13 @@ export async function transferOwnership(
     actorId,
     targetId,
     async (tx, owner, newOwner) => {
+      /**
+       * Before the role changes (#277): the previous owner's links for
+       * admins, and every open link of the new owner whoever issued it.
+       */
+      const resetLinksRevoked =
+        (await revokeResetLinks(tx, { issuedBy: owner.id, targetRole: "admin" })) +
+        (await revokeResetLinks(tx, { userId: newOwner.id }));
       await tx
         .update(users)
         .set({ role: "admin", updatedAt: sql`now()` })
@@ -508,9 +527,70 @@ export async function transferOwnership(
         previousOwnerRole: "admin",
         invitesRevoked,
         setupLinksRevoked: setupLinks.length,
+        resetLinksRevoked,
       };
     },
   );
   if (result.ok) limiter.clear();
   return result;
+}
+
+/**
+ * Issues a one-time password reset link for an account (#277). The rules
+ * (`reset_password` in `accountActionRefusal`: the owner resets admins and
+ * members, an admin members; nobody their own account or the owner; not a
+ * deactivated account) are checked on the live rows under the owner lock,
+ * and the link is minted in the same transaction (`replaceResetToken`:
+ * earlier open links of the account are revoked, the new one lives one
+ * hour on the database clock, `invited_by` records the issuer).
+ *
+ * The link is built after commit, so a rolled-back token is never shown,
+ * and returned for the caller's one-time reveal: it is never emailed,
+ * stored, logged or put in a URL of ours. The account's sessions and
+ * password are untouched until the link is used.
+ */
+export async function issuePasswordReset(
+  actorId: string,
+  targetId: string,
+): Promise<IssuePasswordResetResult> {
+  /** Set by the locked step; a holder object, so TypeScript keeps its type. */
+  const minted: { reset?: IssuedPasswordReset } = {};
+  const result = await runAccountAction(
+    "reset_password",
+    actorId,
+    targetId,
+    async (tx, actor, target) => {
+      const reset = await replaceResetToken(tx, target.id, actor.id);
+      minted.reset = reset;
+      return {
+        resetId: reset.resetId,
+        resetLinksRevoked: reset.replaced,
+        expiresAt: reset.expiresAt.toISOString(),
+      };
+    },
+  );
+  if (!result.ok) return result;
+  const { reset } = minted;
+  /** Unreachable: an applied action ran the locked step. */
+  if (!reset) throw new Error("Password reset applied without a token");
+
+  const { url, usedFallback } = buildPasswordResetUrl(
+    config.appBaseUrl,
+    config.server.port,
+    reset.token,
+  );
+  if (usedFallback) {
+    logger.warn("Password reset link points at localhost", {
+      resetId: reset.resetId,
+      targetUserId: targetId,
+      hint: "set APP_BASE_URL: the link points at http://localhost",
+    });
+  }
+  return {
+    ok: true,
+    resetId: reset.resetId,
+    url,
+    usedFallback,
+    expiresAt: reset.expiresAt,
+  };
 }

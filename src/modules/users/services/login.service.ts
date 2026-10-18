@@ -100,5 +100,10 @@ export async function verifyPasswordLogin(
       .where(eq(userCredentials.id, credentialId)),
   );
 
-  return { ok: true, userId: row.userId, assurance: firstFactorAssurance() };
+  return {
+    ok: true,
+    userId: row.userId,
+    assurance: firstFactorAssurance(),
+    credentialId,
+  };
 }

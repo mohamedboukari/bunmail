@@ -227,8 +227,10 @@ bunmail/
 │   │   │   │                               invite.service.ts (create / resend / revoke / list / accept, per-address advisory lock),
 │   │   │   │                               invite-policy.service.ts (pure: who grants which role, name, expiry, URL),
 │   │   │   │                               invite-email.service.ts (invitation email from SYSTEM_MAIL_FROM, DKIM-signed),
-│   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer, owner lock),
-│   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons)
+│   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer / reset link, owner lock),
+│   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
+│   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
+│   │   │   │                               password-reset-policy.service.ts (pure: one-hour TTL, URL, #277)
 │   │   │   └── types/                    ← role / credential / assurance / purpose / invite value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
@@ -248,7 +250,7 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
-│       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation links) bound to kind, user and session (#132, #280, #217)
+│       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links) bound to kind, user and session (#132, #280, #217, #277)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
 │       ├── landing.plugin.tsx            ← Public landing page at /
@@ -259,7 +261,8 @@ bunmail/
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
 │       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
-│       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218)
+│       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
+│       │   ├── reset.tsx                 ← Password reset form + invalid-link page (standalone, #277)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -696,11 +699,11 @@ One row per login method: `password` now; `totp`, `passkey`, `oauth` reserved (C
 
 ### `sessions` (#214, #216)
 
-Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). Indexes on `user_id`, `expires_at` and `previous_token_hash`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
 
 ### `user_tokens` (#214)
 
-One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives; `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`. `user_tokens_invite_check` (#217, migration `0018`): an `invite` row must have an `email` and a `role` of `admin` or `member`, never `owner`. Invitation lifecycle: [docs/users.md](docs/users.md#invitations-217).
+One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives (for a `password_reset` row it records who issued the link, #277); `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`. `user_tokens_invite_check` (#217, migration `0018`): an `invite` row must have an `email` and a `role` of `admin` or `member`, never `owner`. Invitation lifecycle: [docs/users.md](docs/users.md#invitations-217).
 
 ### `__bunmail_migrations`
 
@@ -818,6 +821,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
 | GET    | /dashboard/invite?token=           | Invitation accept form (read-only, never spends the token, #217) | Invite token |
 | POST   | /dashboard/invite                  | Create the invited account, spend the token, sign in (#217) | Invite token |
+| GET    | /dashboard/reset?token=            | Password reset form (read-only, never spends the token, #277) | Reset token |
+| POST   | /dashboard/reset                   | Set the new password, spend the token, sign out everywhere, sign in (#277) | Reset token |
 | GET    | /dashboard                         | Stats overview          | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
@@ -847,6 +852,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/users/:id/reactivate    | Enable again (same rules) | Admin |
 | POST   | /dashboard/users/:id/remove        | Delete, confirmed by the account's email (same rules) | Admin |
 | POST   | /dashboard/users/:id/transfer      | Hand ownership to an active admin, confirmed by password (owner only, in the service) | Admin |
+| POST   | /dashboard/users/:id/reset-password | One-time reset link, shown once to the issuer (same rules as deactivate, active accounts only, #277) | Admin |
 | GET    | /dashboard/domains                 | Domains management      | Member |
 | POST   | /dashboard/domains                 | Add domain              | Admin |
 | POST   | /dashboard/domains/:id/delete      | Delete domain           | Admin |

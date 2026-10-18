@@ -62,7 +62,7 @@ The role is read on every request, so a role change applies on the next request.
 | Helper | Lets through | Used for |
 |---|---|---|
 | `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #219), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
-| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218; the owner-only and members-only rules are checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
 They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
@@ -104,7 +104,7 @@ Admins and the owner invite teammates at **Invitations** (`/dashboard/invitation
 
 - **Invite form:** an address and a role. The owner may grant `admin` or `member`, an admin only `member` (the select lists only those). The service re-checks the role against the signed-in account's role: a crafted `role=owner`, or an admin posting `role=admin`, gets `403`. An address that already has an account is refused with an error flash; inviting a pending address replaces its link, except that an admin cannot replace (or downgrade) a pending admin invitation from the owner: that gets the error flash `A pending invitation from a higher role exists for this address.` and nothing changes.
 - **Pending list:** email, role, invited by, created, expires, with **Resend** (a new link for the same address and role; the old one stops working) and **Revoke**. Rows of a role the viewer cannot grant (admin invitations, for an admin) show "Owner only".
-- **Email or one-time link:** when `SYSTEM_MAIL_FROM` is set and its domain is registered and DKIM-verified, the invitation is emailed (`Invitation sent by email.`). Otherwise, or when the send fails, the flash says why (`no system sender is configured`, `the system sender's domain is not registered or not DKIM-verified`, `sending failed`, or `APP_BASE_URL is not set, so no usable link could be emailed`: a link that falls back to `localhost` is never emailed) and the accept link is shown **once**, through the one-time reveal store (kind `invite_link`, bound to the inviter's user and session, 60 seconds, #280). The link never appears in a URL, a flash message or a log. The Invitations, API Keys and Webhooks pages, which can show a one-time secret, are sent with `Cache-Control: no-store`.
+- **Email or one-time link:** when `SYSTEM_MAIL_FROM` is set and its domain is registered and DKIM-verified, the invitation is emailed (`Invitation sent by email.`). Otherwise, or when the send fails, the flash says why (`no system sender is configured`, `the system sender's domain is not registered or not DKIM-verified`, `sending failed`, or `APP_BASE_URL is not set, so no usable link could be emailed`: a link that falls back to `localhost` is never emailed) and the accept link is shown **once**, through the one-time reveal store (kind `invite_link`, bound to the inviter's user and session, 60 seconds, #280). The link never appears in a URL, a flash message or a log. The Invitations, Users, API Keys and Webhooks pages, which can show a one-time secret, are sent with `Cache-Control: no-store`.
 
 **Accepting** (public, registered before the session guard like owner setup):
 
@@ -129,8 +129,19 @@ Admins and the owner manage accounts at **Users** (`/dashboard/users`). Internal
 | Reactivate | `POST /dashboard/users/:id/reactivate` | same as deactivate | none |
 | Remove | `POST /dashboard/users/:id/remove` (`confirm`) | same as deactivate | type the account's email |
 | Make owner (transfer) | `POST /dashboard/users/:id/transfer` (`password`) | owner, to an active admin | the owner's current password, throttled like login (per account and per client IP, `DASHBOARD_LOGIN_RATE_LIMIT_*`) |
+| Reset password (#277) | `POST /dashboard/users/:id/reset-password` | same as deactivate, active accounts only | browser confirm; shows a one-time link |
 
-Nobody acts on their own account, and the owner is never demoted, deactivated or removed. A refusal that no button leads to (own account, the owner, a role too low, an unknown role) gets the `403` page; a race or a typo (already changed, wrong confirmation, wrong password, target no longer eligible, account gone) goes back to the page with an error flash, and so does an exhausted transfer budget (`Too many failed attempts, try again later.`, no password check runs). Reactivation also signs the account out of any session left over from a login that raced its deactivation. Every outcome is logged.
+Nobody acts on their own account, and the owner is never demoted, deactivated, removed or given a reset link (the owner uses `reset-owner`). A refusal that no button leads to (own account, the owner, a role too low, an unknown role) gets the `403` page; a race or a typo (already changed, wrong confirmation, wrong password, target no longer eligible, account gone) goes back to the page with an error flash, and so does an exhausted transfer budget (`Too many failed attempts, try again later.`, no password check runs). Reactivation also signs the account out of any session left over from a login that raced its deactivation. Every outcome is logged.
+
+### Password reset (#277)
+
+**Reset password** on the Users page issues a one-time link for the account and shows it **once** to the issuer, through the one-time reveal store (kind `password_reset_link`, bound to the issuer's user and session, 60 seconds, #280): copy it and hand it to the account holder privately. It is never emailed, and never in a URL, a flash message or a log. It works once, for one hour (database clock); issuing a new one kills the previous one. A deactivated account must be reactivated first (error flash `Reactivate the account before resetting its password.`). When `APP_BASE_URL` is unset the flash says the link points at localhost. Internals: [docs/users.md](users.md#password-resets-277).
+
+**Completing** (public, registered before the session guard like the invitation accept page, with the same auth-page headers):
+
+1. `GET /dashboard/reset?token=...` only reads the token. Missing, malformed, unknown, expired, used and revoked tokens, and links whose account was since disabled, or whose issuer was since deleted, disabled or demoted (or no longer manages the account's role), all get the same `400` "This password reset link is not valid" page, which never echoes the token. A live token renders the form (`200`): the account's address (escaped), a hidden token field, a new password with confirmation (15 to 256 characters, the owner setup policy).
+2. `POST /dashboard/reset` (form fields `token`, `password`, `confirm`) checks same-origin first (`403` and a `warn` log `Password reset POST rejected: cross-origin (possible CSRF)`), then the token (the same `400` page, logged only at `debug`), then the policy (a problem re-renders the form with `200`, no hashing, no write), then, in one transaction, spends the token, replaces the password, signs the account out of every session, revokes its other open tokens and the invitations and reset links it issued (its pending invitations must be sent again), and opens a new session. A login that checked the old password while the reset ran gets the generic invalid email or password answer.
+3. On success the session the browser already presented is revoked (as at login), the new session's cookie is set and the browser goes to `/dashboard`. Logged at `warn` as `Password reset completed`.
 
 **Sidebar by role.** Members do not see links to admin-only pages: the API Keys and Users entries (and the Invitations link on the home page) are shown to admins and the owner only. The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
 
@@ -162,6 +173,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/login             | Email + password login form (standalone, no nav, #216)            |
 | GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
 | GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
+| GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
 | GET /dashboard/send              | Compose & send emails from dashboard                              |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
@@ -169,7 +181,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
 | GET /dashboard/api-keys          | API keys list + create form                                       |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
-| GET /dashboard/users             | Every account, role and status, with the actions the viewer may take (admin, #218) |
+| GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
 | GET /dashboard/domains           | Domains list + add form                                           |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
 | GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
@@ -201,10 +213,11 @@ src/pages/
 │   └── base.tsx              ← HTML shell, Tailwind, sidebar nav (admin-only links by viewer role)
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
-│   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx
+│   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx and reset.tsx
 │   ├── invite.tsx            ← Invitation accept form, invalid-link and account-exists pages (#217)
 │   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
-│   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218)
+│   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
+│   ├── reset.tsx             ← Password reset form and invalid-link page (#277)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -271,6 +284,8 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Deactivate / reactivate an account → `POST /dashboard/users/:id/deactivate`, `POST /dashboard/users/:id/reactivate`
 - Remove an account → `POST /dashboard/users/:id/remove` (form field: `confirm`, the account's email)
 - Transfer ownership → `POST /dashboard/users/:id/transfer` (form field: `password`, the owner's)
+- Issue a password reset link → `POST /dashboard/users/:id/reset-password`
+- Reset a password → `POST /dashboard/reset` (public; form fields: `token`, `password`, `confirm`)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)

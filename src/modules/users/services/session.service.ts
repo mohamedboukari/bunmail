@@ -72,6 +72,12 @@ function slidingExpiry(): SQL {
  * returns the raw token for the cookie. `executor` lets owner setup run
  * this inside its own transaction, after it deleted the owner's old
  * sessions. A fresh session starts unrotated (`rotated_at` null).
+ *
+ * `input.credentialId` binds the session to the credential that was
+ * checked (#277): when that credential has been replaced meanwhile (a
+ * password reset racing a login), the insert fails with a foreign-key
+ * violation (`UserStoreError`, SQLSTATE `23503`) instead of opening a
+ * session on the old password.
  */
 export async function createSession(
   input: NewSessionInput,
@@ -86,6 +92,7 @@ export async function createSession(
       tokenHash: hash,
       assurance: input.assurance,
       authMethod: input.authMethod,
+      credentialId: input.credentialId ?? null,
       expiresAt: sql`now() + ${seconds(SESSION_IDLE_SECONDS)}`,
       ip: sessionIp(input.ip),
       userAgent: clampUserAgent(input.userAgent),

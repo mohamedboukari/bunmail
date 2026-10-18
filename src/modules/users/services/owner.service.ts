@@ -383,8 +383,9 @@ export async function completeOwnerSetup(
           eq(userCredentials.type, PASSWORD_CREDENTIAL),
         ),
       );
+    const credentialId = generateId("crd");
     await tx.insert(userCredentials).values({
-      id: generateId("crd"),
+      id: credentialId,
       userId,
       type: PASSWORD_CREDENTIAL,
       secretHash,
@@ -403,7 +404,13 @@ export async function completeOwnerSetup(
 
     await revokeAllUserSessions(userId, tx);
     const { token: sessionToken } = await createSession(
-      { userId, assurance: "password", authMethod: PASSWORD_CREDENTIAL, ...client },
+      {
+        userId,
+        assurance: "password",
+        authMethod: PASSWORD_CREDENTIAL,
+        credentialId,
+        ...client,
+      },
       tx,
     );
 
