@@ -36,6 +36,12 @@ import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
 import { LoginPage } from "../../src/pages/routes/login.tsx";
 import { LandingPage } from "../../src/pages/routes/landing.tsx";
 import { OwnerSetupPage, OwnerSetupInvalidPage } from "../../src/pages/routes/setup.tsx";
+import {
+  InviteAcceptPage,
+  InviteAccountExistsPage,
+  InviteInvalidPage,
+} from "../../src/pages/routes/invite.tsx";
+import { InvitationsPage } from "../../src/pages/routes/invitations.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -446,6 +452,62 @@ describe("Dashboard page render smoke tests", () => {
       expect(html).toContain("src/db/reset-owner.ts");
       expect(html).toContain('<meta name="referrer" content="strict-origin"');
       expect(html).not.toContain("<form");
+    });
+  });
+
+  describe("Invitation pages (#217)", () => {
+    const token = "Q".repeat(20) + "b-c_d".repeat(4) + "xyz";
+
+    test("InviteAcceptPage: token only in the hidden input, hostile values escaped", async () => {
+      const html = await InviteAcceptPage({
+        token,
+        email: "<script>alert(1)</script>@example.com",
+        role: "member",
+        name: '"><img src=x onerror=alert(3)>',
+        error: "<img src=x onerror=alert(2)>",
+      });
+      expect(html).toContain('action="/dashboard/invite"');
+      expect(html).toContain(`<input type="hidden" name="token" value="${token}"`);
+      expect(html.split(token).length - 1).toBe(1);
+      expect(html).toContain('<meta name="referrer" content="strict-origin"');
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;@example.com");
+      expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+      /** Attribute escaping encodes the quote, so the value cannot break out. */
+      expect(html).toContain('value="&#34;><img src=x onerror=alert(3)>"');
+      expect(html).not.toContain('value=""><img');
+    });
+
+    test("InviteInvalidPage and InviteAccountExistsPage carry no form", async () => {
+      const invalid = await InviteInvalidPage();
+      expect(invalid).toContain("This invitation link is not valid");
+      expect(invalid).not.toContain("<form");
+      const exists = await InviteAccountExistsPage();
+      expect(exists).toContain('href="/dashboard/login"');
+      expect(exists).not.toContain("<form");
+    });
+
+    test("InvitationsPage escapes stored values and the revealed link", async () => {
+      const html = await InvitationsPage({
+        invitations: [
+          {
+            id: "utk_1",
+            email: "<b>x</b>@example.com",
+            role: "admin",
+            invitedBy: "<i>Ann</i>",
+            createdAt: new Date(),
+            expiresAt: new Date(),
+          },
+        ],
+        grantable: ["member"],
+        revealedLink: "https://mail.example.com/dashboard/invite?token=<x>",
+      });
+      expect(html).not.toContain("<b>x</b>");
+      expect(html).not.toContain("<i>Ann</i>");
+      expect(html).toContain("token=&lt;x&gt;");
+      /** An admin invitation shown to an admin: no Resend/Revoke for it. */
+      expect(html).not.toContain("/dashboard/invitations/utk_1/revoke");
+      expect(html).toContain("Owner only");
     });
   });
 });

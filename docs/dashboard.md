@@ -11,6 +11,8 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 | DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
 | DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout |
 | DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes) |
+| INVITE_EXPIRY_DAYS                 | No       | `7`           | Days an invitation link stays valid (#217): a whole number from 1 to 90; anything else refuses to boot. |
+| SYSTEM_MAIL_FROM                   | No       | _(empty)_     | Sender of invitation emails (#217): one bare address on a domain registered and DKIM-verified in BunMail; malformed refuses to boot. Unset, or its domain unusable: the inviter gets the link once on the Invitations page instead. See [Invitations](#invitations-217). |
 
 `DASHBOARD_PASSWORD` and `SESSION_SECRET` were removed by account login (#216). A value left in `.env` does nothing except one boot warning: `Dashboard auth env vars are no longer used since #216, remove from .env`.
 
@@ -32,7 +34,7 @@ Account login (#216): email and password against the `users` and `user_credentia
 
 **Lifetimes:** a session expires after 24 hours without use (idle timeout) and 7 days after login at the latest (absolute cap). Both are code constants in `session-policy.service.ts`, not env vars. All expiry math runs on the Postgres clock, so replicas agree.
 
-**Guard** (every route registered after the public login, logout and setup routes), in order:
+**Guard** (every route registered after the public login, logout, setup and invitation accept routes), in order:
 
 1. No cookie: `302` to `/dashboard/login`.
 2. A value that is not a 43-character token, including a pre-#216 `<timestamp>.<hmac>` cookie: cleared and `302`, with no database query.
@@ -60,12 +62,12 @@ The role is read on every request, so a role change applies on the next request.
 | Helper | Lets through | Used for |
 |---|---|---|
 | `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #218), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
-| `adminGuard` | admins and the owner | every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
-| `ownerGuard` | the owner | no route yet; account management (#217, #218) will use it |
+| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `ownerGuard` | the owner | no route yet; role management (#218) will use it |
 
 They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
 
-A denial answers `403` with a small "Forbidden" page in the dashboard layout (it names the required and the current role, nothing else) and logs `warn` `Dashboard access denied: role too low` with `userId`, `role`, `required`, `method` and `path` (`Dashboard access denied: session assurance too low` with `userId`, `sessionId`, `assurance`, `required`, `method`, `path` for `requireAssurance`). The navigation is not filtered by role yet: a member still sees links to admin pages and gets the 403 page there.
+A denial answers `403` with a small "Forbidden" page in the dashboard layout (it names the required and the current role, nothing else) and logs `warn` `Dashboard access denied: role too low` with `userId`, `role`, `required`, `method` and `path` (`Dashboard access denied: session assurance too low` with `userId`, `sessionId`, `assurance`, `required`, `method`, `path` for `requireAssurance`). The navigation is not filtered by role yet: a member still sees links to admin pages and gets the 403 page there. The Invitations page has no sidebar entry for that reason (the shared sidebar does not know the viewer's role); admins and the owner get an **Invite teammates** link on the dashboard home instead.
 
 Deny by default: `test/integration/dashboard-route-access.integration.test.ts` reads every route from the plugin and fails when one is missing from its table, when a protected route does not carry exactly the role guard its table entry names, or when a request gets the wrong answer (no cookie: `302` to the login page; a role too low: `403`; a role high enough: neither). A new dashboard route needs a role guard and a table entry.
 
@@ -96,6 +98,23 @@ Every response from the setup handlers, including the `403` and `302` (but not a
 
 After setup the owner signs in at `/dashboard/login` with `BUNMAIL_OWNER_EMAIL` and that password. `reset-owner` signs the owner out of every session as soon as it runs, and completing its link does so again. Internals: [docs/users.md](users.md#owner-bootstrap-215).
 
+### Invitations (#217)
+
+Admins and the owner invite teammates at **Invitations** (`/dashboard/invitations`, linked from the dashboard home). Internals and the full rules: [docs/users.md](users.md#invitations-217).
+
+- **Invite form:** an address and a role. The owner may grant `admin` or `member`, an admin only `member` (the select lists only those). The service re-checks the role against the signed-in account's role: a crafted `role=owner`, or an admin posting `role=admin`, gets `403`. An address that already has an account is refused with an error flash; inviting a pending address replaces its link, except that an admin cannot replace (or downgrade) a pending admin invitation from the owner: that gets the error flash `A pending invitation from a higher role exists for this address.` and nothing changes.
+- **Pending list:** email, role, invited by, created, expires, with **Resend** (a new link for the same address and role; the old one stops working) and **Revoke**. Rows of a role the viewer cannot grant (admin invitations, for an admin) show "Owner only".
+- **Email or one-time link:** when `SYSTEM_MAIL_FROM` is set and its domain is registered and DKIM-verified, the invitation is emailed (`Invitation sent by email.`). Otherwise, or when the send fails, the flash says why (`no system sender is configured`, `the system sender's domain is not registered or not DKIM-verified`, `sending failed`, or `APP_BASE_URL is not set, so no usable link could be emailed`: a link that falls back to `localhost` is never emailed) and the accept link is shown **once**, through the one-time reveal store (kind `invite_link`, bound to the inviter's user and session, 60 seconds, #280). The link never appears in a URL, a flash message or a log. The Invitations, API Keys and Webhooks pages, which can show a one-time secret, are sent with `Cache-Control: no-store`.
+
+**Accepting** (public, registered before the session guard like owner setup):
+
+1. `GET /dashboard/invite?token=...` only reads the token. Missing, malformed, unknown, expired, used and revoked tokens, and invitations whose inviter was since deleted, disabled or demoted below the role it granted, all get the same `400` "This invitation link is not valid" page, which never echoes the token. A live token renders the form (`200`): the invited address and role, a hidden token field, a name (1 to 100 characters, no control or invisible formatting characters) and a password with confirmation (15 to 256 characters, the owner setup policy).
+2. `POST /dashboard/invite` (form fields `token`, `name`, `password`, `confirm`) checks same-origin first (`403` and a `warn` log `Invitation accept POST rejected: cross-origin (possible CSRF)`), then the token (the same `400` page), then the policy (a problem re-renders the form with `200`, no hashing, no write), then creates the account, its password and its session in one transaction and spends the token.
+3. When an account took the address after the invitation was sent, the answer is `409` with a page pointing at the login page, and the address's invitations are revoked.
+4. On success the session the browser already presented is revoked (as at login), the new session's cookie is set (same attributes and 7-day `Max-Age` as a login) and the browser goes to `/dashboard`. Logged at `warn` as `Invitation accepted`.
+
+Every response from the accept handlers sends the same auth-page headers as owner setup (`Cache-Control: no-store`, `Referrer-Policy: strict-origin` plus the meta tag, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`).
+
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
@@ -123,12 +142,14 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 |----------------------------------|-------------------------------------------------------------------|
 | GET /dashboard/login             | Email + password login form (standalone, no nav, #216)            |
 | GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
+| GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
 | GET /dashboard/send              | Compose & send emails from dashboard                              |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
 | GET /dashboard/api-keys          | API keys list + create form                                       |
+| GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
 | GET /dashboard/domains           | Domains list + add form                                           |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
 | GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
@@ -152,14 +173,16 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 src/pages/
 ├── pages.plugin.tsx          ← Plugin with all routes + session guard
 ├── guards.tsx                ← Role and assurance checks per route (#222)
-├── reveal-store.ts           ← One-time secret reveal, bound to kind, user and session (#132, #280)
+├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation links), bound to kind, user and session (#132, #280, #217)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── layouts/
 │   └── base.tsx              ← HTML shell, Tailwind, sidebar nav
 ├── routes/
 │   ├── login.tsx             ← Email + password login page (#216)
-│   ├── setup.tsx             ← Owner setup form and invalid-link page (#215)
+│   ├── setup.tsx             ← Owner setup form and invalid-link page (#215); its shell is shared with invite.tsx
+│   ├── invite.tsx            ← Invitation accept form, invalid-link and account-exists pages (#217)
+│   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
@@ -219,6 +242,10 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Send email → `POST /dashboard/send`
 - Create API key → `POST /dashboard/api-keys`
 - Revoke API key → `POST /dashboard/api-keys/:id/revoke`
+- Invite an address → `POST /dashboard/invitations` (form fields: `email`, `role`)
+- Revoke invitation → `POST /dashboard/invitations/:id/revoke`
+- Resend invitation → `POST /dashboard/invitations/:id/resend`
+- Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)
 - Verify domain DNS → `POST /dashboard/domains/:id/verify`

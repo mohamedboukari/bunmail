@@ -22,10 +22,11 @@ export const users = pgTable(
     email: varchar("email", { length: 255 }).notNull().unique(),
 
     /**
-     * When the address was confirmed: set by invite acceptance (#217) and
-     * future email verification. Owner setup (#215) leaves it null: its
-     * link arrives through server logs, which does not prove control of
-     * the mailbox.
+     * When the address was confirmed: set by future email verification.
+     * Owner setup (#215) leaves it null: its link arrives through server
+     * logs, which does not prove control of the mailbox. Invite acceptance
+     * (#217) leaves it null too: the link may have been shared by hand
+     * when no system sender is configured.
      */
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
 

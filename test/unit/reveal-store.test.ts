@@ -27,6 +27,8 @@ describe("reveal store", () => {
 
   test("another user, another session of the same user, or the wrong page get nothing and do not burn it", () => {
     const warn = spyOn(logger, "warn").mockImplementation(() => {});
+    /** Start from zero: a spy left on logger.warn by another file keeps its history. */
+    warn.mockClear();
     try {
       const token = stashRevealSecret("whsec_value", "webhook_secret", ANN);
       expect(consumeRevealSecret(token, "webhook_secret", BOB)).toBeUndefined();

@@ -2,7 +2,7 @@
 
 Dashboard user accounts (#214): the first piece of the invite-only accounts epic (#225), which replaces the shared `DASHBOARD_PASSWORD` with real accounts, roles and revocable sessions.
 
-#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) and role management (#218) build on them next.
+#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Role management (#218) builds on them next.
 
 ## Design
 
@@ -90,20 +90,22 @@ One-time tokens: the owner setup link, invitations, password resets.
 | email      | varchar(255)   | nullable, lower-cased: the invited address                      |
 | purpose    | varchar(20)    | NOT NULL, `CHECK IN (owner_setup, invite, password_reset)`      |
 | token_hash | varchar(64)    | NOT NULL, UNIQUE                                                |
-| role       | varchar(10)    | nullable, `CHECK IN (owner, admin, member)`: role an invite grants |
+| role       | varchar(10)    | nullable, `CHECK IN (owner, admin, member)`: role an invite grants (`admin` or `member` only, see below) |
 | invited_by | varchar(36)    | nullable, FK `users` ON DELETE SET NULL: invite history survives |
 | expires_at | timestamptz    | NOT NULL                                                        |
 | used_at    | timestamptz    | nullable: spent                                                 |
 | revoked_at | timestamptz    | nullable: withdrawn                                             |
 | created_at | timestamptz    | NOT NULL, default `now()`                                       |
 
-Checks: `user_tokens_target_check` (`user_id` or `email` must be set). Index: `user_tokens_email_purpose_idx` (re-inviting an address replaces its pending invitation).
+Checks: `user_tokens_target_check` (`user_id` or `email` must be set); `user_tokens_invite_check` (#217): a row with `purpose = 'invite'` must have an `email` and a `role` of `admin` or `member`, so no code path and no hand-written row can mint an owner invitation (`role IS NOT NULL` is spelled out, since a NULL `IN (...)` would pass a CHECK). Index: `user_tokens_email_purpose_idx` (re-inviting an address replaces its pending invitation).
 
 ## Types
 
 `src/modules/users/types/user.types.ts` exports the value sets as constants and unions: `USER_ROLES` / `UserRole`, `CREDENTIAL_TYPES` / `CredentialType`, `SESSION_ASSURANCES` / `SessionAssurance`, `TOKEN_PURPOSES` / `TokenPurpose`. The same constants render the `CHECK` constraints (`literals()`), and an integration test reads the live constraint definitions back from Postgres and checks every value is present, so a constant changed without `bun run db:generate` fails the test instead of silently diverging.
 
 For the owner bootstrap (#215) it also exports `OwnerSetupLink` (`{ token, email, expiresAt }`: a freshly minted link, the raw token shown once and never stored) and `OwnerBootstrapResult` (the discriminated union `bootstrapOwner` returns, see below).
+
+For invitations (#217): `INVITE_ROLES` / `InviteRole` (`admin`, `member`) with `isInviteRole`, `InviteActor` (`{ id, role }` from `auth`), `InviteRefusal` (`invalid_email`, `role_not_allowed`, `account_exists`, `not_found`), `InviteMailFailure` / `InviteMailOutcome`, `IssuedInvitation` (`{ invitationId, token, email, role, expiresAt, replaced }`, the raw token never stored), `IssueInvitationResult`, `PendingInvitation`, `InviteTarget`, `InviteAcceptance` and `AcceptInvitationResult`.
 
 For login and sessions (#216): `Tx` (a `db.transaction` handle) and `DbExecutor` (`db` or a `Tx`, so a caller can run a session write inside its own transaction), `SessionClient` (`{ ip, userAgent }`), `NewSessionInput`, `CreatedSession` (`{ sessionId, token }`), `ActiveSession` (`{ sessionId, userId, matched: "current" | "previous", rotationDue, graceOver }`), `RotatedSession` (`{ token, maxAgeSec }`), `LoginFailureReason`, `LoginResult` and `CompletedOwnerSetup` (`{ userId, email, sessionToken }`).
 
@@ -151,9 +153,23 @@ The dashboard login is an account login: email and password against `user_creden
 
 No JavaScript secret comparison is left on these paths: the presented token is hashed and looked up through a unique index, and argon2id verification is constant-time inside Bun. That is why the pre-#216 `crypto.timingSafeEqual` check (and its spy test) is gone.
 
+## Invitations (#217)
+
+Every account other than the owner arrives by invitation. An admin or the owner opens **Invitations** in the dashboard (`/dashboard/invitations`, linked from the dashboard home for admins and the owner), enters an address and a role, and BunMail emails a one-time accept link or, when it cannot, shows the link once for the inviter to share.
+
+**Who may invite whom.** The owner invites admins and members; an admin invites members; a member invites nobody; nobody invites an owner. `canGrantRole(actorRole, role)` decides it in the service from the signed-in account's role (`auth.user.role`, read with the session on every request), so a crafted form (`role=owner`, or an admin posting `role=admin`) is refused with `403` and logged (`Invitation refused`, `reason: role_not_allowed`); the routes carry `adminGuard` as well. The same rule covers revoke and resend: an admin cannot revoke or resend an admin invitation (the page shows "Owner only" for those rows). The database's `user_tokens_invite_check` refuses an owner invitation even from a bug.
+
+**Creating.** The address is trimmed, lower-cased and checked with `isEmailAddress`; control and format characters (Unicode `Cc`, `Cf`: bidi overrides, zero-width) are refused in the invite policy. An address that already has an account (enabled or not) is refused (`account_exists`). Under `pg_advisory_xact_lock(hashtext('bunmail:invite:' || email))`, a live invitation for the address whose role the actor cannot grant (an owner's admin invitation, seen by an admin) is never replaced or downgraded: the request is refused (`pending_higher_role`) and nothing changes. Otherwise, in the same transaction, every open invitation for the address is revoked and a new `user_tokens` row is inserted (`purpose = 'invite'`, `email`, `role`, `invited_by` = the inviter, only `hashToken(token)` stored, `expires_at` = `now() + interval 'N days'` on the database clock with N = `INVITE_EXPIRY_DAYS`, default 7, at most 90, inlined as a literal and read back with `RETURNING` for the email and the page). Re-inviting a pending address therefore replaces its link, and concurrent invitations of one address leave exactly one live link. Logged at `info` as `Invitation created` (`invitationId`, `invitedBy`, `role`, `email` through `redactEmail`, `replaced`, `expiresAt`).
+
+**The email.** After commit, `sendInviteEmail` sends `You're invited to BunMail` from `SYSTEM_MAIL_FROM` with `sendMail` (out of band, no `emails` row), DKIM-signed with that domain's key (`resolveDomainDkim`, shared with inbound notifications). Plain text and simple escaped HTML: the inviter's name (or email), the role, the expiry and the accept link `<APP_BASE_URL or http://localhost:PORT>/dashboard/invite?token=...`, the only link (no tracking). It is sent only when `SYSTEM_MAIL_FROM` is set, its domain is registered in BunMail with `dkim_verified`, and the key decrypts; it counts as sent when an MX group reached `sent`. Logged as `Invitation email sent` (`info`) or `Invitation email not sent` (`warn`, with `reason`: `not_configured`, `sender_unavailable`, `send_failed` or `no_base_url`; a thrown error is logged as a fixed message with its `errorName` and, for a users-store error, its `sqlState`, never its raw message, and the domain lookup runs through `withSanitizedErrors`). An unsent email never fails the invitation: the link is stashed in the one-time reveal store (kind `invite_link`, bound to the inviter's user and session, 60 seconds, #280) and the Invitations page shows it once, with a flash saying why the email was not sent. The link never appears in a URL, a flash message or a log. When `APP_BASE_URL` is unset or not an `http(s)://` URL the link falls back to `http://localhost:PORT`, which is useless to an invitee: it is never emailed, and the inviter gets it once with the reason `APP_BASE_URL is not set, so no usable link could be emailed` (`reason: no_base_url`).
+
+**Revoke and resend.** Revoke sets `revoked_at` on a pending invitation (conditional on it still being open). Resend, under the address lock, revokes the pending invitation and mints a new one for the same address and role (`invited_by` becomes whoever resent it), then sends or reveals it like a new one. Logged as `Invitation revoked` / `Invitation resent` (`previousInvitationId`).
+
+**Accepting.** `GET /dashboard/invite?token=` and `POST /dashboard/invite` are public routes registered before the session guard, mirroring owner setup: auth-page headers (`no-store`, `Referrer-Policy: strict-origin`, `nosniff`, `DENY`), same-origin first on the POST, then the token shape, an indexed lookup, the policy (name 1 to 100 characters with no control or format characters; password 15 to 256 characters and confirmed, the owner setup policy), and only then argon2id. An invitation counts as live only while its inviter still could send it: `invited_by` must name an existing, enabled account whose current role grants the invitation's role (the owner any, an admin `member`), so an invitation from a deleted (`invited_by` NULL), disabled or demoted inviter is dead. Every dead link (missing, malformed, unknown, expired, used, revoked, inviter no longer allowed) gets the same `400` page; `GET` never spends the token. In one transaction under the address lock: refuse when an account took the address meanwhile (`409` page, the open invitations revoked); spend the token with a conditional `UPDATE ... SET used_at = now()` on the live predicate (database clock) plus the inviter re-check, so an inviter disabled or demoted after the form was opened still makes the spend fail; insert the user with the invited role and name; insert the `password` credential (hashed before the transaction); revoke every other open invitation for the address; open the session. A unique violation on `users.email` from a writer outside the lock is reported as `account_exists` too. The route then revokes the session the browser presented, if any (like login), sets the new cookie and redirects to `/dashboard`. Logged at `warn` as `Invitation accepted` (`invitationId`, `userId`, `invitedBy`, `role`, redacted `email`, `sessionId`, `ip`). `email_verified_at` stays null: a hand-shared link proves nothing about the mailbox.
+
 ## Service helpers
 
-`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts` and `session-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts` and `login.service.ts` touch the database, all through `withSanitizedErrors`.
+`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts` and `invite-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts` and `invite.service.ts` touch the database, all through `withSanitizedErrors`; `invite-email.service.ts` sends mail.
 
 ### password.service.ts
 
@@ -173,7 +189,30 @@ No JavaScript secret comparison is left on these paths: the presented token is h
 - `isWellFormedSetupToken(token): boolean`: delegates to `isWellFormedToken`. Checked before any database call.
 - `SETUP_PASSWORD_MIN_LENGTH` (15) and `SETUP_PASSWORD_MAX_LENGTH` (256): also the form's `minlength` / `maxlength`.
 - `setupPasswordProblem(password, confirm): string | null`: 15 to 256 characters, counted in code points rather than UTF-16 units (15 per NIST SP 800-63B-4 for a single factor; 256 caps the argon2 input), and `confirm` must match; `null` when acceptable. The message never echoes the input.
-- `buildSetupUrl(appBaseUrl, port, token): { url, usedFallback }`: uses `APP_BASE_URL` (trimmed, trailing slashes stripped) when it starts with `http://` or `https://`, otherwise `http://localhost:PORT` (and `usedFallback` lets the caller add a hint to set `APP_BASE_URL`).
+- `buildDashboardUrl(appBaseUrl, port, path): { url, usedFallback }`: uses `APP_BASE_URL` (trimmed, trailing slashes stripped) when it starts with `http://` or `https://`, otherwise `http://localhost:PORT` (and `usedFallback` lets the caller add a hint to set `APP_BASE_URL`). Shared by the setup and invitation links.
+- `buildSetupUrl(appBaseUrl, port, token): { url, usedFallback }`: `buildDashboardUrl` for `/dashboard/setup?token=...`.
+
+### invite-policy.service.ts
+
+- `grantableRoles(actorRole)` and `canGrantRole(actorRole, role)`: owner grants `admin` and `member`, admin grants `member`, member nothing; never `owner`.
+- `normalizeInviteEmail(email)` (trimmed, lower-cased) and `isInvitableEmail(email)` (`isEmailAddress`, plus no `Cc`/`Cf` characters).
+- `INVITE_NAME_MAX_LENGTH` (100) and `inviteNameProblem(name)`: 1 to 100 code points, no control or format characters (`Cc`, `Cf`); the message never echoes the input.
+- `buildInviteUrl(appBaseUrl, port, token)`: `buildDashboardUrl` for `/dashboard/invite?token=...`.
+
+### invite-email.service.ts
+
+- `buildInviteEmail({ url, inviter, role, expiresAt }): { subject, text, html }`: pure; every dynamic value escaped in the HTML part and flattened to one line in the text part; exactly one link.
+- `sendInviteEmail(input, deps?): Promise<InviteMailOutcome>`: the send decision above; never throws. `deps` (`from`, `findDomain`, `resolveDkim`, `send`, `hostname`) defaults to the real ones and is injected by the unit tests.
+
+### invite.service.ts
+
+Every write for an address runs in a transaction under its `bunmail:invite:<email>` advisory lock. Never logs a token, its hash or the link.
+
+- `createInvitation(actor, email, role): Promise<IssueInvitationResult>`: checks, replaces the address's open invitations (never a higher-role one), sends or reports the email. `{ ok: true, invitation, url, delivery }` or `{ ok: false, reason }`.
+- `resendInvitation(actor, id)`, `revokeInvitation(actor, id)`: as above, for a pending invitation of a role the actor may grant.
+- `listPendingInvitations(): Promise<PendingInvitation[]>`: open and unexpired, newest first, with the inviter's name or email.
+- `findLiveInvitation(token): Promise<InviteTarget | null>`: read-only lookup for the accept form (live, and the inviter re-check).
+- `acceptInvitation(token, { name, password }, client?): Promise<AcceptInvitationResult>`: the acceptance transaction above.
 
 ### owner.service.ts
 
@@ -213,8 +252,8 @@ Three roles, ranked owner > admin > member. The dashboard guard (`src/pages/page
 | Role | Can do |
 |---|---|
 | `member` | Read the dashboard (emails, inbound, logs and stats, the view pages of domains, webhooks, DMARC reports and suppressions), send email, restore single messages from trash, view and create templates (editing existing templates is admin until #218 adds per-member ownership) |
-| `admin` | Everything a member can, plus API keys, every domain, webhook and suppression change, template edit and delete, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
-| `owner` | Everything an admin can. No route is owner-only yet; account management (#217, #218) will be |
+| `admin` | Everything a member can, plus inviting members (#217), API keys, every domain, webhook and suppression change, template edit and delete, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
+| `owner` | Everything an admin can. No route is owner-only yet; inviting admins (and managing their invitations) is owner-only inside the invitation service (#217); role management (#218) will add owner-only routes |
 
 A role too low gets `403` and a `warn` log line with IDs only. The full route table and the 403 behaviour are in [docs/dashboard.md](dashboard.md#roles-222). The REST API does not use these roles: it authorizes API keys (`is_admin`, `allowed_senders`).
 
@@ -223,6 +262,8 @@ A role too low gets `403` and a `warn` log line with IDs only. The full route ta
 `drizzle/0016_*.sql` creates the four tables, applied automatically on boot by the runner. The `CHECK` lists are rendered as quoted literals via `sql.raw` (code constants): bound parameters are not valid in DDL, and drizzle-kit would otherwise emit `$1, $2` placeholders into the migration.
 
 `drizzle/0017_*.sql` (#216) adds the nullable `sessions.previous_token_hash` and `sessions.rotated_at` columns, the `sessions_previous_token_hash_idx` index, and the `session_token_history` table (`token_hash` PK, `session_id` FK `sessions` ON DELETE CASCADE, `superseded_at`, index on `session_id`). No backfill: existing rows simply have not rotated yet.
+
+`drizzle/0018_*.sql` (#217) adds `user_tokens_invite_check`: `purpose <> 'invite' OR (email IS NOT NULL AND role IS NOT NULL AND role IN ('admin', 'member'))`. No invitation rows existed before, so nothing can violate it.
 
 ## Tests
 
@@ -236,6 +277,8 @@ A role too low gets `403` and a `warn` log line with IDs only. The full route ta
 - `test/unit/session.test.ts`: the cookie helpers (exact-name parsing, a legacy value returned as is, attributes, `Secure` only when asked, `Max-Age` clamping, clearing).
 - `test/unit/session-policy.test.ts`: token shape (including a pre-#216 HMAC cookie), `sessionIp`, `clampUserAgent`, email normalization and input bounds, and the lifetime constants and their ordering.
 - `test/e2e/dashboard.test.ts` (services mocked): login (same-origin, bounds, identical failures, session replacement, `503` on a database error), the #109 limiter, protected routes without a usable session, rotation and reuse detection (new cookie, no write when not due, grace, lost race, rotation error, reuse revoking every session, `503` when that revoke fails, cross-origin POST refused before rotation), owner setup (public access, security headers, identical invalid-link responses, same-origin check including `Origin: null`, password policy, cookie and redirect on success, a token spent between the check and the write) and logout (revocation, legacy cookie, revoke error, cross-origin `403`).
+- `test/unit/invite-policy.test.ts`, `test/unit/invite-config.test.ts`, `test/unit/invite-email.test.ts` (#217): the role matrix, address and name rules, expiry and link building; `INVITE_EXPIRY_DAYS` and `SYSTEM_MAIL_FROM` parsing; the email builder (hostile names escaped, exactly one link) and every send outcome with injected dependencies.
+- `test/integration/invitations.integration.test.ts` (#217): role rules at the service and over crafted HTTP, the database CHECK, re-invite and concurrent invites leaving one live link, acceptance (account, name, role, password, session, token spent, other links revoked, concurrent acceptances), an address taken meanwhile, every dead link getting the identical `400` without reaching argon2, revoke and resend (admin-only, role-checked), and the email path (with no system sender the link is revealed once, to the inviter's session only; when the email goes out, no reveal).
 - `test/unit/dashboard-guards.test.ts`: role ranking, `requireRole` and `requireAssurance` (pass, `403` page, `warn` line), `toDashboardAuth`.
 - `test/integration/dashboard-route-access.integration.test.ts` (#222): the deny-by-default route table (every plugin route listed with its access level and carrying the matching role guard; no cookie, member, admin and owner requests per route), a role change applying on the next request, `requireAssurance("mfa")` on a test-only route, and one session lookup per request.
 - `test/integration/dashboard-session.integration.test.ts`: login against real Postgres (only the hash stored, `last_used_at`, distinct cookies, session replacement, one argon2id verify on every failure branch), logout, the guard (expired, disabled user, `pending` assurance, tampered token, old HMAC cookie), rotation (after 60 s, the absolute cap, grace, exactly one winner among concurrent requests), reuse detection (every session of the user revoked; a token two rotations old only rejected) and the service helpers (sweep, per-user revoke, IP cleaning).

@@ -1,0 +1,1 @@
+ALTER TABLE "user_tokens" ADD CONSTRAINT "user_tokens_invite_check" CHECK ("user_tokens"."purpose" <> 'invite' OR ("user_tokens"."email" IS NOT NULL AND "user_tokens"."role" IS NOT NULL AND "user_tokens"."role" IN ('admin', 'member')));

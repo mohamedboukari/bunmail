@@ -127,6 +127,13 @@
       "when": 1792327194982,
       "tag": "0017_busy_risque",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792333020274,
+      "tag": "0018_giant_xorn",
+      "breakpoints": true
     }
   ]
 }

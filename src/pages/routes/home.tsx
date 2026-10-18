@@ -9,15 +9,36 @@ import type { DashboardStats } from "../../modules/emails/services/stats.service
  *   1. Outbound: totals + per-status, last-24h activity, success rate.
  *   2. Inbound: total received, last 24h, trash counts.
  *   3. Configuration: API keys, domains, templates, webhooks.
+ *
+ * Admins and the owner also get a link to the Invitations page (#217):
+ * the sidebar is shared by every role and does not know the viewer's.
+ *
+ * @param canInvite True when the viewer may open the Invitations page.
  */
-export function HomePage({ stats }: { stats: DashboardStats }) {
+export function HomePage({
+  stats,
+  canInvite = false,
+}: {
+  stats: DashboardStats;
+  canInvite?: boolean;
+}) {
   /** Format the success rate as a percentage with one decimal: null = no data yet */
   const successRateDisplay =
     stats.successRate === null ? "n/a" : `${(stats.successRate * 100).toFixed(1)}%`;
 
   return (
     <BaseLayout title="Dashboard" activeNav="home">
-      <h1 class="text-xl font-semibold mb-6">Dashboard</h1>
+      <div class="flex items-center justify-between mb-6">
+        <h1 class="text-xl font-semibold">Dashboard</h1>
+        {canInvite && (
+          <a
+            href="/dashboard/invitations"
+            class="text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 underline"
+          >
+            Invite teammates
+          </a>
+        )}
+      </div>
 
       {/* ── Outbound emails ── */}
       <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">
