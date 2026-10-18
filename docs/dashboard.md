@@ -6,7 +6,8 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 
 | Env Variable                       | Required | Default       | Description                                  |
 |------------------------------------|----------|---------------|----------------------------------------------|
-| DASHBOARD_PASSWORD                 | No       | _(empty)_     | Password to access dashboard. Empty = disabled |
+| BUNMAIL_OWNER_EMAIL                | **Prod** | _(empty)_     | Email of the dashboard owner account (#215), stored lowercased. **Required when `BUNMAIL_ENV=production`** (app refuses to start when it is unset); a malformed address or one over 254 characters is refused in every environment; unset in dev skips the owner bootstrap with a warning. See [Owner setup](#owner-setup-215). |
+| DASHBOARD_PASSWORD                 | No       | _(empty)_     | Password to access dashboard. Empty = disabled. Still the login until account login ships (#216) |
 | SESSION_SECRET                     | **Prod** | random UUID   | HMAC key for session cookies. **Required when `BUNMAIL_ENV=production`** (app refuses to start without it); random per-process in dev. Generate with `openssl rand -hex 32`. |
 | DASHBOARD_TRUSTED_PROXY_HOPS       | No       | `0`           | Trusted reverse-proxy hops in front of BunMail, used to resolve the real client IP for login rate limiting. `0` = trust only the raw socket IP. Set to `1` behind a single nginx/Caddy/Cloudflare (`N` for `N` chained proxies). |
 | DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
@@ -22,6 +23,19 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 5. On subsequent requests: HMAC recomputed and verified, timestamp checked < 24h
 
 If `DASHBOARD_PASSWORD` is not set, all dashboard routes show a "Dashboard disabled" page.
+
+### Owner setup (#215)
+
+On first boot BunMail creates the owner account for `BUNMAIL_OWNER_EMAIL` and logs a one-time link at `warn` (at `error` when `LOG_LEVEL=error`) (`Owner setup link`): `<APP_BASE_URL>/dashboard/setup?token=...`, or `http://localhost:PORT/...` (with a `hint` field) when `APP_BASE_URL` is unset or not an `http(s)://` URL. The link is single use and valid for 24 hours; until setup is done each restart replaces it, so only the most recent link works. `bun run src/db/reset-owner.ts` (in Docker: `docker compose exec app bun run src/db/reset-owner.ts`) prints a fresh one.
+
+1. `GET /dashboard/setup?token=...` is public (registered before the session guard, and also in its skip list). It only reads the token: a missing, malformed, unknown, expired, used or replaced token gets the same `400` "invalid link" page, which never echoes the token (missing and malformed tokens are rejected before any database call). A `token` longer than 128 characters, or a repeated `token` parameter, fails the route's schema instead and gets the global `422` JSON error.
+2. A live token renders the form (`200`): the owner email, a hidden token field, password and confirmation (15 to 256 characters, counted in code points).
+3. `POST /dashboard/setup` (form fields `token`, `password`, `confirm`) checks same-origin itself first, since the guard's CSRF check does not run on public routes: a cross-origin `Origin`/`Referer`, or neither header, gets `403` `Forbidden: cross-origin request rejected` and a `warn` log (`Owner setup POST rejected: cross-origin (possible CSRF)`). Then the token (the same `400` invalid page), then the password policy (a policy error re-renders the form with `200`, no hashing and no write), then it spends the token and stores the argon2id password hash. A token spent by a concurrent submission in between also gets the `400` invalid page.
+4. On success the server logs `Owner setup completed` at `warn` (`owner` through `redactEmail`, client `ip`). The owner is signed in with the same `bm_session` cookie `POST /dashboard/login` issues (both use `issueLegacySession`), and redirected (`302`) to `/dashboard`. When `DASHBOARD_PASSWORD` is empty the dashboard is disabled, so an "Owner password saved" page is shown instead (`200`) and no cookie is set.
+
+Every response from the setup handlers, including the `403` and `302` (but not a `422` schema rejection, which never reaches the handler), sends `Cache-Control: no-store`, `Referrer-Policy: strict-origin` (the pages also carry a matching meta tag; a `Referer` carries the origin only, never the token URL, and `no-referrer` would make browsers send `Origin: null` on the form POST, which the same-origin check rejects), `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`.
+
+**Interim (until #216):** the stored owner password is not used by `/dashboard/login` yet; `DASHBOARD_PASSWORD` stays the login. Sessions from either path are the stateless HMAC cookie and end only on expiry (24 h) or a `SESSION_SECRET` rotation. Internals: [docs/users.md](users.md#owner-bootstrap-215).
 
 ### Brute-force protection (#109)
 
@@ -45,6 +59,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | Route                            | Description                                                       |
 |----------------------------------|-------------------------------------------------------------------|
 | GET /dashboard/login             | Login form (standalone, no nav)                                   |
+| GET /dashboard/setup             | Owner setup form from the one-time link (standalone, public, #215) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
 | GET /dashboard/send              | Compose & send emails from dashboard                              |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
@@ -79,6 +94,7 @@ src/pages/
 │   └── base.tsx              ← HTML shell, Tailwind, sidebar nav
 ├── routes/
 │   ├── login.tsx             ← Login + dashboard disabled pages
+│   ├── setup.tsx             ← Owner setup form, invalid-link and done pages (#215)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page

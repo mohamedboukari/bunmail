@@ -74,6 +74,7 @@ Set these values:
 BUNMAIL_ENV=production
 DATABASE_URL=postgres://bunmail:bunmail@db:5432/bunmail
 MAIL_HOSTNAME=mail.yourdomain.com
+BUNMAIL_OWNER_EMAIL=you@yourdomain.com
 DASHBOARD_PASSWORD=your-secure-password
 SESSION_SECRET=run-openssl-rand-hex-32-to-generate
 DKIM_ENCRYPTION_KEY=run-openssl-rand-base64-32-to-generate
@@ -86,6 +87,7 @@ TRASH_RETENTION_DAYS=7
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
 DASHBOARD_TRUSTED_PROXY_HOPS=1
 # Optional: public base URL, used for the dashboard link in inbound notifications
+# and the one-time owner setup link
 APP_BASE_URL=https://mail.yourdomain.com
 # Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
@@ -94,13 +96,15 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_HOSTNAME` is **required in production** (#242): it is the SMTP EHLO name and the Message-ID domain of every email. BunMail refuses to start if it is unset, `localhost`, an IP address, not fully qualified, or a placeholder (`*.example.com`, `*.yourdomain.com`, `.test`, `.local`). Use this server's real hostname, whose A record points at the server and which the sending IP's PTR resolves to (see the reverse DNS section below).
 
+> `BUNMAIL_OWNER_EMAIL` is **required in production** (#215): the email address of the dashboard owner account. BunMail refuses to start if it is unset, and refuses a malformed address or one over 254 characters in every environment (development only warns and skips the owner bootstrap when it is unset). It is stored lowercased. On first boot BunMail creates the owner and logs a one-time setup link (see [Claim the owner account](#claim-the-owner-account)). While setup is pending, a changed value updates the stored owner email on the next boot. After setup the database is the source of truth: changing the variable later only logs a warning.
+
 > Generate a session secret: `openssl rand -hex 32`
 >
 > Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
-> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used only to build the "view in dashboard" link in inbound notification emails; leave unset to omit the link.
+> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it) and the owner setup link logged on first boot. When unset, the setup link falls back to `http://localhost:PORT`, which you can still open through an SSH tunnel.
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
@@ -181,6 +185,24 @@ curl http://localhost:${PORT:-3000}/health
 
 ## 4. Initial Setup
 
+### Claim the owner account
+
+On first boot BunMail creates the owner account for `BUNMAIL_OWNER_EMAIL` and logs a one-time setup link at `warn` level (at `error` when `LOG_LEVEL=error`, so no log level hides it):
+
+```bash
+docker compose logs app | grep 'Owner setup link'
+```
+
+Open the link and choose the owner password (15 to 256 characters, confirmed twice). The link is valid for 24 hours and works once. Until the password is set, every restart logs a new link and the previous one stops working, so **use the most recent link** (with several replicas, only the last one logged works). Anyone who can read these logs can claim the account first, so do this right after the first deploy.
+
+After setup you are signed in to the dashboard (redirected to `/dashboard`). If the link expired or got lost before setup, restart the container (a restart logs a new link only while setup is pending) or print a fresh one:
+
+```bash
+docker compose exec app bun run src/db/reset-owner.ts
+```
+
+The script prints the link to your terminal (not to `docker compose logs`) and revokes every earlier link. It also works after setup, as a password reset: the stored owner password stays in place until the new link is completed (until #216 that password is not used for login yet). If `BUNMAIL_OWNER_EMAIL` differs from the stored owner, the script warns and keeps the stored address. It exits `1` when there is no owner and `BUNMAIL_OWNER_EMAIL` is unset.
+
 ### Seed your first API key
 
 ```bash
@@ -237,6 +259,8 @@ curl -s http://localhost:3000/api/v1/emails \
 ## 5. Dashboard
 
 Open `http://YOUR_SERVER_IP:3000/dashboard` in your browser. Log in with the `DASHBOARD_PASSWORD` you set in `.env`.
+
+> **Interim login (#215 to #216).** The owner password set through the setup link is stored, but the login form still checks `DASHBOARD_PASSWORD` until account login ships (#216). Completing setup signs you in with the same session cookie the login form issues. Those sessions end only when they expire (24 h) or when `SESSION_SECRET` is rotated.
 
 The dashboard lets you manage emails, domains, API keys, and view delivery status.
 
@@ -490,6 +514,15 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 - Check logs: `docker compose logs app`
 - Migrations run via the Bun-native runner at `src/db/migrate.ts` (#56): drizzle-kit no longer ships in the runtime image. The runner reads the committed `drizzle/<n>_*.sql` files and tracks applied tags in the `__bunmail_migrations` table. Every app container runs it on start, under a Postgres advisory lock (#175), so several replicas (`--scale app=2`, rolling deploys) are safe: one migrates, the others wait and then find nothing to do.
 - Ensure `DATABASE_URL` is correct and PostgreSQL is healthy: `docker compose ps`
+
+**Boot fails with a `[config]` error about `BUNMAIL_OWNER_EMAIL`:**
+- Production requires it since #215 (`[config] BUNMAIL_OWNER_EMAIL must be set when BUNMAIL_ENV=production.`). Add `BUNMAIL_OWNER_EMAIL=you@yourdomain.com` to `.env` (one bare address, no name or angle brackets, at most 254 characters) and recreate the container with `docker compose up -d` (`docker compose restart` does not re-read `.env`). A malformed value (`[config] BUNMAIL_OWNER_EMAIL is not usable: ...`) is refused in development too; the error does not echo the value.
+
+**Owner setup link expired, lost, or says the link is invalid:**
+- The page (HTTP `400`) shows the same message for a missing, malformed, unknown, expired, used or replaced link. Before setup, restart the container (`docker compose restart app`) and take the newest `Owner setup link` from `docker compose logs app`; only the most recent link works. At any time, `docker compose exec app bun run src/db/reset-owner.ts` prints a fresh link to your terminal.
+- ``Owner bootstrap failed; run `bun run src/db/reset-owner.ts` to retry`` in the logs: the boot continued without an owner link (the API and mail delivery do not depend on it). Fix the cause in the logged `error` and run `docker compose exec app bun run src/db/reset-owner.ts`.
+- `Owner bootstrap skipped: BUNMAIL_OWNER_EMAIL belongs to an existing non-owner account, which is never promoted`: pick an address no other account uses.
+- If the link points at `http://localhost:PORT` (the log line then carries a `hint`), `APP_BASE_URL` is unset or not an `http(s)://` URL: set it, or open the link through an SSH tunnel (`ssh -L 3000:localhost:3000 root@your-server-ip`).
 
 **Boot fails with `[config] Missing required environment variable: DKIM_ENCRYPTION_KEY`:**
 - Add `DKIM_ENCRYPTION_KEY=$(openssl rand -base64 32)` to `.env`. Required since v0.4.x: the key encrypts DKIM private keys at rest. Boot fails loudly rather than silently storing plaintext.

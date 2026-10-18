@@ -85,7 +85,8 @@ bunmail/
 │   │   ├── index.ts                      ← Drizzle DB connection
 │   │   ├── schema.ts                     ← Re-exports all model schemas
 │   │   ├── migrate.ts                    ← Bun-native migration runner (#56)
-│   │   └── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
+│   │   ├── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
+│   │   └── reset-owner.ts                ← Shell-only recovery: prints a fresh owner setup link (#215)
 │   ├── middleware/
 │   │   ├── auth.ts                       ← API key bearer auth
 │   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
@@ -212,9 +213,11 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema + pure auth helpers (#214)
+│   │   ├── users/                        ← Dashboard accounts schema (#214) + owner bootstrap (#215)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
-│   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens)
+│   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
+│   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
+│   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL)
 │   │   │   └── types/                    ← role / credential / assurance / purpose value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
@@ -239,6 +242,7 @@ bunmail/
 │       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav
 │       ├── routes/
 │       │   ├── login.tsx                 ← Login form (standalone, no nav)
+│       │   ├── setup.tsx                 ← Owner setup form + invalid-link + done pages (standalone, #215)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -790,6 +794,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/login                   | Login form              | No       |
 | POST   | /dashboard/login                   | Validate password       | No       |
 | POST   | /dashboard/logout                  | Clear session           | No       |
+| GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
+| POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
 | GET    | /dashboard                         | Stats overview          | Session  |
 | GET    | /dashboard/send                    | Compose & send email    | Session  |
 | POST   | /dashboard/send                    | Queue email for send    | Session  |
@@ -833,7 +839,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
 
-Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting).
+Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (24h expiry). `POST /dashboard/login` is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password and issues the same session cookie. Until account login ships (#216), `DASHBOARD_PASSWORD` remains the login. See [docs/users.md](docs/users.md#owner-bootstrap-215).
 
 ### Health
 
@@ -850,7 +856,7 @@ Dashboard auth uses `DASHBOARD_PASSWORD` env var + HMAC-signed session cookie (2
 - **Storage:** Only SHA-256 hash stored in DB; raw key shown once at creation
 - **Lookup:** Hash incoming token → match against `key_hash` column
 - **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
-- **Bootstrap:** Run `bun run seed` to create the first API key (admin)
+- **Bootstrap:** Run `bun run src/db/seed.ts` to create the first API key (admin). The dashboard owner is created on boot from `BUNMAIL_OWNER_EMAIL` (#215); recover a lost setup link with `bun run src/db/reset-owner.ts`
 
 ---
 
@@ -909,6 +915,7 @@ services:
       DATABASE_URL: postgres://bunmail:bunmail@db:5432/bunmail
       DKIM_ENCRYPTION_KEY: ${DKIM_ENCRYPTION_KEY}    # Required (#23), `openssl rand -base64 32`
       DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}      # Required in production (#19)
+      BUNMAIL_OWNER_EMAIL: ${BUNMAIL_OWNER_EMAIL}    # Required in production (#215)
     depends_on:
       db: { condition: service_healthy }
 

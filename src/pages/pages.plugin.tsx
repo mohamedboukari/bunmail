@@ -1,4 +1,4 @@
-import { Elysia, t } from "elysia";
+import { Elysia, t, type Context } from "elysia";
 import { html } from "@elysiajs/html";
 import { timingSafeEqual, randomBytes } from "crypto";
 import { config } from "../config.ts";
@@ -14,6 +14,11 @@ import { isEmailStatus } from "../modules/emails/types/email.types.ts";
 
 /* ─── Page Components ─── */
 import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
+import {
+  OwnerSetupPage,
+  OwnerSetupInvalidPage,
+  OwnerSetupDonePage,
+} from "./routes/setup.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
 import { EmailTombstonesPage } from "./routes/email-tombstones.tsx";
@@ -54,6 +59,11 @@ import * as inboundService from "../modules/inbound/services/inbound.service.ts"
 import * as dmarcReportsService from "../modules/dmarc-reports/services/dmarc-reports.service.ts";
 import * as suppressionService from "../modules/suppressions/services/suppression.service.ts";
 import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
+import * as ownerService from "../modules/users/services/owner.service.ts";
+import {
+  isWellFormedSetupToken,
+  setupPasswordProblem,
+} from "../modules/users/services/owner-setup-policy.service.ts";
 
 /**
  * Normalises a form field that can come back either as a single string
@@ -92,6 +102,41 @@ function parseSenderList(input: string | undefined): string[] {
 function sessionCookieAttributes(): string {
   const secure = config.env === "production" ? "; Secure" : "";
   return `HttpOnly; SameSite=Lax${secure}; Path=/dashboard`;
+}
+
+/**
+ * Signs the operator in with the stateless `bm_session` cookie and
+ * redirects to the fixed `/dashboard` (no `next` parameter, so no open
+ * redirect). Shared by `POST /login` and, until account sessions ship
+ * (#216), `POST /setup` (#215), so both issue exactly the same cookie:
+ * HttpOnly, SameSite=Lax, Secure in production (#133), 24h expiry.
+ */
+function issueLegacySession(set: Context["set"]): string {
+  const sessionValue = createSessionCookie(config.dashboard.sessionSecret);
+  set.headers["set-cookie"] =
+    `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
+  set.status = 302;
+  set.headers["location"] = "/dashboard";
+  return "";
+}
+
+/**
+ * Leak hardening for the owner setup pages (#215), whose URL or form
+ * carries a one-time setup token: never cached (`no-store`), not
+ * MIME-sniffed, and not frameable (no clickjacking of the form).
+ *
+ * `Referrer-Policy: strict-origin` keeps the token URL out of every
+ * `Referer` (the page loads a third-party CDN script, and our own access
+ * logs record Referer too): requests carry the origin only. It must NOT be
+ * `no-referrer`: under that policy browsers send `Origin: null` on the
+ * form POST (Fetch spec, "append a request Origin header"), so
+ * `isSameOrigin` would reject every real submission with 403.
+ */
+function setAuthPageHeaders(set: Context["set"]): void {
+  set.headers["cache-control"] = "no-store";
+  set.headers["referrer-policy"] = "strict-origin";
+  set.headers["x-content-type-options"] = "nosniff";
+  set.headers["x-frame-options"] = "DENY";
 }
 
 /**
@@ -269,6 +314,8 @@ function validatePassword(input: string): boolean {
  * - GET  /dashboard/login           → login form
  * - POST /dashboard/login           → validate password, set cookie
  * - POST /dashboard/logout          → clear cookie, redirect
+ * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
+ * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
  * - GET  /dashboard                 → home (stats overview)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -281,6 +328,7 @@ function validatePassword(input: string): boolean {
  * - GET  /dashboard/domains/:id     → domain detail
  *
  * Auth: password-based via DASHBOARD_PASSWORD env var + session cookie.
+ * The owner setup routes are authorized by the one-time setup token.
  */
 
 /**
@@ -395,12 +443,7 @@ export const pagesPlugin = new Elysia({
       logger.info("Dashboard login successful", { ip });
 
       /** Set session cookie: HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
-      const sessionValue = createSessionCookie(config.dashboard.sessionSecret);
-      set.headers["set-cookie"] =
-        `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
-      set.status = 302;
-      set.headers["location"] = "/dashboard";
-      return "";
+      return issueLegacySession(set);
     },
     {
       body: t.Object({
@@ -422,6 +465,108 @@ export const pagesPlugin = new Elysia({
     return "";
   })
 
+  /**
+   * GET /dashboard/setup?token=...
+   * Owner setup form from the one-time link logged on first boot (#215).
+   * Public: the token is the authorization. Read-only, so link scanners
+   * and prefetchers cannot burn it. The format is checked before any
+   * database call, and every unusable link (missing, malformed, unknown,
+   * expired, used, replaced) gets the same 400 page: no oracle, and the
+   * token is never echoed.
+   */
+  .get(
+    "/setup",
+    async ({ query, set }) => {
+      setAuthPageHeaders(set);
+      const token = query.token ?? "";
+      const setup = isWellFormedSetupToken(token)
+        ? await ownerService.findLiveOwnerSetup(token)
+        : null;
+      if (!setup) {
+        set.status = 400;
+        return <OwnerSetupInvalidPage />;
+      }
+      return <OwnerSetupPage token={token} email={setup.email} />;
+    },
+    {
+      query: t.Object({
+        token: t.Optional(t.String({ maxLength: 128 })),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/setup
+   * Sets the owner password and spends the token (#215). The session
+   * guard's CSRF check never runs for public routes, so same-origin is
+   * checked here, first, before any work. Then cheap checks before
+   * expensive ones: token format, an indexed lookup, the password policy
+   * (a failure re-renders the form with 200, no hashing, no write), and
+   * only then argon2id inside `completeOwnerSetup`.
+   *
+   * On success the owner is signed in with the legacy session cookie and
+   * redirected to `/dashboard`, which also drops the token from the
+   * address bar. With `DASHBOARD_PASSWORD` empty the dashboard is
+   * disabled, so a "password saved" page is shown instead.
+   *
+   * The body schema is deliberately loose (only length caps): a schema
+   * failure answers 422 JSON from the global handler, not a page, so the
+   * policy is enforced in the handler instead.
+   */
+  .post(
+    "/setup",
+    async ({ body, set, request, server }) => {
+      setAuthPageHeaders(set);
+      const ip = resolveClientIp({
+        socketIp: server?.requestIP(request)?.address,
+        forwardedFor: request.headers.get("x-forwarded-for"),
+        trustedProxyHops: config.dashboard.trustedProxyHops,
+      });
+
+      if (!isSameOrigin(request)) {
+        logger.warn("Owner setup POST rejected: cross-origin (possible CSRF)", {
+          ip,
+          origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+        });
+        set.status = 403;
+        return "Forbidden: cross-origin request rejected";
+      }
+
+      const setup = isWellFormedSetupToken(body.token)
+        ? await ownerService.findLiveOwnerSetup(body.token)
+        : null;
+      if (!setup) {
+        set.status = 400;
+        return <OwnerSetupInvalidPage />;
+      }
+
+      const problem = setupPasswordProblem(body.password, body.confirm);
+      if (problem) {
+        return <OwnerSetupPage token={body.token} email={setup.email} error={problem} />;
+      }
+
+      const owner = await ownerService.completeOwnerSetup(body.token, body.password);
+      if (!owner) {
+        set.status = 400;
+        return <OwnerSetupInvalidPage />;
+      }
+
+      logger.warn("Owner setup completed", { owner: redactEmail(owner.email), ip });
+
+      if (!config.dashboard.password) {
+        return <OwnerSetupDonePage />;
+      }
+      return issueLegacySession(set);
+    },
+    {
+      body: t.Object({
+        token: t.String({ maxLength: 128 }),
+        password: t.String({ maxLength: 1024 }),
+        confirm: t.String({ maxLength: 1024 }),
+      }),
+    },
+  )
+
   /* ─── Session Guard ─── */
 
   /**
@@ -429,8 +574,16 @@ export const pagesPlugin = new Elysia({
    * If the dashboard is disabled or the session is invalid, redirect to login.
    */
   .onBeforeHandle(({ request, set, path }) => {
-    /** Skip auth for login/logout routes (already handled above) */
-    if (path === "/dashboard/login" || path === "/dashboard/logout") {
+    /**
+     * Skip auth for the public routes registered above (login, logout,
+     * owner setup #215). Local hooks only apply to routes registered after
+     * them, so this is defense in depth.
+     */
+    if (
+      path === "/dashboard/login" ||
+      path === "/dashboard/logout" ||
+      path === "/dashboard/setup"
+    ) {
       return;
     }
 

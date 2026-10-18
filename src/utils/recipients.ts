@@ -46,6 +46,18 @@ const EMAIL_RE = /^[^\s@,<>"]+@[^\s@,<>".]+(?:\.[^\s@,<>".]+)+$/;
 export const MAX_ADDRESS_LENGTH = 254;
 
 /**
+ * True when `value` is one bare address in the shape the recipient parser
+ * accepts: at most {@link MAX_ADDRESS_LENGTH} characters (checked first, so
+ * a huge value is never scanned) and matching {@link EMAIL_RE}. Shared with
+ * `config.ts` (`BUNMAIL_OWNER_EMAIL`, #215) so the codebase keeps one
+ * address regex instead of a second one that drifts. No trimming: callers
+ * normalize first.
+ */
+export function isEmailAddress(value: string): boolean {
+  return value.length <= MAX_ADDRESS_LENGTH && EMAIL_RE.test(value);
+}
+
+/**
  * Parses the three raw fields off an email row into a flat list of
  * normalised recipients. Drops empty entries, trims whitespace, and
  * de-duplicates on lowercased address with first-occurrence wins.

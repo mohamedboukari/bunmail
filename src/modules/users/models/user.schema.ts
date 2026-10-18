@@ -21,7 +21,12 @@ export const users = pgTable(
     /** Login identity. Stored lower-cased (enforced below) and unique. */
     email: varchar("email", { length: 255 }).notNull().unique(),
 
-    /** When the address was confirmed (owner setup, invite acceptance). */
+    /**
+     * When the address was confirmed: set by invite acceptance (#217) and
+     * future email verification. Owner setup (#215) leaves it null: its
+     * link arrives through server logs, which does not prove control of
+     * the mailbox.
+     */
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
 
     /** Display name, set by the user. */

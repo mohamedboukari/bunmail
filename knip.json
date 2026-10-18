@@ -1,5 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": ["src/db/reset-owner.ts"],
   "project": ["src/**/*.{ts,tsx}"],
   "ignore": ["src/db/seed.ts"],
   "ignoreExportsUsedInFile": true,
@@ -8,9 +9,5 @@
     "unlisted": "error",
     "exports": "error",
     "types": "error"
-  },
-  "ignoreFiles": [
-    "src/modules/users/services/password.service.ts",
-    "src/modules/users/services/token.service.ts"
-  ]
+  }
 }

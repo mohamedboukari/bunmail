@@ -23,6 +23,9 @@ import { emails } from "../../src/modules/emails/models/email.schema.ts";
 import { suppressions } from "../../src/modules/suppressions/models/suppression.schema.ts";
 import { templates } from "../../src/modules/templates/models/template.schema.ts";
 import { webhooks } from "../../src/modules/webhooks/models/webhook.schema.ts";
+import { users } from "../../src/modules/users/models/user.schema.ts";
+import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
+import { hashPassword } from "../../src/modules/users/services/password.service.ts";
 import { config } from "../../src/config.ts";
 
 /**
@@ -220,6 +223,29 @@ export const seed = {
       bounceType: opts.bounceType ?? null,
       expiresAt: opts.expiresAt ?? null,
     });
+    return { id };
+  },
+
+  /**
+   * Insert the dashboard owner (#215), optionally with a `password`
+   * credential (argon2id, like owner setup writes it), i.e. setup already
+   * completed. The email is lower-cased as `users.email` requires.
+   */
+  async owner(opts: { email: string; password?: string }): Promise<{ id: string }> {
+    const id = generateId("usr");
+    await db.insert(users).values({
+      id,
+      email: opts.email.trim().toLowerCase(),
+      role: "owner",
+    });
+    if (opts.password !== undefined) {
+      await db.insert(userCredentials).values({
+        id: generateId("crd"),
+        userId: id,
+        type: "password",
+        secretHash: await hashPassword(opts.password),
+      });
+    }
     return { id };
   },
 };

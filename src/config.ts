@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { isIP } from "net";
+import { MAX_ADDRESS_LENGTH, isEmailAddress } from "./utils/recipients.ts";
 
 /**
  * Reads a required environment variable. Throws at startup if missing
@@ -218,6 +219,65 @@ export function readMailHostname(
 }
 
 /**
+ * Why `raw` can't be used as `BUNMAIL_OWNER_EMAIL`, or `null` if it can
+ * (#215). Checks the trimmed, lower-cased value, which is what gets
+ * stored. Uses the recipient parser's address check so the codebase has a
+ * single address regex. Pure, for tests.
+ */
+export function ownerEmailProblem(raw: string): string | null {
+  const email = raw.trim().toLowerCase();
+  if (email === "") return "it is not set";
+  if (email.length > MAX_ADDRESS_LENGTH) {
+    return `it is longer than ${MAX_ADDRESS_LENGTH} characters`;
+  }
+  if (!isEmailAddress(email)) return "it is not a valid email address";
+  return null;
+}
+
+/**
+ * Reads `BUNMAIL_OWNER_EMAIL`, the address of the single dashboard owner
+ * account (#215), trimmed and lower-cased so it satisfies the
+ * `users.email = lower(email)` check and a case-only edit is not a
+ * mismatch.
+ *
+ * - Unset in production: refuses to boot, mirroring the `SESSION_SECRET`
+ *   and `DASHBOARD_PASSWORD` guards, so a deploy cannot come up without
+ *   an owner to claim the dashboard.
+ * - Unset in development: `null`; `src/index.ts` warns and skips the owner
+ *   bootstrap (this file cannot log: the logger imports config).
+ * - Set but malformed, or over 254 characters: refuses to boot in every
+ *   environment, because an explicit value with a typo is a mistake to
+ *   report, not to ignore.
+ */
+export function readOwnerEmail(
+  env: AppEnv,
+  raw: string = optionalEnv("BUNMAIL_OWNER_EMAIL", ""),
+): string | null {
+  const email = raw.trim().toLowerCase();
+  if (email === "") {
+    if (env === "production") {
+      throw new Error(
+        "[config] BUNMAIL_OWNER_EMAIL must be set when BUNMAIL_ENV=production.\n" +
+          "  → It is the email of the dashboard owner account. On first boot\n" +
+          "    BunMail creates that account and logs a one-time setup link\n" +
+          "    (`Owner setup link`) to claim it. Set it in your .env, e.g.\n" +
+          "    BUNMAIL_OWNER_EMAIL=you@yourcompany.com",
+      );
+    }
+    return null;
+  }
+  const problem = ownerEmailProblem(email);
+  if (problem) {
+    throw new Error(
+      `[config] BUNMAIL_OWNER_EMAIL is not usable: ${problem}.\n` +
+        "  → Set it to the dashboard owner's email address (one address,\n" +
+        "    no name or angle brackets), e.g. you@yourcompany.com",
+    );
+  }
+  return email;
+}
+
+/**
  * Central application configuration.
  *
  * Every setting is read from environment variables at import time.
@@ -261,10 +321,12 @@ export const config = {
 
   /**
    * Public base URL of this BunMail instance (e.g. "https://mail.example.com"),
-   * no trailing slash. Used to build absolute links in outbound system mail:
-   * currently the "view in dashboard" link in inbound notifications (#106).
-   * Optional: when empty, those emails simply omit the link. Trailing slash
-   * is stripped so callers can always append "/dashboard/...".
+   * no trailing slash. Used to build absolute links: the "view in
+   * dashboard" link in inbound notifications (#106), and the owner setup
+   * link logged on first boot (#215). Optional: when empty, those emails
+   * simply omit the link, and the setup link falls back to
+   * `http://localhost:PORT`. Trailing slash is stripped so callers can
+   * always append "/dashboard/...".
    */
   appBaseUrl: optionalEnv("APP_BASE_URL", "").replace(/\/+$/, ""),
 
@@ -443,6 +505,13 @@ export const config = {
      * `readSessionSecret` (#133).
      */
     sessionSecret: readSessionSecret(readAppEnv()),
+
+    /**
+     * Email of the single dashboard owner account (#215), lower-cased.
+     * Required in production; `null` in development when unset, which
+     * skips the owner bootstrap. See `readOwnerEmail`.
+     */
+    ownerEmail: readOwnerEmail(readAppEnv()),
 
     /**
      * Number of trusted reverse-proxy hops in front of BunMail, used to
