@@ -34,7 +34,13 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { signPayload } from "./webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { generateId } from "../../../utils/id.ts";
-import { assertPublicWebhookUrl } from "../../../utils/ssrf-guard.ts";
+import {
+  buildPinnedRequest,
+  resolvePublicWebhookTarget,
+  type PinnedRequest,
+  type PublicWebhookTarget,
+  type ResolveAll,
+} from "../../../utils/ssrf-guard.ts";
 import { config } from "../../../config.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
 
@@ -360,6 +366,9 @@ interface AttemptOutcome {
  * stored body from the signature. A row sitting in `pending` for 6
  * hours, when finally retried, ships a fresh timestamp the consumer's
  * 5-min freshness window will accept.
+ *
+ * The request goes to the address the SSRF guard validated, not to the
+ * host name (see {@link buildPinnedRequest}).
  */
 export async function performHttpAttempt(opts: {
   url: string;
@@ -367,6 +376,8 @@ export async function performHttpAttempt(opts: {
   body: string;
   event: string;
   fetchImpl?: typeof fetch;
+  /** DNS lookup for the SSRF guard; defaults to the system resolver. */
+  resolver?: ResolveAll;
   timeoutMs?: number;
 }): Promise<AttemptOutcome> {
   const fetchFn = opts.fetchImpl ?? globalThis.fetch;
@@ -375,12 +386,22 @@ export async function performHttpAttempt(opts: {
 
   /**
    * SSRF re-validation at delivery time (#128). The URL was checked at
-   * create, but DNS can change (rebinding / TOCTOU) and rows created before
-   * this guard existed were never checked, so re-resolve and re-validate
-   * on every attempt. A blocked URL is a failed attempt, not a fetch.
+   * create, but DNS can change and rows created before this guard existed
+   * were never checked, so resolve and validate on every attempt. The host
+   * is resolved exactly once here: the request below connects to the
+   * address validated now, so a different later answer is never used.
+   * A blocked URL, or one that cannot be pinned to the validated address,
+   * is a failed attempt, not a fetch.
    */
+  let target: PublicWebhookTarget;
+  let pinned: PinnedRequest;
   try {
-    await assertPublicWebhookUrl(opts.url, config.webhookDelivery.allowInsecureHttp);
+    target = await resolvePublicWebhookTarget(
+      opts.url,
+      config.webhookDelivery.allowInsecureHttp,
+      opts.resolver,
+    );
+    pinned = buildPinnedRequest(target);
   } catch (err) {
     return {
       ok: false,
@@ -389,11 +410,16 @@ export async function performHttpAttempt(opts: {
       bodyPreview: null,
     };
   }
+  logger.debug("Webhook attempt pinned to validated address", {
+    family: target.family,
+  });
 
   try {
-    const response = await fetchFn(opts.url, {
+    const response = await fetchFn(pinned.url, {
       method: "POST",
       headers: {
+        /** The receiver sees the configured host, not the address. */
+        Host: pinned.host,
         "Content-Type": "application/json",
         "X-BunMail-Signature": signature,
         "X-BunMail-Timestamp": sigTimestamp,
@@ -403,6 +429,14 @@ export async function performHttpAttempt(opts: {
         "Accept-Encoding": "identity",
       },
       body: opts.body,
+      /** SNI and certificate check against the host name (https only). */
+      tls: pinned.tls,
+      /**
+       * A fresh connection per attempt: a pooled connection to the same
+       * address could have been opened, and its certificate checked, for
+       * a different host name.
+       */
+      keepalive: false,
       /** Never inflate the untrusted body (Bun-specific option). */
       decompress: false,
       /**
