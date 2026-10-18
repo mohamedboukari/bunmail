@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **API key middleware tests (#183).** A new integration suite runs the real Bearer-key middleware against Postgres and checks that each malformed `Authorization` header (missing, another scheme, a bare token, an unknown key) gets its own `401`, and that `last_used_at` is written on first use and then at most once a minute per key. With the authorization matrix (#228, every route: no key, invalid and revoked keys, the admin gate, tenant isolation), the deactivated-creator checks (#219) and the allowed-senders suite (REST and SMTP), the middleware no longer depends on stubbed e2e tests for coverage. Tests only.
+
 ### Fixed
 
 - **The send queue no longer opens unbounded connections when receivers are slow (#176).** The queue polled every 2 seconds on a fixed timer without waiting for the previous poll's sends, and each poll claimed 5 more rows; with a slow or hanging receiver (SMTP timeouts reach 10 minutes) the number of sends in flight grew without limit, exactly when backing off matters. Polls are now scheduled one after another and never overlap, and each claims only as many rows as there are free slots under the new `QUEUE_MAX_CONCURRENT_SENDS` (default `10` per process); when all slots are taken it claims nothing. A slow send holds one slot rather than the whole batch. The poll interval and batch size are now configurable (`QUEUE_POLL_INTERVAL_MS`, default `2000`; `QUEUE_BATCH_SIZE`, default `5`), and polls carry +/-10% jitter so replicas don't hit the database in lockstep. The webhook delivery worker gets the same non-overlapping, jittered poll. An unexpected error in one send is now logged (`Email send attempt crashed`) instead of being dropped. New optional env vars, all validated at boot (a value that is not a whole number in range refuses to start). No migration, no new dependency. Docs: `docs/emails.md`, `docs/webhooks.md`, `docs/self-hosting.md`, `ARCHITECTURE.md`, `.env.example`.
