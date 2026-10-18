@@ -1,4 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
+import type { db } from "../../../db/index.ts";
 
 /**
  * Value sets for the dashboard accounts schema (#214). Each is enforced by
@@ -17,7 +18,6 @@ export type UserRole = (typeof USER_ROLES)[number];
  * without a schema change.
  */
 export const CREDENTIAL_TYPES = ["password", "totp", "passkey", "oauth"] as const;
-/** @public Consumed by the login, invite and guard flows (#215 to #218); exported ahead of them. */
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
 
 /**
@@ -27,7 +27,6 @@ export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
  * require a minimum level per route.
  */
 export const SESSION_ASSURANCES = ["pending", "password", "mfa"] as const;
-/** @public Consumed by the login, invite and guard flows (#215 to #218); exported ahead of them. */
 export type SessionAssurance = (typeof SESSION_ASSURANCES)[number];
 
 /** What a one-time token is for. */
@@ -65,6 +64,89 @@ export type OwnerBootstrapResult =
   | { kind: "complete" }
   | { kind: "mismatch"; storedEmail: string }
   | { kind: "email-taken" };
+
+/** The transaction handle `db.transaction` passes to its callback. */
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Where a users-module write runs: the shared pool, or a transaction the
+ * caller opened (owner setup creates the owner's session inside its own
+ * advisory-lock transaction, #216).
+ */
+export type DbExecutor = typeof db | Tx;
+
+/** Request metadata stored with a new session (#216). */
+export interface SessionClient {
+  /** Resolved client IP; anything that is not an IP literal is stored as null. */
+  ip: string | null;
+  /** Raw `User-Agent` header; cut to the column width before it is stored. */
+  userAgent: string | null;
+}
+
+/** What `createSession` needs to open a session (#216). */
+export interface NewSessionInput extends SessionClient {
+  /** `users.id` of the account signing in. */
+  userId: string;
+  /** How far login got; the guard only admits `password` and `mfa`. */
+  assurance: SessionAssurance;
+  /** Which credential type started the session. */
+  authMethod: CredentialType;
+}
+
+/** A freshly opened session. `token` goes into the cookie, never into storage or logs. */
+export interface CreatedSession {
+  /** `sessions.id` (`ses_...`): safe to log, not a credential. */
+  sessionId: string;
+  /** Raw cookie value; only its SHA-256 is stored. */
+  token: string;
+}
+
+/**
+ * A live session found by the dashboard guard (#216). The presented token
+ * matched either the session's current token or the one the last rotation
+ * replaced; the flags are computed on the database clock.
+ */
+export interface ActiveSession {
+  /** `sessions.id`; safe to log. */
+  sessionId: string;
+  /** Owner of the session. */
+  userId: string;
+  /** Which of the session's two hashes the presented token matched. */
+  matched: "current" | "previous";
+  /** The current token is older than `SESSION_ROTATE_SECONDS`. */
+  rotationDue: boolean;
+  /** The last rotation is older than `SESSION_ROTATION_GRACE_SECONDS`. */
+  graceOver: boolean;
+}
+
+/** A rotated session token and how long the cookie may live. */
+export interface RotatedSession {
+  /** The new raw cookie value. */
+  token: string;
+  /** Seconds left until the session's absolute cap: the cookie `Max-Age`. */
+  maxAgeSec: number;
+}
+
+/**
+ * Why a password login failed. Server logs only: every reason gets the
+ * same response, so the form never reveals whether an account exists.
+ */
+export type LoginFailureReason = "unknown" | "no_password" | "disabled" | "bad_password";
+
+/** Outcome of the first-factor (password) step of login (#216). */
+export type LoginResult =
+  | { ok: true; userId: string; assurance: SessionAssurance }
+  | { ok: false; reason: LoginFailureReason };
+
+/** What a completed owner setup returns (#215, #216). */
+export interface CompletedOwnerSetup {
+  /** `users.id` of the owner. */
+  userId: string;
+  /** The owner's stored (lower-cased) email. */
+  email: string;
+  /** Raw cookie value of the session opened for the owner. */
+  sessionToken: string;
+}
 
 /**
  * Renders a value set as a quoted SQL list for a `CHECK (... IN (...))`

@@ -21,4 +21,5 @@ export { dmarcRecords } from "../modules/dmarc-reports/models/dmarc-record.schem
 export { users } from "../modules/users/models/user.schema.ts";
 export { userCredentials } from "../modules/users/models/user-credential.schema.ts";
 export { sessions } from "../modules/users/models/session.schema.ts";
+export { sessionTokenHistory } from "../modules/users/models/session-token-history.schema.ts";
 export { userTokens } from "../modules/users/models/user-token.schema.ts";

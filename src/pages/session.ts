@@ -1,69 +1,65 @@
-import crypto from "crypto";
-
 /**
- * Dashboard session cookie signing and validation.
+ * Dashboard session cookie helpers (#216).
  *
- * Pure: the secret and the clock are passed in, so this unit-tests
- * without config or mocks (#174). `pages.plugin.tsx` passes
- * `config.dashboard.sessionSecret`.
+ * The cookie only carries the opaque session token; the session itself
+ * lives in the `sessions` table (`src/modules/users/services/session.service.ts`).
+ * These helpers read the cookie from a request and build the `Set-Cookie`
+ * values, nothing more.
  *
- * `crypto.timingSafeEqual` is called through the default import on
- * purpose: tests spy on it to prove the HMAC comparison is constant-time.
- * A named import would bypass the spy.
+ * Pure: `secure` and the lifetime are passed in, so this unit-tests
+ * without config or mocks (#174).
  */
 
-/** Max session age in seconds (24 hours) */
-export const SESSION_MAX_AGE = 86400;
+/** Name of the dashboard session cookie. */
+export const SESSION_COOKIE = "bm_session";
 
-/** HMAC-SHA256 of the timestamp, hex-encoded. */
-function sign(timestamp: string, secret: string): string {
-  return crypto.createHmac("sha256", secret).update(timestamp).digest("hex");
+/**
+ * Cookie attributes shared by every `Set-Cookie` of the session (#133):
+ * `HttpOnly` (no JS access), `SameSite=Lax` (baseline CSRF defense),
+ * `Secure` when requested (production: never over plaintext HTTP), and
+ * `Path=/dashboard`. The path must stay the same as the pre-#216 cookie, so
+ * setting or clearing the cookie overwrites a legacy value in the browser.
+ */
+function attributes(secure: boolean): string {
+  return `HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}; Path=/dashboard`;
 }
 
 /**
- * Creates a signed session cookie value.
- * Format: `<timestamp>.<hmac_hex>` where timestamp is Unix epoch (seconds).
+ * Reads the session cookie from a `Cookie` header. The name must match
+ * exactly (`xbm_session=` is a different cookie), and an empty value counts
+ * as missing. With several `bm_session` entries the first wins, which is
+ * the one with the most specific path.
  *
- * @param secret - The session signing secret
- * @param nowMs  - Current time in milliseconds (defaults to Date.now())
+ * @returns the raw cookie value, or `undefined` when there is none.
  */
-export function createSessionCookie(secret: string, nowMs: number = Date.now()): string {
-  const timestamp = String(Math.floor(nowMs / 1000));
-  return `${timestamp}.${sign(timestamp, secret)}`;
+export function readSessionCookie(cookieHeader: string | null): string | undefined {
+  if (!cookieHeader) return undefined;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
+    const value = part.slice(eq + 1).trim();
+    return value === "" ? undefined : value;
+  }
+  return undefined;
 }
 
 /**
- * Validates a session cookie value.
- * Recomputes the HMAC and checks the timestamp is within SESSION_MAX_AGE.
+ * `Set-Cookie` value that stores a session token.
  *
- * @param cookie - The `bm_session` cookie value
- * @param secret - The session signing secret
- * @param nowMs  - Current time in milliseconds (defaults to Date.now())
- * @returns true if the session is valid
+ * @param token     - The raw session token (43 base64url characters).
+ * @param secure    - Add `Secure` (production).
+ * @param maxAgeSec - Cookie lifetime in seconds.
  */
-export function validateSessionCookie(
-  cookie: string,
-  secret: string,
-  nowMs: number = Date.now(),
-): boolean {
-  const dotIndex = cookie.indexOf(".");
-  if (dotIndex === -1) return false;
+export function sessionSetCookie(
+  token: string,
+  secure: boolean,
+  maxAgeSec: number,
+): string {
+  return `${SESSION_COOKIE}=${token}; ${attributes(secure)}; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
+}
 
-  const timestamp = cookie.substring(0, dotIndex);
-  const providedHmac = cookie.substring(dotIndex + 1);
-
-  /** Check timestamp is a valid number and within the max age */
-  const ts = parseInt(timestamp, 10);
-  if (isNaN(ts)) return false;
-
-  const now = Math.floor(nowMs / 1000);
-  if (now - ts > SESSION_MAX_AGE) return false;
-
-  /** Recompute HMAC and compare with timing-safe comparison */
-  const expectedHmac = sign(timestamp, secret);
-
-  /** Both must be the same length for timingSafeEqual */
-  if (providedHmac.length !== expectedHmac.length) return false;
-
-  return crypto.timingSafeEqual(Buffer.from(providedHmac), Buffer.from(expectedHmac));
+/** `Set-Cookie` value that removes the session cookie from the browser. */
+export function clearSessionCookie(secure: boolean): string {
+  return `${SESSION_COOKIE}=; ${attributes(secure)}; Max-Age=0`;
 }

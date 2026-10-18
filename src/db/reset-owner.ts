@@ -6,10 +6,13 @@
  *
  * Use it when the setup link logged on first boot was lost or expired, or
  * as a password reset for the owner. It revokes every open token of the
- * owner and mints a new single-use link valid for 24 hours; the stored
- * email and the current password stay until the new link is completed,
- * so an abandoned reset cannot lock the owner out. With no owner yet, it
- * creates one from `BUNMAIL_OWNER_EMAIL`, as the boot does.
+ * owner, signs the owner out of every dashboard session (#216: a kill
+ * switch when a compromise is suspected), and mints a new single-use link
+ * valid for 24 hours; the stored email and the current password stay until
+ * the new link is completed, so an abandoned reset cannot lock the owner
+ * out (until then the old password can still sign in; completing the link
+ * signs every session out again). With no owner yet, it creates one from
+ * `BUNMAIL_OWNER_EMAIL`, as the boot does.
  *
  * Shell access is the trust boundary: there is no HTTP surface, and the
  * link goes to the operator's terminal (`docker compose exec` output), not
@@ -41,6 +44,7 @@ async function resetOwner(): Promise<void> {
     link.token,
   );
   const lines = [
+    "The owner's dashboard sessions were signed out.",
     `Owner setup link for ${redactEmail(link.email)} (single use, expires ${link.expiresAt.toISOString()}; earlier links no longer work):`,
     url,
     ...(usedFallback

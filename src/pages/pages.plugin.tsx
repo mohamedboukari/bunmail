@@ -1,6 +1,6 @@
 import { Elysia, t, type Context } from "elysia";
 import { html } from "@elysiajs/html";
-import { timingSafeEqual, randomBytes } from "crypto";
+import { randomBytes } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
 import { redactEmail } from "../utils/redact.ts";
@@ -13,12 +13,8 @@ import {
 import { isEmailStatus } from "../modules/emails/types/email.types.ts";
 
 /* ─── Page Components ─── */
-import { LoginPage, DashboardDisabledPage } from "./routes/login.tsx";
-import {
-  OwnerSetupPage,
-  OwnerSetupInvalidPage,
-  OwnerSetupDonePage,
-} from "./routes/setup.tsx";
+import { LoginPage } from "./routes/login.tsx";
+import { OwnerSetupPage, OwnerSetupInvalidPage } from "./routes/setup.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
 import { EmailTombstonesPage } from "./routes/email-tombstones.tsx";
@@ -39,11 +35,7 @@ import { InboundDetailPage } from "./routes/inbound-detail.tsx";
 import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
 import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 import { SuppressionsPage } from "./routes/suppressions.tsx";
-import {
-  createSessionCookie,
-  validateSessionCookie,
-  SESSION_MAX_AGE,
-} from "./session.ts";
+import { clearSessionCookie, readSessionCookie, sessionSetCookie } from "./session.ts";
 import { parsePagination } from "./pagination.ts";
 
 /* ─── Services ─── */
@@ -60,10 +52,18 @@ import * as dmarcReportsService from "../modules/dmarc-reports/services/dmarc-re
 import * as suppressionService from "../modules/suppressions/services/suppression.service.ts";
 import { verifyDomain } from "../modules/domains/services/dns-verification.service.ts";
 import * as ownerService from "../modules/users/services/owner.service.ts";
+import * as sessionService from "../modules/users/services/session.service.ts";
+import * as loginService from "../modules/users/services/login.service.ts";
 import {
   isWellFormedSetupToken,
   setupPasswordProblem,
 } from "../modules/users/services/owner-setup-policy.service.ts";
+import {
+  SESSION_ABSOLUTE_SECONDS,
+  loginInputTooLong,
+  normalizeLoginEmail,
+} from "../modules/users/services/session-policy.service.ts";
+import { isWellFormedToken } from "../modules/users/services/token.service.ts";
 
 /**
  * Normalises a form field that can come back either as a single string
@@ -90,34 +90,70 @@ function parseSenderList(input: string | undefined): string[] {
 /* ─── Session Helpers ─── */
 
 /**
- * Builds the shared `bm_session` cookie attributes (#133).
- *
- * Adds `Secure` in production so the session cookie is never transmitted
- * over plaintext HTTP (a missing/terminated TLS hop would otherwise expose
- * it to a network MITM). We don't force `Secure` in development because
- * local dev runs over `http://localhost` with no TLS. `HttpOnly` (no JS
- * access) and `SameSite=Lax` (baseline CSRF defense) are always set;
- * `Path=/dashboard` scopes it to the dashboard.
+ * `Secure` on the session cookie in production (#133), so it is never
+ * sent over plaintext HTTP. Not in development, which runs over
+ * `http://localhost` without TLS.
  */
-function sessionCookieAttributes(): string {
-  const secure = config.env === "production" ? "; Secure" : "";
-  return `HttpOnly; SameSite=Lax${secure}; Path=/dashboard`;
+function secureCookies(): boolean {
+  return config.env === "production";
 }
 
 /**
- * Signs the operator in with the stateless `bm_session` cookie and
- * redirects to the fixed `/dashboard` (no `next` parameter, so no open
- * redirect). Shared by `POST /login` and, until account sessions ship
- * (#216), `POST /setup` (#215), so both issue exactly the same cookie:
- * HttpOnly, SameSite=Lax, Secure in production (#133), 24h expiry.
+ * Puts a session token in the `bm_session` cookie (#216): HttpOnly,
+ * SameSite=Lax, Secure in production, Path=/dashboard. At login the
+ * lifetime is the absolute cap; on rotation it is what is left of it. The
+ * server enforces the idle timeout itself, so the cookie never needs
+ * refreshing just to stay alive.
  */
-function issueLegacySession(set: Context["set"]): string {
-  const sessionValue = createSessionCookie(config.dashboard.sessionSecret);
-  set.headers["set-cookie"] =
-    `bm_session=${sessionValue}; ${sessionCookieAttributes()}; Max-Age=${SESSION_MAX_AGE}`;
+function issueSession(
+  set: Context["set"],
+  token: string,
+  maxAgeSec: number = SESSION_ABSOLUTE_SECONDS,
+): void {
+  set.headers["set-cookie"] = sessionSetCookie(token, secureCookies(), maxAgeSec);
+}
+
+/** Removes the `bm_session` cookie from the browser (same attributes, Max-Age=0). */
+function clearSession(set: Context["set"]): void {
+  set.headers["set-cookie"] = clearSessionCookie(secureCookies());
+}
+
+/** Answers with a 302 to `location`; the body is empty. */
+function redirect(set: Context["set"], location: string): string {
   set.status = 302;
-  set.headers["location"] = "/dashboard";
+  set.headers["location"] = location;
   return "";
+}
+
+/** The message a browser sees when the session store cannot be reached. */
+const SESSION_STORE_DOWN = "Dashboard temporarily unavailable";
+
+/**
+ * Message of an error for a log line. Users-module errors are already
+ * `UserStoreError` (SQLSTATE only), so this never carries a token hash or
+ * an email.
+ */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Token reuse (#216): a token the session already rotated away from was
+ * presented, so two parties hold copies of the cookie. Every session of
+ * the user is revoked (the thief's and the victim's) and the event is
+ * logged; the caller then clears the cookie. Throws when the revoke fails,
+ * so callers can fail closed.
+ */
+async function revokeOnTokenReuse(
+  owner: { userId: string; sessionId: string },
+  ip: string,
+): Promise<void> {
+  await sessionService.revokeAllUserSessions(owner.userId);
+  logger.warn("Session token reuse detected: all sessions of the user revoked", {
+    userId: owner.userId,
+    sessionId: owner.sessionId,
+    ip,
+  });
 }
 
 /**
@@ -177,19 +213,6 @@ function isSameOrigin(request: Request): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Extracts the bm_session cookie value from the Cookie header.
- *
- * @returns The cookie value, or undefined if not found
- */
-function getSessionCookie(request: Request): string | undefined {
-  const cookieHeader = request.headers.get("cookie");
-  if (!cookieHeader) return undefined;
-
-  const match = cookieHeader.match(/bm_session=([^;]+)/);
-  return match?.[1];
 }
 
 /* ─── One-Time Secret Reveal (#132) ─── */
@@ -294,26 +317,15 @@ function isDnsVerifyThrottled(domainId: string): boolean {
   return recent.length > DNS_VERIFY_MAX;
 }
 
-/**
- * Validates the dashboard password using timing-safe comparison.
- *
- * @returns true if the password matches DASHBOARD_PASSWORD
- */
-function validatePassword(input: string): boolean {
-  const expected = config.dashboard.password;
-  if (input.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(input), Buffer.from(expected));
-}
-
 /* ─── Dashboard Plugin ─── */
 
 /**
  * Pages plugin: server-rendered dashboard under /dashboard.
  *
  * Routes:
- * - GET  /dashboard/login           → login form
- * - POST /dashboard/login           → validate password, set cookie
- * - POST /dashboard/logout          → clear cookie, redirect
+ * - GET  /dashboard/login           → login form (email + password)
+ * - POST /dashboard/login           → check email + password, open a session, set cookie
+ * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
  * - GET  /dashboard                 → home (stats overview)
@@ -327,8 +339,11 @@ function validatePassword(input: string): boolean {
  * - POST /dashboard/domains/:id/delete → delete domain (form action)
  * - GET  /dashboard/domains/:id     → domain detail
  *
- * Auth: password-based via DASHBOARD_PASSWORD env var + session cookie.
- * The owner setup routes are authorized by the one-time setup token.
+ * Auth (#216): account login with email and password against
+ * `user_credentials`, then a server-side session in the `sessions` table
+ * whose opaque token rides in the `bm_session` cookie and rotates every
+ * minute. The owner setup routes are authorized by the one-time setup
+ * token.
  */
 
 /**
@@ -358,18 +373,15 @@ export const pagesPlugin = new Elysia({
 
   /**
    * GET /dashboard/login
-   * Shows the login form. If dashboard is disabled (no password set),
-   * shows a "Dashboard disabled" page instead.
+   * Shows the email and password form. Gets the auth-page headers (no
+   * caching, no framing). The error text is the same for every failed
+   * login, so it never says whether an account exists.
    */
   .get(
     "/login",
-    ({ query }) => {
-      if (!config.dashboard.password) {
-        return <DashboardDisabledPage />;
-      }
-      /** Show error message if redirected after wrong password */
-      const error =
-        query.error === "invalid" ? "Invalid password. Please try again." : undefined;
+    ({ query, set }) => {
+      setAuthPageHeaders(set);
+      const error = query.error === "invalid" ? "Invalid email or password." : undefined;
       return <LoginPage error={error} />;
     },
     {
@@ -381,32 +393,55 @@ export const pagesPlugin = new Elysia({
 
   /**
    * POST /dashboard/login
-   * Validates the password and sets a session cookie on success.
-   * Redirects back to login with error on failure.
+   * Email and password login (#216). In order: auth-page headers; a
+   * same-origin check (blocks login CSRF, which would sign a victim into
+   * the attacker's account); the per-IP limiter (#109), before any
+   * database or argon2id work; the input bounds; then exactly one argon2id
+   * verify on every branch (`verifyPasswordLogin`).
+   *
+   * Every failure (unknown email, no password, disabled account, wrong
+   * password, over-long input) counts against the IP and gets the same
+   * redirect to `?error=invalid`; the reason only reaches the server log.
+   * The email never goes in the URL.
+   *
+   * On success a fresh session is opened (a session the browser already
+   * presented is revoked first, so sessions do not stack and a planted
+   * cookie cannot survive login) and the browser is sent to the fixed
+   * `/dashboard`: no `next` parameter, no open redirect.
+   *
+   * The body schema is deliberately loose (only generous length caps): a
+   * schema failure answers 422 JSON from the global handler, not a page,
+   * so the real bounds are checked in the handler.
    */
   .post(
     "/login",
-    ({ body, set, request, server }) => {
-      if (!config.dashboard.password) {
-        set.status = 403;
-        return <DashboardDisabledPage />;
-      }
-
-      /**
-       * Brute-force protection (#109). Resolve the client IP honouring the
-       * configured trusted-proxy-hop count, then enforce the per-IP failed
-       * attempt limit before validating the password. Lockout is checked
-       * first (a read), failures are recorded after a wrong guess, and a
-       * successful login clears the counter.
-       */
+    async ({ body, set, request, server }) => {
+      setAuthPageHeaders(set);
       const { loginRateLimit, trustedProxyHops } = config.dashboard;
       const ip = resolveClientIp({
         socketIp: server?.requestIP(request)?.address,
         forwardedFor: request.headers.get("x-forwarded-for"),
         trustedProxyHops,
       });
-      const windowMs = loginRateLimit.windowSec * 1000;
 
+      if (!isSameOrigin(request)) {
+        logger.warn("Dashboard login POST rejected: cross-origin (possible CSRF)", {
+          ip,
+          origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+        });
+        set.status = 403;
+        return "Forbidden: cross-origin request rejected";
+      }
+
+      /**
+       * Brute-force protection (#109). Lockout is checked first, then the
+       * attempt is counted right away, before any await: the password
+       * check (argon2id) takes tens of milliseconds, and counting only
+       * after it would let a parallel burst from one IP pass the limit,
+       * each request running a full hash. A successful login clears the
+       * counter.
+       */
+      const windowMs = loginRateLimit.windowSec * 1000;
       if (loginRateLimit.enabled) {
         const { limited, retryAfterSec } = isLoginRateLimited(
           ip,
@@ -428,41 +463,126 @@ export const pagesPlugin = new Elysia({
             />
           );
         }
+        recordFailedLogin(ip, windowMs);
       }
 
-      if (!validatePassword(body.password)) {
-        if (loginRateLimit.enabled) recordFailedLogin(ip, windowMs);
-        logger.warn("Dashboard login failed: invalid password", { ip });
-        set.status = 302;
-        set.headers["location"] = "/dashboard/login?error=invalid";
-        return "";
+      const email = normalizeLoginEmail(body.email);
+      const tooLong = loginInputTooLong(email, body.password);
+
+      try {
+        const result = tooLong
+          ? null
+          : await loginService.verifyPasswordLogin(email, body.password);
+
+        if (!result?.ok) {
+          /** Already counted before the password check. */
+          logger.warn("Dashboard login failed", {
+            ip,
+            reason: result ? result.reason : "too_long",
+            ...(result ? { email: redactEmail(email) } : {}),
+          });
+          return redirect(set, "/dashboard/login?error=invalid");
+        }
+
+        /** Success: wipe any accumulated failures for this IP. */
+        if (loginRateLimit.enabled) clearLoginAttempts(ip);
+
+        /**
+         * Replace the browser's previous session. A token the session had
+         * already rotated away from means a copy is in other hands (for
+         * example a victim signing in again while a thief keeps the stolen
+         * session alive): treat it as reuse and revoke every session of
+         * that user before opening the new one.
+         */
+        const presented = readSessionCookie(request.headers.get("cookie"));
+        if (presented && isWellFormedToken(presented)) {
+          const revoked = await sessionService.revokeSessionByToken(presented);
+          if (!revoked) {
+            const superseded =
+              await sessionService.findSessionBySupersededToken(presented);
+            if (superseded) await revokeOnTokenReuse(superseded, ip);
+          }
+        }
+
+        const { sessionId, token } = await sessionService.createSession({
+          userId: result.userId,
+          assurance: result.assurance,
+          authMethod: "password",
+          ip,
+          userAgent: request.headers.get("user-agent"),
+        });
+        logger.info("Dashboard login successful", {
+          userId: result.userId,
+          sessionId,
+          ip,
+        });
+
+        issueSession(set, token);
+        return redirect(set, "/dashboard");
+      } catch (error: unknown) {
+        logger.error("Dashboard login failed: session store error", {
+          ip,
+          error: errorMessage(error),
+        });
+        set.status = 503;
+        return SESSION_STORE_DOWN;
       }
-
-      /** Success: wipe any accumulated failures for this IP. */
-      if (loginRateLimit.enabled) clearLoginAttempts(ip);
-      logger.info("Dashboard login successful", { ip });
-
-      /** Set session cookie: HttpOnly, SameSite=Lax, Secure in prod (#133), 24h expiry */
-      return issueLegacySession(set);
     },
     {
       body: t.Object({
-        password: t.String(),
+        email: t.String({ maxLength: 320 }),
+        password: t.String({ maxLength: 1024 }),
       }),
     },
   )
 
   /**
    * POST /dashboard/logout
-   * Clears the session cookie and redirects to login.
+   * Revokes the session (deletes its row) and clears the cookie (#216).
+   * Same-origin only, so a third-party page cannot sign the operator out.
+   * Works for missing, malformed, already revoked and legacy cookies: the
+   * cookie is always cleared. A database error is logged and the cookie
+   * is still cleared. Replaying the old cookie afterwards gets a 302 to
+   * the login page.
    */
-  .post("/logout", ({ set }) => {
-    logger.info("Dashboard logout");
-    /** Clear cookie by setting Max-Age=0 (same attributes as when set, #133) */
-    set.headers["set-cookie"] = `bm_session=; ${sessionCookieAttributes()}; Max-Age=0`;
-    set.status = 302;
-    set.headers["location"] = "/dashboard/login";
-    return "";
+  .post("/logout", async ({ set, request, server }) => {
+    const ip = resolveClientIp({
+      socketIp: server?.requestIP(request)?.address,
+      forwardedFor: request.headers.get("x-forwarded-for"),
+      trustedProxyHops: config.dashboard.trustedProxyHops,
+    });
+
+    if (!isSameOrigin(request)) {
+      logger.warn("Dashboard logout POST rejected: cross-origin (possible CSRF)", {
+        ip,
+        origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+      });
+      set.status = 403;
+      return "Forbidden: cross-origin request rejected";
+    }
+
+    const token = readSessionCookie(request.headers.get("cookie"));
+    if (token && isWellFormedToken(token)) {
+      try {
+        const sessionId = await sessionService.revokeSessionByToken(token);
+        if (!sessionId) {
+          /** A superseded token: someone else holds the live one. */
+          const superseded = await sessionService.findSessionBySupersededToken(token);
+          if (superseded) await revokeOnTokenReuse(superseded, ip);
+        }
+        logger.info("Dashboard logout", { sessionId, ip });
+      } catch (error: unknown) {
+        logger.error("Dashboard logout: session revoke failed", {
+          ip,
+          error: errorMessage(error),
+        });
+      }
+    } else {
+      logger.info("Dashboard logout", { sessionId: null, ip });
+    }
+
+    clearSession(set);
+    return redirect(set, "/dashboard/login");
   })
 
   /**
@@ -504,10 +624,10 @@ export const pagesPlugin = new Elysia({
    * (a failure re-renders the form with 200, no hashing, no write), and
    * only then argon2id inside `completeOwnerSetup`.
    *
-   * On success the owner is signed in with the legacy session cookie and
-   * redirected to `/dashboard`, which also drops the token from the
-   * address bar. With `DASHBOARD_PASSWORD` empty the dashboard is
-   * disabled, so a "password saved" page is shown instead.
+   * On success `completeOwnerSetup` has, in one transaction, deleted every
+   * session of the owner and opened a new one (#216); its token is set as
+   * the cookie and the browser is redirected to `/dashboard`, which also
+   * drops the setup token from the address bar.
    *
    * The body schema is deliberately loose (only length caps): a schema
    * failure answers 422 JSON from the global handler, not a page, so the
@@ -545,7 +665,10 @@ export const pagesPlugin = new Elysia({
         return <OwnerSetupPage token={body.token} email={setup.email} error={problem} />;
       }
 
-      const owner = await ownerService.completeOwnerSetup(body.token, body.password);
+      const owner = await ownerService.completeOwnerSetup(body.token, body.password, {
+        ip,
+        userAgent: request.headers.get("user-agent"),
+      });
       if (!owner) {
         set.status = 400;
         return <OwnerSetupInvalidPage />;
@@ -553,10 +676,8 @@ export const pagesPlugin = new Elysia({
 
       logger.warn("Owner setup completed", { owner: redactEmail(owner.email), ip });
 
-      if (!config.dashboard.password) {
-        return <OwnerSetupDonePage />;
-      }
-      return issueLegacySession(set);
+      issueSession(set, owner.sessionToken);
+      return redirect(set, "/dashboard");
     },
     {
       body: t.Object({
@@ -570,10 +691,27 @@ export const pagesPlugin = new Elysia({
   /* ─── Session Guard ─── */
 
   /**
-   * All routes below this guard require a valid session cookie.
-   * If the dashboard is disabled or the session is invalid, redirect to login.
+   * All routes below this guard require a live session (#216). In order:
+   *
+   * 1. No cookie: 302 to the login page.
+   * 2. A cookie that is not a minted token (including a pre-#216
+   *    `<ts>.<hmac>` cookie): cleared and redirected, with no database
+   *    query.
+   * 3. One indexed lookup (`findActiveSession`): the session must exist,
+   *    be unexpired, belong to an enabled user and have `password` or
+   *    `mfa` assurance. No row: cookie cleared, 302. A database error:
+   *    503, never a pass-through (fail closed) and never a false logout.
+   * 4. The token replaced by the last rotation, presented after the grace
+   *    period, or any older superseded token (`session_token_history`):
+   *    reuse detected. Two parties hold the session, so every session of
+   *    the user is revoked, the cookie cleared, 302.
+   * 5. A cross-origin POST: 403 (CSRF second layer, #133).
+   * 6. The current token, older than a minute: rotated. The new token goes
+   *    out with this response; when a parallel request rotated first, this
+   *    one is served without a new cookie. A rotation error is logged and
+   *    the request is served (the old token stays current).
    */
-  .onBeforeHandle(({ request, set, path }) => {
+  .onBeforeHandle(async ({ request, set, path, server }) => {
     /**
      * Skip auth for the public routes registered above (login, logout,
      * owner setup #215). Local hooks only apply to routes registered after
@@ -587,23 +725,74 @@ export const pagesPlugin = new Elysia({
       return;
     }
 
-    /** Dashboard disabled: redirect to login page (shows disabled message) */
-    if (!config.dashboard.password) {
-      set.status = 302;
-      set.headers["location"] = "/dashboard/login";
-      return "";
+    const token = readSessionCookie(request.headers.get("cookie"));
+    if (!token) {
+      return redirect(set, "/dashboard/login");
+    }
+    if (!isWellFormedToken(token)) {
+      logger.debug("Dashboard session cookie malformed or legacy, clearing it");
+      clearSession(set);
+      return redirect(set, "/dashboard/login");
     }
 
-    /** Check session cookie */
-    const sessionCookie = getSessionCookie(request);
-    if (
-      !sessionCookie ||
-      !validateSessionCookie(sessionCookie, config.dashboard.sessionSecret)
-    ) {
+    let session: Awaited<ReturnType<typeof sessionService.findActiveSession>>;
+    try {
+      session = await sessionService.findActiveSession(token);
+    } catch (error: unknown) {
+      logger.error("Dashboard session lookup failed", {
+        path,
+        error: errorMessage(error),
+      });
+      set.status = 503;
+      return SESSION_STORE_DOWN;
+    }
+
+    /**
+     * Reuse: the previous token after the grace period, or (no live match)
+     * an older superseded token from the session's history.
+     */
+    let reusedBy: { userId: string; sessionId: string } | null = null;
+    if (session && session.matched === "previous" && session.graceOver) {
+      reusedBy = session;
+    } else if (!session) {
+      try {
+        reusedBy = await sessionService.findSessionBySupersededToken(token);
+      } catch (error: unknown) {
+        logger.error("Dashboard session lookup failed", {
+          path,
+          error: errorMessage(error),
+        });
+        set.status = 503;
+        return SESSION_STORE_DOWN;
+      }
+    }
+
+    if (reusedBy) {
+      const ip = resolveClientIp({
+        socketIp: server?.requestIP(request)?.address,
+        forwardedFor: request.headers.get("x-forwarded-for"),
+        trustedProxyHops: config.dashboard.trustedProxyHops,
+      });
+      try {
+        await revokeOnTokenReuse(reusedBy, ip);
+      } catch (error: unknown) {
+        logger.error("Session token reuse detected, but revoking the sessions failed", {
+          userId: reusedBy.userId,
+          sessionId: reusedBy.sessionId,
+          ip,
+          error: errorMessage(error),
+        });
+        set.status = 503;
+        return SESSION_STORE_DOWN;
+      }
+      clearSession(set);
+      return redirect(set, "/dashboard/login");
+    }
+
+    if (!session) {
       logger.debug("Dashboard session invalid, redirecting to login");
-      set.status = 302;
-      set.headers["location"] = "/dashboard/login";
-      return "";
+      clearSession(set);
+      return redirect(set, "/dashboard/login");
     }
 
     /**
@@ -611,7 +800,8 @@ export const pagesPlugin = new Elysia({
      * POST, so require same-origin on POST. `SameSite=Lax` is the primary
      * defense; this rejects a forged cross-site form-POST that rides the
      * operator's session cookie. Returns 403 (not a redirect) so it's an
-     * explicit refusal, not a silent bounce.
+     * explicit refusal, not a silent bounce. Checked before rotation, so a
+     * rejected request never carries a new token.
      */
     if (request.method === "POST" && !isSameOrigin(request)) {
       logger.warn("Dashboard POST rejected: cross-origin (possible CSRF)", {
@@ -620,6 +810,18 @@ export const pagesPlugin = new Elysia({
       });
       set.status = 403;
       return "Forbidden: cross-origin request rejected";
+    }
+
+    if (session.matched === "current" && session.rotationDue) {
+      try {
+        const rotated = await sessionService.rotateSession(session.sessionId, token);
+        if (rotated) issueSession(set, rotated.token, rotated.maxAgeSec);
+      } catch (error: unknown) {
+        logger.error("Dashboard session rotation failed", {
+          sessionId: session.sessionId,
+          error: errorMessage(error),
+        });
+      }
     }
   })
 

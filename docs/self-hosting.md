@@ -75,8 +75,6 @@ BUNMAIL_ENV=production
 DATABASE_URL=postgres://bunmail:bunmail@db:5432/bunmail
 MAIL_HOSTNAME=mail.yourdomain.com
 BUNMAIL_OWNER_EMAIL=you@yourdomain.com
-DASHBOARD_PASSWORD=your-secure-password
-SESSION_SECRET=run-openssl-rand-hex-32-to-generate
 DKIM_ENCRYPTION_KEY=run-openssl-rand-base64-32-to-generate
 SMTP_ENABLED=true
 SMTP_PORT=25
@@ -96,10 +94,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_HOSTNAME` is **required in production** (#242): it is the SMTP EHLO name and the Message-ID domain of every email. BunMail refuses to start if it is unset, `localhost`, an IP address, not fully qualified, or a placeholder (`*.example.com`, `*.yourdomain.com`, `.test`, `.local`). Use this server's real hostname, whose A record points at the server and which the sending IP's PTR resolves to (see the reverse DNS section below).
 
-> `BUNMAIL_OWNER_EMAIL` is **required in production** (#215): the email address of the dashboard owner account. BunMail refuses to start if it is unset, and refuses a malformed address or one over 254 characters in every environment (development only warns and skips the owner bootstrap when it is unset). It is stored lowercased. On first boot BunMail creates the owner and logs a one-time setup link (see [Claim the owner account](#claim-the-owner-account)). While setup is pending, a changed value updates the stored owner email on the next boot. After setup the database is the source of truth: changing the variable later only logs a warning.
+> `BUNMAIL_OWNER_EMAIL` is **required in production** (#215): the email address of the dashboard owner account. BunMail refuses to start if it is unset, and refuses a malformed address or one over 254 characters in every environment (development only warns and skips the owner bootstrap when it is unset). It is stored lowercased. On first boot BunMail creates the owner and logs a one-time setup link (see [Claim the owner account](#claim-the-owner-account)). While setup is pending, a changed value updates the stored owner email on the next boot. After setup the database is the source of truth: changing the variable later only logs a warning. This account is the only way into the dashboard (#216): with the variable unset, development has no dashboard login and logs a warning at boot.
 
-> Generate a session secret: `openssl rand -hex 32`
->
 > Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key at rest with AES-256-GCM (#23). See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
@@ -108,7 +104,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
-> `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed passwords per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
+> `DASHBOARD_TRUSTED_PROXY_HOPS`: the dashboard login throttle (#109) rate-limits failed logins per client IP. Behind a reverse proxy (section 6) the socket IP is the proxy's, so set this to the number of trusted proxy hops (`1` for a single nginx/Caddy/Cloudflare): BunMail then reads the real client from the Nth-from-right `X-Forwarded-For` entry. Leave at `0` only if BunMail is exposed directly. **Make sure the origin is reachable only through the proxy** (don't expose `:3000`), otherwise `X-Forwarded-For` can be forged. Tune the limits with `DASHBOARD_LOGIN_RATE_LIMIT_MAX` (default `5`) and `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` (seconds, default `900`). See [docs/dashboard.md](dashboard.md#brute-force-protection-109).
 
 > `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`: per-API-key request limit on the REST API (default `100` requests per `60` seconds, then `429` with `Retry-After`). Raise it if one key legitimately makes more calls than that, for example a high-volume sender. Boot fails on a non-positive or non-integer value.
 
@@ -195,13 +191,13 @@ docker compose logs app | grep 'Owner setup link'
 
 Open the link and choose the owner password (15 to 256 characters, confirmed twice). The link is valid for 24 hours and works once. Until the password is set, every restart logs a new link and the previous one stops working, so **use the most recent link** (with several replicas, only the last one logged works). Anyone who can read these logs can claim the account first, so do this right after the first deploy.
 
-After setup you are signed in to the dashboard (redirected to `/dashboard`). If the link expired or got lost before setup, restart the container (a restart logs a new link only while setup is pending) or print a fresh one:
+After setup you are signed in to the dashboard (redirected to `/dashboard`); from then on you sign in at `/dashboard/login` with `BUNMAIL_OWNER_EMAIL` and that password. If the link expired or got lost before setup, restart the container (a restart logs a new link only while setup is pending) or print a fresh one:
 
 ```bash
 docker compose exec app bun run src/db/reset-owner.ts
 ```
 
-The script prints the link to your terminal (not to `docker compose logs`) and revokes every earlier link. It also works after setup, as a password reset: the stored owner password stays in place until the new link is completed (until #216 that password is not used for login yet). If `BUNMAIL_OWNER_EMAIL` differs from the stored owner, the script warns and keeps the stored address. It exits `1` when there is no owner and `BUNMAIL_OWNER_EMAIL` is unset.
+The script prints the link to your terminal (not to `docker compose logs`) and revokes every earlier link. It also works after setup, as a password reset and a kill switch: it signs the owner out of every dashboard session at once (#216). The stored owner password stays in place until the new link is completed, so it still signs in until then; completing the link signs every session out again. If `BUNMAIL_OWNER_EMAIL` differs from the stored owner, the script warns and keeps the stored address. It exits `1` when there is no owner and `BUNMAIL_OWNER_EMAIL` is unset.
 
 ### Seed your first API key
 
@@ -258,9 +254,11 @@ curl -s http://localhost:3000/api/v1/emails \
 
 ## 5. Dashboard
 
-Open `http://YOUR_SERVER_IP:3000/dashboard` in your browser. Log in with the `DASHBOARD_PASSWORD` you set in `.env`.
+Open `https://mail.yourdomain.com/dashboard` (through the reverse proxy of section 6) and sign in with the owner email and the password you chose at [Claim the owner account](#claim-the-owner-account). Every failed login shows the same `Invalid email or password.`, whatever the cause.
 
-> **Interim login (#215 to #216).** The owner password set through the setup link is stored, but the login form still checks `DASHBOARD_PASSWORD` until account login ships (#216). Completing setup signs you in with the same session cookie the login form issues. Those sessions end only when they expire (24 h) or when `SESSION_SECRET` is rotated.
+> **HTTPS in production.** With `BUNMAIL_ENV=production` the session cookie is `Secure`, so browsers only keep it over HTTPS (most browsers also accept it on `http://localhost`, for example through an SSH tunnel: `ssh -L 3000:localhost:3000 root@your-server-ip`). Over plain `http://YOUR_SERVER_IP:3000` the sign-in does not stick.
+
+Sessions (#216) live in the database: a session expires after 24 hours without use and 7 days after sign-in at the latest, **Log out** ends it on the server, and `reset-owner` signs the owner out everywhere. While you use the dashboard, the session cookie is replaced with a fresh one about once a minute; if an old cookie shows up again later, BunMail treats it as stolen and signs the account out of every session (details in [docs/dashboard.md](dashboard.md#auth-flow)).
 
 The dashboard lets you manage emails, domains, API keys, and view delivery status.
 
@@ -361,6 +359,16 @@ git pull
 # Rebuild and restart
 docker compose down && docker compose up -d --build
 ```
+
+### Upgrading to account login (#216)
+
+Account login replaces the shared `DASHBOARD_PASSWORD` and the `SESSION_SECRET`-signed cookie. Pending migrations (including `0017`, which adds the session rotation columns) apply on container start as usual. The API, SMTP and the queue are not affected; only the dashboard is unreachable until the owner is claimed. In order:
+
+1. **Before you pull**, add `BUNMAIL_OWNER_EMAIL=you@yourdomain.com`, a real `MAIL_HOSTNAME` (#242) and `APP_BASE_URL` to `.env`. Production refuses to start without the first two, so a `git pull` and rebuild without them crash-loops.
+2. Pull and rebuild as above.
+3. **Everyone is signed out once:** old dashboard cookies are rejected and cleared.
+4. If the owner has not set a password yet, claim it: `docker compose logs app | grep 'Owner setup link'`, open the link, choose a password (15 or more characters). Setup signs you in. If the link expired or was lost, restart the container (a new link is logged while setup is pending) or run `docker compose exec app bun run src/db/reset-owner.ts`. If you already claimed the owner on an earlier version, sign in with that email and password.
+5. Remove `DASHBOARD_PASSWORD` and `SESSION_SECRET` from `.env`. They do nothing any more; while they are set, every boot logs `Dashboard auth env vars are no longer used since #216, remove from .env`.
 
 ## Preventing Spam (Deliverability Guide)
 
@@ -506,9 +514,17 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 - DNS resolution issues: check with `dig MX example.com`
 
 **Dashboard not loading:**
-- Check `DASHBOARD_PASSWORD` is set in `.env`
 - Check the container is running: `docker compose ps`
 - If using a reverse proxy, verify it's forwarding to port 3000
+- `Dashboard temporarily unavailable` (HTTP `503`): the dashboard could not reach the session store in Postgres. Check the database with `docker compose ps` and `docker compose logs db`; the API keeps working.
+
+**Can't sign in to the dashboard (for example after upgrading to #216):**
+- The dashboard login is the owner account, not `DASHBOARD_PASSWORD`. If the owner never completed setup, take the newest `Owner setup link` from `docker compose logs app` or run `docker compose exec app bun run src/db/reset-owner.ts`. A forgotten password is reset the same way.
+- `Invalid email or password.` is shown for every failure. The server log line `Dashboard login failed` carries the `reason` (`unknown`, `no_password`, `disabled`, `bad_password`, `too_long`); `no_password` means the setup link was never completed.
+- After 5 failures in 15 minutes from one IP the form is locked (HTTP `429`, `Retry-After`) until the window passes (#109).
+- The sign-in succeeds but you land on the login page again: the `Secure` cookie was dropped because the dashboard is served over plain HTTP. Use HTTPS or an SSH tunnel to `localhost` (see [5. Dashboard](#5-dashboard)).
+- `Forbidden: cross-origin request rejected` (HTTP `403`) on the login form: the `Origin` of the form post does not match the host BunMail sees. Behind a reverse proxy, forward the original `Host` header (`proxy_set_header Host $host;` in nginx; Caddy does it by default).
+- Signed out unexpectedly and the log shows `Session token reuse detected: all sessions of the user revoked`: a replaced session cookie was presented more than 30 seconds after its replacement, so every session of the account was ended. Sign in again. It also happens, rarely, when the response carrying a new cookie never reached the browser (a dropped connection). If neither explains it, treat the cookie as stolen and run `reset-owner`.
 
 **Migration errors:**
 - Check logs: `docker compose logs app`

@@ -3,12 +3,15 @@ import { logger } from "../utils/logger.ts";
 /**
  * Per-IP brute-force protection for the dashboard login form (#109).
  *
- * The dashboard authenticates with a single shared `DASHBOARD_PASSWORD`
- * (no username) and a successful login grants unscoped read/write across
- * every tenant's mail. Without a throttle, an attacker can guess the
- * password at full request speed. This module counts *failed* login
- * attempts per client IP in a sliding window and lets the login handler
- * reject further attempts with HTTP 429 once the limit is hit.
+ * The dashboard signs in with an account email and password (#216), and a
+ * successful login grants read/write across every tenant's mail. Without
+ * a throttle, an attacker can guess passwords at full request speed. This
+ * module counts *failed* logins per client IP in a sliding window (every
+ * kind of failure: unknown email, no password, disabled account, wrong
+ * password, over-long input) and lets the login handler reject further
+ * attempts with HTTP 429 once the limit is hit. The limit runs before any
+ * database or argon2id work. Throttling is per IP only; there is no
+ * per-account lockout, which would let anyone lock the owner out.
  *
  * Config-free by design: thresholds are passed in by the caller (the
  * pages plugin reads them from `config`). Keeping `config` out of this

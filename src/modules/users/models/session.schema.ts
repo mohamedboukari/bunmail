@@ -9,6 +9,14 @@ import { CREDENTIAL_TYPES, SESSION_ASSURANCES, literals } from "../types/user.ty
  * stored, so a database leak does not yield usable sessions. Logout,
  * password change and deactivation delete rows, which revokes them for
  * real. Rows live in Postgres, so they work across replicas (#185).
+ *
+ * The token rotates (#216): at most once a minute an active session gets
+ * a fresh token, the old hash moves to `previous_token_hash` and stays
+ * accepted for a short grace period (racing requests of the same
+ * browser). Presenting the previous token after the grace period means
+ * two parties hold the session, so every session of the user is revoked.
+ * Older generations live in `session_token_history`, so they are caught
+ * too, however old.
  */
 export const sessions = pgTable(
   "sessions",
@@ -23,6 +31,16 @@ export const sessions = pgTable(
 
     /** SHA-256 (hex) of the cookie token; the token itself is never stored. */
     tokenHash: varchar("token_hash", { length: 64 }).notNull().unique(),
+
+    /**
+     * SHA-256 (hex) of the token this one replaced at the last rotation
+     * (#216), or null before the first rotation. Accepted for a short
+     * grace period, then treated as a stolen token (reuse detection).
+     */
+    previousTokenHash: varchar("previous_token_hash", { length: 64 }),
+
+    /** When the token last rotated; null until the first rotation. */
+    rotatedAt: timestamp("rotated_at", { withTimezone: true }),
 
     /**
      * `pending` (first factor passed, second required) | `password` |
@@ -51,6 +69,9 @@ export const sessions = pgTable(
 
     /** Expired-session purge. */
     index("sessions_expires_at_idx").on(table.expiresAt),
+
+    /** The guard looks a presented token up by either hash (#216). */
+    index("sessions_previous_token_hash_idx").on(table.previousTokenHash),
 
     check(
       "sessions_assurance_check",

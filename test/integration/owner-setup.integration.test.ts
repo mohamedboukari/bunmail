@@ -2,12 +2,14 @@
  * Owner bootstrap and the one-time setup link (#215), against real
  * Postgres: the state machine, the `bunmail:owner` advisory lock taken
  * through drizzle on bun-sql, single use, expiry on the database clock,
- * recovery, and the `reset-owner.ts` script itself.
+ * recovery, and the `reset-owner.ts` script itself. Since #216 also the
+ * session side: completion and reset-owner sign the owner out everywhere,
+ * and completion opens the owner's new session in the same transaction.
  */
 import { describe, test, expect, beforeEach, spyOn } from "bun:test";
 import { join } from "path";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
-import { db, seed, truncateAll } from "./_helpers.ts";
+import { db, seed, sessions, truncateAll } from "./_helpers.ts";
 import { users } from "../../src/modules/users/models/user.schema.ts";
 import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
 import { userTokens } from "../../src/modules/users/models/user-token.schema.ts";
@@ -59,6 +61,15 @@ async function passwordHashes(userId: string): Promise<string[]> {
     .from(userCredentials)
     .where(and(eq(userCredentials.userId, userId), eq(userCredentials.type, "password")));
   return rows.map((r) => r.secretHash ?? "");
+}
+
+/** Token hashes of every session of a user. */
+async function sessionHashes(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ tokenHash: sessions.tokenHash })
+    .from(sessions)
+    .where(eq(sessions.userId, userId));
+  return rows.map((r) => r.tokenHash);
 }
 
 /** Number of `user_tokens` rows of any state. */
@@ -509,6 +520,68 @@ describe("recovery (issueOwnerSetupLink)", () => {
   });
 });
 
+describe("sessions (#216)", () => {
+  test("completion deletes the owner's sessions and opens exactly one new one", async () => {
+    const token = await freshOwnerToken();
+    const [owner] = await owners();
+    const ownerId = owner?.id ?? "";
+    const member = await seed.user({ email: "member@example.com" });
+    await seed.session({ userId: ownerId });
+    await seed.session({ userId: ownerId });
+    await seed.session({ userId: member.id });
+
+    const done = await completeOwnerSetup(token, PASSWORD, {
+      ip: "203.0.113.5",
+      userAgent: "setup-agent",
+    });
+    expect(done).not.toBeNull();
+    const sessionToken = done?.sessionToken ?? "";
+    expect(sessionToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    expect(await sessionHashes(ownerId)).toEqual([hashToken(sessionToken)]);
+    expect(await sessionHashes(member.id)).toHaveLength(1);
+
+    const [row] = await db
+      .select({
+        ip: sessions.ip,
+        userAgent: sessions.userAgent,
+        assurance: sessions.assurance,
+        authMethod: sessions.authMethod,
+      })
+      .from(sessions)
+      .where(eq(sessions.userId, ownerId));
+    expect(row).toEqual({
+      ip: "203.0.113.5",
+      userAgent: "setup-agent",
+      assurance: "password",
+      authMethod: "password",
+    });
+  });
+
+  test("a failed completion (spent token) leaves the sessions untouched", async () => {
+    const token = await freshOwnerToken();
+    const done = await completeOwnerSetup(token, PASSWORD);
+    const ownerId = done?.userId ?? "";
+    const before = await sessionHashes(ownerId);
+    expect(before).toHaveLength(1);
+
+    expect(await completeOwnerSetup(token, "another password, long enough")).toBeNull();
+    expect(await sessionHashes(ownerId)).toEqual(before);
+  });
+
+  test("issueOwnerSetupLink signs the owner out everywhere, nobody else", async () => {
+    const { id } = await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    const member = await seed.user({ email: "member@example.com" });
+    await seed.session({ userId: id });
+    await seed.session({ userId: id });
+    await seed.session({ userId: member.id });
+
+    await issueOwnerSetupLink(OWNER_EMAIL);
+    expect(await sessionHashes(id)).toHaveLength(0);
+    expect(await sessionHashes(member.id)).toHaveLength(1);
+  });
+});
+
 describe("src/db/reset-owner.ts", () => {
   const SCRIPT = join(import.meta.dir, "..", "..", "src", "db", "reset-owner.ts");
 
@@ -565,6 +638,19 @@ describe("src/db/reset-owner.ts", () => {
     const live = await liveSetupTokens();
     expect(live).toHaveLength(1);
     expect(live[0]?.tokenHash).toBe(hashToken(token));
+  });
+
+  test("signs the owner's dashboard sessions out and says so", async () => {
+    const { id } = await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    const member = await seed.user({ email: "member@example.com" });
+    await seed.session({ userId: id });
+    await seed.session({ userId: member.id });
+
+    const { code, output } = await runScript(OWNER_EMAIL);
+    expect(code).toBe(0);
+    expect(output).toContain("The owner's dashboard sessions were signed out.");
+    expect(await sessionHashes(id)).toHaveLength(0);
+    expect(await sessionHashes(member.id)).toHaveLength(1);
   });
 
   test("with no owner and BUNMAIL_OWNER_EMAIL unset it exits 1", async () => {

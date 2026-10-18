@@ -13,7 +13,7 @@
  * violations, and transactional semantics that mocked-DB tests can't.
  */
 
-import { sql as drizzleSql } from "drizzle-orm";
+import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { hashApiKey, generateApiKey, encryptSecret } from "../../src/utils/crypto.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { db } from "../../src/db/index.ts";
@@ -25,7 +25,13 @@ import { templates } from "../../src/modules/templates/models/template.schema.ts
 import { webhooks } from "../../src/modules/webhooks/models/webhook.schema.ts";
 import { users } from "../../src/modules/users/models/user.schema.ts";
 import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
+import { sessions } from "../../src/modules/users/models/session.schema.ts";
 import { hashPassword } from "../../src/modules/users/services/password.service.ts";
+import { hashToken, mintToken } from "../../src/modules/users/services/token.service.ts";
+import type {
+  SessionAssurance,
+  UserRole,
+} from "../../src/modules/users/types/user.types.ts";
 import { config } from "../../src/config.ts";
 
 /**
@@ -232,11 +238,25 @@ export const seed = {
    * completed. The email is lower-cased as `users.email` requires.
    */
   async owner(opts: { email: string; password?: string }): Promise<{ id: string }> {
+    return seed.user({ ...opts, role: "owner" });
+  },
+
+  /**
+   * Insert a dashboard user (#216) of any role, optionally with a
+   * `password` credential (argon2id) and optionally disabled.
+   */
+  async user(opts: {
+    email: string;
+    role?: UserRole;
+    password?: string;
+    disabledAt?: Date;
+  }): Promise<{ id: string }> {
     const id = generateId("usr");
     await db.insert(users).values({
       id,
       email: opts.email.trim().toLowerCase(),
-      role: "owner",
+      role: opts.role ?? "member",
+      disabledAt: opts.disabledAt ?? null,
     });
     if (opts.password !== undefined) {
       await db.insert(userCredentials).values({
@@ -248,11 +268,45 @@ export const seed = {
     }
     return { id };
   },
+
+  /**
+   * Insert a dashboard session (#216) and return its raw cookie token
+   * (only the hash is stored). Times default to a fresh, live session;
+   * pass SQL such as `sql\`now() - interval '2 minutes'\`` to age one.
+   */
+  async session(opts: {
+    userId: string;
+    assurance?: SessionAssurance;
+    expiresAt?: SQL | Date;
+    lastSeenAt?: SQL | Date;
+    createdAt?: SQL | Date;
+    rotatedAt?: SQL | Date | null;
+    previousToken?: string | null;
+  }): Promise<{ id: string; token: string }> {
+    const { token, hash } = mintToken();
+    const id = generateId("ses");
+    await db.insert(sessions).values({
+      id,
+      userId: opts.userId,
+      tokenHash: hash,
+      assurance: opts.assurance ?? "password",
+      authMethod: "password",
+      expiresAt: opts.expiresAt ?? drizzleSql`now() + interval '1 day'`,
+      lastSeenAt: opts.lastSeenAt ?? drizzleSql`now()`,
+      createdAt: opts.createdAt ?? drizzleSql`now()`,
+      rotatedAt: opts.rotatedAt ?? null,
+      previousTokenHash:
+        opts.previousToken === undefined || opts.previousToken === null
+          ? null
+          : hashToken(opts.previousToken),
+    });
+    return { id, token };
+  },
 };
 
 /**
  * Re-export the `db` instance and the schema tables so tests can read
  * back state for assertions without re-importing from src/.
  */
-export { db, apiKeys, domains, emails, suppressions, templates, webhooks };
+export { db, apiKeys, domains, emails, suppressions, templates, webhooks, sessions };
 export { hashApiKey };

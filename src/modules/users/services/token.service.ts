@@ -28,3 +28,18 @@ export function mintToken(): MintedToken {
   const token = randomBytes(32).toString("base64url");
   return { token, hash: hashToken(token) };
 }
+
+/**
+ * The exact shape `mintToken()` produces: 32 random bytes as base64url
+ * without padding, which is always 43 characters.
+ */
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * True when `value` has the shape of a minted token. Callers check this
+ * before any database call, so a malformed value (or a legacy `<ts>.<hmac>`
+ * session cookie from before #216) never costs a query.
+ */
+export function isWellFormedToken(value: string): boolean {
+  return TOKEN_RE.test(value);
+}

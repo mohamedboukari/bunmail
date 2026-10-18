@@ -1,3 +1,5 @@
+import { isWellFormedToken } from "./token.service.ts";
+
 /**
  * Rules for the owner setup link (#215): how long it lives, what a
  * well-formed token looks like, the password policy, and how the link is
@@ -23,24 +25,19 @@ export const SETUP_PASSWORD_MIN_LENGTH = 15;
 /** Longest owner password accepted: caps the input fed to argon2id. */
 export const SETUP_PASSWORD_MAX_LENGTH = 256;
 
-/**
- * A setup token is what `mintToken()` produces: 32 random bytes as
- * base64url without padding, which is always exactly 43 characters.
- */
-const SETUP_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
-
 /** Expiry of a setup token minted at `now`. */
 export function setupTokenExpiry(now: Date): Date {
   return new Date(now.getTime() + OWNER_SETUP_TTL_MS);
 }
 
 /**
- * True when `token` has the shape of a minted setup token. Checked before
- * any database call, so a malformed value from the URL or the form never
+ * True when `token` has the shape of a minted setup token (what
+ * `mintToken()` produces, see `isWellFormedToken`). Checked before any
+ * database call, so a malformed value from the URL or the form never
  * costs a query.
  */
 export function isWellFormedSetupToken(token: string): boolean {
-  return SETUP_TOKEN_RE.test(token);
+  return isWellFormedToken(token);
 }
 
 /**
