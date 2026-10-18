@@ -17,6 +17,7 @@ import {
   type AttemptLimiter,
   type IssuedPasswordReset,
   type IssuePasswordResetResult,
+  type ContentRecordCounts,
   type Tx,
   type UserRole,
 } from "../types/user.types.ts";
@@ -25,6 +26,11 @@ import { withOwnerLock } from "./owner.service.ts";
 import { buildPasswordResetUrl } from "./password-reset-policy.service.ts";
 import { replaceResetToken, revokeResetLinks } from "./password-reset.service.ts";
 import { verifyPassword } from "./password.service.ts";
+import {
+  disableKeysCreatedBy,
+  downgradeAdminKeysCreatedBy,
+  moveOwnerRecords,
+} from "./record-ownership.service.ts";
 import { revokeAllUserSessions } from "./session.service.ts";
 import {
   accountActionRefusal,
@@ -50,14 +56,21 @@ import {
  *
  * Side effects run in the same transaction as the change:
  *
- * - deactivate and remove: every session of the target is deleted, and
- *   the open invitations the target issued are revoked; deactivation also
+ * - deactivate and remove: every session of the target is deleted, the
+ *   open invitations the target issued are revoked, and every active API
+ *   key the target created is disabled (#219, with the reason
+ *   `creator_deactivated` or `creator_removed`; removal disables them
+ *   before the row delete sets their creator to null); deactivation also
  *   revokes the open password reset links for the target and those the
  *   target issued (#277: reactivation must not revive them);
  * - reactivate: every session of the target is deleted (a login that
- *   raced the deactivation cannot leave one behind);
+ *   raced the deactivation cannot leave one behind); its API keys stay
+ *   disabled (#219: a deactivation usually means a leaver or a suspected
+ *   compromise, so the user creates new keys or an admin decides);
  * - admin to member: the open invitations and password reset links the
- *   target issued are revoked (a member can grant or manage nothing);
+ *   target issued are revoked (a member can grant or manage nothing), and
+ *   every admin API key it created becomes restricted (#219; the keys stay
+ *   active, so their sending keeps working);
  *   member to admin: the target's own open reset links are revoked (#277);
  * - password reset (#277): the account's earlier open reset links are
  *   revoked and a new one is minted (`replaceResetToken`); sessions are
@@ -66,7 +79,11 @@ import {
  *   revoked (an admin cannot grant admin), and every open owner setup link
  *   too, the open password reset links it issued for admins (#277: an
  *   admin cannot manage an admin) and the new owner's own open reset links,
- *   whoever issued them; both accounts stay signed in. Its password check is throttled.
+ *   whoever issued them; the previous owner's templates, domains and
+ *   webhooks (and rows with no creator) move to the new owner (#219; API
+ *   keys stay with their creator, so later account actions on the former
+ *   owner still reach its keys);
+ *   both accounts stay signed in. Its password check is throttled.
  *
  * Revoking those invitations is housekeeping: acceptance re-checks that
  * the inviter is enabled and may still grant the role (#217), so an
@@ -108,6 +125,12 @@ interface AccountChange {
   resetLinksRevoked?: number;
   /** `user_tokens.id` of a new password reset link (#277); never the token. */
   resetId?: string;
+  /** API keys of the target disabled (#219, deactivation and removal). */
+  keysDisabled?: number;
+  /** Admin API keys of the target made restricted (#219, demotion to member). */
+  adminKeysDowngraded?: number;
+  /** Templates, domains and webhooks moved to the new owner (#219, ownership transfer; keys never move). */
+  recordsMoved?: ContentRecordCounts;
   /** When that link expires, ISO 8601. */
   expiresAt?: string;
 }
@@ -270,8 +293,10 @@ export async function listAccounts(): Promise<AccountSummary[]> {
  * Changes an account's role between `member` and `admin` (owner only).
  * `rawRole` is the submitted value: `owner` or anything unknown is
  * `invalid_role`. Demoting an admin revokes the open invitations it
- * issued, and the password reset links it issued (#277); promoting a
- * member revokes its own open reset links (#277). The new role
+ * issued, and the password reset links it issued (#277), and makes every
+ * admin API key it created restricted (#219: a member never holds a
+ * management-plane key; the keys stay active); promoting a member revokes
+ * its own open reset links (#277) and restores no key. The new role
  * applies on the target's next request (the session guard reads it every
  * time).
  */
@@ -306,7 +331,14 @@ export async function changeAccountRole(
       }
       const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
       const resetLinksRevoked = await revokeResetLinks(tx, { issuedBy: target.id });
-      return { oldRole: target.role, newRole, invitesRevoked, resetLinksRevoked };
+      const adminKeysDowngraded = await downgradeAdminKeysCreatedBy(tx, target.id);
+      return {
+        oldRole: target.role,
+        newRole,
+        invitesRevoked,
+        resetLinksRevoked,
+        adminKeysDowngraded,
+      };
     },
   );
 }
@@ -315,7 +347,8 @@ export async function changeAccountRole(
  * Deactivates an account: `disabled_at` is set (no login, the session
  * guard rejects it), every session is deleted, and the open invitations
  * it issued are revoked, as are the open password reset links for it and
- * those it issued (#277), so reactivating it revives none of them.
+ * those it issued (#277), so reactivating it revives none of them. Every
+ * active API key it created is disabled (#219, `creator_deactivated`).
  */
 export async function deactivateAccount(
   actorId: string,
@@ -331,12 +364,14 @@ export async function deactivateAccount(
     const resetLinksRevoked =
       (await revokeResetLinks(tx, { userId: target.id })) +
       (await revokeResetLinks(tx, { issuedBy: target.id }));
+    const keysDisabled = await disableKeysCreatedBy(tx, target.id, "creator_deactivated");
     return {
       oldStatus: statusOf(target),
       newStatus: "disabled",
       sessionsRevoked,
       invitesRevoked,
       resetLinksRevoked,
+      keysDisabled,
     };
   });
 }
@@ -346,7 +381,8 @@ export async function deactivateAccount(
  * sign in again. Every session of the account is deleted in the same
  * transaction: a session created by a login that raced the deactivation
  * (its row inserted after the deactivation deleted the others) must never
- * come back to life. Its invitations stay revoked.
+ * come back to life. Its invitations stay revoked, and so do its API keys
+ * (#219): reactivation never re-enables a key.
  */
 export async function reactivateAccount(
   actorId: string,
@@ -365,9 +401,12 @@ export async function reactivateAccount(
 /**
  * Deletes an account for good. `confirm` must be the target's email
  * (trimmed, case-insensitive). The open invitations it issued are revoked
- * and its sessions deleted first (for the counts in the log line); the
- * row delete then cascades to its credentials and tokens, and
- * `invited_by` on its past invitations becomes NULL.
+ * and its sessions deleted first (for the counts in the log line), and
+ * every active API key it created is disabled (#219, `creator_removed`)
+ * before the row delete, which cascades to its credentials and tokens and
+ * sets `invited_by` on its past invitations and `created_by_user_id` on
+ * its keys, templates, domains and webhooks to NULL (they then belong to
+ * the owner; the next boot records that explicitly).
  */
 export async function removeAccount(
   actorId: string,
@@ -378,6 +417,8 @@ export async function removeAccount(
     if (!removalConfirmed(confirm, target.email)) return "confirm_mismatch";
     const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
     const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
+    /** Before the delete: afterwards the keys no longer name their creator. */
+    const keysDisabled = await disableKeysCreatedBy(tx, target.id, "creator_removed");
     await tx.delete(users).where(eq(users.id, target.id));
     return {
       oldRole: target.role,
@@ -385,6 +426,7 @@ export async function removeAccount(
       newStatus: "removed",
       sessionsRevoked,
       invitesRevoked,
+      keysDisabled,
       email: redactEmail(target.email),
     };
   });
@@ -434,9 +476,11 @@ async function readAccount(id: string): Promise<AccountRow | null> {
  *    single-owner index holds at every statement), revoke the previous
  *    owner's open `admin` invitations, and revoke every open owner setup
  *    link (one minted for the previous owner by `reset-owner` would
- *    otherwise come back to life if ownership ever returned to it).
- *    Sessions are untouched: both accounts stay signed in, with their new
- *    roles from the next request.
+ *    otherwise come back to life if ownership ever returned to it), and
+ *    move the previous owner's templates, domains and webhooks (and rows
+ *    with no creator, which were the owner's) to the new owner (#219;
+ *    API keys stay with their creator). Sessions are untouched: both accounts stay signed in, with
+ *    their new roles from the next request.
  * 5. A completed transfer clears the budget.
  */
 export async function transferOwnership(
@@ -521,6 +565,7 @@ export async function transferOwnership(
           ),
         )
         .returning({ id: userTokens.id });
+      const recordsMoved = await moveOwnerRecords(tx, owner.id, newOwner.id);
       return {
         oldRole: newOwner.role,
         newRole: "owner",
@@ -528,6 +573,7 @@ export async function transferOwnership(
         invitesRevoked,
         setupLinksRevoked: setupLinks.length,
         resetLinksRevoked,
+        recordsMoved,
       };
     },
   );

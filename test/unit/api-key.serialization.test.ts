@@ -18,6 +18,8 @@ describe("serializeApiKey", () => {
     isAdmin: false,
     allowedSenders: ["noreply@example.com"],
     lastUsedAt: new Date("2024-06-15"),
+    createdByUserId: null,
+    disabledReason: null,
     createdAt: new Date("2024-01-01"),
   };
 

@@ -19,6 +19,7 @@ describe("serializeTemplate", () => {
     variables: ["name", "company"],
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-06-01"),
+    createdByUserId: null,
   };
 
   test("maps textContent to text", () => {

@@ -46,6 +46,7 @@ const baseDomain = {
   verifiedAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  createdByUserId: null,
 };
 
 beforeEach(() => {

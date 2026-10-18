@@ -7,6 +7,8 @@ import { TemplateTooLargeError } from "../errors.ts";
 import type {
   Template,
   CreateTemplateInput,
+  TemplateActor,
+  TemplateChangeResult,
   UpdateTemplateInput,
 } from "../types/template.types.ts";
 
@@ -47,15 +49,19 @@ export function renderTemplate(
  *
  * @param input - Template name, subject, and optional html/text bodies
  * @param apiKeyId - Owner API key
+ * @param createdByUserId - Who created it (#219): the dashboard user, or
+ *   the calling key's user over REST; null = the owner. A member may edit
+ *   and delete only the templates that carry its id.
  * @returns The newly created template row
  */
 export async function createTemplate(
   input: CreateTemplateInput,
   apiKeyId: string,
+  createdByUserId: string | null = null,
 ): Promise<Template> {
   const id = generateId("tpl");
 
-  logger.info("Creating template", { id, name: input.name, apiKeyId });
+  logger.info("Creating template", { id, name: input.name, apiKeyId, createdByUserId });
 
   const [template] = await db
     .insert(templates)
@@ -67,6 +73,7 @@ export async function createTemplate(
       html: input.html ?? null,
       textContent: input.text ?? null,
       variables: input.variables ?? [],
+      createdByUserId,
     })
     .returning();
 
@@ -145,4 +152,77 @@ export async function deleteTemplate(
     .returning();
 
   return template;
+}
+
+/**
+ * Whether `actor` may edit or delete `template` (#219): admins and the
+ * owner any template, a member only one it created. A template with no
+ * creator belongs to the owner, so a member never matches it.
+ */
+function mayChangeTemplate(actor: TemplateActor, template: Template): boolean {
+  if (actor.role === "admin" || actor.role === "owner") return true;
+  return template.createdByUserId === actor.id;
+}
+
+/**
+ * Looks a template up for a dashboard edit or delete and applies the
+ * ownership rule (#219). Refusals are logged at `warn` with IDs only.
+ */
+async function templateForChange(
+  id: string,
+  actor: TemplateActor,
+  action: "update" | "delete",
+): Promise<TemplateChangeResult> {
+  const template = await getTemplateByIdUnscoped(id);
+  if (!template) {
+    logger.warn("Template not found for dashboard change", {
+      id,
+      action,
+      actorId: actor.id,
+    });
+    return { ok: false, reason: "not_found" };
+  }
+  if (!mayChangeTemplate(actor, template)) {
+    logger.warn("Template change refused: not the creator", {
+      id,
+      action,
+      actorId: actor.id,
+      actorRole: actor.role,
+      createdByUserId: template.createdByUserId,
+    });
+    return { ok: false, reason: "forbidden" };
+  }
+  return { ok: true, template };
+}
+
+/**
+ * Dashboard edit (#219): updates a template if `actor` may change it
+ * (admins and the owner any, a member its own). The write is scoped to
+ * the template's API key, as the REST update is.
+ */
+export async function updateTemplateAs(
+  id: string,
+  actor: TemplateActor,
+  input: UpdateTemplateInput,
+): Promise<TemplateChangeResult> {
+  const found = await templateForChange(id, actor, "update");
+  if (!found.ok) return found;
+  const template = await updateTemplate(id, found.template.apiKeyId, input);
+  if (!template) return { ok: false, reason: "not_found" };
+  return { ok: true, template };
+}
+
+/**
+ * Dashboard delete (#219): deletes a template if `actor` may change it
+ * (admins and the owner any, a member its own).
+ */
+export async function deleteTemplateAs(
+  id: string,
+  actor: TemplateActor,
+): Promise<TemplateChangeResult> {
+  const found = await templateForChange(id, actor, "delete");
+  if (!found.ok) return found;
+  const template = await deleteTemplate(id, found.template.apiKeyId);
+  if (!template) return { ok: false, reason: "not_found" };
+  return { ok: true, template };
 }

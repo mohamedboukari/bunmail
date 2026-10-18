@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
 import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
 
 /**
@@ -11,6 +12,8 @@ interface WebhooksPageProps {
   webhooks: Webhook[];
   flash?: { message: string; type: "success" | "error" };
   secret?: string;
+  /** Display names of accounts, for the "Created by" column (#219). */
+  creators: CreatorNames;
 }
 
 const WEBHOOK_EVENTS = [
@@ -24,7 +27,7 @@ const WEBHOOK_EVENTS = [
  * Webhooks page: shows a create form and table of all webhooks.
  * After creating a webhook, the signing secret is displayed once.
  */
-export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
+export function WebhooksPage({ webhooks, flash, secret, creators }: WebhooksPageProps) {
   return (
     <BaseLayout title="Webhooks" activeNav="webhooks">
       <h1 class="text-xl font-semibold mb-6">Webhooks</h1>
@@ -108,6 +111,9 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
                   Events
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                  Created by
+                </th>
+                <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Created
                 </th>
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
@@ -137,6 +143,9 @@ export function WebhooksPage({ webhooks, flash, secret }: WebhooksPageProps) {
                         ),
                       )}
                     </div>
+                  </td>
+                  <td class="px-4 py-3 whitespace-nowrap">
+                    <CreatedBy userId={webhook.createdByUserId} creators={creators} />
                   </td>
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={webhook.createdAt} />

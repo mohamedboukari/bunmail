@@ -34,6 +34,9 @@ Table: `templates`
 | variables    | jsonb          | NOT NULL, default `[]`       |
 | created_at   | timestamp      | NOT NULL, default `now()`    |
 | updated_at   | timestamp      | NOT NULL, default `now()`    |
+| created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed (#219) |
+
+`created_by_user_id` is the dashboard user who created the template (over REST: the creator of the calling key). NULL means the owner; legacy rows are assigned to the owner at boot.
 
 ## Variable Substitution
 
@@ -67,8 +70,8 @@ The template create and edit pages (`/dashboard/templates` and `/dashboard/templ
 #### `renderTemplate(templateStr, variables, maxLength?): string`
 Replaces `{{key}}` placeholders with values from the variables object (own keys only). Throws `TemplateTooLargeError` (`src/modules/templates/errors.ts`) once the output would exceed `maxLength` (default `MAX_RENDERED_BODY_LENGTH`, 5 MB; subjects use `MAX_RENDERED_SUBJECT_LENGTH`, 500).
 
-#### `createTemplate(input, apiKeyId): Promise<Template>`
-Creates a new template scoped to the API key.
+#### `createTemplate(input, apiKeyId, createdByUserId = null): Promise<Template>`
+Creates a new template scoped to the API key, recording who created it (#219).
 
 #### `listTemplates(apiKeyId): Promise<Template[]>`
 Lists all templates for the requesting API key.
@@ -81,6 +84,13 @@ Partially updates a template. Only provided fields are changed.
 
 #### `deleteTemplate(id, apiKeyId): Promise<Template | undefined>`
 Deletes a template, scoped to the API key.
+
+#### `updateTemplateAs(id, actor, input)` / `deleteTemplateAs(id, actor): Promise<TemplateChangeResult>`
+Dashboard edit and delete (#219). `actor` is the signed-in account (`{ id, role }`). Admins and the owner may change any template; a member only one it created (`created_by_user_id` = its id, so never an owner's or legacy one). Returns `{ ok: true, template }` or `{ ok: false, reason: "not_found" | "forbidden" }`; the route answers `forbidden` with the 403 page. Refusals are logged at `warn` with IDs only.
+
+## Dashboard permissions (#219)
+
+Any signed-in account views templates and creates them. Edit and delete are open to members for their own templates and to admins and the owner for all; the detail page is read-only otherwise. The list and detail pages show who created each template.
 
 ## API Endpoints
 

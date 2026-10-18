@@ -41,6 +41,7 @@ Table: `domains`
 | verified_at       | timestamp      | nullable                     |
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
+| created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed: who created it (#219, attribution only; NULL = the owner) |
 
 ## DKIM Key Generation
 
@@ -68,7 +69,7 @@ Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Ver
 ### domain.service.ts
 
 #### `createDomain(input): Promise<Domain>`
-Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing.
+Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
 
 #### `getDkimDnsRecord(domain): string | null`
 Returns the DKIM DNS TXT record value (`v=DKIM1; k=rsa; p=<base64>`) for a domain.

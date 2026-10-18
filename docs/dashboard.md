@@ -61,8 +61,8 @@ The role is read on every request, so a role change applies on the next request.
 
 | Helper | Lets through | Used for |
 |---|---|---|
-| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #219), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
-| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
 They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
@@ -131,6 +131,8 @@ Admins and the owner manage accounts at **Users** (`/dashboard/users`). Internal
 | Make owner (transfer) | `POST /dashboard/users/:id/transfer` (`password`) | owner, to an active admin | the owner's current password, throttled like login (per account and per client IP, `DASHBOARD_LOGIN_RATE_LIMIT_*`) |
 | Reset password (#277) | `POST /dashboard/users/:id/reset-password` | same as deactivate, active accounts only | browser confirm; shows a one-time link |
 
+Demoting an admin to member makes every admin API key it created restricted (they stay active). Deactivating or removing an account disables every active API key it created (the API keys page shows "Disabled: creator deactivated" or "creator removed"); reactivating does not re-enable them. A transfer moves the old owner's templates, domains and webhooks to the new owner, never its API keys (#219). Only keys of an active admin or the owner (or with no creator) get a **Make admin** button; a crafted promotion of a member's key is refused with a flash. Template and webhook creates attach to the user's own active key (a member without one gets "Create an API key first"). For members, the emails and suppressions key filters and the inbound reply key picker list only their own keys, and "Created by" shows a masked email when the account has no name.
+
 Nobody acts on their own account, and the owner is never demoted, deactivated, removed or given a reset link (the owner uses `reset-owner`). A refusal that no button leads to (own account, the owner, a role too low, an unknown role) gets the `403` page; a race or a typo (already changed, wrong confirmation, wrong password, target no longer eligible, account gone) goes back to the page with an error flash, and so does an exhausted transfer budget (`Too many failed attempts, try again later.`, no password check runs). Reactivation also signs the account out of any session left over from a login that raced its deactivation. Every outcome is logged.
 
 ### Password reset (#277)
@@ -143,7 +145,7 @@ Nobody acts on their own account, and the owner is never demoted, deactivated, r
 2. `POST /dashboard/reset` (form fields `token`, `password`, `confirm`) checks same-origin first (`403` and a `warn` log `Password reset POST rejected: cross-origin (possible CSRF)`), then the token (the same `400` page, logged only at `debug`), then the policy (a problem re-renders the form with `200`, no hashing, no write), then, in one transaction, spends the token, replaces the password, signs the account out of every session, revokes its other open tokens and the invitations and reset links it issued (its pending invitations must be sent again), and opens a new session. A login that checked the old password while the reset ran gets the generic invalid email or password answer.
 3. On success the session the browser already presented is revoked (as at login), the new session's cookie is set and the browser goes to `/dashboard`. Logged at `warn` as `Password reset completed`.
 
-**Sidebar by role.** Members do not see links to admin-only pages: the API Keys and Users entries (and the Invitations link on the home page) are shown to admins and the owner only. The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
+**Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
 
 ### Brute-force protection (#109)
 
@@ -175,18 +177,18 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/invite            | Invitation accept form from the invitation link (standalone, public, #217) |
 | GET /dashboard/reset             | Password reset form from an admin-issued link (standalone, public, #277) |
 | GET /dashboard                   | Stats overview: outbound, inbound, configuration sections        |
-| GET /dashboard/send              | Compose & send emails from dashboard                              |
+| GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
-| GET /dashboard/api-keys          | API keys list + create form                                       |
+| GET /dashboard/api-keys          | API keys list + create form: every key with its creator and why it is disabled (admins, owner), or the member's own keys (#219) |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
 | GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
-| GET /dashboard/domains           | Domains list + add form                                           |
+| GET /dashboard/domains           | Domains list (with who added each, #219) + add form               |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
-| GET /dashboard/templates         | Templates list + create form (live HTML preview)                  |
-| GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview)                   |
-| GET /dashboard/webhooks          | Webhooks list + create form                                       |
+| GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
+| GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview); read-only for a member on someone else's template (#219) |
+| GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form                 |
 | GET /dashboard/inbound           | Inbound emails list: bulk-select, per-row trash                  |
 | GET /dashboard/inbound/trash     | Trashed inbound: bulk Restore / Delete-forever / Empty trash     |
 | GET /dashboard/inbound/:id       | Inbound email detail + HTML preview                               |
@@ -274,8 +276,10 @@ directly in JSX: those run on the server and bake in the server's tz/locale.
 Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash message in query params. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
 
 **General**
-- Send email → `POST /dashboard/send`
-- Create API key → `POST /dashboard/api-keys`
+- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219)
+- Create API key → `POST /dashboard/api-keys` (form fields: `name`, `allowedSenders`, `isAdmin`; `isAdmin` is ignored for members, #219)
+- Promote / demote API key → `POST /dashboard/api-keys/:id/admin` (admins and the owner)
+- Set allowed senders → `POST /dashboard/api-keys/:id/senders`
 - Revoke API key → `POST /dashboard/api-keys/:id/revoke`
 - Invite an address → `POST /dashboard/invitations` (form fields: `email`, `role`)
 - Revoke invitation → `POST /dashboard/invitations/:id/revoke`

@@ -44,7 +44,7 @@ export const domainsPlugin = new Elysia({
    */
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, apiKeyCreatedByUserId }) => {
       logger.info("POST /api/v1/domains", { name: body.name });
 
       const domain = await domainService.createDomain({
@@ -53,6 +53,8 @@ export const domainsPlugin = new Elysia({
         /** Validated by the DTO but previously never passed on (#243). */
         unsubscribeEmail: body.unsubscribeEmail,
         unsubscribeUrl: body.unsubscribeUrl,
+        /** Attributed to the calling key's user (#219). */
+        createdByUserId: apiKeyCreatedByUserId,
       });
 
       return {

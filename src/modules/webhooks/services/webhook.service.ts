@@ -14,11 +14,16 @@ import type { Webhook, CreateWebhookInput } from "../types/webhook.types.ts";
  * Creates a new webhook endpoint.
  * Generates a random signing secret that the consumer uses to verify payloads.
  *
+ * @param input - Endpoint URL and subscribed events
+ * @param apiKeyId - Owner API key (scopes the events it receives)
+ * @param createdByUserId - Who created it (#219): the dashboard user, or
+ *   the calling key's user over REST. Attribution only; null = the owner.
  * @returns The webhook row AND the secret (shown once, like API keys).
  */
 export async function createWebhook(
   input: CreateWebhookInput,
   apiKeyId: string,
+  createdByUserId: string | null = null,
 ): Promise<{ webhook: Webhook; secret: string }> {
   /**
    * SSRF guard (#128): reject URLs that aren't https (unless http is opted
@@ -50,6 +55,7 @@ export async function createWebhook(
     url: input.url,
     events: input.events,
     apiKeyId,
+    createdByUserId,
   });
 
   const [webhook] = await db
@@ -60,6 +66,7 @@ export async function createWebhook(
       url: input.url,
       events: input.events,
       secret,
+      createdByUserId,
     })
     .returning();
 

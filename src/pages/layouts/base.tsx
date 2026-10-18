@@ -128,7 +128,6 @@ function Nav({ activeNav }: { activeNav?: string }) {
       label: "API Keys",
       href: "/dashboard/api-keys",
       icon: KeyIcon,
-      adminOnly: true,
     },
     {
       id: "templates",

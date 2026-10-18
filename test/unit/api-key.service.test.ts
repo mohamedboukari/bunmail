@@ -80,9 +80,14 @@ describe("revokeApiKey", () => {
 
 describe("findByHash", () => {
   test("returns the row when the hash matches", async () => {
-    selectResult = [baseKey];
+    selectResult = [{ apiKey: baseKey, creatorDisabledAt: null }];
     const result = await findByHash("abc123");
     expect(result?.id).toBe("key_x");
+  });
+
+  test("treats a key whose creator is deactivated as unknown (#219)", async () => {
+    selectResult = [{ apiKey: baseKey, creatorDisabledAt: new Date() }];
+    expect(await findByHash("abc123")).toBeUndefined();
   });
 
   test("returns undefined when no row matches", async () => {

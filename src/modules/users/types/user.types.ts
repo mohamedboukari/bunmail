@@ -379,6 +379,25 @@ export type OwnerBootstrapResult =
   | { kind: "mismatch"; storedEmail: string }
   | { kind: "email-taken" };
 
+/**
+ * Templates, domains and webhooks whose creator an ownership transfer
+ * changed (#219). API keys never move. Logged as counts, never IDs.
+ */
+export interface ContentRecordCounts {
+  templates: number;
+  domains: number;
+  webhooks: number;
+}
+
+/**
+ * Rows per table the boot backfill assigned to the owner (#219), API
+ * keys included. Logged as counts, never IDs.
+ */
+export interface RecordCounts extends ContentRecordCounts {
+  /** `api_keys` rows. */
+  keys: number;
+}
+
 /** The transaction handle `db.transaction` passes to its callback. */
 export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

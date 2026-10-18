@@ -500,6 +500,8 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | allowed_senders | jsonb       | NOT NULL, default `[]`: `From` allowlist (#126); empty = unrestricted |
 | last_used_at | timestamp      | nullable                        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
+| created_by_user_id | varchar(36) | nullable, FK → users.id `ON DELETE SET NULL`, indexed: the user it belongs to (#219); NULL = the owner |
+| disabled_reason | varchar(20) | nullable, CHECK `revoked` / `creator_deactivated` / `creator_removed`: why an inactive key is inactive (#219) |
 
 ### `domains`
 
@@ -519,6 +521,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | verified_at       | timestamp      | nullable                     |
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
+| created_by_user_id | varchar(36) | nullable, FK → users.id `ON DELETE SET NULL`, indexed: the user it belongs to (#219); NULL = the owner |
 
 ### `webhooks`
 
@@ -532,6 +535,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | is_active    | boolean        | NOT NULL, default `true`        |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 | updated_at   | timestamp      | NOT NULL, default `now()`       |
+| created_by_user_id | varchar(36) | nullable, FK → users.id `ON DELETE SET NULL`, indexed: the user it belongs to (#219); NULL = the owner |
 
 ### `email_tombstones` (#34)
 
@@ -589,6 +593,9 @@ Indexes: `(next_attempt_at)` partial WHERE `status='pending'` (worker hot path),
 | variables    | jsonb          | NOT NULL, default `[]`          |
 | created_at   | timestamp      | NOT NULL, default `now()`       |
 | updated_at   | timestamp      | NOT NULL, default `now()`       |
+| created_by_user_id | varchar(36) | nullable, FK → users.id `ON DELETE SET NULL`, indexed: the user it belongs to (#219); NULL = the owner |
+
+`created_by_user_id` on `api_keys`, `domains`, `webhooks` and `templates` (#219, migration `0020`): set from the signed-in user on dashboard creates and from the calling key's creator on REST creates. Legacy rows (NULL) are assigned to the owner by the owner bootstrap at boot, not by the migration (the owner row does not exist yet when migrations run on an upgrade). Members manage only their own keys and templates; domains and webhooks carry it for attribution. See [docs/users.md](docs/users.md#record-ownership-219).
 
 ### `inbound_emails`
 
@@ -718,6 +725,7 @@ webhooks  ──1:N──▶ webhook_deliveries  (CASCADE on parent delete)
 api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
+users     ──1:N──▶ api_keys, templates, domains, webhooks  (created_by_user_id, SET NULL on delete, #219)
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
 dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 ```
@@ -837,11 +845,11 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/emails/:id/permanent    | Hard-delete single (writes tombstone) | Admin |
 | GET    | /dashboard/emails/tombstones       | Tombstone list + Message-ID search | Member |
 | GET    | /dashboard/emails/:id              | Email detail            | Member |
-| GET    | /dashboard/api-keys                | API keys management     | Admin |
-| POST   | /dashboard/api-keys                | Create API key          | Admin |
-| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key          | Admin |
+| GET    | /dashboard/api-keys                | API keys management (a member: own keys, #219) | Member |
+| POST   | /dashboard/api-keys                | Create API key (a member: restricted only, #219) | Member |
+| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key (a member: own keys, #219) | Member |
 | POST   | /dashboard/api-keys/:id/admin      | Promote/demote a key to admin (#130) | Admin |
-| POST   | /dashboard/api-keys/:id/senders    | Set a key's allowed senders (#126) | Admin |
+| POST   | /dashboard/api-keys/:id/senders    | Set a key's allowed senders (#126; a member: own keys, #219) | Member |
 | GET    | /dashboard/invitations             | Pending invitations + invite form, one-time link (#217) | Admin |
 | POST   | /dashboard/invitations             | Invite an address (owner: admin or member; admin: member) | Admin |
 | POST   | /dashboard/invitations/:id/revoke  | Revoke an invitation (roles the actor may grant) | Admin |
@@ -863,8 +871,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/templates               | Templates management    | Member |
 | POST   | /dashboard/templates               | Create template         | Member |
 | GET    | /dashboard/templates/:id           | Template detail + edit  | Member |
-| POST   | /dashboard/templates/:id/edit      | Update template         | Admin  |
-| POST   | /dashboard/templates/:id/delete    | Delete template         | Admin |
+| POST   | /dashboard/templates/:id/edit      | Update template (a member: own templates, #219) | Member |
+| POST   | /dashboard/templates/:id/delete    | Delete template (a member: own templates, #219) | Member |
 | GET    | /dashboard/webhooks                | Webhooks management     | Member |
 | POST   | /dashboard/webhooks                | Create webhook          | Admin |
 | POST   | /dashboard/webhooks/:id/delete     | Delete webhook          | Admin |

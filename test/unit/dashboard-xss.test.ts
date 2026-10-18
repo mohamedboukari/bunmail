@@ -34,6 +34,7 @@ function makeTemplate(overrides: Partial<Template> = {}): Template {
     variables: [XSS],
     createdAt: new Date("2026-05-01T00:00:00Z"),
     updatedAt: new Date("2026-05-01T00:00:00Z"),
+    createdByUserId: null,
     ...overrides,
   };
 }
@@ -60,7 +61,11 @@ function eventHandlerValues(html: string): string[] {
 
 describe("templates list: XSS", () => {
   test("escapes API-writable template variables", async () => {
-    const html = await TemplatesPage({ templates: [makeTemplate()] });
+    const html = await TemplatesPage({
+      templates: [makeTemplate()],
+      creators: new Map(),
+      viewer: { id: "usr_x", canManageAll: true },
+    });
 
     expect(html).not.toContain(XSS);
     expect(html).toContain(ESCAPED_LT);

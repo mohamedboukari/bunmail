@@ -35,3 +35,18 @@ export class InactiveApiKeyError extends Error {
     super("This API key has been revoked.");
   }
 }
+
+/**
+ * Thrown by `createApiKey` when the key's creator (#219: the signed-in
+ * dashboard user, or over REST the calling key's user) no longer exists
+ * or is deactivated, checked on the live row under `FOR SHARE`. Mapped to
+ * HTTP 403 with `code: "API_KEY_CREATOR_INACTIVE"`; the dashboard shows a
+ * flash.
+ */
+export class ApiKeyCreatorInactiveError extends Error {
+  override readonly name = "ApiKeyCreatorInactiveError";
+
+  constructor() {
+    super("The account this API key would belong to is deactivated or gone.");
+  }
+}

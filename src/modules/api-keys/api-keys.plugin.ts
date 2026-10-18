@@ -40,12 +40,14 @@ export const apiKeysPlugin = new Elysia({
    */
   .post(
     "/",
-    async ({ body }) => {
+    async ({ body, apiKeyCreatedByUserId }) => {
       logger.info("POST /api/v1/api-keys", { name: body.name });
 
       const { apiKey, rawKey } = await apiKeyService.createApiKey({
         name: body.name,
         allowedSenders: body.allowedSenders,
+        /** The new key belongs to the calling key's user (#219). */
+        createdByUserId: apiKeyCreatedByUserId,
       });
 
       return {

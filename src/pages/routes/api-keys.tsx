@@ -3,28 +3,94 @@ import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { EmailChipInput, EmailChipInputScript } from "../components/email-chip-input.tsx";
-import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
+import { creatorLabel, type CreatorNames } from "../components/created-by.tsx";
+import type {
+  ApiKey,
+  ApiKeyDisabledReason,
+} from "../../modules/api-keys/types/api-key.types.ts";
 
 /**
  * Props for the API keys list page.
  */
 interface ApiKeysPageProps {
-  /** All API keys (active + revoked) */
+  /** The keys the viewer may see (#219): all of them, or a member's own (active + revoked) */
   keys: ApiKey[];
+  /** Display names of accounts, for the "Created by" column (#219). */
+  creators: CreatorNames;
+  /**
+   * Active admins and the owner (#219): only their keys (and keys with no
+   * creator, the owner's) get a "Make admin" button. The server refuses
+   * any other promotion anyway.
+   */
+  adminCreatorIds: ReadonlySet<string>;
+  /**
+   * The viewer is an admin or the owner (#219): sees every key, the
+   * "Created by" column, the admin checkbox and the admin toggle. A
+   * member gets none of them (the server ignores or refuses them anyway).
+   */
+  canManageAll: boolean;
   /** Optional flash message (e.g. after creating or revoking a key) */
   flash?: { message: string; type: "success" | "error" };
   /** If a key was just created, show the raw key once */
   rawKey?: string;
 }
 
+/** Status badge text of an inactive key, by why it is inactive (#219). */
+const DISABLED_LABEL: Record<ApiKeyDisabledReason, string> = {
+  revoked: "Revoked",
+  creator_deactivated: "Disabled: creator deactivated",
+  creator_removed: "Disabled: creator removed",
+};
+
 /**
- * API Keys page: shows a create form and table of all API keys.
+ * Status badge text of an inactive key. No stored reason means a key
+ * revoked before reasons were recorded; an unknown value (unreachable
+ * while the check constraint holds) reads as disabled.
+ */
+function disabledLabel(reason: string | null): string {
+  if (reason === null) return DISABLED_LABEL.revoked;
+  const known = Object.entries(DISABLED_LABEL).find(([value]) => value === reason);
+  return known ? known[1] : "Disabled";
+}
+
+/**
+ * "Created by" label of a key (#219). A removed user's keys lose their
+ * creator (it becomes the owner), so they are named by their reason.
+ */
+function keyCreatorLabel(key: ApiKey, creators: CreatorNames): string {
+  if (key.disabledReason === "creator_removed") return "Removed account";
+  return creatorLabel(key.createdByUserId, creators);
+}
+
+/**
+ * Whether a key may be promoted to admin (#219): no creator (the owner's)
+ * or a creator who is an active admin or the owner.
+ */
+function mayHoldAdmin(key: ApiKey, adminCreatorIds: ReadonlySet<string>): boolean {
+  return key.createdByUserId === null || adminCreatorIds.has(key.createdByUserId);
+}
+
+/**
+ * API Keys page: shows a create form and table of API keys (#219: every
+ * key for admins and the owner, a member's own keys for a member).
  * After creating a key, the raw key is displayed in a flash message (shown once).
  */
-export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
+export function ApiKeysPage({
+  keys,
+  creators,
+  adminCreatorIds,
+  canManageAll,
+  flash,
+  rawKey,
+}: ApiKeysPageProps) {
   return (
     <BaseLayout title="API Keys" activeNav="api-keys">
-      <h1 class="text-xl font-semibold mb-6">API Keys</h1>
+      <h1 class="text-xl font-semibold mb-2">API Keys</h1>
+      <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
+        {canManageAll
+          ? "Every key on this server. Keys belong to the account that created them; deactivating or removing an account disables its keys."
+          : "The keys you created. Your keys are restricted (send-only); ask an admin for an admin key."}
+      </p>
 
       {/* Flash message */}
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
@@ -72,21 +138,23 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
               from spoofing other identities (e.g. your CEO).
             </p>
           </div>
-          <label class="flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              name="isAdmin"
-              class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
-            />
-            <span class="text-sm text-gray-700 dark:text-gray-300">
-              Admin key
-              <span class="block text-xs text-gray-500 dark:text-gray-400">
-                Can manage keys, domains, and read inbound mail. Leave unchecked for a
-                restricted <strong>send-only</strong> key (recommended for keys you hand
-                to apps or developers).
+          {canManageAll && (
+            <label class="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                name="isAdmin"
+                class="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+              />
+              <span class="text-sm text-gray-700 dark:text-gray-300">
+                Admin key
+                <span class="block text-xs text-gray-500 dark:text-gray-400">
+                  Can manage keys, domains, and read inbound mail. Leave unchecked for a
+                  restricted <strong>send-only</strong> key (recommended for keys you hand
+                  to apps or developers).
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+          )}
           <button
             type="submit"
             class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors whitespace-nowrap"
@@ -116,6 +184,11 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Access
                 </th>
+                {canManageAll && (
+                  <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
+                    Created by
+                  </th>
+                )}
                 <th class="text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400">
                   Last Used
                 </th>
@@ -148,8 +221,11 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                         Active
                       </span>
                     ) : (
-                      <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                        Revoked
+                      <span
+                        class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"
+                        safe
+                      >
+                        {disabledLabel(key.disabledReason)}
                       </span>
                     )}
                   </td>
@@ -165,27 +241,37 @@ export function ApiKeysPage({ keys, flash, rawKey }: ApiKeysPageProps) {
                           Restricted
                         </span>
                       )}
-                      {key.isActive && (
-                        <form
-                          method="POST"
-                          action={`/dashboard/api-keys/${key.id}/admin`}
-                          class="inline"
-                        >
-                          <input
-                            type="hidden"
-                            name="isAdmin"
-                            value={key.isAdmin ? "false" : "true"}
-                          />
-                          <button
-                            type="submit"
-                            class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 underline"
+                      {canManageAll &&
+                        key.isActive &&
+                        (key.isAdmin || mayHoldAdmin(key, adminCreatorIds)) && (
+                          <form
+                            method="POST"
+                            action={`/dashboard/api-keys/${key.id}/admin`}
+                            class="inline"
                           >
-                            {key.isAdmin ? "Make restricted" : "Make admin"}
-                          </button>
-                        </form>
-                      )}
+                            <input
+                              type="hidden"
+                              name="isAdmin"
+                              value={key.isAdmin ? "false" : "true"}
+                            />
+                            <button
+                              type="submit"
+                              class="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 underline"
+                            >
+                              {key.isAdmin ? "Make restricted" : "Make admin"}
+                            </button>
+                          </form>
+                        )}
                     </div>
                   </td>
+                  {canManageAll && (
+                    <td
+                      class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap"
+                      safe
+                    >
+                      {keyCreatorLabel(key, creators)}
+                    </td>
+                  )}
                   <td class="px-4 py-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
                     <TimeDisplay value={key.lastUsedAt} fallback="Never" />
                   </td>
