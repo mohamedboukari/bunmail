@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   MAX_ADDRESS_LENGTH,
+  isEmailAddress,
   parseRecipients,
   groupByMx,
   type MxResolver,
@@ -202,6 +203,31 @@ describe("parseRecipients: address length and shape limits", () => {
     expect(parseRecipients("a@b..c, a@b., a@.b, a@localhost", null, null)).toHaveLength(
       0,
     );
+  });
+});
+
+describe("isEmailAddress (shared with BUNMAIL_OWNER_EMAIL, #215)", () => {
+  test("accepts the shapes parseRecipients accepts, up to the length cap", () => {
+    const domain = "@example.org";
+    const atLimit = "a".repeat(MAX_ADDRESS_LENGTH - domain.length) + domain;
+    expect(isEmailAddress("owner@example.com")).toBe(true);
+    expect(isEmailAddress("first.last+tag@mail.example.co.uk")).toBe(true);
+    expect(isEmailAddress(atLimit)).toBe(true);
+    expect(isEmailAddress("a" + atLimit)).toBe(false);
+  });
+
+  test("rejects lists, display names, whitespace and dotless domains", () => {
+    for (const value of [
+      "",
+      "a@b.com,c@d.com",
+      "Owner <owner@example.com>",
+      " owner@example.com",
+      "a b@c.d",
+      "a@localhost",
+      "no-at",
+    ]) {
+      expect(isEmailAddress(value)).toBe(false);
+    }
   });
 });
 

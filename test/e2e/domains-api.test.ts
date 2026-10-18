@@ -49,7 +49,7 @@ void mock.module("../../src/config.ts", () => ({
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
     mail: { hostname: "localhost" },
-    dashboard: { password: "", sessionSecret: "test-secret" },
+    dashboard: { password: "", sessionSecret: "test-secret", ownerEmail: null },
     logLevel: "error",
   },
 }));

@@ -26,6 +26,9 @@ import {
   stopLoginRateLimitCleanup,
 } from "./middleware/login-rate-limit.ts";
 import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
+import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
+import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
+import { redactEmail } from "./utils/redact.ts";
 
 /**
  * Encrypt any DKIM private keys still stored as plaintext PEM (legacy
@@ -34,6 +37,77 @@ import { encryptDomainKeys } from "./db/encrypt-domain-keys.ts";
  * restart can never read a plaintext row.
  */
 await encryptDomainKeys();
+
+/**
+ * Owner bootstrap (#215): create the dashboard owner from
+ * `BUNMAIL_OWNER_EMAIL`, or replace a still-unused setup link, and log the
+ * one-time link. Runs on every boot and is idempotent (see
+ * `bootstrapOwner`). Non-fatal: the API and mail delivery do not depend on
+ * the dashboard owner, so a failure is logged and the boot continues; the
+ * operator can retry with a restart or `bun run src/db/reset-owner.ts`.
+ */
+async function runOwnerBootstrap(): Promise<void> {
+  const ownerEmail = config.dashboard.ownerEmail;
+  if (ownerEmail === null) {
+    /** Only reachable in development: production refuses to boot (config.ts). */
+    logger.warn("BUNMAIL_OWNER_EMAIL is not set: owner bootstrap skipped");
+    return;
+  }
+
+  try {
+    const result = await bootstrapOwner(ownerEmail);
+    switch (result.kind) {
+      case "created":
+      case "reissued": {
+        /** Logged only now, after the transaction committed, and once per
+         *  minted token. `warn` so LOG_LEVEL=warn does not hide it, raised to
+         *  `error` when LOG_LEVEL=error so the link is never filtered out. */
+        const { url, usedFallback } = buildSetupUrl(
+          config.appBaseUrl,
+          config.server.port,
+          result.token,
+        );
+        const fields = {
+          note: "single use, open it to set the owner password; only the most recent link works",
+          url,
+          owner: redactEmail(result.email),
+          expiresAt: result.expiresAt.toISOString(),
+          ...(usedFallback
+            ? {
+                hint: "APP_BASE_URL is not set to an http(s) URL: the link uses localhost, set it to this server's public URL",
+              }
+            : {}),
+        };
+        if (config.logLevel === "error") logger.error("Owner setup link", fields);
+        else logger.warn("Owner setup link", fields);
+        break;
+      }
+      case "complete":
+        break;
+      case "mismatch":
+        logger.warn(
+          "BUNMAIL_OWNER_EMAIL differs from the stored owner; ignored. Ownership moves only by transfer.",
+          {
+            configured: redactEmail(ownerEmail),
+            stored: redactEmail(result.storedEmail),
+          },
+        );
+        break;
+      case "email-taken":
+        logger.error(
+          "Owner bootstrap skipped: BUNMAIL_OWNER_EMAIL belongs to an existing non-owner account, which is never promoted",
+          { configured: redactEmail(ownerEmail) },
+        );
+        break;
+    }
+  } catch (error: unknown) {
+    logger.error("Owner bootstrap failed; run `bun run src/db/reset-owner.ts` to retry", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+await runOwnerBootstrap();
 
 /**
  * Main Elysia application.

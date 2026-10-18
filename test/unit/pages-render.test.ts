@@ -35,6 +35,11 @@ import { TemplateDetailPage } from "../../src/pages/routes/template-detail.tsx";
 import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
 import { LoginPage, DashboardDisabledPage } from "../../src/pages/routes/login.tsx";
 import { LandingPage } from "../../src/pages/routes/landing.tsx";
+import {
+  OwnerSetupPage,
+  OwnerSetupInvalidPage,
+  OwnerSetupDonePage,
+} from "../../src/pages/routes/setup.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -386,6 +391,49 @@ describe("Dashboard page render smoke tests", () => {
 
   test("LandingPage", () => {
     expect(typeof LandingPage()).toBe("string");
+  });
+
+  describe("Owner setup pages (#215)", () => {
+    const token = "A".repeat(20) + "b-c_d".repeat(4) + "xyz";
+
+    test("OwnerSetupPage renders the form with the token only in the hidden input", async () => {
+      const html = await OwnerSetupPage({ token, email: "owner@example.com" });
+      expect(html).toContain('action="/dashboard/setup"');
+      expect(html).toContain('method="POST"');
+      expect(html).toContain(`<input type="hidden" name="token" value="${token}"`);
+      expect(html.split(token).length - 1).toBe(1);
+      expect(html).toContain("owner@example.com");
+      expect(html).toContain('autocomplete="new-password"');
+      expect(html).toContain('name="confirm"');
+      expect(html).toContain('<meta name="referrer" content="strict-origin"');
+    });
+
+    test("OwnerSetupPage escapes a hostile email and error", async () => {
+      const html = await OwnerSetupPage({
+        token,
+        email: "<script>alert(1)</script>@example.com",
+        error: "<img src=x onerror=alert(2)>",
+      });
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;@example.com");
+      expect(html).not.toContain("<img src=x");
+      expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+    });
+
+    test("OwnerSetupInvalidPage points at reset-owner and sends the origin-only referrer", async () => {
+      const html = await OwnerSetupInvalidPage();
+      expect(html).toContain("not valid");
+      expect(html).toContain("src/db/reset-owner.ts");
+      expect(html).toContain('<meta name="referrer" content="strict-origin"');
+      expect(html).not.toContain("<form");
+    });
+
+    test("OwnerSetupDonePage says the password is saved", async () => {
+      const html = await OwnerSetupDonePage();
+      expect(html).toContain("Owner password saved");
+      expect(html).toContain("DASHBOARD_PASSWORD");
+      expect(html).toContain('<meta name="referrer" content="strict-origin"');
+    });
   });
 });
 

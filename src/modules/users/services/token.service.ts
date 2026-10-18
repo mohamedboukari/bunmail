@@ -19,14 +19,11 @@ export interface MintedToken {
 }
 
 /** SHA-256 of a presented token, hex, as stored in the `token_hash` columns. */
-// Consumed by the session and invite flows (#216, #217); exported ahead of them.
-/** @public */
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 /** Mints a new random token and its storage hash. */
-/** @public */
 export function mintToken(): MintedToken {
   const token = randomBytes(32).toString("base64url");
   return { token, hash: hashToken(token) };

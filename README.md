@@ -53,7 +53,7 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
   }'
 ```
 
-Open the dashboard at <http://localhost:3000/dashboard> (set `DASHBOARD_PASSWORD` in `.env` to enable).
+Open the dashboard at <http://localhost:3000/dashboard> (set `DASHBOARD_PASSWORD` in `.env` to enable). Set `BUNMAIL_OWNER_EMAIL` in `.env` too (required in production): on first boot BunMail logs a one-time owner setup link (`docker compose logs app | grep 'Owner setup link'`) to claim the owner account. In this release `DASHBOARD_PASSWORD` is still the dashboard login.
 
 > Local dev without Docker? See [docs/self-hosting.md](docs/self-hosting.md).
 

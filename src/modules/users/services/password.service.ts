@@ -10,9 +10,8 @@
 
 /**
  * Hashes a password for storage in `user_credentials.secret_hash`.
- * Consumed by the login and invite flows (#216, #217); exported ahead of them.
+ * Used by owner setup (#215), then the login and invite flows (#216, #217).
  */
-/** @public */
 export function hashPassword(password: string): Promise<string> {
   return Bun.password.hash(password, { algorithm: "argon2id" });
 }
@@ -26,6 +25,7 @@ const SUPPORTED_HASH_RE = /^\$(?:argon2(?:id|i|d)|2[abxy])\$/;
  * or legacy row) yields `false` instead of throwing, so it cannot turn into
  * a 500 on the login form; any other error is a programming error and
  * propagates rather than being reported as "wrong password".
+ * Consumed by the login flow (#216); exported ahead of it.
  */
 /** @public */
 export function verifyPassword(password: string, hash: string): Promise<boolean> {
