@@ -54,5 +54,11 @@ export const webhooks = pgTable(
   (table) => [
     /** Ownership transfer and the boot backfill update by creator. */
     index("webhooks_created_by_user_id_idx").on(table.createdByUserId),
+    /**
+     * Event dispatch and the per-key lists filter by key (#173). The event
+     * itself is matched in SQL with `events @>`; at these table sizes the
+     * key index is what matters, a GIN index on `events` is not needed.
+     */
+    index("webhooks_api_key_id_idx").on(table.apiKeyId),
   ],
 );

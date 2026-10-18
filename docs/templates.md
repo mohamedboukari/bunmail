@@ -26,7 +26,7 @@ Table: `templates`
 | Column       | Type           | Constraints                  |
 |--------------|----------------|------------------------------|
 | id           | varchar(36)    | PK, prefixed `tpl_`         |
-| api_key_id   | varchar(36)    | FK → api_keys, NOT NULL      |
+| api_key_id   | varchar(36)    | FK → api_keys, NOT NULL, indexed (#173) |
 | name         | varchar(255)   | NOT NULL                     |
 | subject      | varchar(500)   | NOT NULL                     |
 | html         | text           | nullable                     |

@@ -38,7 +38,7 @@ Table: `webhooks`
 | Column      | Type           | Constraints                  |
 |-------------|----------------|------------------------------|
 | id          | varchar(36)    | PK, prefixed `whk_`         |
-| api_key_id  | varchar(36)    | FK → api_keys, NOT NULL      |
+| api_key_id  | varchar(36)    | FK → api_keys, NOT NULL, indexed (#173) |
 | url         | text           | NOT NULL                     |
 | events      | jsonb          | NOT NULL, default `[]`       |
 | secret      | varchar(255)   | NOT NULL, encrypted at rest (`v1:` AES-256-GCM with `DKIM_ENCRYPTION_KEY`, #259) |
