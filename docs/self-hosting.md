@@ -84,9 +84,14 @@ TRASH_RETENTION_DAYS=7
 # single proxy (see section 4) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
 DASHBOARD_TRUSTED_PROXY_HOPS=1
-# Optional: public base URL, used for the dashboard link in inbound notifications
-# and the one-time owner setup link
+# Optional: public base URL, used for the dashboard link in inbound notifications,
+# the one-time owner setup link and invitation links
 APP_BASE_URL=https://mail.yourdomain.com
+# Optional: sender of invitation emails (a DKIM-verified domain registered in
+# BunMail); unset = the inviter copies the link from the dashboard
+SYSTEM_MAIL_FROM=noreply@yourdomain.com
+# Optional: days an invitation link stays valid (1 to 90, default 7)
+INVITE_EXPIRY_DAYS=7
 # Optional: inbound notifications (per-domain notify_email is the opt-in)
 INBOUND_NOTIFY_ENABLED=true
 INBOUND_NOTIFY_FROM_LOCAL=notifications
@@ -100,7 +105,9 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
-> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it) and the owner setup link logged on first boot. When unset, the setup link falls back to `http://localhost:PORT`, which you can still open through an SSH tunnel.
+> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, and invitation links (#217). When unset, the setup link falls back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone.
+
+> `SYSTEM_MAIL_FROM` / `INVITE_EXPIRY_DAYS`: dashboard invitations (#217). Admins and the owner invite teammates from the dashboard (**Invite teammates** on the home page). When `SYSTEM_MAIL_FROM` is set to an address on a domain you registered in BunMail and whose DKIM record is verified, BunMail emails the accept link from it, signed with that domain's key. When it is unset, or the domain is missing or unverified, or the send fails, the invitation is still created and the inviter sees the link once on the Invitations page to send by hand (share it privately: anyone with it can create the account). A malformed `SYSTEM_MAIL_FROM` refuses to boot. `INVITE_EXPIRY_DAYS` (default `7`, a whole number from `1` to `90`, anything else refuses to boot) sets how long a link stays valid. See [docs/dashboard.md](dashboard.md#invitations-217).
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 

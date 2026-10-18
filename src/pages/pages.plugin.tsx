@@ -8,7 +8,13 @@ import {
   stashRevealSecret,
   type RevealOwner,
 } from "./reveal-store.ts";
-import type { DashboardAuth } from "../modules/users/types/user.types.ts";
+import type {
+  DashboardAuth,
+  InviteActor,
+  InviteMailFailure,
+  InviteRefusal,
+  IssueInvitationResult,
+} from "../modules/users/types/user.types.ts";
 import { redactEmail } from "../utils/redact.ts";
 import {
   resolveClientIp,
@@ -21,6 +27,13 @@ import { isEmailStatus } from "../modules/emails/types/email.types.ts";
 /* ─── Page Components ─── */
 import { LoginPage } from "./routes/login.tsx";
 import { OwnerSetupPage, OwnerSetupInvalidPage } from "./routes/setup.tsx";
+import {
+  InviteAcceptPage,
+  InviteAccountExistsPage,
+  InviteInvalidPage,
+} from "./routes/invite.tsx";
+import { InvitationsPage } from "./routes/invitations.tsx";
+import { ForbiddenPage } from "./routes/forbidden.tsx";
 import { HomePage } from "./routes/home.tsx";
 import { EmailsPage } from "./routes/emails.tsx";
 import { EmailTombstonesPage } from "./routes/email-tombstones.tsx";
@@ -42,7 +55,7 @@ import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
 import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 import { SuppressionsPage } from "./routes/suppressions.tsx";
 import { clearSessionCookie, readSessionCookie, sessionSetCookie } from "./session.ts";
-import { adminGuard, memberGuard, toDashboardAuth } from "./guards.tsx";
+import { adminGuard, memberGuard, roleAtLeast, toDashboardAuth } from "./guards.tsx";
 import { parsePagination } from "./pagination.ts";
 
 /* ─── Services ─── */
@@ -61,6 +74,11 @@ import { verifyDomain } from "../modules/domains/services/dns-verification.servi
 import * as ownerService from "../modules/users/services/owner.service.ts";
 import * as sessionService from "../modules/users/services/session.service.ts";
 import * as loginService from "../modules/users/services/login.service.ts";
+import * as inviteService from "../modules/users/services/invite.service.ts";
+import {
+  grantableRoles,
+  inviteNameProblem,
+} from "../modules/users/services/invite-policy.service.ts";
 import {
   isWellFormedSetupToken,
   setupPasswordProblem,
@@ -223,11 +241,102 @@ function isSameOrigin(request: Request): boolean {
 }
 
 /**
+ * `Cache-Control: no-store` for pages that can render a one-time secret
+ * (API key, webhook secret, invitation link): neither the browser nor a
+ * proxy may keep a copy of the page that showed it.
+ */
+function setNoStore(set: Context["set"]): void {
+  set.headers["cache-control"] = "no-store";
+}
+
+/**
  * The owner a one-time reveal is bound to (#280): the signed-in user and
  * the session that created it, from the guard's `auth` (#222).
  */
 function revealOwnerOf(auth: DashboardAuth): RevealOwner {
   return { userId: auth.user.id, sessionId: auth.session.id };
+}
+
+/* ─── Invitation helpers (#217) ─── */
+
+/** The account acting on invitations: id and role from the guard's `auth`. */
+function inviteActorOf(auth: DashboardAuth): InviteActor {
+  return { id: auth.user.id, role: auth.user.role };
+}
+
+/** Why the invitation email did not go out, in the inviter's flash message. */
+const INVITE_MAIL_FAILURE_TEXT: Record<InviteMailFailure, string> = {
+  not_configured: "no system sender is configured",
+  sender_unavailable: "the system sender's domain is not registered or not DKIM-verified",
+  send_failed: "sending failed",
+  no_base_url: "APP_BASE_URL is not set, so no usable link could be emailed",
+};
+
+/** Flash text for a refused invitation action (other than a role refusal). */
+const INVITE_REFUSAL_TEXT: Record<InviteRefusal, string> = {
+  invalid_email: "Enter one valid email address.",
+  role_not_allowed: "Your role cannot grant or manage that role.",
+  account_exists: "An account already exists for that address.",
+  pending_higher_role:
+    "A pending invitation from a higher role exists for this address. Only the owner can replace it.",
+  not_found: "Invitation not found: it may have been accepted, revoked or replaced.",
+};
+
+/** 302 back to the Invitations page with a flash message (never the link or token). */
+function invitationsRedirect(
+  set: Context["set"],
+  message: string,
+  type: "success" | "error",
+  reveal?: string,
+): string {
+  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
+  return redirect(
+    set,
+    `/dashboard/invitations?${query}${reveal ? `&reveal=${reveal}` : ""}`,
+  );
+}
+
+/**
+ * Answers a refused invitation action: a role the actor cannot grant is a
+ * crafted request (the form never offers it), so it gets the 403 page;
+ * anything else goes back to the page with an error flash. The service
+ * already logged the refusal.
+ */
+function answerInviteRefusal(
+  set: Context["set"],
+  reason: InviteRefusal,
+): string | Promise<string> {
+  if (reason === "role_not_allowed") {
+    set.status = 403;
+    return <ForbiddenPage message={INVITE_REFUSAL_TEXT.role_not_allowed} />;
+  }
+  return invitationsRedirect(set, INVITE_REFUSAL_TEXT[reason], "error");
+}
+
+/**
+ * Answers a created or resent invitation. When the email went out, a
+ * plain success flash. When it did not, the accept link is stashed for a
+ * one-time reveal bound to this user and session (#280) and only the
+ * reveal token goes in the redirect: the link itself never appears in a
+ * URL, a flash message or a log.
+ */
+function answerIssuedInvitation(
+  set: Context["set"],
+  auth: DashboardAuth,
+  result: IssueInvitationResult,
+  verb: "sent" | "resent",
+): string | Promise<string> {
+  if (!result.ok) return answerInviteRefusal(set, result.reason);
+  if (result.delivery.sent) {
+    return invitationsRedirect(set, `Invitation ${verb} by email.`, "success");
+  }
+  const reveal = stashRevealSecret(result.url, "invite_link", revealOwnerOf(auth));
+  return invitationsRedirect(
+    set,
+    `Invitation created, but the email was not sent: ${INVITE_MAIL_FAILURE_TEXT[result.delivery.reason]}. Copy the link below and share it with the invitee.`,
+    "success",
+    reveal,
+  );
 }
 
 /* ─── DNS-verify throttle (#133) ─── */
@@ -271,12 +380,18 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
+ * - GET  /dashboard/invite?token=   → invitation accept form (public, #217)
+ * - POST /dashboard/invite          → create the invited account, sign in (public, #217)
  * - GET  /dashboard                 → home (stats overview)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
  * - GET  /dashboard/api-keys        → API keys list + create form
  * - POST /dashboard/api-keys        → create API key (form action)
  * - POST /dashboard/api-keys/:id/revoke → revoke API key (form action)
+ * - GET  /dashboard/invitations     → pending invitations + invite form (admin, #217)
+ * - POST /dashboard/invitations     → invite an address (admin, #217)
+ * - POST /dashboard/invitations/:id/revoke → revoke an invitation (admin, #217)
+ * - POST /dashboard/invitations/:id/resend → new link, sent again (admin, #217)
  * - GET  /dashboard/domains         → domains list + add form
  * - POST /dashboard/domains         → add domain (form action)
  * - POST /dashboard/domains/:id/delete → delete domain (form action)
@@ -285,8 +400,8 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * Auth (#216): account login with email and password against
  * `user_credentials`, then a server-side session in the `sessions` table
  * whose opaque token rides in the `bm_session` cookie and rotates every
- * minute. The owner setup routes are authorized by the one-time setup
- * token.
+ * minute. The owner setup and invitation accept routes are authorized
+ * by their one-time token.
  *
  * Roles (#222): the session guard puts the signed-in account on `auth`,
  * and every protected route carries a role check from `guards.tsx` as its
@@ -637,6 +752,160 @@ export const pagesPlugin = new Elysia({
     },
   )
 
+  /**
+   * GET /dashboard/invite?token=...
+   * Invitation accept form (#217). Public: the token is the authorization.
+   * Mirrors the owner setup page: auth-page headers, read-only (link
+   * scanners and prefetchers cannot burn the token), the format checked
+   * before any database call, and one identical 400 page for every
+   * unusable link (missing, malformed, unknown, expired, used, revoked).
+   */
+  .get(
+    "/invite",
+    async ({ query, set }) => {
+      setAuthPageHeaders(set);
+      const token = query.token ?? "";
+      const target = isWellFormedToken(token)
+        ? await inviteService.findLiveInvitation(token)
+        : null;
+      if (!target) {
+        set.status = 400;
+        return <InviteInvalidPage />;
+      }
+      return <InviteAcceptPage token={token} email={target.email} role={target.role} />;
+    },
+    {
+      query: t.Object({
+        token: t.Optional(t.String({ maxLength: 128 })),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/invite
+   * Creates the invited account and signs it in (#217). Same order as the
+   * owner setup POST: auth-page headers; same-origin first (the session
+   * guard's CSRF check never runs on public routes); token format; an
+   * indexed lookup; the name and password policy (a failure re-renders the
+   * form with 200, no hashing, no write); only then argon2id inside
+   * `acceptInvitation`, which creates the user, the credential and the
+   * session in one transaction.
+   *
+   * On success the session the browser presented, if any, is revoked
+   * (like login: sessions do not stack, and a superseded token is treated
+   * as reuse), the new cookie is set and the browser goes to `/dashboard`,
+   * which also drops the token from the address bar.
+   *
+   * The body schema is deliberately loose (only length caps): a schema
+   * failure answers 422 JSON from the global handler, not a page.
+   */
+  .post(
+    "/invite",
+    async ({ body, set, request, server }) => {
+      setAuthPageHeaders(set);
+      const ip = resolveClientIp({
+        socketIp: server?.requestIP(request)?.address,
+        forwardedFor: request.headers.get("x-forwarded-for"),
+        trustedProxyHops: config.dashboard.trustedProxyHops,
+      });
+
+      if (!isSameOrigin(request)) {
+        logger.warn("Invitation accept POST rejected: cross-origin (possible CSRF)", {
+          ip,
+          origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+        });
+        set.status = 403;
+        return "Forbidden: cross-origin request rejected";
+      }
+
+      const target = isWellFormedToken(body.token)
+        ? await inviteService.findLiveInvitation(body.token)
+        : null;
+      if (!target) {
+        set.status = 400;
+        return <InviteInvalidPage />;
+      }
+
+      const name = body.name.trim();
+      const problem =
+        inviteNameProblem(name) ?? setupPasswordProblem(body.password, body.confirm);
+      if (problem) {
+        return (
+          <InviteAcceptPage
+            token={body.token}
+            email={target.email}
+            role={target.role}
+            name={name}
+            error={problem}
+          />
+        );
+      }
+
+      const result = await inviteService.acceptInvitation(
+        body.token,
+        { name, password: body.password },
+        { ip, userAgent: request.headers.get("user-agent") },
+      );
+      if (!result.ok) {
+        if (result.reason === "account_exists") {
+          logger.warn("Invitation not accepted: an account already holds the address", {
+            invitationId: target.invitationId,
+            email: redactEmail(target.email),
+            ip,
+          });
+          set.status = 409;
+          return <InviteAccountExistsPage />;
+        }
+        set.status = 400;
+        return <InviteInvalidPage />;
+      }
+
+      /**
+       * Replace the browser's previous session, as login does. The account
+       * already exists at this point, so a failure here is logged and the
+       * new session is still issued.
+       */
+      const presented = readSessionCookie(request.headers.get("cookie"));
+      if (presented && isWellFormedToken(presented)) {
+        try {
+          const revoked = await sessionService.revokeSessionByToken(presented);
+          if (!revoked) {
+            const superseded =
+              await sessionService.findSessionBySupersededToken(presented);
+            if (superseded) await revokeOnTokenReuse(superseded, ip);
+          }
+        } catch (error: unknown) {
+          logger.error("Invitation accepted, but revoking the previous session failed", {
+            userId: result.userId,
+            ip,
+            error: errorMessage(error),
+          });
+        }
+      }
+
+      logger.warn("Invitation accepted", {
+        invitationId: target.invitationId,
+        userId: result.userId,
+        invitedBy: result.invitedBy,
+        role: result.role,
+        email: redactEmail(result.email),
+        sessionId: result.sessionId,
+        ip,
+      });
+
+      issueSession(set, result.sessionToken);
+      return redirect(set, "/dashboard");
+    },
+    {
+      body: t.Object({
+        token: t.String({ maxLength: 128 }),
+        name: t.String({ maxLength: 1024 }),
+        password: t.String({ maxLength: 1024 }),
+        confirm: t.String({ maxLength: 1024 }),
+      }),
+    },
+  )
+
   /* ─── Session Guard ─── */
 
   /**
@@ -785,9 +1054,9 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/",
-    async () => {
+    async ({ auth }) => {
       const stats = await statsService.getDashboardStats();
-      return <HomePage stats={stats} />;
+      return <HomePage stats={stats} canInvite={roleAtLeast(auth.user.role, "admin")} />;
     },
     { beforeHandle: memberGuard },
   )
@@ -1243,7 +1512,8 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/api-keys",
-    async ({ query, auth }) => {
+    async ({ query, auth, set }) => {
+      setNoStore(set);
       const keys = await apiKeyService.listApiKeys();
 
       /** Parse flash message from query params (set after create/revoke) */
@@ -1397,6 +1667,124 @@ export const pagesPlugin = new Elysia({
       params: t.Object({
         id: t.String(),
       }),
+    },
+  )
+
+  /**
+   * GET /dashboard/invitations
+   * Pending invitations, the invite form and, right after an invitation
+   * whose email did not go out, its accept link once (#217). Admins and
+   * the owner; the role select offers only what the viewer may grant.
+   */
+  .get(
+    "/invitations",
+    async ({ query, auth, set }) => {
+      setNoStore(set);
+      const invitations = await inviteService.listPendingInvitations();
+      const flash = toFlash(query.flash, query.flashType);
+      /** One-time reveal bound to this user and session (#280): never in a URL. */
+      const revealedLink = consumeRevealSecret(
+        query.reveal,
+        "invite_link",
+        revealOwnerOf(auth),
+      );
+      return (
+        <InvitationsPage
+          invitations={invitations}
+          grantable={grantableRoles(auth.user.role)}
+          flash={flash}
+          revealedLink={revealedLink}
+        />
+      );
+    },
+    {
+      beforeHandle: adminGuard,
+      query: t.Object({
+        flash: t.Optional(t.String()),
+        flashType: t.Optional(t.String()),
+        reveal: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/invitations
+   * Invites an address with a role (#217). The service re-checks the role
+   * against the actor's (owner: admin or member; admin: member), so a
+   * crafted `owner` or an admin asking for `admin` gets 403. The email is
+   * sent when a system sender is usable; otherwise the link is revealed
+   * once on the page.
+   */
+  .post(
+    "/invitations",
+    async ({ body, set, auth }) => {
+      try {
+        const result = await inviteService.createInvitation(
+          inviteActorOf(auth),
+          body.email,
+          body.role,
+        );
+        return answerIssuedInvitation(set, auth, result, "sent");
+      } catch (error: unknown) {
+        logger.error("Failed to create invitation via dashboard", {
+          error: errorMessage(error),
+        });
+        return invitationsRedirect(set, "Failed to create the invitation.", "error");
+      }
+    },
+    {
+      beforeHandle: adminGuard,
+      body: t.Object({
+        email: t.String({ maxLength: 320 }),
+        role: t.String({ maxLength: 20 }),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/invitations/:id/revoke
+   * Revokes a pending invitation (#217); its link stops working. Only for
+   * a role the actor may grant.
+   */
+  .post(
+    "/invitations/:id/revoke",
+    async ({ params, set, auth }) => {
+      const result = await inviteService.revokeInvitation(inviteActorOf(auth), params.id);
+      if (!result.ok) return answerInviteRefusal(set, result.reason);
+      return invitationsRedirect(set, "Invitation revoked.", "success");
+    },
+    {
+      beforeHandle: adminGuard,
+      params: t.Object({ id: t.String({ maxLength: 64 }) }),
+    },
+  )
+
+  /**
+   * POST /dashboard/invitations/:id/resend
+   * Replaces a pending invitation with a new link (same address and role;
+   * the old link dies) and sends it again, or reveals it once (#217).
+   * Only for a role the actor may grant.
+   */
+  .post(
+    "/invitations/:id/resend",
+    async ({ params, set, auth }) => {
+      try {
+        const result = await inviteService.resendInvitation(
+          inviteActorOf(auth),
+          params.id,
+        );
+        return answerIssuedInvitation(set, auth, result, "resent");
+      } catch (error: unknown) {
+        logger.error("Failed to resend invitation via dashboard", {
+          invitationId: params.id,
+          error: errorMessage(error),
+        });
+        return invitationsRedirect(set, "Failed to resend the invitation.", "error");
+      }
+    },
+    {
+      beforeHandle: adminGuard,
+      params: t.Object({ id: t.String({ maxLength: 64 }) }),
     },
   )
 
@@ -1816,7 +2204,8 @@ export const pagesPlugin = new Elysia({
 
   .get(
     "/webhooks",
-    async ({ query, auth }) => {
+    async ({ query, auth, set }) => {
+      setNoStore(set);
       const hooks = await webhookService.listAllWebhooks();
       const flash = toFlash(query.flash, query.flashType);
       /** One-time reveal of the webhook HMAC secret (#132): never in URL. */

@@ -9,6 +9,7 @@ src/modules/domains/
 ├── domains.plugin.ts               ← Elysia plugin (route group)
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
+│   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
 │   └── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification
 ├── dtos/
 │   └── create-domain.dto.ts        ← POST body validation
@@ -89,6 +90,10 @@ Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243); only the fields prese
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
 Hard-deletes a domain and its keys.
+
+### domain-dkim.service.ts
+
+- `resolveDomainDkim(domain): DkimOptions | undefined`: decrypts the domain's stored DKIM key (`DKIM_ENCRYPTION_KEY`; a plaintext key is used with a `warn`, a decrypt failure is logged at `error` and yields no key) and returns the signing options, or `undefined` when there is no usable key. Used by inbound notifications (#106, which then send unsigned) and invitation emails (#217, which then do not send). The queue keeps its own copy of the decrypt step.
 
 ### dns-verification.service.ts
 

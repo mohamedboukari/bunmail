@@ -17,20 +17,23 @@ import {
  */
 
 /** Shared input styling, matching the login form. */
-const INPUT_CLASS =
+export const INPUT_CLASS =
   "w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent";
 
 /** Shared label styling, matching the login form. */
-const LABEL_CLASS = "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5";
+export const LABEL_CLASS =
+  "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5";
 
 /**
- * HTML shell shared by the three setup pages: the same head as the login
- * page plus the strict-origin referrer meta tag, and a centered column.
+ * HTML shell shared by the setup pages and the invitation accept pages
+ * (#217, `invite.tsx`), whose URLs carry a one-time token too: the same
+ * head as the login page plus the strict-origin referrer meta tag, and a
+ * centered column.
  *
  * @param title    Static page title, prefixed to "| BunMail".
  * @param subtitle Static line under the brand heading.
  */
-function SetupShell({
+export function SetupShell({
   title,
   subtitle,
   children,

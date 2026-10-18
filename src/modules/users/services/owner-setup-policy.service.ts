@@ -61,23 +61,36 @@ export function setupPasswordProblem(password: string, confirm: string): string 
 }
 
 /**
- * Builds the absolute setup link for `token`.
+ * Builds an absolute dashboard link for `path` (which starts with `/`).
  *
  * Uses `appBaseUrl` (`APP_BASE_URL`) when it is an `http://` or `https://`
  * URL. Anything else, including an empty value or a `javascript:` URL,
  * falls back to `http://localhost:PORT`, which the operator can still open
  * through an SSH tunnel; `usedFallback` lets the caller add a hint to set
- * `APP_BASE_URL`.
+ * `APP_BASE_URL`. Shared by the owner setup link (#215) and invitation
+ * links (#217).
  */
-export function buildSetupUrl(
+export function buildDashboardUrl(
   appBaseUrl: string,
   port: number,
-  token: string,
+  path: string,
 ): { url: string; usedFallback: boolean } {
-  const path = `/dashboard/setup?token=${encodeURIComponent(token)}`;
   const base = appBaseUrl.trim().replace(/\/+$/, "");
   if (/^https?:\/\/[^/]/i.test(base)) {
     return { url: `${base}${path}`, usedFallback: false };
   }
   return { url: `http://localhost:${port}${path}`, usedFallback: true };
+}
+
+/** Builds the absolute setup link for `token` (see `buildDashboardUrl`). */
+export function buildSetupUrl(
+  appBaseUrl: string,
+  port: number,
+  token: string,
+): { url: string; usedFallback: boolean } {
+  return buildDashboardUrl(
+    appBaseUrl,
+    port,
+    `/dashboard/setup?token=${encodeURIComponent(token)}`,
+  );
 }

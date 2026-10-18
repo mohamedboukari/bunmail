@@ -70,6 +70,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/logout": { access: "public" },
   "GET /dashboard/setup": { access: "public" },
   "POST /dashboard/setup": { access: "public" },
+  "GET /dashboard/invite": { access: "public" },
+  "POST /dashboard/invite": { access: "public" },
 
   "GET /dashboard/": { access: "member" },
   "GET /dashboard/send": { access: "member" },
@@ -109,6 +111,14 @@ const ROUTES: Record<string, RouteSpec> = {
     body: { allowedSenders: "" },
   },
   "POST /dashboard/api-keys/:id/revoke": { access: "admin" },
+
+  "GET /dashboard/invitations": { access: "admin" },
+  "POST /dashboard/invitations": {
+    access: "admin",
+    body: (caller) => ({ email: `${caller}.invitee@example.com`, role: "member" }),
+  },
+  "POST /dashboard/invitations/:id/revoke": { access: "admin" },
+  "POST /dashboard/invitations/:id/resend": { access: "admin" },
 
   "GET /dashboard/domains": { access: "member" },
   "GET /dashboard/domains/:id": { access: "member" },

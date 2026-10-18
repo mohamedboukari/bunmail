@@ -133,6 +133,7 @@ bunmail/
 │   │   │   ├── domains.plugin.ts         ← CRUD + verify routes
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
+│   │   │   │   ├── domain-dkim.service.ts ← DKIM options for out-of-queue mail (inbound notify, invitations, #217)
 │   │   │   │   └── dns-verification.service.ts ← SPF/DKIM/DMARC checks
 │   │   │   ├── dtos/
 │   │   │   │   └── create-domain.dto.ts
@@ -215,15 +216,18 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
 │   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
 │   │   │   │                               login.service.ts (email + password, one argon2id verify per branch),
 │   │   │   │                               session.service.ts (create / look up / rotate / revoke / sweep),
-│   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent)
-│   │   │   └── types/                    ← role / credential / assurance / purpose value sets
+│   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent),
+│   │   │   │                               invite.service.ts (create / resend / revoke / list / accept, per-address advisory lock),
+│   │   │   │                               invite-policy.service.ts (pure: who grants which role, name, expiry, URL),
+│   │   │   │                               invite-email.service.ts (invitation email from SYSTEM_MAIL_FROM, DKIM-signed)
+│   │   │   └── types/                    ← role / credential / assurance / purpose / invite value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
 │   │       ├── services/
@@ -242,7 +246,7 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
-│       ├── reveal-store.ts               ← One-time secret reveal bound to kind, user and session (#132, #280)
+│       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation links) bound to kind, user and session (#132, #280, #217)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
@@ -250,6 +254,8 @@ bunmail/
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
+│       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
+│       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
@@ -690,7 +696,7 @@ Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DE
 
 ### `user_tokens` (#214)
 
-One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives; `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`.
+One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives; `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`. `user_tokens_invite_check` (#217, migration `0018`): an `invite` row must have an `email` and a `role` of `admin` or `member`, never `owner`. Invitation lifecycle: [docs/users.md](docs/users.md#invitations-217).
 
 ### `__bunmail_migrations`
 
@@ -806,6 +812,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/logout                  | Revoke the session, clear the cookie | No |
 | GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
+| GET    | /dashboard/invite?token=           | Invitation accept form (read-only, never spends the token, #217) | Invite token |
+| POST   | /dashboard/invite                  | Create the invited account, spend the token, sign in (#217) | Invite token |
 | GET    | /dashboard                         | Stats overview          | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
@@ -825,6 +833,10 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/api-keys/:id/revoke     | Revoke API key          | Admin |
 | POST   | /dashboard/api-keys/:id/admin      | Promote/demote a key to admin (#130) | Admin |
 | POST   | /dashboard/api-keys/:id/senders    | Set a key's allowed senders (#126) | Admin |
+| GET    | /dashboard/invitations             | Pending invitations + invite form, one-time link (#217) | Admin |
+| POST   | /dashboard/invitations             | Invite an address (owner: admin or member; admin: member) | Admin |
+| POST   | /dashboard/invitations/:id/revoke  | Revoke an invitation (roles the actor may grant) | Admin |
+| POST   | /dashboard/invitations/:id/resend  | New link for the same address and role, sent again | Admin |
 | GET    | /dashboard/domains                 | Domains management      | Member |
 | POST   | /dashboard/domains                 | Add domain              | Admin |
 | POST   | /dashboard/domains/:id/delete      | Delete domain           | Admin |
@@ -859,7 +871,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |
 | POST   | /dashboard/suppressions/:id/delete | Remove a suppression (#89) | Admin |
 
-Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
+Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
 Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
 
@@ -965,7 +977,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). `docker-compose.override.yml` (merged automatically) publishes Postgres on `127.0.0.1:5432` for local development (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation links point at `localhost`. `docker-compose.override.yml` (merged automatically) publishes Postgres on `127.0.0.1:5432` for local development (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 

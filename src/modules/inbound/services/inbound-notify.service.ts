@@ -2,13 +2,12 @@ import { randomBytes } from "crypto";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
-import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { sendMail } from "../../emails/services/mailer.service.ts";
-import type { DkimOptions } from "../../emails/services/mailer.service.ts";
 import {
   getDomainByName,
   domainExistsByName,
 } from "../../domains/services/domain.service.ts";
+import { resolveDomainDkim } from "../../domains/services/domain-dkim.service.ts";
 import type { Domain } from "../../domains/types/domain.types.ts";
 
 /**
@@ -138,43 +137,6 @@ export function buildInboundNotification(
   return { subject, html, text };
 }
 
-/**
- * Decrypts a domain's stored DKIM private key, mirroring the queue's
- * fail-open behaviour: null stays null, plaintext (boot encrypter not yet
- * run) is used as-is with a warning, and a decrypt failure logs and
- * returns null so the notification still sends, unsigned, rather than
- * being dropped.
- */
-function decryptDkimPrivateKey(stored: string | null, domainName: string): string | null {
-  if (stored === null) return null;
-  if (!isEncryptedSecret(stored)) {
-    logger.warn("DKIM private key stored as plaintext: boot encrypter has not run", {
-      domain: domainName,
-    });
-    return stored;
-  }
-  try {
-    return decryptSecret(stored, config.dkimEncryptionKey);
-  } catch (err) {
-    logger.error("Failed to decrypt DKIM private key: sending notification unsigned", {
-      domain: domainName,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-/** Builds DKIM options from a domain row, or undefined when no key. */
-function resolveDkim(domain: Domain): DkimOptions | undefined {
-  const privateKey = decryptDkimPrivateKey(domain.dkimPrivateKey, domain.name);
-  if (!privateKey) return undefined;
-  return {
-    domainName: domain.name,
-    keySelector: domain.dkimSelector,
-    privateKey,
-  };
-}
-
 /** Inputs for {@link notifyInboundReceived}. */
 export interface NotifyInboundInput {
   /** The `inb_…` id of the stored inbound row (for the dashboard link). */
@@ -267,7 +229,8 @@ async function sendDomainNotification(
   if (!notifyEmail) return;
 
   const from = `${config.inboundNotify.fromLocalPart}@${domain.name}`;
-  const dkim = resolveDkim(domain);
+  /** No usable key (none, or decrypt failed): sent unsigned rather than dropped. */
+  const dkim = resolveDomainDkim(domain);
   const messageId = `<${randomBytes(16).toString("hex")}@${config.mail.hostname}>`;
   const detailUrl = config.appBaseUrl
     ? `${config.appBaseUrl}/dashboard/inbound/${input.inboundId}`

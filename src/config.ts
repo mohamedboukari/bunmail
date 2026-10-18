@@ -245,6 +245,63 @@ export function readOwnerEmail(
   return email;
 }
 
+/** Lifetime of an invitation link when `INVITE_EXPIRY_DAYS` is unset (#217). */
+const DEFAULT_INVITE_EXPIRY_DAYS = 7;
+
+/**
+ * Longest invitation lifetime accepted (#217). A pending link is a live
+ * credential for a new account, so a typo such as `700` must not keep one
+ * open for two years; it also keeps the expiry date arithmetic in range.
+ */
+export const MAX_INVITE_EXPIRY_DAYS = 90;
+
+/**
+ * Reads `INVITE_EXPIRY_DAYS`, how many days an invitation link stays
+ * valid (#217). Unset or empty: 7. Anything other than a whole number
+ * from 1 to {@link MAX_INVITE_EXPIRY_DAYS} refuses to boot, in every
+ * environment: a typo must not silently fall back to the default.
+ */
+export function readInviteExpiryDays(
+  raw: string = optionalEnv("INVITE_EXPIRY_DAYS", ""),
+): number {
+  const trimmed = raw.trim();
+  if (trimmed === "") return DEFAULT_INVITE_EXPIRY_DAYS;
+  const value = Number(trimmed);
+  if (!/^\d+$/.test(trimmed) || value < 1 || value > MAX_INVITE_EXPIRY_DAYS) {
+    throw new Error(
+      `[config] INVITE_EXPIRY_DAYS must be a whole number of days from 1 to ${MAX_INVITE_EXPIRY_DAYS}, got "${raw}"`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
+ * #217) is sent from. Trimmed and lower-cased; unset or empty means no
+ * system sender, and the dashboard shows invitation links for the inviter
+ * to share instead. A malformed value (anything but one bare address, or
+ * over 254 characters) refuses to boot in every environment. Whether its
+ * domain is registered and DKIM-verified is checked at send time, since
+ * domains change at runtime.
+ */
+export function readSystemMailFrom(
+  raw: string = optionalEnv("SYSTEM_MAIL_FROM", ""),
+): string | null {
+  const email = raw.trim().toLowerCase();
+  if (email === "") return null;
+  /** The same single-address check as `BUNMAIL_OWNER_EMAIL`. */
+  const problem = ownerEmailProblem(email);
+  if (problem) {
+    throw new Error(
+      `[config] SYSTEM_MAIL_FROM is not usable: ${problem}.\n` +
+        "  → Set it to one bare address on a domain registered and DKIM-verified\n" +
+        "    in BunMail (no name or angle brackets), e.g. noreply@yourcompany.com,\n" +
+        "    or leave it unset to share invitation links by hand.",
+    );
+  }
+  return email;
+}
+
 /**
  * Central application configuration.
  *
@@ -458,6 +515,20 @@ export const config = {
      * that domain's DKIM key. Default "notifications".
      */
     fromLocalPart: optionalEnv("INBOUND_NOTIFY_FROM_LOCAL", "notifications"),
+  },
+
+  /**
+   * Sender of BunMail's own mail: invitation emails (#217). One bare
+   * address on a domain registered and DKIM-verified in BunMail; `null`
+   * when unset, in which case the dashboard shows each invitation link
+   * once for the inviter to share. See `readSystemMailFrom`.
+   */
+  systemMailFrom: readSystemMailFrom(),
+
+  /** Dashboard invitations (#217). */
+  invites: {
+    /** Days an invitation link stays valid (`INVITE_EXPIRY_DAYS`, default 7, at most 90). */
+    expiryDays: readInviteExpiryDays(),
   },
 
   /** Web dashboard at /dashboard, signed in to with dashboard accounts (#216) */

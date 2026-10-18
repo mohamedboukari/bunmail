@@ -1,7 +1,12 @@
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./user.schema.ts";
-import { TOKEN_PURPOSES, USER_ROLES, literals } from "../types/user.types.ts";
+import {
+  INVITE_ROLES,
+  TOKEN_PURPOSES,
+  USER_ROLES,
+  literals,
+} from "../types/user.types.ts";
 
 /**
  * One-time tokens (#214): the owner setup link (#215), invitations (#217)
@@ -73,6 +78,17 @@ export const userTokens = pgTable(
     check(
       "user_tokens_email_lowercase_check",
       sql`${table.email} IS NULL OR ${table.email} = lower(${table.email})`,
+    ),
+
+    /**
+     * An invitation (#217) names the invited address and grants `admin`
+     * or `member`, never `owner`: a bug or a hand-written row cannot mint
+     * an ownership link. `role IS NOT NULL` is spelled out: a NULL role
+     * makes `IN (...)` NULL, and a CHECK that evaluates to NULL passes.
+     */
+    check(
+      "user_tokens_invite_check",
+      sql`${table.purpose} <> 'invite' OR (${table.email} IS NOT NULL AND ${table.role} IS NOT NULL AND ${table.role} IN (${literals(INVITE_ROLES)}))`,
     ),
   ],
 );

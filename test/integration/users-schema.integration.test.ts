@@ -232,10 +232,12 @@ describe("sessions and user_tokens", () => {
   });
 
   test("a token must act for a user or target an address", async () => {
+    /** `password_reset`, not `invite`: an addressless invite trips the
+     *  invite check (#217) first, constraints run in name order. */
     await rejects(
       db.insert(userTokens).values({
         id: generateId("utk"),
-        purpose: "invite",
+        purpose: "password_reset",
         tokenHash: "c".repeat(64),
         expiresAt: inAnHour(),
       }),
@@ -258,6 +260,7 @@ describe("sessions and user_tokens", () => {
         id: generateId("utk"),
         email: "new@example.org",
         purpose: "invite",
+        role: "member",
         tokenHash: hash,
         expiresAt: inAnHour(),
       }),
