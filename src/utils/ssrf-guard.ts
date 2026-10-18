@@ -75,7 +75,7 @@ function intToIpv4(n: number): string {
  * Parses an IPv6 string (zone id stripped, `::` compression and a trailing
  * dotted quad allowed) into its eight 16-bit groups, or null if malformed.
  */
-function parseIpv6(ip: string): number[] | null {
+export function parseIpv6(ip: string): number[] | null {
   let addr = ip.toLowerCase().split("%")[0] ?? "";
   /** A trailing dotted quad (`::ffff:1.2.3.4`) becomes two hex groups. */
   const dotted = addr.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
@@ -108,7 +108,7 @@ function parseIpv6(ip: string): number[] | null {
  * - NAT64 well-known prefix `64:ff9b::/96` (RFC 6052)
  * - 6to4 `2002::/16` (RFC 3056): `2002:AABB:CCDD::` carries `AA.BB.CC.DD`
  */
-function embeddedIpv4(groups: number[]): string | null {
+export function embeddedIpv4(groups: number[]): string | null {
   const g = (i: number): number => groups[i] ?? 0;
   const v4 = (): string => intToIpv4(((g(6) << 16) | g(7)) >>> 0);
   const zeroUpTo = (end: number, start = 0): boolean => {

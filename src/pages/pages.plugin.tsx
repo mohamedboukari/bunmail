@@ -29,6 +29,8 @@ import {
   isLoginRateLimited,
   recordFailedLogin,
   clearLoginAttempts,
+  rateLimitBucket,
+  refundLoginAttempt,
 } from "../middleware/login-rate-limit.ts";
 import { isEmailStatus } from "../modules/emails/types/email.types.ts";
 
@@ -462,7 +464,8 @@ const ACCOUNT_REFUSAL_FORBIDDEN: ReadonlySet<AccountRefusal> = new Set<AccountRe
 function transferLimiter(actorId: string, ip: string): AttemptLimiter {
   const { enabled, maxAttempts, windowSec } = config.dashboard.loginRateLimit;
   const windowMs = windowSec * 1000;
-  const keys = [`transfer:user:${actorId}`, `transfer:ip:${ip}`];
+  /** IPv6 clients by /64, like the login (#256). */
+  const keys = [`transfer:user:${actorId}`, `transfer:ip:${rateLimitBucket(ip)}`];
   return {
     isLimited: () =>
       enabled &&
@@ -711,8 +714,9 @@ export const pagesPlugin = new Elysia({
        * attempt is counted right away, before any await: the password
        * check (argon2id) takes tens of milliseconds, and counting only
        * after it would let a parallel burst from one IP pass the limit,
-       * each request running a full hash. A successful login clears the
-       * counter.
+       * each request running a full hash. A successful login gives back
+       * only its own count: earlier failures stay until the window ends
+       * (#256).
        */
       const windowMs = loginRateLimit.windowSec * 1000;
       if (loginRateLimit.enabled) {
@@ -806,8 +810,12 @@ export const pagesPlugin = new Elysia({
         }
         const { sessionId, token } = created;
 
-        /** Success: wipe any accumulated failures for this IP. */
-        if (loginRateLimit.enabled) clearLoginAttempts(ip);
+        /**
+         * Success: give back this request's own count. Earlier failures from
+         * this address stay (#256), or anyone could sign in to their own
+         * account between guesses at someone else's password.
+         */
+        if (loginRateLimit.enabled) refundLoginAttempt(ip, windowMs);
 
         logger.info("Dashboard login successful", {
           userId: result.userId,

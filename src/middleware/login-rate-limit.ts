@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger.ts";
+import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
 
 /**
  * Per-IP brute-force protection for the dashboard login form (#109).
@@ -55,13 +56,15 @@ import { logger } from "../utils/logger.ts";
  * @param opts.socketIp          The raw transport peer address, if known.
  * @param opts.forwardedFor      The raw `X-Forwarded-For` header, or null.
  * @param opts.trustedProxyHops  Number of trusted proxy hops in front.
+ * @param opts.now               Current time (ms), for the bypass warning.
  */
 export function resolveClientIp(opts: {
   socketIp?: string;
   forwardedFor: string | null;
   trustedProxyHops: number;
+  now?: number;
 }): string {
-  const { socketIp, forwardedFor, trustedProxyHops } = opts;
+  const { socketIp, forwardedFor, trustedProxyHops, now = Date.now() } = opts;
 
   /** No trusted proxy: the socket address is the only trustworthy source. */
   if (trustedProxyHops <= 0) {
@@ -83,7 +86,57 @@ export function resolveClientIp(opts: {
     return chain[chain.length - trustedProxyHops] ?? socketIp ?? "unknown";
   }
 
+  warnUnproxiedRequest(socketIp, chain.length, trustedProxyHops, now);
   return socketIp ?? "unknown";
+}
+
+/** How often the unproxied-request warning may repeat. */
+const PROXY_WARNING_INTERVAL_MS = 60 * 60 * 1000;
+
+/** When the unproxied-request warning was last logged (ms), 0 for never. */
+let lastProxyWarningAt = 0;
+
+/**
+ * Warns, at most once an hour, that a request reached BunMail with fewer
+ * `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS` (#256): it
+ * did not come through the expected proxies, so BunMail is reachable
+ * directly, and a direct client can then forge the header to get a fresh
+ * throttle bucket per request. Bind the app port to loopback or firewall
+ * it so only the proxy reaches it.
+ */
+function warnUnproxiedRequest(
+  socketIp: string | undefined,
+  forwardedEntries: number,
+  trustedProxyHops: number,
+  now: number,
+): void {
+  if (now - lastProxyWarningAt < PROXY_WARNING_INTERVAL_MS) return;
+  lastProxyWarningAt = now;
+  logger.warn(
+    "Request bypassed the trusted proxy: BunMail is reachable directly, so X-Forwarded-For can be forged",
+    { socketIp: socketIp ?? null, forwardedEntries, trustedProxyHops },
+  );
+}
+
+/* ─── Throttle buckets ─── */
+
+/**
+ * The bucket a client address is counted in (#256). An IPv6 client
+ * usually controls a whole /64 and can rotate through its addresses, so
+ * IPv6 clients are counted per /64; an IPv6 form that carries an IPv4
+ * address (`::ffff:192.0.2.1`) counts as that IPv4. Anything else (IPv4,
+ * `unknown`, a prefixed key such as `transfer:user:...`) is its own bucket.
+ */
+export function rateLimitBucket(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const groups = parseIpv6(ip);
+  if (groups === null) return ip;
+  const ipv4 = embeddedIpv4(groups);
+  if (ipv4 !== null) return ipv4;
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toString(16))
+    .join(":")}::/64`;
 }
 
 /* ─── Per-IP failed-attempt tracking ─── */
@@ -117,7 +170,7 @@ export function isLoginRateLimited(
   windowMs: number,
   now: number = Date.now(),
 ): { limited: boolean; retryAfterSec: number } {
-  const entry = loginAttemptMap.get(ip);
+  const entry = loginAttemptMap.get(rateLimitBucket(ip));
 
   /** No record, or the window has fully expired, not limited. */
   if (!entry || now - entry.windowStart >= windowMs) {
@@ -142,10 +195,11 @@ export function recordFailedLogin(
   windowMs: number,
   now: number = Date.now(),
 ): void {
-  const entry = loginAttemptMap.get(ip);
+  const key = rateLimitBucket(ip);
+  const entry = loginAttemptMap.get(key);
 
   if (!entry || now - entry.windowStart >= windowMs) {
-    loginAttemptMap.set(ip, { count: 1, windowStart: now });
+    loginAttemptMap.set(key, { count: 1, windowStart: now });
     return;
   }
 
@@ -153,12 +207,29 @@ export function recordFailedLogin(
 }
 
 /**
- * Clears an IP's failed-attempt record. Called on a successful login so a
- * legitimate operator who eventually types the right password isn't held
- * under the previous failures.
+ * Gives back the one attempt a successful login counted for itself (the
+ * login counts every attempt before the password check). Earlier failures
+ * stay until their window expires (#256): clearing them on success let
+ * anyone with an account of their own sign in between guesses at another
+ * account's password and keep guessing from the same address forever.
+ */
+export function refundLoginAttempt(
+  ip: string,
+  windowMs: number,
+  now: number = Date.now(),
+): void {
+  const entry = loginAttemptMap.get(rateLimitBucket(ip));
+  if (!entry || now - entry.windowStart >= windowMs) return;
+  entry.count = Math.max(0, entry.count - 1);
+}
+
+/**
+ * Clears a key's failed-attempt record. Used by the ownership transfer
+ * check (#218), whose success cannot be repeated; the login refunds its
+ * own attempt instead (see {@link refundLoginAttempt}).
  */
 export function clearLoginAttempts(ip: string): void {
-  loginAttemptMap.delete(ip);
+  loginAttemptMap.delete(rateLimitBucket(ip));
 }
 
 /* ─── Periodic cleanup ─── */

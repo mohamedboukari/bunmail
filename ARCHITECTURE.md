@@ -944,7 +944,7 @@ Two independent in-memory fixed-window limiters:
 **Dashboard login** (`src/middleware/login-rate-limit.ts`, #109)
 - **Default limit:** 5 failed logins (any reason) per 15 minutes, per client IP; no per-account lockout
 - **Scope:** Per client IP: resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the right of `X-Forwarded-For` (default `0` = raw socket IP; the leftmost header entry is never trusted)
-- **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login clears the counter
+- **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login gives back only its own attempt, earlier failures stay until the window ends (#256); IPv6 clients counted per `/64`
 - **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
 
 Both maps reset on server restart and are per-replica (single-instance only; optional Redis backing is tracked in #185).

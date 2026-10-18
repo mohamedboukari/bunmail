@@ -156,10 +156,15 @@ of failure counts (unknown email, no password, disabled account, wrong
 password, over-long input), and the check runs before any database or argon2id
 work. After `DASHBOARD_LOGIN_RATE_LIMIT_MAX` failures within
 `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` seconds, further attempts from that IP get
-HTTP `429` with a `Retry-After` header until the window expires; a successful
-login clears the counter. There is no per-account lockout (it would let anyone
-lock the owner out); guessing across many IPs is slowed only by argon2id and
-the 15-character password minimum.
+HTTP `429` with a `Retry-After` header until the window expires. A successful
+login gives back only its own attempt; earlier failures from the address stay
+until the window ends (#256), so signing in to an account of one's own does
+not buy more guesses at another. IPv6 clients are counted per `/64` (a client
+usually controls a whole `/64`), and an IPv4-mapped address counts as its IPv4.
+There is no per-account lockout (it would let anyone lock the owner out) and
+no global budget across addresses (it would let anyone lock everyone out);
+guessing across many IPs is slowed only by argon2id and the 15-character
+password minimum.
 
 The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from
 the **right** of `X-Forwarded-For` (the leftmost entry is attacker-controlled and
@@ -167,7 +172,11 @@ never trusted). With the default `0`, the header is ignored and the raw socket I
 is used. Behind a reverse proxy set it to the number of trusted hops (`1` for a
 single proxy) so lockouts are per-attacker rather than shared across the proxy's
 IP, and make sure the origin can only be reached **through** the proxy, or
-`X-Forwarded-For` can't be trusted. State is in-memory and per-replica.
+`X-Forwarded-For` can't be trusted. When a request carries fewer
+`X-Forwarded-For` entries than the configured hops, BunMail logs `Request
+bypassed the trusted proxy` (at most once an hour, #256): the app is reachable
+directly, so bind its port to `127.0.0.1` or firewall it. State is in-memory and
+per-replica.
 
 ## Pages
 

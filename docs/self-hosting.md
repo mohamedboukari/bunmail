@@ -320,7 +320,7 @@ nginx -t && systemctl restart nginx
 certbot --nginx -d mail.yourdomain.com
 ```
 
-> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy; otherwise a direct request could forge `X-Forwarded-For`.
+> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. **Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy**; otherwise a direct request could forge `X-Forwarded-For` and get a fresh throttle bucket per request. The default `docker-compose.yml` publishes `3000` on all interfaces, and Docker-published ports bypass UFW: change the app's `ports` line to `"127.0.0.1:${PORT:-3000}:${PORT:-3000}"` when a proxy runs on the same host. BunMail logs `Request bypassed the trusted proxy` (at most once an hour, #256) when a request arrives with fewer `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS`.
 
 ## Firewall Rules
 
