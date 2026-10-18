@@ -47,10 +47,15 @@ const PATCHED = "return [node.whenTrue, node.whenFalse];";
 const HANDLER_RE = /\son[a-z]+=["'{]/;
 
 /** An inline `<script>`: no `src=`, and not a `type="application/json"` data block. */
-const INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[\s>]/;
+const INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[\s>]/i;
 
-/** The Tailwind Play CDN host the pages loaded before #255 (a plain substring check). */
-const TAILWIND_CDN_HOST = "cdn.tailwindcss.com";
+/**
+ * A `<script src>` or `<link href>` loading from another origin: an absolute
+ * (`https://...`) or protocol-relative (`//...`) URL. The pages loaded the
+ * Tailwind Play CDN this way before #255; every asset is self-hosted now.
+ */
+const THIRD_PARTY_ASSET_RE =
+  /<(?:script|link)\b[^>]*\b(?:src|href)=["'{]?(?:https?:)?\/\//i;
 
 let failed = false;
 function fail(message: string): void {
@@ -97,8 +102,8 @@ async function sweepInlineCode(): Promise<void> {
       "inline <script>; the CSP only runs /dashboard/assets/dashboard.js",
     ],
     [
-      (line) => line.includes(TAILWIND_CDN_HOST),
-      "Tailwind CDN; the pages use the self-hosted dashboard.css",
+      (line) => THIRD_PARTY_ASSET_RE.test(line),
+      "third-party script or stylesheet; serve it from /dashboard/assets",
     ],
   ];
   for await (const relative of new Bun.Glob("**/*.{ts,tsx}").scan(PAGES_DIR)) {
