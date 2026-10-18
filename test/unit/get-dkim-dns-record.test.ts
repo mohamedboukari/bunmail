@@ -12,7 +12,7 @@ void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost" },
+    mail: { hostname: "localhost", publicIps: [] },
     dashboard: { ownerEmail: null },
     logLevel: "error",
   },

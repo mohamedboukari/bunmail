@@ -119,6 +119,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `REQUIRE_VERIFIED_DOMAIN`: refuse sends from a sender domain whose DKIM record is not verified (#245). Default `false`: the email is queued and `POST /api/v1/emails/send` returns `warnings` (`dkim_unverified`, `spf_unverified`, `dmarc_unverified`), the dashboard flash names them, and SMTP submission logs them. With `true`, a registered domain whose stored DKIM flag is false is re-verified in DNS once before the send (a failure is remembered for 5 minutes per domain, so retries do not query DNS each time; running **Verify** on the domain takes effect at once), then refused with `422 SENDER_DOMAIN_UNVERIFIED` (SMTP `550`); an unregistered domain is refused in every environment. SPF and DMARC only warn. Only `true` or `false`; anything else refuses to boot.
 
+> `MAIL_PUBLIC_IP` (#247, #248): the public IPs this server sends from, comma-separated. Optional: unset, BunMail uses the A/AAAA records of `MAIL_HOSTNAME`. SPF verification checks that the domain authorizes these addresses, and every boot logs whether their PTR records name `MAIL_HOSTNAME` and resolve back (`Reverse DNS confirmed for every sending IP`, or a `warn` with the fix). Behind NAT the container can't see its egress address: set this to the real one.
+
 > `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h.
 
 > `QUEUE_BATCH_SIZE` / `QUEUE_POLL_INTERVAL_MS` / `QUEUE_MAX_CONCURRENT_SENDS`: send queue throughput (#176). Every `QUEUE_POLL_INTERVAL_MS` (default `2000`, 250 to 60000, with +/-10% jitter) the queue claims up to `QUEUE_BATCH_SIZE` due emails (default `5`, 1 to 100), but never more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS` (default `10`, 1 to 500), the cap on sends in flight per process. A slow receiver holds its slot instead of making the queue open more connections; sends waiting for a busy MX (`MAIL_MX_CONCURRENCY`) hold theirs too. Raise the cap for high volume to many different domains; mind your IP reputation. Any other value refuses to boot.
@@ -143,7 +145,9 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 
 | Type | Host | Value                                    |
 |------|------|------------------------------------------|
-| TXT  | `@`  | `v=spf1 a mx ip4:YOUR_SERVER_IP -all`    |
+| TXT  | `@`  | `v=spf1 a:mail.yourdomain.com -all`      |
+
+`a:mail.yourdomain.com` authorizes the addresses your `MAIL_HOSTNAME` resolves to (the same name its PTR record must carry). If the domain already has an SPF record (Google Workspace, Microsoft 365, ...), add the `a:` term to it: a domain must publish exactly one SPF record. The dashboard's domain page shows the exact record and **Verify** evaluates it for this server's sending IPs (#247).
 
 ### DMARC Record (tells receivers what to do with unauthenticated mail)
 
@@ -399,7 +403,7 @@ All three must be set correctly. Verify with:
 ```bash
 # SPF
 dig TXT yourdomain.com +short
-# Expected: "v=spf1 a mx ip4:YOUR_SERVER_IP -all"
+# Expected: "v=spf1 a:mail.yourdomain.com -all" (or your existing record with that term)
 
 # DKIM
 dig TXT bunmail._domainkey.yourdomain.com +short

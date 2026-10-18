@@ -261,10 +261,13 @@ Trigger DNS verification for SPF, DKIM, and DMARC records.
   "verification": {
     "spf": true,
     "dkim": false,
-    "dmarc": true
+    "dmarc": true,
+    "spfReason": "SPF passes for 203.0.113.10"
   }
 }
 ```
+
+`spf` is true only when the domain publishes exactly one SPF record that gives `pass` for every sending IP of this server (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`), evaluated per RFC 7208 (#247). `spfReason` says why it passed or failed (no record, two records, a placeholder, more than 10 lookups, `fail`/`softfail` for an IP, a temporary DNS failure).
 
 ---
 

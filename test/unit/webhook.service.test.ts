@@ -37,7 +37,7 @@ void mock.module("../../src/config.ts", () => ({
     env: "test",
     database: { url: "postgres://test:test@localhost:5432/test" },
     server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost" },
+    mail: { hostname: "localhost", publicIps: [] },
     dashboard: { ownerEmail: null },
     webhookDelivery: { retentionDays: 30, allowInsecureHttp: false },
     /** `createWebhook` encrypts the signing secret at rest (#259). */

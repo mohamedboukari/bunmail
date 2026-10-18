@@ -173,6 +173,8 @@ void mock.module("../../src/modules/api-keys/services/api-key.service.ts", () =>
 
 void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
   listDomains: mock(() => Promise.resolve([])),
+  suggestedSpfRecord: mock(() => "v=spf1 a:mail.example.com -all"),
+  spfAuthorizationTerm: mock(() => "a:mail.example.com"),
   createDomain: mock(() =>
     Promise.resolve({
       id: "dom_test123",

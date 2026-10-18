@@ -1,4 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
+import type { DNSResolver } from "mailauth";
+import type { VerificationDeps } from "../../src/modules/domains/services/dns-verification.service.ts";
 
 /**
  * Unit tests for the DNS verification service.
@@ -24,6 +26,9 @@ void mock.module("dns/promises", () => ({
     throw err;
   }),
   resolveMx: mock(async () => []),
+  resolve4: mock(async () => []),
+  resolve6: mock(async () => []),
+  reverse: mock(async () => []),
   lookup: mock(async () => []),
 }));
 
@@ -40,6 +45,7 @@ void mock.module("../../src/db/index.ts", () => ({
 
 const { verifyDomain } =
   await import("../../src/modules/domains/services/dns-verification.service.ts");
+const { spf: mailauthSpf } = await import("mailauth/lib/spf");
 
 const baseDomain = {
   id: "dom_test",
@@ -67,27 +73,137 @@ beforeEach(() => {
   dbUpdates.length = 0;
 });
 
-describe("verifyDomain: SPF", () => {
-  test("returns true when an SPF record is present", async () => {
-    txtRecords["example.com"] = [["v=spf1 a mx ip4:1.2.3.4 -all"]];
-    txtRecords["bunmail._domainkey.example.com"] = [];
-    txtRecords["_dmarc.example.com"] = [];
+/** A and AAAA records for the fake SPF resolver. */
+let addressRecords: Record<string, string[]> = {};
 
-    const result = await verifyDomain(baseDomain);
+/** DNS for mailauth: TXT from `txtRecords`, A/AAAA from `addressRecords`. */
+const fakeResolver: DNSResolver = async (name, rrtype) => {
+  if (rrtype === "TXT" && name in txtRecords) return txtRecords[name] ?? [];
+  if ((rrtype === "A" || rrtype === "AAAA") && name in addressRecords) {
+    return addressRecords[name] ?? [];
+  }
+  throw Object.assign(new Error(`ENOTFOUND ${name}`), { code: "ENOTFOUND" });
+};
+
+/** Real RFC 7208 evaluation (mailauth, strict) over the fake DNS, for the given sending IPs. */
+function spfDeps(ips: string[]): VerificationDeps {
+  return {
+    resolveTxt: async (hostname) => {
+      if (hostname in txtRecords) return txtRecords[hostname] ?? [];
+      throw Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+    },
+    evaluateSpf: async (domain, ip) =>
+      (
+        await mailauthSpf({
+          sender: `postmaster@${domain}`,
+          ip,
+          helo: "mail.example.com",
+          mta: "test",
+          strict: true,
+          resolver: fakeResolver,
+        })
+      ).status.result,
+    sendingIps: async () => ({ ips, source: "MAIL_PUBLIC_IP" }),
+  };
+}
+
+describe("verifyDomain: SPF (#247)", () => {
+  beforeEach(() => {
+    addressRecords = {};
+  });
+
+  test("passes when the record authorizes every sending IP", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 ip6:2001:db8::/32 -all"]];
+    const result = await verifyDomain(
+      baseDomain,
+      spfDeps(["203.0.113.10", "2001:db8::5"]),
+    );
     expect(result.spf).toBe(true);
+    expect(result.spfReason).toContain("passes");
   });
 
-  test("returns false when no TXT records start with v=spf1", async () => {
-    txtRecords["example.com"] = [["google-site-verification=abc"], ["another=record"]];
-    const result = await verifyDomain(baseDomain);
-    expect(result.spf).toBe(false);
+  test("follows include and a mechanisms", async () => {
+    txtRecords["example.com"] = [["v=spf1 include:_spf.example.com -all"]];
+    txtRecords["_spf.example.com"] = [["v=spf1 a:mail.example.com -all"]];
+    addressRecords["mail.example.com"] = ["203.0.113.10"];
+    expect((await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]))).spf).toBe(true);
   });
 
-  test("returns false when DNS lookup throws (NOTFOUND, etc.)", async () => {
-    /** No txtRecords set → resolveTxt throws → verifySPF catches and
-     *  returns []. */
-    const result = await verifyDomain(baseDomain);
+  test("a record that only exists is not enough: v=spf1 -all fails", async () => {
+    txtRecords["example.com"] = [["v=spf1 -all"]];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
     expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("SPF fail for 203.0.113.10");
+  });
+
+  test("another provider's record that omits this server soft-fails", async () => {
+    txtRecords["example.com"] = [["v=spf1 include:_spf.provider.example ~all"]];
+    txtRecords["_spf.provider.example"] = [["v=spf1 ip4:198.51.100.0/24 ~all"]];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("softfail");
+  });
+
+  test("every sending IP must pass", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    const result = await verifyDomain(
+      baseDomain,
+      spfDeps(["203.0.113.10", "203.0.113.11"]),
+    );
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("203.0.113.11");
+  });
+
+  test("two SPF records are a permerror", async () => {
+    txtRecords["example.com"] = [
+      ["v=spf1 ip4:203.0.113.10 -all"],
+      ["v=spf1 include:x.example -all"],
+    ];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("More than one SPF record");
+  });
+
+  test("a pasted placeholder is refused", async () => {
+    txtRecords["example.com"] = [["v=spf1 a mx ip4:<YOUR_SERVER_IP> -all"]];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("placeholder");
+  });
+
+  test("more than 10 DNS lookups is a permerror", async () => {
+    const includes = Array.from({ length: 11 }, (_, i) => `include:i${i}.example`).join(
+      " ",
+    );
+    txtRecords["example.com"] = [[`v=spf1 ${includes} ip4:203.0.113.10 -all`]];
+    for (let i = 0; i < 11; i++) txtRecords[`i${i}.example`] = [["v=spf1 -all"]];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("permerror");
+  });
+
+  test("no SPF record", async () => {
+    txtRecords["example.com"] = [["google-site-verification=abc"]];
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toBe("No SPF record");
+  });
+
+  test("a failed DNS lookup is reported as temporary, not as a missing record", async () => {
+    const deps = spfDeps(["203.0.113.10"]);
+    deps.resolveTxt = async () => {
+      throw Object.assign(new Error("SERVFAIL"), { code: "ESERVFAIL" });
+    };
+    const result = await verifyDomain(baseDomain, deps);
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("temporary");
+  });
+
+  test("unknown sending IPs fail with a hint", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    const result = await verifyDomain(baseDomain, spfDeps([]));
+    expect(result.spf).toBe(false);
+    expect(result.spfReason).toContain("MAIL_PUBLIC_IP");
   });
 });
 
@@ -148,10 +264,10 @@ describe("verifyDomain: DMARC", () => {
 
 describe("verifyDomain: persistence", () => {
   test("writes the verification result to the domains row with a fresh verifiedAt", async () => {
-    txtRecords["example.com"] = [["v=spf1 -all"]];
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
     txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=none"]];
 
-    await verifyDomain(baseDomain);
+    await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
 
     expect(dbUpdates).toHaveLength(1);
     const update = dbUpdates[0]!;

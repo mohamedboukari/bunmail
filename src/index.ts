@@ -35,6 +35,7 @@ import {
   findUndecryptableDomainKeys,
 } from "./db/encrypt-domain-keys.ts";
 import { encryptWebhookSecrets } from "./db/encrypt-webhook-secrets.ts";
+import { logReverseDnsAtBoot } from "./modules/domains/services/sending-ips.service.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
@@ -431,6 +432,9 @@ logger.info("BunMail server started", {
   port: config.server.port,
   host: config.server.host,
 });
+
+/** Forward-confirmed reverse DNS of the sending IPs (#248): reported, never fatal. */
+void logReverseDnsAtBoot();
 
 /**
  * Start the email queue processor.

@@ -27,7 +27,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 void mock.module("../../src/config.ts", () => ({
   config: {
-    mail: { hostname: "test.localhost", mxConcurrency: 1 },
+    mail: { hostname: "test.localhost", mxConcurrency: 1, publicIps: [] },
     env: "test" as const,
     database: { url: "" },
     server: { port: 3000, host: "0.0.0.0" },
@@ -66,6 +66,9 @@ void mock.module("dns/promises", () => ({
     return mxResult;
   }),
   resolveTxt: mock(async () => []),
+  resolve4: mock(async () => []),
+  resolve6: mock(async () => []),
+  reverse: mock(async () => []),
   lookup: mock(async () => lookupResult),
 }));
 

@@ -131,6 +131,22 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
 }
 
 /**
+ * The SPF record to suggest for a domain (#247): authorizes this server
+ * by its hostname (`a:MAIL_HOSTNAME`, the same name the PTR must carry),
+ * instead of a `<YOUR_SERVER_IP>` placeholder that operators pasted as
+ * is. A domain with an existing SPF record must merge the `a:` term into
+ * it: two records are a permerror.
+ */
+export function suggestedSpfRecord(): string {
+  return `v=spf1 ${spfAuthorizationTerm()} -all`;
+}
+
+/** The SPF term that authorizes this server (`a:MAIL_HOSTNAME`), to merge into an existing record. */
+export function spfAuthorizationTerm(): string {
+  return `a:${config.mail.hostname}`;
+}
+
+/**
  * Returns the raw base64 public key for DNS TXT record setup.
  * Format: `v=DKIM1; k=rsa; p=<base64>`
  */
