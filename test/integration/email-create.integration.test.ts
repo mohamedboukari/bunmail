@@ -387,3 +387,30 @@ describe("createEmail: a body is required (#250)", () => {
     expect(email.textContent).toBe("hello");
   });
 });
+
+describe("createEmail: template variables in HTML are escaped (#250)", () => {
+  test("{{var}} escaped, {{{var}}} raw, subject and text as is", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id: templateId } = await seed.template({
+      apiKeyId,
+      subject: "Hello {{name}}",
+      html: "<p>{{name}}</p><div>{{{banner}}}</div>",
+      text: "Hello {{name}}",
+      variables: ["name", "banner"],
+    });
+    const { email } = await createEmail(
+      {
+        from: "hello@example.com",
+        to: "user@example.org",
+        templateId,
+        variables: { name: '<a href="https://evil.example">x</a>', banner: "<hr>" },
+      },
+      apiKeyId,
+    );
+    expect(email.html).toBe(
+      "<p>&lt;a href=&quot;https://evil.example&quot;&gt;x&lt;/a&gt;</p><div><hr></div>",
+    );
+    expect(email.subject).toBe('Hello <a href="https://evil.example">x</a>');
+    expect(email.textContent).toBe('Hello <a href="https://evil.example">x</a>');
+  });
+});

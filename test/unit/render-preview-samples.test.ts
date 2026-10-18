@@ -38,3 +38,12 @@ describe("renderPreviewSamples", () => {
     expect(renderPreviewSamples("")).toBe("");
   });
 });
+
+describe("renderPreviewSamples: raw placeholders (#250)", () => {
+  test("{{{var}}} is filled like {{var}}, with no stray braces", () => {
+    expect(renderPreviewSamples("<p>{{{name}}}</p>")).toBe(
+      renderPreviewSamples("<p>{{name}}</p>"),
+    );
+    expect(renderPreviewSamples("<p>{{{name}}}</p>")).not.toContain("{");
+  });
+});

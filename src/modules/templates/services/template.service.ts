@@ -18,9 +18,28 @@ export const MAX_RENDERED_BODY_LENGTH = 5 * 1024 * 1024;
 /** Largest rendered subject (same cap as an inline send subject). */
 export const MAX_RENDERED_SUBJECT_LENGTH = 500;
 
+/** Characters HTML-escaped in a `{{variable}}` of an HTML body (#250). */
+const HTML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
+/** A raw `{{{variable}}}` or an escaped `{{variable}}` placeholder. */
+const PLACEHOLDER_RE = /\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g;
+
 /**
  * Simple Mustache-style variable substitution.
  * Replaces `{{variableName}}` with the corresponding value.
+ *
+ * In an HTML body (`options.html`), `{{name}}` is HTML-escaped (#250): a
+ * value such as a user-supplied display name can no longer inject markup
+ * (a fake link, a form) into mail BunMail signs for the domain.
+ * `{{{name}}}` inserts the value as is, for callers that pass HTML on
+ * purpose. Subjects and text bodies are not HTML: both forms insert the
+ * value as is there.
  *
  * The output is bounded while it is built: each substitution updates a
  * running length, and rendering stops with `TemplateTooLargeError` as soon
@@ -31,15 +50,24 @@ export function renderTemplate(
   templateStr: string,
   variables: Record<string, string>,
   maxLength: number = MAX_RENDERED_BODY_LENGTH,
+  options: { html?: boolean } = {},
 ): string {
   let length = templateStr.length;
-  const rendered = templateStr.replace(/\{\{(\w+)\}\}/g, (match, key: string) => {
-    const value = Object.hasOwn(variables, key) ? variables[key] : undefined;
-    if (value === undefined) return match;
-    length += value.length - match.length;
-    if (length > maxLength) throw new TemplateTooLargeError(maxLength);
-    return value;
-  });
+  const rendered = templateStr.replace(
+    PLACEHOLDER_RE,
+    (match, rawKey: string | undefined, escapedKey: string | undefined) => {
+      const key = rawKey ?? escapedKey ?? "";
+      const raw = Object.hasOwn(variables, key) ? variables[key] : undefined;
+      if (raw === undefined) return match;
+      const value =
+        options.html === true && rawKey === undefined
+          ? raw.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char)
+          : raw;
+      length += value.length - match.length;
+      if (length > maxLength) throw new TemplateTooLargeError(maxLength);
+      return value;
+    },
+  );
   if (rendered.length > maxLength) throw new TemplateTooLargeError(maxLength);
   return rendered;
 }
