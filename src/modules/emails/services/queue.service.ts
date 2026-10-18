@@ -678,6 +678,11 @@ async function sendClaimedEmail(
       existingState,
       dkim,
       unsubscribe,
+      /** Feedback-ID (#250): how the mail entered BunMail, and for which key. */
+      feedback: {
+        source: email.source === "smtp" ? "smtp" : "api",
+        apiKeyId: email.apiKeyId,
+      },
     });
 
     /**

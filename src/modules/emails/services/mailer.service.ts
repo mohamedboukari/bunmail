@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
@@ -155,6 +156,17 @@ export async function sendMail(options: {
   existingState?: DeliveryState | null;
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
+  /**
+   * Who the mail is sent for, for the `Feedback-ID` header (#250). Typed,
+   * never caller-supplied text: BunMail builds the header itself.
+   */
+  feedback?: FeedbackSource;
+  /**
+   * BunMail's own automatic mail (inbound notifications, invitations,
+   * sign-in alerts): adds `Auto-Submitted: auto-generated` and
+   * `X-Auto-Response-Suppress: All` so auto-responders don't reply (#250).
+   */
+  autoSubmitted?: boolean;
 }): Promise<SendMailResult> {
   /** Build the starting state: either a fresh one from the inputs
    *  or a deep clone of the row's prior state. We always clone so the
@@ -208,6 +220,8 @@ export async function sendMail(options: {
         headers: customHeaders,
         dkim: options.dkim,
         unsubscribe: options.unsubscribe,
+        feedback: options.feedback,
+        autoSubmitted: options.autoSubmitted === true,
       });
       state[mxHost] = {
         ...group,
@@ -312,6 +326,37 @@ interface MxGroupMessage {
   headers: CustomHeaders;
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
+  /** For the `Feedback-ID` header (#250). */
+  feedback?: FeedbackSource;
+  /** BunMail's own automatic mail: `Auto-Submitted` and friends (#250). */
+  autoSubmitted?: boolean;
+}
+
+/** What a `Feedback-ID` header identifies (#250). */
+export interface FeedbackSource {
+  /** How the mail entered BunMail: `api`, `smtp` or `system`. */
+  source: "api" | "smtp" | "system";
+  /** The sending API key; `null` for BunMail's own mail. */
+  apiKeyId: string | null;
+}
+
+/** Keeps a `Feedback-ID` field to safe characters (it is a header value). */
+function feedbackField(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 64) || "none";
+}
+
+/**
+ * `Feedback-ID: <source>:<key>:<sender domain>:bunmail` (#250): Gmail's
+ * feedback loop aggregates complaints by it. Low cardinality on purpose
+ * (no per-message id, which would defeat the aggregation). The API key
+ * id goes in hashed, so recipients see a stable per-tenant value but no
+ * internal identifier.
+ */
+export function feedbackIdHeader(feedback: FeedbackSource, senderDomain: string): string {
+  const key = feedback.apiKeyId
+    ? createHash("sha256").update(feedback.apiKeyId).digest("hex").slice(0, 12)
+    : "system";
+  return [feedback.source, key, senderDomain, "bunmail"].map(feedbackField).join(":");
 }
 
 /**
@@ -387,6 +432,12 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
     const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
     headers["List-Unsubscribe"] = headerValue;
     if (url) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+    if (args.feedback)
+      headers["Feedback-ID"] = feedbackIdHeader(args.feedback, senderDomain);
+  }
+  if (args.autoSubmitted) {
+    headers["Auto-Submitted"] = "auto-generated";
+    headers["X-Auto-Response-Suppress"] = "All";
   }
   if (Object.keys(headers).length > 0) mailOptions.headers = headers;
 
