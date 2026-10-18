@@ -491,6 +491,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | cc            | text           | nullable                        |
 | bcc           | text           | nullable                        |
 | reply_to      | text           | nullable                        |
+| headers       | jsonb          | nullable: custom headers, name to value (#177) |
 | subject       | varchar(500)   | NOT NULL                        |
 | html          | text           | nullable                        |
 | text_content  | text           | nullable                        |

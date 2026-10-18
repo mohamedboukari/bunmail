@@ -169,6 +169,13 @@
       "when": 1792358185961,
       "tag": "0023_furry_the_order",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792359596877,
+      "tag": "0024_short_master_chief",
+      "breakpoints": true
     }
   ]
 }

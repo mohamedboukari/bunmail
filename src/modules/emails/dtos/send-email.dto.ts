@@ -51,4 +51,25 @@ export const sendEmailDto = t.Object({
       maxProperties: 100,
     }),
   ),
+
+  /**
+   * Custom headers (#177), name to value. Syntax is checked here: a name is
+   * 1 to 64 printable ASCII characters without a colon (RFC 5322 field
+   * name; `additionalProperties: false` makes any other key a validation
+   * error instead of a silently ignored one), a value has no CR, LF, NUL
+   * or other control character except HTAB and is at most 998 characters,
+   * at most 20 headers. Reserved names, case-insensitive duplicates and
+   * the 8 KB total cap are enforced by `createEmail`
+   * (`services/custom-headers.ts`), which every send path shares.
+   */
+  headers: t.Optional(
+    t.Record(
+      t.String({ pattern: "^[\\x21-\\x39\\x3b-\\x7e]{1,64}$" }),
+      t.String({
+        maxLength: 998,
+        pattern: "^[^\\u0000-\\u0008\\u000a-\\u001f\\u007f-\\u009f\\u2028\\u2029]*$",
+      }),
+      { maxProperties: 20, additionalProperties: false },
+    ),
+  ),
 });

@@ -187,6 +187,61 @@ describe("sendMail: List-Unsubscribe header", () => {
   });
 });
 
+describe("sendMail: custom headers (#177)", () => {
+  test("passes stored custom headers to nodemailer next to List-Unsubscribe", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+      headers: { "X-Correlation-Id": "abc", "In-Reply-To": "<p@example.com>" },
+    });
+    expect(asRecord(captured[0]!.mailOptions.headers)).toEqual({
+      "X-Correlation-Id": "abc",
+      "In-Reply-To": "<p@example.com>",
+      "List-Unsubscribe": "<mailto:unsubscribe@example.com>",
+    });
+  });
+
+  test("drops stored headers that break the rules, so they never override BunMail's", async () => {
+    /** A row written without createEmail (manual insert, future bug). */
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+      headers: {
+        "X-Ok": "1",
+        "X-Inj": "v\r\nBcc: victim@example.com",
+        "list-unsubscribe": "<mailto:evil@example.com>",
+        "message-id": "<evil@example.com>",
+        "X-BunMail-Internal": "x",
+      },
+    });
+    expect(asRecord(captured[0]!.mailOptions.headers)).toEqual({
+      "X-Ok": "1",
+      "List-Unsubscribe": "<mailto:unsubscribe@example.com>",
+    });
+    expect(captured[0]!.mailOptions.messageId).toBe(MID);
+  });
+
+  test("every MX group gets the same custom headers", async () => {
+    mxResolver = async (domain) => [{ exchange: `mx.${domain}`, priority: 10 }];
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      cc: "other@example.net",
+      subject: "test",
+      messageId: MID,
+      headers: { "X-Correlation-Id": "abc" },
+    });
+    expect(captured).toHaveLength(2);
+    for (const send of captured) {
+      expect(asRecord(send.mailOptions.headers)["X-Correlation-Id"]).toBe("abc");
+    }
+  });
+});
+
 describe("sendMail: DKIM passthrough", () => {
   test("passes DKIM options to nodemailer's mailOptions when provided", async () => {
     await sendMail({

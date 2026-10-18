@@ -81,8 +81,19 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `replyTo`    | string | No       | Comma-separated Reply-To address(es): replies go here instead of `from` (#169). Header only; doesn't change the envelope sender. Returned as `replyTo` on email responses (`null` when unset). |
 | `templateId` | string | No       | Template ID (overrides subject/html/text)    |
 | `variables`  | object | No       | Key-value pairs for template rendering (max 100 entries, values max 100 KB; the rendered body is capped at 5 MB and the subject at 500 characters, else `422 TEMPLATE_OUTPUT_TOO_LARGE`) |
+| `headers`    | object | No       | Custom headers, name to value (#177), e.g. `{"X-Correlation-Id": "abc", "In-Reply-To": "<parent@example.com>"}`. Rules below. Returned as `headers` on email responses (`null` when unset). |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
+
+**Custom headers** (`headers`, #177): application headers (`X-*`) and threading headers (`In-Reply-To`, `References`). Header injection is blocked, and BunMail's own headers cannot be overridden:
+
+- **Name:** RFC 5322 field name, printable ASCII without spaces or `:`, 1 to 64 characters.
+- **Value:** no CR, LF, NUL or other control character (tab is allowed), at most 998 characters.
+- **At most 20 headers**, at most **8 KB** of names plus values in total.
+- **Case-insensitive:** `X-Foo` and `x-foo` together are a duplicate and refused.
+- **Reserved** (any case): `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, and names starting with `Content-`, `ARC-` or `X-BunMail-`. Use the dedicated fields (`from`, `cc`, `replyTo`, ...) and the domain's unsubscribe settings instead.
+
+A name or value with bad syntax, or more than 20 headers, fails validation (`422 VALIDATION_ERROR`); a reserved name, a duplicate or more than 8 KB is `422 INVALID_CUSTOM_HEADER`. Either way nothing is queued, and the error names the header (when its name is valid) but never echoes the value. Nodemailer may normalize a name's case on the wire (`X-Correlation-Id` is sent as `X-Correlation-ID`).
 
 **Response:**
 
@@ -106,7 +117,7 @@ Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
 `warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
 
-**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
+**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
 `nextAttemptAt` is set while `status` is `queued`: the earliest time the next delivery attempt can run. After a temporary failure (for example greylisting) it moves out with the retry backoff; it is `null` once the email is sending or done.
 
@@ -131,7 +142,7 @@ List emails for the authenticated API key with pagination.
 
 #### `GET /api/v1/emails/:id`
 
-Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded: fetch them via `GET /api/v1/emails/trash`.
+Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded: fetch them via `GET /api/v1/emails/trash`. The response includes `headers`, the custom headers set on the send (`null` when none, #177); list responses carry it too.
 
 ---
 
@@ -631,6 +642,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED` |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177) |
 | 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively |
 | 429    | Rate limit exceeded                             |

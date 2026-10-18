@@ -12,7 +12,12 @@ import { findById as findApiKeyById } from "../../api-keys/services/api-key.serv
 import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { checkSenderDomain } from "./sender-domain.service.ts";
-import { SubjectRequiredError, TemplateNotFoundError } from "../errors.ts";
+import { validateCustomHeaders } from "./custom-headers.ts";
+import {
+  InvalidCustomHeaderError,
+  SubjectRequiredError,
+  TemplateNotFoundError,
+} from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -56,6 +61,30 @@ export async function createEmail(
     to: redactEmail(input.to),
     apiKeyId,
   });
+
+  /**
+   * Custom headers (#177), checked first: it is pure input validation,
+   * so a refused header costs no database work. Shared by every ingress
+   * (REST, dashboard, SMTP submission) because they all call this
+   * function. The log line names the header and the rule, never the value.
+   */
+  let headers: Record<string, string> | null = null;
+  if (input.headers && Object.keys(input.headers).length > 0) {
+    try {
+      headers = validateCustomHeaders(input.headers);
+    } catch (error) {
+      if (error instanceof InvalidCustomHeaderError) {
+        logger.warn("Send blocked: invalid custom header", {
+          id,
+          apiKeyId,
+          source,
+          header: error.header,
+          problem: error.problem,
+        });
+      }
+      throw error;
+    }
+  }
 
   /**
    * Suppression gate (#25). Reject sends to addresses on the per-API-key
@@ -170,6 +199,7 @@ export async function createEmail(
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
       replyTo: input.replyTo ?? null,
+      headers,
       subject,
       html: htmlContent,
       textContent,
@@ -177,7 +207,12 @@ export async function createEmail(
     })
     .returning();
 
-  logger.debug("Email created and queued", { id, status: email!.status, domainId });
+  logger.debug("Email created and queued", {
+    id,
+    status: email!.status,
+    domainId,
+    customHeaders: headers ? Object.keys(headers) : [],
+  });
 
   /**
    * One line per send that may fail authentication at the receiver. The

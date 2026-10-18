@@ -1,4 +1,5 @@
 import type { Email } from "../types/email.types.ts";
+import type { CustomHeaders } from "../models/email.schema.ts";
 
 /**
  * Shape of an email in API responses.
@@ -13,6 +14,8 @@ export interface SerializedEmail {
   bcc: string | null;
   /** Reply-To address(es), comma-separated (#169) */
   replyTo: string | null;
+  /** Custom headers set on the send (#177), name to value; null when none. */
+  headers: CustomHeaders | null;
   subject: string;
   html: string | null;
   text: string | null;
@@ -44,6 +47,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     cc: email.cc,
     bcc: email.bcc,
     replyTo: email.replyTo,
+    headers: email.headers,
     subject: email.subject,
     html: email.html,
     text: email.textContent,

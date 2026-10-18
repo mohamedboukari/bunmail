@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import {
   dedupeJoin,
   buildSubmissionInput,
+  selectRelayHeaders,
 } from "../../src/modules/smtp-submission/message-mapper.ts";
 
 /**
@@ -194,5 +195,81 @@ describe("buildSubmissionInput: body & subject passthrough", () => {
     expect(input.subject).toBe("");
     expect(input.html).toBe("<p>hi</p>");
     expect(input.text).toBe("hi");
+  });
+});
+
+describe("selectRelayHeaders (#177)", () => {
+  /** mailparser's `headerLines` shape: lowercase key plus the raw line. */
+  const line = (raw: string) => ({
+    key: raw.slice(0, raw.indexOf(":")).toLowerCase(),
+    line: raw,
+  });
+
+  test("relays In-Reply-To, References and X-* only", () => {
+    const { headers, dropped } = selectRelayHeaders([
+      line("From: a@example.com"),
+      line("Received: from evil"),
+      line("Content-Type: text/plain"),
+      line("List-Unsubscribe: <mailto:evil@example.com>"),
+      line("In-Reply-To: <parent@example.com>"),
+      line("References: <a@example.com> <b@example.com>"),
+      line("X-Foo: bar"),
+    ]);
+    expect(headers).toEqual({
+      "In-Reply-To": "<parent@example.com>",
+      References: "<a@example.com> <b@example.com>",
+      "X-Foo": "bar",
+    });
+    expect(dropped).toEqual([]);
+  });
+
+  test("unfolds continuation lines and trims the value", () => {
+    const { headers } = selectRelayHeaders([
+      line("References: <a@example.com>\r\n <b@example.com>\r\n\t<c@example.com>  "),
+    ]);
+    expect(headers).toEqual({
+      References: "<a@example.com> <b@example.com>\t<c@example.com>",
+    });
+  });
+
+  test("drops X-BunMail-* as reserved, reporting the name only", () => {
+    const { headers, dropped } = selectRelayHeaders([
+      line("X-BunMail-Foo: spoofed"),
+      line("X-Ok: 1"),
+    ]);
+    expect(headers).toEqual({ "X-Ok": "1" });
+    expect(dropped).toEqual([{ name: "X-BunMail-Foo", problem: "reserved" }]);
+  });
+
+  test("drops a value that still holds a bare line break after unfolding", () => {
+    const { headers, dropped } = selectRelayHeaders([
+      line("X-Bad: v\nBcc: victim@example.com"),
+    ]);
+    expect(headers).toBeUndefined();
+    expect(dropped).toEqual([{ name: "X-Bad", problem: "invalid_value" }]);
+  });
+
+  test("drops duplicates and anything past the count cap", () => {
+    const lines = [line("X-Dup: 1"), line("x-dup: 2")];
+    for (let i = 0; i < 25; i++) lines.push(line(`X-H${i}: v`));
+    const { headers, dropped } = selectRelayHeaders(lines);
+    expect(Object.keys(headers ?? {})).toHaveLength(20);
+    expect(dropped[0]).toEqual({ name: "x-dup", problem: "duplicate" });
+    expect(dropped.filter((d) => d.problem === "too_many")).toHaveLength(6);
+  });
+
+  test("no relayable headers: headers is undefined", () => {
+    expect(selectRelayHeaders([line("Subject: hi")]).headers).toBeUndefined();
+  });
+
+  test("buildSubmissionInput passes the headers through", () => {
+    const input = buildSubmissionInput({
+      fromHeader: "a@x.com",
+      toHeader: ["b@y.com"],
+      ccHeader: [],
+      envelopeRecipients: ["b@y.com"],
+      headers: { "X-Foo": "bar" },
+    });
+    expect(input.headers).toEqual({ "X-Foo": "bar" });
   });
 });

@@ -673,6 +673,8 @@ async function sendClaimedEmail(
       html: email.html,
       text: email.textContent,
       messageId,
+      /** Custom headers (#177): the stored set, the same on every retry. */
+      headers: email.headers,
       existingState,
       dkim,
       unsubscribe,

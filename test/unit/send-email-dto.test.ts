@@ -82,3 +82,54 @@ describe("sendEmailDto: template variable caps", () => {
     ).toBe(false);
   });
 });
+
+describe("sendEmailDto: custom headers syntax (#177)", () => {
+  const withHeaders = (headers: Record<string, string>) => ({ ...base, headers });
+
+  test("accepts application and threading headers", () => {
+    expect(
+      check.Check(
+        withHeaders({
+          "X-Correlation-Id": "abc",
+          "In-Reply-To": "<p@example.com>",
+          "X-Tab": "a\tb",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test.each([
+    ["CRLF", "v\r\nBcc: victim@example.com"],
+    ["CR", "v\rBcc: victim@example.com"],
+    ["LF", "v\nBcc: victim@example.com"],
+    ["NUL", "v\u0000"],
+    ["ESC", "v\u001b"],
+    ["DEL", "v\u007f"],
+    ["NEL", "v\u0085"],
+    ["line separator", "v\u2028"],
+  ])("rejects a value with %s", (_label, value) => {
+    expect(check.Check(withHeaders({ "X-A": value }))).toBe(false);
+  });
+
+  test("rejects a value over 998 characters", () => {
+    expect(check.Check(withHeaders({ "X-A": "v".repeat(999) }))).toBe(false);
+  });
+
+  test.each(["X-A:B", "X A", "X-A\r\nBcc", "X-Ä", `X-${"a".repeat(63)}`])(
+    "rejects the name %p",
+    (name) => {
+      expect(check.Check(withHeaders({ [name]: "v" }))).toBe(false);
+    },
+  );
+
+  test("rejects more than 20 headers", () => {
+    const headers = Object.fromEntries(
+      Array.from({ length: 21 }, (_, i) => [`X-H${i}`, "v"]),
+    );
+    expect(check.Check(withHeaders(headers))).toBe(false);
+  });
+
+  test("rejects a non-string value", () => {
+    expect(check.Check({ ...base, headers: { "X-A": 1 } })).toBe(false);
+  });
+});
