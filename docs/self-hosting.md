@@ -81,11 +81,11 @@ SMTP_PORT=25
 LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
-# single proxy (see section 4) so dashboard login rate limiting (#109) keys off
+# single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
 DASHBOARD_TRUSTED_PROXY_HOPS=1
 # Optional: public base URL, used for the dashboard link in inbound notifications,
-# the one-time owner setup link and invitation links
+# the one-time owner setup link, invitation links and password reset links
 APP_BASE_URL=https://mail.yourdomain.com
 # Optional: sender of invitation emails (a DKIM-verified domain registered in
 # BunMail); unset = the inviter copies the link from the dashboard
@@ -105,7 +105,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
 
-> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, and invitation links (#217). When unset, the setup link falls back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone.
+> `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, invitation links (#217) and admin-issued password reset links (#277). When unset, the setup and reset links fall back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone.
 
 > `SYSTEM_MAIL_FROM` / `INVITE_EXPIRY_DAYS`: dashboard invitations (#217). Admins and the owner invite teammates from the dashboard (**Invite teammates** on the home page). When `SYSTEM_MAIL_FROM` is set to an address on a domain you registered in BunMail and whose DKIM record is verified, BunMail emails the accept link from it, signed with that domain's key. When it is unset, or the domain is missing or unverified, or the send fails, the invitation is still created and the inviter sees the link once on the Invitations page to send by hand (share it privately: anyone with it can create the account). A malformed `SYSTEM_MAIL_FROM` refuses to boot. `INVITE_EXPIRY_DAYS` (default `7`, a whole number from `1` to `90`, anything else refuses to boot) sets how long a link stays valid. See [docs/dashboard.md](dashboard.md#invitations-217).
 
@@ -269,7 +269,7 @@ Open `https://mail.yourdomain.com/dashboard` (through the reverse proxy of secti
 
 Sessions (#216) live in the database: a session expires after 24 hours without use and 7 days after sign-in at the latest, **Log out** ends it on the server, and `reset-owner` signs the owner out everywhere. While you use the dashboard, the session cookie is replaced with a fresh one about once a minute; if an old cookie shows up again later, BunMail treats it as stolen and signs the account out of every session (details in [docs/dashboard.md](dashboard.md#auth-flow)).
 
-The dashboard lets you manage emails, domains, API keys, and view delivery status.
+The dashboard lets you manage emails, domains, templates, webhooks, API keys and suppressions, and view delivery status. Admins and the owner invite teammates at **Invitations** and manage accounts at **Users** (roles, deactivation, password reset links, ownership transfer); see [docs/dashboard.md](dashboard.md).
 
 ## 6. Reverse Proxy (Recommended for HTTPS)
 
@@ -369,15 +369,19 @@ git pull
 docker compose down && docker compose up -d --build
 ```
 
-### Upgrading to account login (#216)
+### Upgrading from 0.9.x to 0.10.0
 
-Account login replaces the shared `DASHBOARD_PASSWORD` and the `SESSION_SECRET`-signed cookie. Pending migrations (including `0017`, which adds the session rotation columns) apply on container start as usual. The API, SMTP and the queue are not affected; only the dashboard is unreachable until the owner is claimed. In order:
+0.10.0 replaces the shared `DASHBOARD_PASSWORD` and the `SESSION_SECRET`-signed cookie with accounts (#216) and adds two production boot guards. The full checklist is the **Upgrade guide** at the top of the 0.10.0 entry in [CHANGELOG.md](../CHANGELOG.md); in short:
 
-1. **Before you pull**, add `BUNMAIL_OWNER_EMAIL=you@yourdomain.com`, a real `MAIL_HOSTNAME` (#242) and `APP_BASE_URL` to `.env`. Production refuses to start without the first two, so a `git pull` and rebuild without them crash-loops.
-2. Pull and rebuild as above.
-3. **Everyone is signed out once:** old dashboard cookies are rejected and cleared.
-4. If the owner has not set a password yet, claim it: `docker compose logs app | grep 'Owner setup link'`, open the link, choose a password (15 or more characters). Setup signs you in. If the link expired or was lost, restart the container (a new link is logged while setup is pending) or run `docker compose exec app bun run src/db/reset-owner.ts`. If you already claimed the owner on an earlier version, sign in with that email and password.
-5. Remove `DASHBOARD_PASSWORD` and `SESSION_SECRET` from `.env`. They do nothing any more; while they are set, every boot logs `Dashboard auth env vars are no longer used since #216, remove from .env`.
+1. **Before you pull**, back up the database and add `BUNMAIL_OWNER_EMAIL=you@yourdomain.com` (#215), a real `MAIL_HOSTNAME` (#242) and `APP_BASE_URL` to `.env`. Production refuses to start without the first two (before any migration runs), so a `git pull` and rebuild without them crash-loops.
+2. If you edited `docker-compose.yml` or `docker-compose.override.yml`, `git stash` first. The container now runs as uid 1000 (see [Runs as non-root](#runs-as-non-root)).
+3. Pull and rebuild as above. Migrations `0013` to `0020` (accounts, sessions, record ownership, retry leases) apply on container start.
+4. **Everyone is signed out once:** old dashboard cookies are rejected and cleared.
+5. Claim the owner: `docker compose logs app | grep 'Owner setup link'`, open the link, choose a password (15 or more characters). Setup signs you in. If the link expired or was lost, restart the container (a new link is logged while setup is pending) or run `docker compose exec app bun run src/db/reset-owner.ts`.
+6. Remove `DASHBOARD_PASSWORD` and `SESSION_SECRET` from `.env`. They do nothing any more; while they are set, every boot logs `Dashboard auth env vars are no longer used since #216, remove from .env`.
+7. Existing API keys, templates, domains and webhooks now belong to the owner (#219). After inviting teammates, rotate any admin key you shared with them.
+
+The API, SMTP and the queue are not affected by the account change; only the dashboard is unreachable until the owner is claimed.
 
 ## Preventing Spam (Deliverability Guide)
 

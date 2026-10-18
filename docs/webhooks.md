@@ -303,7 +303,7 @@ CASCADE on the parent `webhooks` row means deleting a webhook also reaps every o
 ### webhook.service.ts
 
 #### `createWebhook(input, apiKeyId, createdByUserId = null): Promise<{ webhook, secret }>`
-Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only.
+Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
 
 #### `listWebhooks(apiKeyId): Promise<Webhook[]>`
 Lists webhooks scoped to the requesting API key.
@@ -316,9 +316,6 @@ Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to d
 
 #### `findWebhooksForEvent(event, scope): Promise<{ id: string }[]>`
 Returns the ids of active webhooks subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` (only admin keys' webhooks). The owner filter runs in SQL; the event match runs on the parsed `events` array.
-
-#### `createWebhook(input, apiKeyId)`
-Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
 
 ### webhook-dispatch.service.ts
 

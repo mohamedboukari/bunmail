@@ -6,9 +6,9 @@ BunMail's test suite has three tiers, each catching a different class of bug. Pr
 
 | Tier | Location | What it catches | Speed | Mocked? |
 |---|---|---|---|---|
-| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness: parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~400ms for 240+ tests | DB, network, time |
-| **E2E plugin** | [test/e2e/](../test/e2e/) | Elysia plugin routing, auth flow, request/response shapes, error handling. Services and DB are mocked at the import boundary. | ~150ms for 70 tests | DB, services |
-| **Integration** | [test/integration/](../test/integration/) | Real Drizzle SQL execution, FK / `ON DELETE` behaviour, `ON CONFLICT DO UPDATE` upserts, transaction semantics, schema drift between TS models and the live DB. End-to-end DSN flow (DSN bytes → suppression + `email.bounced` webhook), atomic queue claim under concurrency, etc. | ~2s for 55+ tests | Outbound HTTP only |
+| **Unit** | [test/unit/](../test/unit/) | Pure-function correctness: parsers, helpers, validators, serializers, classification logic with injected dependencies. | ~10s for 700+ tests | DB, network, time |
+| **E2E plugin** | [test/e2e/](../test/e2e/) | Elysia plugin routing, auth flow, request/response shapes, error handling. Services and DB are mocked at the import boundary. | ~200ms for 180 tests | DB, services |
+| **Integration** | [test/integration/](../test/integration/) | Real Drizzle SQL execution, FK / `ON DELETE` behaviour, `ON CONFLICT DO UPDATE` upserts, transaction semantics, schema drift between TS models and the live DB. End-to-end DSN flow (DSN bytes → suppression + `email.bounced` webhook), atomic queue claim under concurrency, etc. | ~80-95s for 600+ tests | Outbound HTTP only |
 
 Run all three together: `bun run test:all`.
 
@@ -86,10 +86,10 @@ Every route needs an entry in the test's `ROUTES` table (access level, a minimal
 - bun test test/unit
 - bun test test/e2e
 - bun run db:migrate                  # apply schema to bunmail_test
-- bun run test:integration            # 40 tests against real Postgres
+- bun run test:integration            # 600+ tests against real Postgres
 ```
 
-Total CI test time: ~2-3 seconds across all three tiers.
+Total CI test time: about a minute and a half across all three tiers, almost all of it the integration tier (argon2id and real Postgres).
 
 ## Coverage
 

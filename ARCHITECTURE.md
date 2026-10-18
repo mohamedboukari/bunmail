@@ -25,7 +25,7 @@
 │         │                   ▼                                      │
 │  ┌──────────────┐    ┌──────────────┐    ┌───────────────────┐     │
 │  │  Middleware  │    │ Email Queue  │───▶│  Nodemailer SMTP  │     │
-│  │  - Auth      │    │ (backoff)    │    │  (Direct Mode)    │     │
+│  │  - Auth      │    │ (backoff)    │    │  (direct to MX)   │     │
 │  │  - Rate Limit│    │              │    │  + DKIM Signing   │     │
 │  └──────────────┘    └──────────────┘    └────────┬──────────┘     │
 │                                                    │               │
@@ -52,7 +52,7 @@
 |------------------|-------------------------------------|
 | Runtime          | Bun                                 |
 | Backend          | Elysia                              |
-| SMTP Sending     | Nodemailer (direct mode, no relay)  |
+| SMTP Sending     | Nodemailer, one transport per recipient MX on port 25, no relay |
 | Email Auth       | DKIM signing (AES-256-GCM at rest), SPF/DMARC DNS checks |
 | Database         | PostgreSQL                          |
 | ORM              | Drizzle ORM (`drizzle-orm/bun-sql`) |
@@ -216,7 +216,7 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218)
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), record ownership (#219)
 │   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
@@ -230,7 +230,8 @@ bunmail/
 │   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer / reset link, owner lock),
 │   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
 │   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
-│   │   │   │                               password-reset-policy.service.ts (pure: one-hour TTL, URL, #277)
+│   │   │   │                               password-reset-policy.service.ts (pure: one-hour TTL, URL, #277),
+│   │   │   │                               record-ownership.service.ts (owner backfill, transfer moves, disabling or downgrading a user's keys, #219)
 │   │   │   └── types/                    ← role / credential / assurance / purpose / invite value sets
 │   │   └── dmarc-reports/                ← DMARC `rua` aggregate report ingest (#41)
 │   │       ├── dmarc-reports.plugin.ts   ← Routes: list + get
@@ -279,7 +280,13 @@ bunmail/
 │       │   ├── inbound.tsx               ← Inbound emails list (bulk-select + trash)
 │       │   ├── inbound-detail.tsx        ← Inbound email detail + preview
 │       │   ├── inbound-trash.tsx         ← Trashed inbound view
-│       │   └── emails-trash.tsx          ← Trashed outbound view
+│       │   ├── emails-trash.tsx          ← Trashed outbound view
+│       │   ├── email-tombstones.tsx      ← Post-purge audit snapshots + Message-ID search (#34)
+│       │   ├── webhook-deliveries.tsx    ← Delivery history of one webhook (#30)
+│       │   ├── webhook-delivery-detail.tsx ← Delivery detail + replay (#30)
+│       │   ├── suppressions.tsx          ← Suppressions across every API key (#89)
+│       │   ├── dmarc-reports.tsx         ← DMARC reports list + domain filter (#41)
+│       │   └── dmarc-report-detail.tsx   ← DMARC report detail (per-source-IP, #41)
 │       └── components/
 │           ├── stats-card.tsx            ← Stat card (label, value, accent)
 │           ├── status-badge.tsx          ← Status + verification badges
@@ -294,7 +301,7 @@ bunmail/
 │       ├── _preload.ts                   ← Locks DATABASE_URL to bunmail_test
 │       ├── _helpers.ts                   ← truncateAll, seed factories
 │       ├── setup-db.ts                   ← One-shot: create bunmail_test + migrate
-│       └── *.integration.test.ts         ← One file per service (5 currently)
+│       └── *.integration.test.ts         ← One file per service or feature
 ```
 
 See [docs/testing.md](docs/testing.md) for the three-tier strategy + how to run each.
@@ -390,7 +397,7 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │  2. For each claimed row (up to 5 concurrent):                  │
 │     ┌───────────────────────────────────────┐                   │
 │     │ a. Call mailerService.sendMail()      │                   │
-│     │    (Nodemailer direct + DKIM)         │                   │
+│     │    (Nodemailer per-MX + DKIM)         │                   │
 │     │                                       │                   │
 │     │ b. On SUCCESS:                        │                   │
 │     │    status = 'sent', sentAt = now()    │                   │
@@ -726,6 +733,9 @@ api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
 users     ──1:N──▶ api_keys, templates, domains, webhooks  (created_by_user_id, SET NULL on delete, #219)
+users     ──1:N──▶ user_credentials, sessions, user_tokens  (CASCADE on user delete; user_tokens.invited_by SET NULL)
+user_credentials ──1:N──▶ sessions  (credential_id, CASCADE, #277)
+sessions  ──1:N──▶ session_token_history  (CASCADE, #216)
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
 dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 ```
@@ -935,13 +945,13 @@ Two independent in-memory fixed-window limiters:
 - **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login clears the counter
 - **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}`
 
-Both maps reset on server restart and are per-replica (single-instance only; Redis-backed in v2).
+Both maps reset on server restart and are per-replica (single-instance only; optional Redis backing is tracked in #185).
 
 ---
 
 ## Email Delivery
 
-BunMail sends emails directly to recipient MX servers using Nodemailer's `direct: true` mode: no SMTP relay or third-party provider.
+BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX host itself, refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to the checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS).
 
 **What this means:**
 - The server's IP reputation directly affects deliverability
@@ -966,8 +976,15 @@ BunMail sends emails directly to recipient MX servers using Nodemailer's `direct
 
 ```yaml
 # docker-compose.yml (abridged: the SMTP port lines are commented out until enabled)
+x-logging: &default-logging          # log rotation (#284): 5 files of 10 MB per container
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   app:
+    logging: *default-logging
     build: .
     ports:
       - "${PORT:-3000}:${PORT:-3000}"   # HTTP API + Dashboard
@@ -983,6 +1000,7 @@ services:
     restart: unless-stopped
 
   db:
+    logging: *default-logging
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bunmail}
@@ -1001,7 +1019,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation links point at `localhost`. `docker-compose.override.yml` (merged automatically) publishes Postgres on `127.0.0.1:5432` for local development (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). `docker-compose.override.yml` (merged automatically) publishes Postgres on `127.0.0.1:5432` for local development (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1024,10 +1042,16 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 
 - Services throw; routes don't catch
 - Elysia's global `onError` handler in [src/index.ts](src/index.ts) maps known error classes to structured JSON responses:
+  - Request validation failure → 422 with `{ code: "VALIDATION_ERROR", details: [{ path, message }] }` (submitted values never echoed); malformed JSON → 400 `INVALID_BODY`
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
+  - `TemplateTooLargeError` → 422 `TEMPLATE_OUTPUT_TOO_LARGE`
+  - `InactiveApiKeyError` → 401 `API_KEY_REVOKED`
+  - `ApiKeyCreatorInactiveError` → 403 `API_KEY_CREATOR_INACTIVE` (#219)
   - `UnauthorizedSenderError` → 403 with `{ code: "UNAUTHORIZED_SENDER", sender }`: `From` not in the key's allowed-senders list (#126)
-  - Unhandled errors → 500 with the error message (stack traces hidden in production)
+  - `InboundEventsRequireAdminError` → 403 `INBOUND_EVENTS_REQUIRE_ADMIN`
+  - `BlockedUrlError` → 422 `WEBHOOK_URL_BLOCKED` (#128)
+  - Unhandled errors → 500; the client gets `"Internal server error"` in production (#133), the message in development; the detail is logged server-side
 - Email queue failures are logged and stored in the `last_error` column
 
 ---
@@ -1035,14 +1059,11 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 ## Future (v2+)
 
 - Open/click tracking
-- Multiple API keys with permissions
-- Team access / multi-user
 - Analytics dashboard with charts
 - SDK packages (`npm i bunmail`)
 - CLI tool (`bunx bunmail init`)
 - Scheduled emails
 - One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
-- DMARC `rua` aggregate report ingest (#41)
-- Webhook delivery persistence + replay (#30)
 - Bun-native SMTP client (subsumes #37, #42, see #60)
-- Redis-backed rate limiting + queue for multi-instance deploys (#20)
+- Optional Redis backing for the per-replica in-memory state (rate limits, one-time reveal store) (#185)
+- Dashboard account follow-ups: TOTP two-factor (#220), passkeys (#223), SSO (#224), an active sessions page (#281)

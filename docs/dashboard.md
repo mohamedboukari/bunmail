@@ -6,6 +6,7 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 
 | Env Variable                       | Required | Default       | Description                                  |
 |------------------------------------|----------|---------------|----------------------------------------------|
+| APP_BASE_URL                       | No       | _(empty)_     | Public base URL (no trailing slash) used for the owner setup link, invitation links and password reset links. Unset or not an `http(s)://` URL: links point at `http://localhost:PORT` and invitations are never emailed (the inviter sees the link instead). |
 | BUNMAIL_OWNER_EMAIL                | **Prod** | _(empty)_     | Email of the dashboard owner account (#215), stored lowercased. **Required when `BUNMAIL_ENV=production`** (app refuses to start when it is unset); a malformed address or one over 254 characters is refused in every environment; unset in dev skips the owner bootstrap with a warning, which leaves the dashboard without an account to sign in with (#216). See [Owner setup](#owner-setup-215). |
 | DASHBOARD_TRUSTED_PROXY_HOPS       | No       | `0`           | Trusted reverse-proxy hops in front of BunMail, used to resolve the real client IP for login rate limiting. `0` = trust only the raw socket IP. Set to `1` behind a single nginx/Caddy/Cloudflare (`N` for `N` chained proxies). |
 | DASHBOARD_LOGIN_RATE_LIMIT_ENABLED | No       | `true`        | Master switch for login brute-force protection |
@@ -181,6 +182,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
 | GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed) |
+| GET /dashboard/emails/tombstones | Post-purge audit snapshots with a Message-ID search (#34)        |
 | GET /dashboard/api-keys          | API keys list + create form: every key with its creator and why it is disabled (admins, owner), or the member's own keys (#219) |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
 | GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
@@ -189,9 +191,15 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 | GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
 | GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview); read-only for a member on someone else's template (#219) |
 | GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form                 |
+| GET /dashboard/webhooks/:id/deliveries | Delivery history of one webhook, filter by status (#30)     |
+| GET /dashboard/webhooks/deliveries/:deliveryId | Delivery detail: payload, last response, Replay (#30) |
 | GET /dashboard/inbound           | Inbound emails list: bulk-select, per-row trash                  |
 | GET /dashboard/inbound/trash     | Trashed inbound: bulk Restore / Delete-forever / Empty trash     |
 | GET /dashboard/inbound/:id       | Inbound email detail + HTML preview                               |
+| GET /dashboard/inbound/:id/reply | Send form pre-filled as a reply (#86)                             |
+| GET /dashboard/dmarc-reports     | DMARC aggregate reports list + domain filter (#41)                |
+| GET /dashboard/dmarc-reports/:id | DMARC report detail, per source IP (#41)                          |
+| GET /dashboard/suppressions      | Suppressions across every API key (#89)                           |
 
 ## Design System
 
@@ -207,7 +215,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 src/pages/
 ├── pages.plugin.tsx          ← Plugin with all routes + session guard
 ├── guards.tsx                ← Role and assurance checks per route (#222)
-├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation links), bound to kind, user and session (#132, #280, #217)
+├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation and password reset links), bound to kind, user and session (#132, #280, #217, #277)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
 ├── landing.plugin.tsx        ← Public landing page at /
@@ -236,7 +244,13 @@ src/pages/
 │   ├── inbound.tsx           ← Inbound emails list (bulk-select + trash)
 │   ├── inbound-detail.tsx    ← Inbound email detail + preview
 │   ├── inbound-trash.tsx     ← Trashed inbound (Restore / Delete-forever / Empty)
-│   └── emails-trash.tsx      ← Trashed outbound (Restore / Delete-forever / Empty)
+│   ├── emails-trash.tsx      ← Trashed outbound (Restore / Delete-forever / Empty)
+│   ├── email-tombstones.tsx  ← Post-purge audit snapshots + Message-ID search (#34)
+│   ├── webhook-deliveries.tsx ← Delivery history of one webhook (#30)
+│   ├── webhook-delivery-detail.tsx ← Delivery detail + replay (#30)
+│   ├── suppressions.tsx      ← Suppressions across every API key (#89)
+│   ├── dmarc-reports.tsx     ← DMARC reports list + domain filter (#41)
+│   └── dmarc-report-detail.tsx ← DMARC report detail (#41)
 └── components/
     ├── stats-card.tsx        ← Metric display card
     ├── status-badge.tsx      ← Status + verification badges
@@ -294,11 +308,15 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Add domain → `POST /dashboard/domains`
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)
 - Verify domain DNS → `POST /dashboard/domains/:id/verify`
+- Set or clear the inbound notification address → `POST /dashboard/domains/:id/notify-email` (#106)
+- Set or clear the List-Unsubscribe overrides → `POST /dashboard/domains/:id/unsubscribe` (#243)
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`
 - Create webhook → `POST /dashboard/webhooks`
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
+- Replay a webhook delivery → `POST /dashboard/webhooks/deliveries/:deliveryId/replay`
+- Remove a suppression → `POST /dashboard/suppressions/:id/delete`
 
 **Email trash**
 - Move email to trash → `POST /dashboard/emails/:id/trash`

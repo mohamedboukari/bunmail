@@ -342,8 +342,8 @@ Three roles, ranked owner > admin > member. The dashboard guard (`src/pages/page
 
 | Role | Can do |
 |---|---|
-| `member` | Read the dashboard (emails, inbound, logs and stats, the view pages of domains, webhooks, DMARC reports and suppressions), send email, restore single messages from trash, view and create templates (editing existing templates is admin until #219 adds per-member ownership) |
-| `admin` | Everything a member can, plus inviting members (#217), deactivating, reactivating and removing members (#218), issuing password reset links for members (#277), API keys, every domain, webhook and suppression change, template edit and delete, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
+| `member` | Read the dashboard (emails, inbound, logs and stats, the view pages of domains, webhooks, DMARC reports and suppressions), send email with its own API keys, restore single messages from trash, view and create templates, edit and delete the templates it created, manage its own restricted API keys (#219) |
+| `admin` | Everything a member can, plus inviting members (#217), deactivating, reactivating and removing members (#218), issuing password reset links for members (#277), every API key (and the admin toggle), every domain, webhook and suppression change, edit and delete of any template, trash (single and bulk, since trash is purged after `TRASH_RETENTION_DAYS`), bulk and permanent deletes, empty trash |
 | `owner` | Everything an admin can, plus inviting admins (#217), changing roles, deactivating, reactivating and removing admins, transferring ownership (#218), and issuing password reset links for admins (#277). No route carries `ownerGuard`: these owner-only rules are checked inside the invitation and account services, against the live role |
 
 A role too low gets `403` and a `warn` log line with IDs only. The full route table and the 403 behaviour are in [docs/dashboard.md](dashboard.md#roles-222). The REST API does not use these roles: it authorizes API keys (`is_admin`, `allowed_senders`).

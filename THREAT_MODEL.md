@@ -1,6 +1,6 @@
 # BunMail: Threat Model
 
-> Last reviewed: 2026-05-01
+> Last reviewed: 2026-10-18
 
 A self-hosted email service has a different threat surface than a SaaS one: there is no provider firewall in front of you, and you own the IP reputation, the database, the keys, and the abuse-response. This document walks the assets, the attackers we model against, the controls already in place, and the responsibilities that **stay with the operator**.
 
@@ -17,7 +17,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **Sending IP reputation** | Earned over weeks. A few hours of abuse can take it months to recover. |
 | **Webhook secrets** (`webhooks.secret`) | HMAC keys shared with the consumer. Compromise = forged webhook deliveries. |
 | **Dashboard sessions** (`sessions.token_hash`, #216) | Opaque 256-bit cookie tokens; only their SHA-256 is stored, so a DB dump yields no usable cookie. A stolen live cookie = dashboard access until the real browser's next request reveals the copy (any superseded token, however old, revokes every session of the user, see §4) or the session is revoked. Superseded hashes are kept in `session_token_history` for the session's life. |
-| **Dashboard passwords** (`user_credentials.secret_hash`, #215/#216) | argon2id hashes of account passwords (the owner's today). Compromise of the hash = offline guessing; of the password = dashboard login. |
+| **Dashboard passwords** (`user_credentials.secret_hash`, #215/#216) | argon2id hashes of account passwords (the owner and every invited account, #217). Compromise of the hash = offline guessing; of the password = dashboard login. |
 | **Invitation tokens** (`user_tokens`, purpose `invite`, #217) | One-time link that creates an account with the invited role (`admin` or `member`). Only the SHA-256 hash is stored; the raw link exists in the invitation email or, when no system sender is usable, in the inviter's one-time reveal. Compromise before acceptance = the attacker creates the account under the invited address and role and is signed in. Valid `INVITE_EXPIRY_DAYS` (default 7). |
 | **Password reset links** (`user_tokens`, purpose `password_reset`, #277) | One-time link, issued by an admin or the owner on the Users page, that sets a new password for one admin or member account and signs it in. Only the SHA-256 hash is stored; the raw link exists only in the issuer's one-time reveal (never emailed, logged or put in a URL). Compromise before use = the attacker takes over that account (and signs the real holder out everywhere). Valid 1 hour; one live link per account. |
 | **Owner setup tokens** (`user_tokens`, purpose `owner_setup`, #215) | One-time link that sets the owner account's password. Only the SHA-256 hash is stored; the raw link exists once in the app log (or the operator's terminal after `reset-owner`). Compromise during the 24 h claim window = the attacker sets the owner password and is signed in to the dashboard. |
@@ -32,7 +32,7 @@ If you self-host BunMail, read the **Operator responsibilities** section. Some c
 | **Insider with DB read** (read-only replica access, leaked dump) | Harvest recipient lists, read inbound mail. **DKIM private keys are AES-256-GCM encrypted at rest** (#23): useless without `DKIM_ENCRYPTION_KEY` from `.env`. | Likely on careless backups. |
 | **Privileged insider with DB write** | Forge mail history, grant their own API keys, exfiltrate. | Lower likelihood; full DB write effectively bypasses the app. |
 | **Network adversary on egress path** | Strip TLS on outbound to recipients (downgrade attack). | Realistic on hostile networks; mostly irrelevant on cloud egress. |
-| **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape): every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate is tracked in #150. |
+| **Web XSS in dashboard** | Steal session cookie, send mail. | `@kitajs/html` escapes only children marked `safe` (it does **not** auto-escape): every interpolation of stored/user data carries `safe`. The DMARC pages were a gap (attacker-controlled aggregate-report fields) fixed in #131; a codebase-wide `xss-scan` gate runs in CI since #150 (blind spots closed in #229). |
 
 We **do not** model nation-state attackers with side-channel access to the host, if they're on the box, the game is already over.
 
@@ -55,7 +55,7 @@ We **do not** model nation-state attackers with side-channel access to the host,
    │  ┌──────────────────────────┐    ┌────────────────────────┐  │
    │  │ Elysia: REST + dashboard │───►│ PostgreSQL             │  │
    │  └──────────┬───────────────┘    │  • API keys (hashed)   │  │
-   │             │                    │  • DKIM keys (PEM)     │  │
+   │             │                    │  • DKIM keys (AES-GCM) │  │
    │             ▼                    │  • email queue + body  │  │
    │  ┌──────────────────────────┐    └────────────────────────┘  │
    │  │ smtp-server (inbound)    │                                │
@@ -158,7 +158,7 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 - `@kitajs/html` does **not** auto-escape interpolated children: escaping requires the `safe` attribute on the enclosing element. Every interpolation of stored/user data must carry `safe`; missing it is a stored/reflected XSS.
 - **DMARC pages (#131):** aggregate-report fields (`orgName`, `domain`, `sourceIp`, `disposition`, auth domains/results, raw XML) arrive over the unauthenticated inbound path and were rendered without `safe`: an emailed report with `<img onerror>` would execute in the admin origin. Now all such fields (both DMARC pages) carry `safe`, covered by a render-level regression test (`test/unit/dmarc-xss.test.ts`).
 - **Templates and suppressions pages:** template `variables` and suppression addresses are writable by any API key, including restricted ones, so they are attacker-controlled from the dashboard's point of view. The variables cell carries `safe`, and the suppression Delete confirmation is static text: no stored value is ever placed inside an inline event handler, where `@kitajs/html` attribute escaping (double quotes only) is not enough. Covered by `test/unit/dashboard-xss.test.ts`.
-- **Tooling:** `@kitajs/ts-html-plugin`'s `xss-scan` CLI finds unescaped children. 4.1.4 has two blind spots that `test/xss-gate.ts` (what `bun run lint:xss` runs, #229) closes: it only checked the false branch of a conditional expression (`cond ? a : b`), so the installed copy is patched before every scan to check both branches (the gate fails loudly if the scanner source changes); and it never checks attribute values, so the gate also rejects any dynamic event-handler attribute (`onclick={...}`) under `src/pages`, where `@kitajs/html` escapes only `"`. Adopting it as a CI gate + auditing the remaining flagged interpolations is tracked in #150. Inbound **email body** HTML is separately rendered in a sandboxed iframe (`html-preview.tsx`, `sandbox` without `allow-scripts`).
+- **Tooling:** `@kitajs/ts-html-plugin`'s `xss-scan` CLI finds unescaped children. 4.1.4 has two blind spots that `test/xss-gate.ts` (what `bun run lint:xss` runs, #229) closes: it only checked the false branch of a conditional expression (`cond ? a : b`), so the installed copy is patched before every scan to check both branches (the gate fails loudly if the scanner source changes); and it never checks attribute values, so the gate also rejects any dynamic event-handler attribute (`onclick={...}`) under `src/pages`, where `@kitajs/html` escapes only `"`. It runs as a CI gate since #150, which also audited every flagged interpolation. Inbound **email body** HTML is separately rendered in a sandboxed iframe (`html-preview.tsx`, `sandbox` without `allow-scripts`).
 
 ### Logging
 

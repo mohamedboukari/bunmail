@@ -41,6 +41,8 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_status_created` (`(status, created_at)`) queue processor uses this
 - `idx_emails_api_key_id`, `(api_key_id)`, fast filtering by API key
 - `idx_emails_api_key_deleted` (`(api_key_id, deleted_at)`) trash list / purge queries
+- `idx_emails_due` (`(next_attempt_at)` WHERE `status = 'queued' AND deleted_at IS NULL`) queue claim of due rows (#180)
+- `idx_emails_lease` (`(lease_until)` WHERE `status = 'sending'`) reclaim of expired leases (#180)
 
 ## Module Layout
 
