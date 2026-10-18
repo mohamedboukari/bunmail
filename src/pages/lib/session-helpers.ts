@@ -1,9 +1,10 @@
 import type { Context } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
-import { clearSessionCookie, sessionSetCookie } from "../session.ts";
+import { clearSessionCookie, deviceSetCookie, sessionSetCookie } from "../session.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { SESSION_ABSOLUTE_SECONDS } from "../../modules/users/services/session-policy.service.ts";
+import { DEVICE_COOKIE_MAX_AGE_SECONDS } from "../../modules/users/services/device-policy.service.ts";
 
 /* ─── Session Helpers ─── */
 
@@ -29,6 +30,25 @@ export function issueSession(
   maxAgeSec: number = SESSION_ABSOLUTE_SECONDS,
 ): void {
   set.headers["set-cookie"] = sessionSetCookie(token, secureCookies(), maxAgeSec);
+}
+
+/**
+ * Adds the `bm_device` cookie (#282) next to whatever `Set-Cookie` the
+ * response already carries (the login sets `bm_session` first): same
+ * attributes as the session cookie, `Max-Age` 400 days, refreshed at
+ * every password sign-in.
+ */
+export function issueDeviceCookie(set: Context["set"], value: string): void {
+  const cookie = deviceSetCookie(value, secureCookies(), DEVICE_COOKIE_MAX_AGE_SECONDS);
+  const current = set.headers["set-cookie"];
+  if (current === undefined) {
+    set.headers["set-cookie"] = cookie;
+  } else {
+    set.headers["set-cookie"] = [
+      ...(Array.isArray(current) ? current : [current]),
+      cookie,
+    ];
+  }
 }
 
 /** Removes the `bm_session` cookie from the browser (same attributes, Max-Age=0). */

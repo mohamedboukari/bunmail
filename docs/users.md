@@ -2,14 +2,14 @@
 
 Dashboard user accounts (#214): the first piece of the invite-only accounts epic (#225), which replaces the shared `DASHBOARD_PASSWORD` with real accounts, roles and revocable sessions.
 
-#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Account management (#218) lets the owner and admins change roles, deactivate, reactivate and remove accounts, and the owner hand over ownership (see [Account management](#account-management-218)). Record ownership (#219) ties API keys, templates, domains and webhooks to the user who created them (see [Record ownership](#record-ownership-219)). Admin-issued reset links (#277) let a user who forgot their password back in (see [Password resets](#password-resets-277)), and every signed-in user can change their own password (#279, see [Password change](#password-change-279)) and see and sign out their own sessions (#281, see [Active sessions](#active-sessions-281)).
+#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Account management (#218) lets the owner and admins change roles, deactivate, reactivate and remove accounts, and the owner hand over ownership (see [Account management](#account-management-218)). Record ownership (#219) ties API keys, templates, domains and webhooks to the user who created them (see [Record ownership](#record-ownership-219)). Admin-issued reset links (#277) let a user who forgot their password back in (see [Password resets](#password-resets-277)), and every signed-in user can change their own password (#279, see [Password change](#password-change-279)) and see and sign out their own sessions (#281, see [Active sessions](#active-sessions-281)). A password sign-in from a browser the account has not used recently emails the account an alert (#282, see [New-device alerts](#new-device-alerts-282)).
 
 ## Design
 
 - **Identity and credentials are separate.** `users` holds who someone is; `user_credentials` holds one row per way they can log in. A password is the first credential type; TOTP (#220), passkeys (#223) and OAuth/SSO (#224) are further rows with the columns they need already present (`provider`, `provider_account_id`, `public_key`, `counter`, `name`). The `metadata` jsonb column from the original design is deliberately deferred: every planned type has explicit columns; a later type that needs free-form data adds it with the `jsonb` column type from `src/db/jsonb.ts` (#261). TOTP recovery codes (#220) are expected to be stored hashed in `secret_hash` of their own rows, or in a small table of their own if several per user are needed.
 - **Sessions carry an assurance level.** `pending` (first factor passed, second required), `password`, `mfa`. The auth guard (#222) can require a minimum per route (`requireAssurance`), so adding 2FA later touches no routes.
 - **Invariants live in the database.** Exactly one owner, lower-cased unique emails, and every enum column limited to its value set by a `CHECK` constraint, so a typo can never become a privilege.
-- **Secrets are never stored.** Session cookies and one-time links carry a random 256-bit token; only its SHA-256 hash is in the database. Passwords are argon2id hashes from `Bun.password`.
+- **Secrets are never stored.** Session cookies and one-time links carry a random 256-bit token; only its SHA-256 hash is in the database. The `bm_device` cookie (#282) is stored the same way, although it is not a credential. Passwords are argon2id hashes from `Bun.password`.
 - **No new dependency for auth.** Hashing, randomness and SHA-256 come from Bun and Node's `crypto`. The only dependency of the module is `mmdb-lib` (pinned, no dependencies of its own), which reads the optional offline GeoIP database of the Active sessions page (#281).
 
 ## Schema
@@ -101,6 +101,23 @@ One-time tokens: the owner setup link, invitations, password resets.
 
 Checks: `user_tokens_target_check` (`user_id` or `email` must be set); `user_tokens_invite_check` (#217): a row with `purpose = 'invite'` must have an `email` and a `role` of `admin` or `member`, so no code path and no hand-written row can mint an owner invitation (`role IS NOT NULL` is spelled out, since a NULL `IN (...)` would pass a CHECK). Index: `user_tokens_email_purpose_idx` (re-inviting an address replaces its pending invitation).
 
+### `user_devices` (#282)
+
+The browsers each account signed in from with a password, for the new-device alert. One row per account and `bm_device` cookie.
+
+| Column        | Type         | Constraints                                                     |
+|---------------|--------------|-----------------------------------------------------------------|
+| id            | varchar(36)  | PK, `udv_` prefix                                               |
+| user_id       | varchar(36)  | NOT NULL, FK `users` ON DELETE CASCADE                           |
+| device_hash   | varchar(64)  | NOT NULL: SHA-256 of the `bm_device` cookie value (the value is never stored) |
+| user_agent    | varchar(64)  | nullable: the device label at the last sign-in ("Chrome on macOS", fixed strings from `describeUserAgent`), not the raw header |
+| ip            | varchar(45)  | nullable: client IP at the last sign-in, only a valid IPv4/IPv6 literal |
+| location      | varchar(128) | nullable: approximate location of `ip` (#281) when the lookup answered within 2 s |
+| first_seen_at | timestamptz  | NOT NULL, default `now()`                                       |
+| last_seen_at  | timestamptz  | NOT NULL, default `now()`: moved forward at every sign-in from this browser |
+
+Indexes: `user_devices_user_id_device_hash_idx` (UNIQUE, the sign-in upsert's conflict target), `user_devices_user_id_idx` (the account's devices, the cascade), `user_devices_last_seen_at_idx` (the 400-day sweep).
+
 ## Types
 
 `src/modules/users/types/user.types.ts` exports the value sets as constants and unions: `USER_ROLES` / `UserRole`, `CREDENTIAL_TYPES` / `CredentialType`, `SESSION_ASSURANCES` / `SessionAssurance`, `TOKEN_PURPOSES` / `TokenPurpose`. The same constants render the `CHECK` constraints (`literals()`), and an integration test reads the live constraint definitions back from Postgres and checks every value is present, so a constant changed without `bun run db:generate` fails the test instead of silently diverging.
@@ -155,7 +172,7 @@ The dashboard login is an account login: email and password against `user_creden
 - **Reuse detection.** The previous token is served (no write, no cookie) for 30 s after the rotation. Presented later, it means two parties hold the session: `revokeAllUserSessions` deletes every session of the user and the guard logs `Session token reuse detected: all sessions of the user revoked`. Every replaced hash is also written to `session_token_history` (in the rotation's transaction) and kept until the session ends, so a token two or more rotations old is recognized as reuse too (`findSessionBySupersededToken`, only for unexpired sessions), in the guard and also on the login and logout pages. A lost response (the new cookie never reached the browser) looks like reuse and signs the user out: a rare false positive, accepted for the detection.
 - **Revoke.** Logout deletes the row (matching the current or the previous hash). Owner setup completion and `reset-owner` delete every session of the owner under the owner lock. `revokeAllUserSessions(userId, executor?)` is also the hook for deactivation (#218), a completed password reset (#277) and a password change (#279); the `credential_id` cascade (#277) is a second, independent path for sessions bound to a replaced credential. Independently, the lookup and the login reject a disabled user, so leftover rows grant nothing, and `ON DELETE CASCADE` removes the rows of a deleted user.
 - **Account fields.** The same row returns the account's email and role and the session's assurance (#222), narrowed with `isUserRole` / `isSessionAssurance` (an unknown value, impossible while the `CHECK` constraints hold, counts as no session). The dashboard builds its `auth` context from it, so a request costs exactly one session query and a role change applies on the next request.
-- **Sweep.** The purge worker (`runSessionSweep` in `src/modules/trash/services/purge.service.ts`) calls `purgeExpiredSessions()` on boot and every 6 hours and logs `Expired session sweep completed` with `deleted`. Housekeeping only: the guard enforces expiry itself.
+- **Sweep.** The purge worker (`runSessionSweep` in `src/modules/trash/services/purge.service.ts`) calls `purgeExpiredSessions()` on boot and every 6 hours and logs `Expired session sweep completed` with `deleted`. Housekeeping only: the guard enforces expiry itself. In the same cycle `runDeviceSweep` deletes the `user_devices` rows not seen for 400 days (#282, `Stale sign-in device sweep completed`).
 
 **Login without account enumeration.** `verifyPasswordLogin` runs exactly one argon2id verify on every branch: an unknown email or a user without a password is verified against a dummy hash made once per process by the same `hashPassword` (so the cost parameters match), and a disabled user verifies the real hash and then fails. Every failure reason (`unknown`, `no_password`, `disabled`, `bad_password`, plus `too_long` decided in the route before any lookup) gets the same response. On success `user_credentials.last_used_at` is updated. The first unknown-email login of a process also creates the dummy hash, one extra argon2id hash; that slower response happens once per process.
 
@@ -267,9 +284,32 @@ Every signed-in account, the owner included, lists and signs out its **own** ses
 - **Stored** (`setSessionLocation`) as "City, Country" or "Country" (`formatLocation`: control and format characters dropped, cut to 128 code points; no country, no label). A failed lookup or write logs `warn` `Session location lookup failed` with `sessionId`, `ip` and a sanitized message, and the session keeps a null location.
 - **Approximate**: a VPN or proxy shows its own location, and the page says so.
 
+## New-device alerts (#282)
+
+A successful password sign-in from a browser the account has not used in the last 30 days emails the account "New sign-in to your BunMail account". Route behaviour: [docs/dashboard.md](dashboard.md#auth-flow).
+
+**Recognizing a browser.** By a cookie, never by IP (mobile and VPN addresses change all the time). `bm_device` holds 32 random bytes as base64url (`HttpOnly; SameSite=Lax; Path=/dashboard`, `Secure` in production like `bm_session`, `Max-Age` 400 days). `POST /dashboard/login` sets it on every successful sign-in: the value the browser presented when it is well-formed (43 base64url characters, `isWellFormedToken`), otherwise a new one (a missing, malformed or oversized value counts as absent), so the lifetime is refreshed at each sign-in. Logout does not clear it. **It is not a credential**: it opens no page and no session, and nothing but the alert decision reads it. The same value is shared by every account that signs in from that browser, but rows are per account, so a browser one account uses is still new to another. Only its SHA-256 is stored (`user_devices.device_hash`).
+
+**When it alerts** (`device-policy.service.ts`, decided in one statement by `recordSignInDevice`):
+
+- **Known device**: the account has a `user_devices` row for this cookie hash with `last_seen_at` within the last 30 days (`KNOWN_DEVICE_DAYS`). No alert; `last_seen_at`, the label, the IP and the location move forward.
+- **New device**: no row for this account and cookie, or one last seen longer ago than 30 days. One alert, and the row is inserted or refreshed.
+- **First device**: the account has no `user_devices` row at all (the first password sign-in after owner setup or invitation accept, or the first after upgrading to #282). Recorded **without an alert**: the account's first browser is not a "new device" event. Consequence: on an upgraded instance, each account's first sign-in afterwards is silent.
+- **Only `POST /dashboard/login`**. Owner setup, invitation accept, password reset and password change never run the check and set no device cookie: they are link or credential flows the user just performed.
+
+The upsert is `INSERT ... ON CONFLICT (user_id, device_hash) DO UPDATE` with a `prior` CTE that reads the table as it was before the statement (whether the account had any device, and whether this one was known or stale) and `xmax = 0` to tell an insert from an update. Two sign-ins racing from the same new browser give one alert (the one that inserted); two racing on the same stale row may both alert.
+
+**When it runs.** After the login response is decided, in the background (`recognizeSignInDevice` in `sign-in-device.service.ts`, not awaited), like the location lookup: it never delays or fails a login. It waits up to 2 s (`LOCATION_WAIT_MS`) for the session's location lookup (`locateSession` now returns the location it stored), then records the device and decides. Any error is logged at `warn` (`New-device sign-in check failed`, with `userId`, `ip`, `errorName` and, for a database error, `sqlState`) and the login is unaffected.
+
+**The email** (`new-device-alert.service.ts`), sent like the invitation email: `sendSystemMail` (`system-mail.service.ts`, now shared by both) sends from `SYSTEM_MAIL_FROM` with `sendMail`, out of band, DKIM-signed with that domain's key, and only when the domain is registered in BunMail with `dkim_verified` and the key decrypts (never unsigned). Plain text and escaped HTML: the account address masked (`m***@example.com`), the device label, the IP (or `unknown`), the approximate location when known (left out otherwise), the time in UTC (`2026-10-18 14:03:27 UTC`), and "If this was you, you can ignore this email. If it wasn't, sign in and use Account > Active sessions > Sign out all other devices, change your password, and tell an administrator." **No links of any kind**: no URL, no token, no button, no tracking. A forwarded or leaked alert cannot act on the account, and users are not trained to click links in security mail.
+
+**Logs.** `info` `New-device sign-in` (`userId`, `deviceId`, `ip`) for every new device, sent or not; `info` `First sign-in device recorded, no alert`; `debug` `Sign-in from a known device`. Then `warn` `New-device sign-in alert sent` (`userId`, `deviceId`, the address through `redactEmail`), `info` `New-device sign-in alert not sent` with `reason: not_configured` when `SYSTEM_MAIL_FROM` is unset, or `warn` `New-device sign-in alert not sent` with `reason` `sender_unavailable` or `send_failed` (thrown errors by name and SQLSTATE only). Never the cookie value or its hash.
+
+**Retention.** A row is deleted with its account (`ON DELETE CASCADE`) and by the purge worker once not seen for 400 days (`DEVICE_RETENTION_DAYS`, the cookie lifetime); that browser is new again at its next sign-in.
+
 ## Service helpers
 
-`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts`, `invite-policy.service.ts`, `user-admin-policy.service.ts`, `password-reset-policy.service.ts` and `password-change-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts`, `invite.service.ts`, `user-admin.service.ts`, `password-reset.service.ts` and `password-change.service.ts` touch the database, all through `withSanitizedErrors`; `record-ownership.service.ts` (#219) only runs inside their owner-locked transactions; `invite-email.service.ts` sends mail.
+`password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts`, `invite-policy.service.ts`, `user-admin-policy.service.ts`, `password-reset-policy.service.ts` and `password-change-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts`, `invite.service.ts`, `user-admin.service.ts`, `password-reset.service.ts`, `password-change.service.ts` and `user-device.service.ts` touch the database, all through `withSanitizedErrors`; `record-ownership.service.ts` (#219) only runs inside their owner-locked transactions; `system-mail.service.ts` sends mail, for `invite-email.service.ts` and `new-device-alert.service.ts`. `device-policy.service.ts` is pure too.
 
 ### password.service.ts
 
@@ -299,10 +339,16 @@ Every signed-in account, the owner included, lists and signs out its **own** ses
 - `INVITE_NAME_MAX_LENGTH` (100) and `inviteNameProblem(name)`: 1 to 100 code points, no control or format characters (`Cc`, `Cf`); the message never echoes the input.
 - `buildInviteUrl(appBaseUrl, port, token)`: `buildDashboardUrl` for `/dashboard/invite?token=...`.
 
+### system-mail.service.ts
+
+- `sendSystemMail({ to, subject, text, html }, deps): Promise<SystemMailResult>`: the system sender decision (`SYSTEM_MAIL_FROM` set, its domain registered and DKIM-verified, the key decrypts), then `sendMail` with a fresh Message-ID on `MAIL_HOSTNAME`; `{ sent: true, domain }` when an MX group reached `sent`, else `{ sent: false, reason, detail }` (`not_configured`, `sender_unavailable`, `send_failed`; `detail` is safe to log). Never throws, never logs: the caller logs with its own ids.
+- `systemMailDeps()`: the real `deps` (`from`, `findDomain`, `resolveDkim`, `send`, `hostname`); the unit tests inject fakes.
+- `escapeHtml(value)`, `oneLine(value)`: the escaping shared by both emails.
+
 ### invite-email.service.ts
 
 - `buildInviteEmail({ url, inviter, role, expiresAt }): { subject, text, html }`: pure; every dynamic value escaped in the HTML part and flattened to one line in the text part; exactly one link.
-- `sendInviteEmail(input, deps?): Promise<InviteMailOutcome>`: the send decision above; never throws. `deps` (`from`, `findDomain`, `resolveDkim`, `send`, `hostname`) defaults to the real ones and is injected by the unit tests.
+- `sendInviteEmail(input, deps?): Promise<InviteMailOutcome>`: `sendSystemMail` plus the log lines above; never throws. `deps` (`InviteMailDeps`, the same as `SystemMailDeps`) defaults to `systemMailDeps()` and is injected by the unit tests.
 
 ### invite.service.ts
 
@@ -381,9 +427,16 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 
 ### session-location.service.ts, geoip.service.ts, user-agent.service.ts (#281)
 
-- `locateSession(sessionId, ip): Promise<void>`: the background lookup and write; never rejects.
+- `locateSession(sessionId, ip): Promise<string | null>`: the background lookup and write; never rejects; resolves to the location stored, or `null` (the new-device check waits on it, #282).
 - `lookupLocation(ip, settings?)`, `loadMmdbLookup(path)`, `fetchIpinfoLocation(ip, token, fetch?)`, `formatLocation(city, country)`, `locationFromMmdbRecord(record)`, `locationFromIpinfo(body)`: the GeoIP sources and the label.
 - `describeUserAgent(userAgent): string`: the device label (pure).
+
+### device-policy.service.ts, user-device.service.ts, sign-in-device.service.ts, new-device-alert.service.ts (#282)
+
+- `KNOWN_DEVICE_DAYS` (30), `DEVICE_RETENTION_DAYS` (400), `DEVICE_COOKIE_MAX_AGE_SECONDS` (400 days); `classifySignInDevice(facts): "first" | "known" | "new"` (pure).
+- `recordSignInDevice({ userId, deviceToken, label, ip, location }): Promise<{ deviceId, kind }>`: the one-statement upsert above; `purgeStaleUserDevices(): Promise<number>`: the 400-day sweep.
+- `recognizeSignInDevice(event): Promise<void>`: the background check of a login (location wait, record, alert); never rejects.
+- `buildNewDeviceAlertEmail(input): { subject, text, html }` (pure, no links), `formatAlertTime(at)`, `sendNewDeviceAlert(input, deps?): Promise<NewDeviceAlertOutcome>` (never throws, logs as above).
 
 ### login.service.ts
 
@@ -415,6 +468,8 @@ A role too low gets `403` and a `warn` log line with IDs only. The full route ta
 
 `drizzle/0025_*.sql` (#281) adds the nullable `sessions.location` (`varchar(128)`). No backfill: existing sessions show no location.
 
+`drizzle/0026_*.sql` (#282) creates `user_devices` (FK `users(id)` ON DELETE CASCADE, the unique `(user_id, device_hash)` index and the `user_id` and `last_seen_at` indexes). Starts empty, so each account's first password sign-in after the upgrade is its silent first device.
+
 ## Tests
 
 - `test/unit/user-auth-helpers.test.ts`: hashing and verification, token minting and hashing.
@@ -440,6 +495,8 @@ A role too low gets `403` and a `warn` log line with IDs only. The full route ta
 - `test/unit/user-agent.test.ts` (#281): the device label table (Chrome, Edge, Firefox, Safari, Opera and Samsung Internet on Windows, macOS, Linux, ChromeOS, Android and iOS; curl, Wget, unknown and empty user agents).
 - `test/unit/geoip.test.ts` (#281): `readGeoipSettings` (off, file, provider, precedence, every refusal, the token never echoed), the label formatter, the `.mmdb` reader against a tiny database generated in the test (and a missing or corrupt file), private addresses never looked up, and the ipinfo client with a fake `fetch` (URL, timeout, no redirects, non-2xx, oversized, invalid JSON, network errors without the token).
 - `test/integration/account-sessions.integration.test.ts` (#281): the list (only the user's own live sessions, expired and `pending` ones never, the current one marked, the location column only when a location is stored, values escaped); signing out one session (own: revoked and its cookie dead; another user's or an unknown id: `404`, nothing changes; the current one: signed out here); signing out all others (exactly the current session kept, other users untouched); cross-origin `POST`s refused; a login storing the location after the background lookup (injected locator), a failing lookup never breaking the login, and nothing stored with location off.
+- `test/unit/device-policy.test.ts`, `test/unit/new-device-alert.test.ts` (#282): the first, known and new classification (including a racing insert), the windows; the alert's contents (masked address, device, IP, location left out when unknown, UTC time, the advice), no link or token-like string in either part, hostile values escaped, and every send outcome with injected dependencies and its log line. `test/unit/session.test.ts` covers the `bm_device` helpers and `test/e2e/dashboard.test.ts` the login's cookie and call (kept when well-formed, replaced when malformed or oversized, none on a failed login).
+- `test/integration/new-device-alert.integration.test.ts` (#282): the first device recorded without an alert; a new browser, a forged or malformed cookie and a browser another account used each getting exactly one alert; the same browser within 30 days getting none and moving `last_seen_at`, IP and label; 29 days known, 31 days alerting again, also while another browser of the account is recent; the email (sender, DKIM, contents, location, no link, no cookie, token or hash); no `SYSTEM_MAIL_FROM` (no email, the event logged, the login fine); a throwing sender and a failing device check never breaking the login; owner setup, invitation accept, password reset and password change never running the check; the 400-day purge and the cascade on account removal.
 - `test/integration/dashboard-route-access.integration.test.ts` (#222): the deny-by-default route table (every plugin route listed with its access level and carrying the matching role guard; no cookie, member, admin and owner requests per route), a role change applying on the next request, `requireAssurance("mfa")` on a test-only route, and one session lookup per request.
 - `test/integration/dashboard-session.integration.test.ts`: login against real Postgres (only the hash stored, `last_used_at`, distinct cookies, session replacement, one argon2id verify on every failure branch), logout, the guard (expired, disabled user, `pending` assurance, tampered token, old HMAC cookie), rotation (after 60 s, the absolute cap, grace, exactly one winner among concurrent requests), reuse detection (every session of the user revoked; a token two rotations old only rejected) and the service helpers (sweep, per-user revoke, IP cleaning).
 - `test/integration/owner-setup.integration.test.ts`: fresh install, restart before setup (including a changed email and `email-taken`), concurrency (parallel bootstraps, parallel completions, bootstrap racing completion, completion and recovery provably waiting on the held owner lock, lock released after commit), expiry, single use and a disabled owner (including one disabled while completion waits on the lock), behaviour after setup, sessions (completion deletes the owner's sessions and opens exactly one; a failed completion leaves them; `issueOwnerSetupLink` signs out only the owner), recovery, and a spawned `reset-owner.ts` smoke test (exit `0` with a live link and the sign-out line, also under `LOG_LEVEL=error`; exit `1` with no owner and no email).

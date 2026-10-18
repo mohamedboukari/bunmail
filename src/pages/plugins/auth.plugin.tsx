@@ -18,11 +18,12 @@ import {
   InviteInvalidPage,
 } from "../routes/invite.tsx";
 import { PasswordResetInvalidPage, PasswordResetPage } from "../routes/reset.tsx";
-import { readSessionCookie } from "../session.ts";
+import { readDeviceCookie, readSessionCookie } from "../session.ts";
 import * as ownerService from "../../modules/users/services/owner.service.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import * as loginService from "../../modules/users/services/login.service.ts";
 import * as sessionLocation from "../../modules/users/services/session-location.service.ts";
+import * as signInDevice from "../../modules/users/services/sign-in-device.service.ts";
 import * as inviteService from "../../modules/users/services/invite.service.ts";
 import * as passwordResetService from "../../modules/users/services/password-reset.service.ts";
 import { inviteNameProblem } from "../../modules/users/services/invite-policy.service.ts";
@@ -35,9 +36,13 @@ import {
   normalizeLoginEmail,
   sessionIp,
 } from "../../modules/users/services/session-policy.service.ts";
-import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
+import {
+  isWellFormedToken,
+  mintToken,
+} from "../../modules/users/services/token.service.ts";
 import {
   issueSession,
+  issueDeviceCookie,
   clearSession,
   SESSION_STORE_DOWN,
   revokeOnTokenReuse,
@@ -120,7 +125,11 @@ export function authPages(app: PublicDashboard) {
        * `/dashboard`: no `next` parameter, no open redirect. The session is
        * bound to the verified credential (#277): a password reset that
        * replaced it meanwhile makes this a failed login. The IP's failures are
-       * cleared only once the session exists.
+       * cleared only once the session exists. A successful login also sets
+       * the `bm_device` cookie and starts the new-device check (#282) in the
+       * background; only this route does (owner setup, invitation accept,
+       * password reset and password change are link or credential flows
+       * the user just performed).
        *
        * The body schema is deliberately loose (only generous length caps): a
        * schema failure answers 422 JSON from the global handler, not a page,
@@ -261,10 +270,38 @@ export function authPages(app: PublicDashboard) {
               ip,
             });
 
-            /** Approximate location (#281): in the background, never awaited. */
-            void sessionLocation.locateSession(sessionId, sessionIp(ip));
+            /**
+             * Approximate location (#281): in the background, never awaited
+             * here (the new-device check below waits on it for at most 2 s).
+             */
+            const located = sessionLocation.locateSession(sessionId, sessionIp(ip));
+
+            /**
+             * New-device alert (#282). The browser keeps its `bm_device`
+             * cookie when it presents a well-formed one, else it gets a new
+             * one (a malformed or oversized value counts as absent); the
+             * cookie is set again either way, which refreshes its lifetime.
+             * The check (record the device, alert when it is new to the
+             * account) runs in the background, after the response is
+             * decided: it never delays or fails the login.
+             */
+            const presentedDevice = readDeviceCookie(request.headers.get("cookie"));
+            const deviceToken =
+              presentedDevice && isWellFormedToken(presentedDevice)
+                ? presentedDevice
+                : mintToken().token;
+            void signInDevice.recognizeSignInDevice({
+              userId: result.userId,
+              email,
+              deviceToken,
+              ip: sessionIp(ip),
+              userAgent: request.headers.get("user-agent"),
+              location: located,
+              at: new Date(),
+            });
 
             issueSession(set, token);
+            issueDeviceCookie(set, deviceToken);
             return redirect(set, "/dashboard");
           } catch (error: unknown) {
             logger.error("Dashboard login failed: session store error", {

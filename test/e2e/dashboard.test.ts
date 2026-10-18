@@ -23,6 +23,7 @@ import type {
   SessionClient,
   UserRole,
 } from "../../src/modules/users/types/user.types.ts";
+import type { SignInDeviceEvent } from "../../src/modules/users/services/sign-in-device.service.ts";
 
 /**
  * E2E tests for the dashboard.
@@ -196,6 +197,7 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
     }),
   ),
   getDomainById: mock(() => Promise.resolve(undefined)),
+  getDomainByName: mock(() => Promise.resolve(undefined)),
   deleteDomain: mock(() => Promise.resolve(undefined)),
   getDkimDnsRecord: mock(() => null),
 }));
@@ -440,6 +442,18 @@ const verifyPasswordLogin = mock(
 /** Every export of login.service.ts. */
 void mock.module("../../src/modules/users/services/login.service.ts", () => ({
   verifyPasswordLogin,
+}));
+
+/**
+ * The new-device check (#282): its SQL and the alert are covered by the
+ * integration test; here only the login's call is checked.
+ */
+const recognizeSignInDevice = mock((_event: SignInDeviceEvent) => Promise.resolve());
+
+/** Every export of sign-in-device.service.ts. */
+void mock.module("../../src/modules/users/services/sign-in-device.service.ts", () => ({
+  recognizeSignInDevice,
+  LOCATION_WAIT_MS: 2000,
 }));
 
 const findLiveOwnerSetup = mock((token: string) =>
@@ -869,6 +883,68 @@ describe("Dashboard E2E", () => {
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
       expect(first).not.toBe(second);
+    });
+
+    test("sets the bm_device cookie and starts the new-device check (#282)", async () => {
+      recognizeSignInDevice.mockClear();
+      const response = await postLogin(
+        { email: " Owner@Example.com ", password: ACCOUNT.password },
+        { "x-forwarded-for": "198.51.100.4", "user-agent": "e2e-agent" },
+      );
+      expect(response.status).toBe(302);
+      const cookies = response.headers.getSetCookie();
+      expect(cookies).toHaveLength(2);
+      expect(cookies[0]).toStartWith("bm_session=");
+      const device = cookies[1] ?? "";
+      expect(device).toMatch(
+        /^bm_device=[A-Za-z0-9_-]{43}; HttpOnly; SameSite=Lax; Path=\/dashboard; Max-Age=34560000$/,
+      );
+      const value = device.match(/^bm_device=([^;]+)/)?.[1];
+      /** A device id, not the session token. */
+      expect(value).not.toBe(cookieValue(response));
+
+      expect(recognizeSignInDevice).toHaveBeenCalledTimes(1);
+      expect(recognizeSignInDevice.mock.calls[0]?.[0]).toMatchObject({
+        userId: OWNER.userId,
+        email: "owner@example.com",
+        deviceToken: value,
+        ip: "198.51.100.4",
+        userAgent: "e2e-agent",
+      });
+    });
+
+    test("keeps a well-formed device cookie; a malformed or oversized one is replaced", async () => {
+      const kept = "D".repeat(43);
+      for (const [presented, keep] of [
+        [kept, true],
+        ["not-a-device-id", false],
+        ["A".repeat(44), false],
+        ["A".repeat(4096), false],
+      ] as const) {
+        recognizeSignInDevice.mockClear();
+        const response = await postLogin(
+          { email: ACCOUNT.email, password: ACCOUNT.password },
+          { cookie: `bm_device=${presented}`, "x-forwarded-for": "198.51.100.5" },
+        );
+        const value = response.headers
+          .getSetCookie()
+          .find((c) => c.startsWith("bm_device="))
+          ?.match(/^bm_device=([^;]+)/)?.[1];
+        expect(value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        if (keep) expect(value).toBe(presented);
+        else expect(value).not.toBe(presented);
+        expect(recognizeSignInDevice.mock.calls[0]?.[0].deviceToken).toBe(value);
+      }
+    });
+
+    test("a failed login sets no device cookie and runs no device check", async () => {
+      recognizeSignInDevice.mockClear();
+      const response = await postLogin(
+        { email: ACCOUNT.email, password: "not the password" },
+        { "x-forwarded-for": "198.51.100.6" },
+      );
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(recognizeSignInDevice).not.toHaveBeenCalled();
     });
 
     test("an unknown email and a wrong password get identical responses", async () => {

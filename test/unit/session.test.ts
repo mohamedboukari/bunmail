@@ -1,7 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import {
+  DEVICE_COOKIE,
   SESSION_COOKIE,
   clearSessionCookie,
+  deviceSetCookie,
+  readDeviceCookie,
   readSessionCookie,
   sessionSetCookie,
 } from "../../src/pages/session.ts";
@@ -79,5 +82,26 @@ describe("sessionSetCookie / clearSessionCookie", () => {
     expect(cleared).toBe(
       "bm_session=; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=0",
     );
+  });
+});
+
+describe("device cookie (#282)", () => {
+  test("readDeviceCookie reads bm_device only, next to bm_session", () => {
+    const header = `bm_session=${TOKEN}; bm_device=dev-value; xbm_device=evil`;
+    expect(readDeviceCookie(header)).toBe("dev-value");
+    expect(readSessionCookie(header)).toBe(TOKEN);
+    expect(readDeviceCookie(`xbm_device=evil`)).toBeUndefined();
+    expect(readDeviceCookie("bm_device=")).toBeUndefined();
+    expect(readDeviceCookie(null)).toBeUndefined();
+  });
+
+  test("deviceSetCookie: the session cookie's attributes and a long Max-Age", () => {
+    expect(deviceSetCookie(TOKEN, false, 34_560_000)).toBe(
+      `${DEVICE_COOKIE}=${TOKEN}; HttpOnly; SameSite=Lax; Path=/dashboard; Max-Age=34560000`,
+    );
+    expect(deviceSetCookie(TOKEN, true, 60)).toBe(
+      `bm_device=${TOKEN}; HttpOnly; SameSite=Lax; Secure; Path=/dashboard; Max-Age=60`,
+    );
+    expect(deviceSetCookie(TOKEN, false, -1)).toContain("Max-Age=0");
   });
 });

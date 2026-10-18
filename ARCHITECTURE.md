@@ -219,8 +219,8 @@ bunmail/
 │   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
-│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), record ownership (#219)
-│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens
+│   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), record ownership (#219)
+│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens, user_devices (#282)
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
 │   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
@@ -232,7 +232,12 @@ bunmail/
 │   │   │   │                               session-policy.service.ts (pure: lifetimes, input bounds, IP / user agent),
 │   │   │   │                               invite.service.ts (create / resend / revoke / list / accept, per-address advisory lock),
 │   │   │   │                               invite-policy.service.ts (pure: who grants which role, name, expiry, URL),
-│   │   │   │                               invite-email.service.ts (invitation email from SYSTEM_MAIL_FROM, DKIM-signed),
+│   │   │   │                               system-mail.service.ts (BunMail's own mail from SYSTEM_MAIL_FROM, DKIM-signed, #282),
+│   │   │   │                               invite-email.service.ts (invitation email, via system-mail),
+│   │   │   │                               device-policy.service.ts (pure: 30-day known window, 400-day retention, #282),
+│   │   │   │                               user-device.service.ts (record a sign-in's browser in user_devices, sweep, #282),
+│   │   │   │                               sign-in-device.service.ts (background new-device check after login, #282),
+│   │   │   │                               new-device-alert.service.ts (new sign-in alert email, no links, #282),
 │   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer / reset link, owner lock),
 │   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
 │   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
@@ -476,7 +481,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 
 `TRASH_RETENTION_DAYS` is configurable via env (default `7`). The purge runs once on boot to catch anything that aged out while the server was offline.
 
-The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself.
+The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself. It also deletes sign-in devices not seen for 400 days (`runDeviceSweep` → `purgeStaleUserDevices`, #282, logged as `Stale sign-in device sweep completed`).
 
 ---
 
@@ -738,6 +743,10 @@ Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DE
 
 One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), stored as SHA-256 (`token_hash`, UNIQUE). `user_id` (FK CASCADE) or `email` (lower-cased) must be set; `role` for invites; `invited_by` FK ON DELETE SET NULL so invite history survives (for a `password_reset` row it records who issued the link, #277); `expires_at`, `used_at`, `revoked_at`. Index on `(email, purpose)`. `user_tokens_invite_check` (#217, migration `0018`): an `invite` row must have an `email` and a `role` of `admin` or `member`, never `owner`. Invitation lifecycle: [docs/users.md](docs/users.md#invitations-217).
 
+### `user_devices` (#282)
+
+The browsers each account signed in from with a password, for the new-device sign-in alert (migration `0026`). `id` (`udv_`), `user_id` (FK `users` ON DELETE CASCADE), `device_hash` (SHA-256 of the `bm_device` cookie value; the value is never stored), `user_agent` (the device label, "Chrome on macOS"), `ip`, `location` (nullable, #281), `first_seen_at`, `last_seen_at`. UNIQUE `(user_id, device_hash)` (the sign-in upsert's conflict target); indexes on `user_id` and `last_seen_at` (the 400-day sweep). Rules: [docs/users.md](docs/users.md#new-device-alerts-282).
+
 ### `__bunmail_migrations`
 
 System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table. The whole run holds a session-level advisory lock (`pg_advisory_lock(hashtext('bunmail:migrations'))`) on a single pinned connection (#175), so concurrent runs from several replicas serialize instead of racing.
@@ -752,7 +761,7 @@ api_keys  ──1:N──▶ templates
 api_keys  ──1:N──▶ suppressions
 domains   ──1:N──▶ emails
 users     ──1:N──▶ api_keys, templates, domains, webhooks  (created_by_user_id, SET NULL on delete, #219)
-users     ──1:N──▶ user_credentials, sessions, user_tokens  (CASCADE on user delete; user_tokens.invited_by SET NULL)
+users     ──1:N──▶ user_credentials, sessions, user_tokens, user_devices  (CASCADE on user delete; user_tokens.invited_by SET NULL)
 user_credentials ──1:N──▶ sessions  (credential_id, CASCADE, #277)
 sessions  ──1:N──▶ session_token_history  (CASCADE, #216)
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
@@ -933,7 +942,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |
 | POST   | /dashboard/suppressions/:id/delete | Remove a suppression (#89) | Admin |
 
-Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
+Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. A password login also sets the long-lived `bm_device` cookie (#282, 400 days, not a credential, only its SHA-256 stored in `user_devices`); a sign-in from a browser the account has not used in 30 days emails it a "New sign-in to your BunMail account" alert from `SYSTEM_MAIL_FROM` (no links), checked in the background so it never delays the login. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
 Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. Account management (#218) adds owner-only and members-only rules inside `user-admin.service.ts`, checked against the live roles under the `bunmail:owner` lock; the sidebar hides admin-only links from members. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
 
@@ -1047,7 +1056,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails, on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 

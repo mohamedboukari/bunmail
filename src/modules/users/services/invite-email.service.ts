@@ -1,22 +1,18 @@
-import { randomBytes } from "crypto";
-import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
-import { sendMail } from "../../emails/services/mailer.service.ts";
-import type {
-  DkimOptions,
-  SendMailResult,
-} from "../../emails/services/mailer.service.ts";
-import { getDomainByName } from "../../domains/services/domain.service.ts";
-import { resolveDomainDkim } from "../../domains/services/domain-dkim.service.ts";
-import type { Domain } from "../../domains/types/domain.types.ts";
-import { UserStoreError, withSanitizedErrors } from "../errors.ts";
 import type { InviteMailOutcome, InviteRole } from "../types/user.types.ts";
+import {
+  escapeHtml,
+  oneLine,
+  sendSystemMail,
+  systemMailDeps,
+  type SystemMailDeps,
+} from "./system-mail.service.ts";
 
 /**
- * The invitation email (#217): composed here and sent out-of-band with
- * `sendMail` (no `emails` row, no API key), like inbound notifications
- * (#106), from `SYSTEM_MAIL_FROM` and signed with that domain's DKIM key.
+ * The invitation email (#217): composed here and sent with
+ * `sendSystemMail` (`system-mail.service.ts`): out-of-band, from
+ * `SYSTEM_MAIL_FROM`, signed with that domain's DKIM key.
  *
  * Sent only when the sender is usable: `SYSTEM_MAIL_FROM` is set, its
  * domain is registered in BunMail with a verified DKIM record, and its
@@ -48,27 +44,6 @@ export interface InviteEmailContent {
   subject: string;
   text: string;
   html: string;
-}
-
-/** Escapes the five HTML-significant characters. */
-function escapeHtml(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[c] ?? c,
-  );
-}
-
-/**
- * Flattens a value for one line of the plain-text part: control
- * characters become spaces, so a hostile name cannot add lines that look
- * like part of the message.
- */
-function oneLine(value: string): string {
-  return value
-    .replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 /** "an admin" / "a member". */
@@ -109,30 +84,7 @@ export function buildInviteEmail(input: InviteEmailInput): InviteEmailContent {
 }
 
 /** What `sendInviteEmail` needs from the outside, injectable for tests. */
-export interface InviteMailDeps {
-  /** `SYSTEM_MAIL_FROM`, or `null` when unset. */
-  from: string | null;
-  /** Domain lookup by name (lower-cased). */
-  findDomain: (name: string) => Promise<Domain | undefined>;
-  /** DKIM options for a domain, or `undefined` when its key is unusable. */
-  resolveDkim: (domain: Domain) => DkimOptions | undefined;
-  /** The direct-to-MX mailer. */
-  send: typeof sendMail;
-  /** Message-ID domain (`MAIL_HOSTNAME`). */
-  hostname: string;
-}
-
-/** The production dependencies. */
-function defaultDeps(): InviteMailDeps {
-  return {
-    from: config.systemMailFrom,
-    /** A drizzle error would carry the query params: sanitized to its SQLSTATE. */
-    findDomain: (name) => withSanitizedErrors(() => getDomainByName(name)),
-    resolveDkim: resolveDomainDkim,
-    send: sendMail,
-    hostname: config.mail.hostname,
-  };
-}
+export type InviteMailDeps = SystemMailDeps;
 
 /** What to send and to whom. */
 export interface SendInviteEmailInput extends InviteEmailInput {
@@ -151,71 +103,28 @@ export interface SendInviteEmailInput extends InviteEmailInput {
  */
 export async function sendInviteEmail(
   input: SendInviteEmailInput,
-  deps: InviteMailDeps = defaultDeps(),
+  deps: InviteMailDeps = systemMailDeps(),
 ): Promise<InviteMailOutcome> {
   const to = redactEmail(input.to);
-  const notSent = (
-    reason: "not_configured" | "sender_unavailable" | "send_failed",
-    detail: Record<string, unknown> = {},
-  ): InviteMailOutcome => {
+  const content = buildInviteEmail(input);
+  const result = await sendSystemMail({ to: input.to, ...content }, deps);
+
+  if (!result.sent) {
     logger.warn("Invitation email not sent", {
       invitationId: input.invitationId,
       to,
-      reason,
-      ...detail,
+      reason: result.reason,
+      ...("errorName" in result.detail
+        ? { error: "Invitation email lookup or send threw" }
+        : {}),
+      ...result.detail,
     });
-    return { sent: false, reason };
-  };
-
-  if (!deps.from) return notSent("not_configured");
-  const domainName = deps.from.split("@")[1] ?? "";
-
-  let result: SendMailResult;
-  try {
-    const domain = await deps.findDomain(domainName);
-    if (!domain) return notSent("sender_unavailable", { domain: domainName });
-    if (!domain.dkimVerified) {
-      return notSent("sender_unavailable", { domain: domainName, dkimVerified: false });
-    }
-    const dkim = deps.resolveDkim(domain);
-    if (!dkim) return notSent("sender_unavailable", { domain: domainName, dkim: "none" });
-
-    const content = buildInviteEmail(input);
-    result = await deps.send({
-      from: deps.from,
-      to: input.to,
-      subject: content.subject,
-      text: content.text,
-      html: content.html,
-      messageId: `<${randomBytes(16).toString("hex")}@${deps.hostname}>`,
-      dkim,
-    });
-  } catch (err) {
-    /**
-     * Never the raw message: a database error's carries the query and its
-     * parameters, and an SMTP error's can quote addresses. The error name
-     * and, for the users store, the SQLSTATE are enough to diagnose.
-     */
-    return notSent("send_failed", {
-      domain: domainName,
-      error: "Invitation email lookup or send threw",
-      errorName: err instanceof Error ? err.name : typeof err,
-      ...(err instanceof UserStoreError ? { sqlState: err.sqlState } : {}),
-    });
-  }
-
-  /** `sendMail` reports a dead MX per group instead of throwing. */
-  const groups = Object.values(result.deliveryState);
-  if (!groups.some((g) => g.status === "sent")) {
-    return notSent("send_failed", {
-      domain: domainName,
-      groups: groups.map((g) => g.status),
-    });
+    return { sent: false, reason: result.reason };
   }
   logger.info("Invitation email sent", {
     invitationId: input.invitationId,
     to,
-    domain: domainName,
+    domain: result.domain,
   });
   return { sent: true };
 }

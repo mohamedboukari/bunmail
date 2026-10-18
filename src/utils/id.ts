@@ -15,7 +15,8 @@ type IdPrefix =
   | "usr" // dashboard user account (#214)
   | "crd" // user credential: password, TOTP, passkey, OAuth link (#214)
   | "ses" // dashboard session (#214)
-  | "utk"; // one-time token: owner setup, invite, password reset (#214)
+  | "utk" // one-time token: owner setup, invite, password reset (#214)
+  | "udv"; // browser an account signed in from (#282)
 
 /**
  * Generates a prefixed unique ID.
