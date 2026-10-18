@@ -19,7 +19,7 @@ import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import { buildSubmissionInput } from "../message-mapper.ts";
-import { recordOutcome, getAcceptedToday } from "./usage.service.ts";
+import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
 import {
   describeListenError,
   isListenError,
@@ -73,9 +73,30 @@ const connectionMap = new Map<string, WindowEntry>();
 const authFailureMap = new Map<string, WindowEntry>();
 
 /**
- * Generic sliding-window check-and-increment. Returns true once `max`
- * events have accumulated for `ip` within `windowSec`. A fresh window
- * starts on the first event or after the previous one expired.
+ * Counts one event for `ip` in its fixed window and returns the count so
+ * far. A fresh window starts on the first event or after the previous one
+ * expired. The counter alone (#190); {@link hitWindow} is the limiter.
+ */
+function countInWindow(
+  map: Map<string, WindowEntry>,
+  ip: string,
+  windowSec: number,
+): number {
+  const now = Date.now();
+  const entry = map.get(ip);
+
+  if (!entry || now - entry.windowStart >= windowSec * 1000) {
+    map.set(ip, { count: 1, windowStart: now });
+    return 1;
+  }
+
+  entry.count += 1;
+  return entry.count;
+}
+
+/**
+ * Counts one event for `ip` and returns true once it is over `max`
+ * events within `windowSec`.
  */
 function hitWindow(
   map: Map<string, WindowEntry>,
@@ -83,17 +104,7 @@ function hitWindow(
   max: number,
   windowSec: number,
 ): boolean {
-  const windowMs = windowSec * 1000;
-  const now = Date.now();
-  const entry = map.get(ip);
-
-  if (!entry || now - entry.windowStart >= windowMs) {
-    map.set(ip, { count: 1, windowStart: now });
-    return 1 > max;
-  }
-
-  entry.count += 1;
-  return entry.count > max;
+  return countInWindow(map, ip, windowSec) > max;
 }
 
 /**
@@ -108,10 +119,14 @@ function isAuthLockedOut(ip: string): boolean {
   return entry.count >= maxAttempts;
 }
 
-/** Record a failed AUTH for an IP (starts/extends its window). */
+/**
+ * Records a failed AUTH for an IP. Failures only expire with their
+ * window: a successful AUTH does not clear them (#190), or anyone holding
+ * one valid key could reset their own count between guesses at others.
+ */
 function recordAuthFailure(ip: string): void {
   const { windowSec } = config.smtpSubmission.authRateLimit;
-  hitWindow(authFailureMap, ip, Number.POSITIVE_INFINITY, windowSec);
+  countInWindow(authFailureMap, ip, windowSec);
 }
 
 /* ─── Message parsing helpers ─── */
@@ -281,7 +296,7 @@ export function start(portOverride?: number): void {
      * Authenticate the client. The password (falling back to the username
      * for clients that only fill one field) is treated as a `bm_live_` API
      * key: SHA-256 hashed and looked up. A per-IP failed-AUTH throttle
-     * blunts key brute-forcing; a success clears the counter.
+     * blunts key brute-forcing; failures expire only with their window (#190).
      */
     onAuth(
       auth: SMTPServerAuthentication,
@@ -315,8 +330,10 @@ export function start(portOverride?: number): void {
               logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
               return callback(smtpError("Invalid API key", 535));
             }
-            /** Success: clear the failure counter and stash the key id. */
-            authFailureMap.delete(ip);
+            /**
+             * Success: stash the key id. The IP's failure count stays until
+             * its window expires (#190, see `recordAuthFailure`).
+             */
             logger.info("SMTP submission client authenticated", {
               ip,
               apiKeyId: apiKey.id,
@@ -416,20 +433,27 @@ export function start(portOverride?: number): void {
                 return;
               }
 
+              /**
+               * The UTC day this message took a quota slot on, while it holds
+               * one (#190); a rejection hands the slot back.
+               */
+              let reservedDay: string | null = null;
+
               try {
                 /**
-                 * Per-key daily quota (#123). Checked before the send so an
-                 * over-quota key never queues. `452` is temporary: the quota
-                 * window resets at the next UTC day, so the client should retry
-                 * later rather than treat it as a permanent failure.
+                 * Per-key daily quota (#123). Taken before the send, in one
+                 * atomic statement (#190), so an over-quota key never queues
+                 * and concurrent sessions cannot all pass a stale count. `452`
+                 * is temporary: the quota window resets at the next UTC day,
+                 * so the client should retry later rather than treat it as a
+                 * permanent failure.
                  */
                 const { dailyQuota } = config.smtpSubmission;
                 if (dailyQuota > 0) {
-                  const usedToday = await getAcceptedToday(apiKeyId);
-                  if (usedToday >= dailyQuota) {
+                  reservedDay = await reserveAccepted(apiKeyId, dailyQuota);
+                  if (reservedDay === null) {
                     logger.warn("SMTP submission rejected: daily quota exceeded", {
                       apiKeyId,
-                      usedToday,
                       dailyQuota,
                     });
                     await recordOutcome(apiKeyId, "rejected");
@@ -469,7 +493,9 @@ export function start(portOverride?: number): void {
 
                 /** Tag the row as SMTP-sourced so the dashboard can filter it (#137). */
                 const email = await createEmail(input, apiKeyId, "smtp");
-                await recordOutcome(apiKeyId, "accepted");
+                /** With a quota, the reservation already counted it. */
+                if (reservedDay === null) await recordOutcome(apiKeyId, "accepted");
+                reservedDay = null;
 
                 logger.info("SMTP submission accepted: email queued", {
                   id: email.id,
@@ -480,8 +506,23 @@ export function start(portOverride?: number): void {
 
                 callback();
               } catch (error) {
-                /** Post-auth rejection: count it against the key's daily usage. */
-                await recordOutcome(apiKeyId, "rejected").catch(() => {});
+                /**
+                 * Post-auth rejection: count it against the key's daily usage,
+                 * handing back the quota slot it took, if any (#190).
+                 */
+                const recorded =
+                  reservedDay === null
+                    ? recordOutcome(apiKeyId, "rejected")
+                    : releaseReservation(apiKeyId, reservedDay);
+                await recorded.catch((usageError: unknown) => {
+                  logger.warn("SMTP submission usage not recorded", {
+                    apiKeyId,
+                    error:
+                      usageError instanceof Error
+                        ? usageError.message
+                        : String(usageError),
+                  });
+                });
                 if (error instanceof SuppressedRecipientError) {
                   logger.warn("SMTP submission rejected: recipient suppressed", {
                     apiKeyId,

@@ -32,6 +32,16 @@ function transport(pass: string) {
 const quotaConfig = config.smtpSubmission as { dailyQuota: number };
 const originalQuota = quotaConfig.dailyQuota;
 
+/** Awaits a send that must fail and returns its error message. */
+async function failureOf(send: Promise<unknown>): Promise<string> {
+  try {
+    await send;
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("expected the submission to be rejected");
+}
+
 beforeAll(() => {
   smtpSubmission.start(TEST_PORT);
 });
@@ -135,5 +145,60 @@ describe("daily quota enforcement (live server)", () => {
       });
     }
     expect(await usage.getAcceptedToday(apiKeyId)).toBe(3);
+  });
+});
+
+describe("atomic daily quota (#190)", () => {
+  test("concurrent reservations never take more than the quota", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => usage.reserveAccepted(apiKeyId, 3)),
+    );
+
+    expect(results.filter((day) => day !== null)).toHaveLength(3);
+    expect(await usage.getAcceptedToday(apiKeyId)).toBe(3);
+  });
+
+  test("a released reservation frees its slot and is recorded as rejected", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+
+    const day = await usage.reserveAccepted(apiKeyId, 1);
+    expect(day).not.toBeNull();
+    expect(await usage.reserveAccepted(apiKeyId, 1)).toBeNull();
+
+    await usage.releaseReservation(apiKeyId, day ?? "");
+    const stats = await usage.getStats(apiKeyId, 1);
+    expect(stats.totals).toEqual({ accepted: 0, rejected: 1 });
+
+    expect(await usage.reserveAccepted(apiKeyId, 1)).not.toBeNull();
+  });
+
+  test("a rejected submission does not use up the quota (live server)", async () => {
+    quotaConfig.dailyQuota = 1;
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+
+    /** Headers name a recipient that was never in RCPT TO: rejected after the reservation. */
+    const rejected = await failureOf(
+      transport(rawKey).sendMail({
+        from: "hello@unregistered.test",
+        to: "user@example.org",
+        envelope: { from: "hello@unregistered.test", to: ["other@example.org"] },
+        subject: "rejected",
+        text: "hi",
+      }),
+    );
+    expect(rejected).toContain("550");
+
+    const accepted = await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to: "user@example.org",
+      subject: "accepted",
+      text: "hi",
+    });
+    expect(accepted.accepted.length).toBeGreaterThan(0);
+
+    const stats = await usage.getStats(apiKeyId, 1);
+    expect(stats.totals).toEqual({ accepted: 1, rejected: 1 });
   });
 });

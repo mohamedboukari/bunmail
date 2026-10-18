@@ -87,6 +87,55 @@ export async function getAcceptedToday(apiKeyId: string): Promise<number> {
 }
 
 /**
+ * Takes one message from the key's daily quota, atomically (#190).
+ *
+ * One statement: insert today's row with `accepted = 1`, or increment
+ * `accepted` only while it is below `dailyQuota`. Postgres locks the row
+ * for the conflict update, so concurrent sessions (and replicas) queue on
+ * it and exactly `dailyQuota` reservations succeed per day; reading the
+ * count first and recording after the send let every concurrent session
+ * pass. `dailyQuota` must be at least 1 (0 means no quota: don't call).
+ *
+ * @returns the UTC day the reservation was counted on, to hand back to
+ *   {@link releaseReservation}, or `null` when the quota is used up.
+ */
+export async function reserveAccepted(
+  apiKeyId: string,
+  dailyQuota: number,
+): Promise<string | null> {
+  const day = utcDay();
+  const reserved = await db
+    .insert(smtpSubmissionUsage)
+    .values({ id: generateId("smu"), apiKeyId, day, accepted: 1, rejected: 0 })
+    .onConflictDoUpdate({
+      target: [smtpSubmissionUsage.apiKeyId, smtpSubmissionUsage.day],
+      set: { accepted: sql`${smtpSubmissionUsage.accepted} + 1`, updatedAt: new Date() },
+      setWhere: sql`${smtpSubmissionUsage.accepted} < ${dailyQuota}`,
+    })
+    .returning({ id: smtpSubmissionUsage.id });
+  return reserved.length > 0 ? day : null;
+}
+
+/**
+ * Hands back a reservation whose message was then rejected (#190): moves
+ * one count from `accepted` to `rejected` on the day it was taken, in one
+ * statement, so the quota slot is free again and the rejection is still
+ * recorded.
+ */
+export async function releaseReservation(apiKeyId: string, day: string): Promise<void> {
+  await db
+    .update(smtpSubmissionUsage)
+    .set({
+      accepted: sql`GREATEST(${smtpSubmissionUsage.accepted} - 1, 0)`,
+      rejected: sql`${smtpSubmissionUsage.rejected} + 1`,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(eq(smtpSubmissionUsage.apiKeyId, apiKeyId), eq(smtpSubmissionUsage.day, day)),
+    );
+}
+
+/**
  * Aggregates usage for an API key over the last `days` UTC days (inclusive
  * of today). Returns per-day rows (oldest first) plus window totals.
  */

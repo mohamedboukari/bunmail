@@ -9,10 +9,19 @@
  * isolated high port so it never collides with a locally-running instance.
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from "bun:test";
 import { eq } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
+import { config } from "../../src/config.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 
 /** Isolated port for the test server (avoids the privileged 587 default). */
@@ -29,6 +38,16 @@ function transport(pass: string, user = "apikey") {
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
   });
+}
+
+/** Awaits a send that must fail and returns its error message. */
+async function failureOf(send: Promise<unknown>): Promise<string> {
+  try {
+    await send;
+  } catch (error: unknown) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("expected the submission to be rejected");
 }
 
 beforeAll(() => {
@@ -129,6 +148,54 @@ describe("SMTP submission: authentication", () => {
 
     const rows = await db.select().from(emails).where(eq(emails.apiKeyId, id));
     expect(rows.map((r) => r.subject)).toEqual(["before"]);
+  });
+});
+
+describe("SMTP submission: failed-AUTH throttle (#190)", () => {
+  /** Runtime handle on the throttle settings (config is import-time). */
+  const authLimit = config.smtpSubmission.authRateLimit as {
+    maxAttempts: number;
+    windowSec: number;
+  };
+  const original = { ...authLimit };
+
+  afterEach(() => {
+    authLimit.maxAttempts = original.maxAttempts;
+    authLimit.windowSec = original.windowSec;
+  });
+
+  test("a successful AUTH does not clear the IP's earlier failures", async () => {
+    /** A short window starts a fresh count and keeps the lockout from leaking into other tests. */
+    authLimit.maxAttempts = 3;
+    authLimit.windowSec = 2;
+    /** Earlier tests' failures from this IP fall out of the short window. */
+    await Bun.sleep(2100);
+    const { rawKey } = await seed.apiKey();
+    const message = {
+      from: "hello@unregistered.test",
+      to: "user@example.org",
+      subject: "probe",
+      text: "hi",
+    };
+
+    expect(await failureOf(transport("bm_live_wrong_one").sendMail(message))).toContain(
+      "535",
+    );
+    expect(await failureOf(transport("bm_live_wrong_two").sendMail(message))).toContain(
+      "535",
+    );
+    /** One valid login between guesses... */
+    await transport(rawKey).sendMail(message);
+    expect(await failureOf(transport("bm_live_wrong_three").sendMail(message))).toContain(
+      "535",
+    );
+
+    /** ...did not reset the count: the third failure locks the IP out, valid key included. */
+    expect(await failureOf(transport(rawKey).sendMail(message))).toContain("454");
+    expect(await db.select().from(emails)).toHaveLength(1);
+
+    /** Let the short window lapse so later tests start clean. */
+    await Bun.sleep(2100);
   });
 });
 

@@ -70,7 +70,7 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 
 - **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): STARTTLS is advertised so clients can encrypt before sending the API key. This is the recommended posture whenever the port isn't strictly loopback.
 - **Without a cert**: plaintext `AUTH` is **refused by default** (#133): the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
-- **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. A successful AUTH clears the counter.
+- **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. Failures expire only with their window: a successful AUTH does not clear them (#190), so holding one valid key does not buy more guesses at others.
 
 ### First-boot checklist (Docker Compose)
 
@@ -129,7 +129,7 @@ Set `SMTP_SUBMISSION_DAILY_QUOTA` to cap how many messages each API key can send
 - Counts only **accepted** messages toward the cap; rejections don't consume quota.
 - Applies to the SMTP submission path **only**: the REST `POST /api/v1/emails/send` API is unaffected.
 - Usage is tracked per `(api_key, UTC day)` in the `smtp_submission_usage` table (`accepted` / `rejected` counters). Every post-auth outcome is recorded, so `rejected` includes quota hits, suppressed recipients, and unregistered-domain rejections.
-- The check reads the day's accepted count then sends; under high concurrency a key may exceed the cap by a small margin (soft quota).
+- The quota is exact, also under concurrency and across replicas (#190): before the send, one atomic statement takes a slot (`accepted + 1` only while it is below the cap); a message rejected after that (parse error, suppressed recipient, sender check) hands its slot back and is counted as `rejected`. A process that dies between the two keeps the slot (errs on the safe side).
 
 ## Stats endpoint (#123)
 
@@ -176,7 +176,13 @@ Gracefully shuts the server down (called from the app's shutdown handler).
 Upserts today's `(api_key, UTC day)` row and increments the matching counter atomically (`ON CONFLICT DO UPDATE`).
 
 #### `getAcceptedToday(apiKeyId): Promise<number>`
-Today's accepted count for the key (0 if no row). Backs the quota check.
+Today's accepted count for the key (0 if no row). Backs the stats endpoint's `usedToday`.
+
+#### `reserveAccepted(apiKeyId, dailyQuota): Promise<string | null>`
+Takes one of today's quota slots atomically (#190): inserts today's row with `accepted = 1`, or increments `accepted` only while it is below `dailyQuota` (`ON CONFLICT DO UPDATE ... WHERE`). Returns the UTC day it counted on, or `null` when the quota is used up.
+
+#### `releaseReservation(apiKeyId, day): Promise<void>`
+Hands a slot back after a rejection: `accepted - 1`, `rejected + 1` on that day, in one statement.
 
 #### `getStats(apiKeyId, days): Promise<UsageStats>`
 Per-day rows (oldest first) + window totals over the trailing `days` UTC days. Backs the stats endpoint.
