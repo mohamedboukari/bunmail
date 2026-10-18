@@ -43,7 +43,7 @@ EOF
 docker compose up -d
 ```
 
-Replace `mail.yourcompany.com` with this server's real hostname (placeholders such as `*.example.com` are refused) and `you@yourcompany.com` with your email: it becomes the dashboard login.
+Replace `mail.yourcompany.com` with this server's real hostname (placeholders such as `*.example.com` are refused) and `you@yourcompany.com` with your email: it becomes the dashboard login. The app listens on `127.0.0.1:3000` only: reach it from outside through a reverse proxy with TLS ([docs/self-hosting.md](docs/self-hosting.md), section 6); host-specific ports such as inbound SMTP go in a `docker-compose.override.yml` copied from `docker-compose.override.example.yml`.
 
 Then seed your first API key and send a test email:
 
@@ -241,6 +241,7 @@ bun test test/e2e      # e2e (plugin) tests only
 bun run test:integration  # real-Postgres tests (bun run test:integration:setup first)
 bunx tsc --noEmit      # type check (TypeScript 7, native)
 bun run lint           # oxlint (type-aware)
+cp docker-compose.override.example.yml docker-compose.override.yml  # once: Postgres on localhost:5432
 docker compose up -d   # full stack with Postgres
 ```
 

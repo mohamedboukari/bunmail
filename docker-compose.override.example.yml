@@ -1,0 +1,42 @@
+# Example host-local overrides for docker-compose.yml (#205).
+#
+# Copy it to docker-compose.override.yml (git-ignored, one per host) and keep
+# only the blocks you need. Compose merges that file automatically on a plain
+# `docker compose up`, so every host keeps its own ports and mounts there
+# and `git pull` never conflicts with them.
+#
+# `ports` entries are added to the base file's list. The base publishes the
+# app on 127.0.0.1 only; replacing that list needs `!override` (Compose
+# 2.24.4 or later), see the last example.
+#
+# Docker-published ports bypass UFW and host firewalls: publish on 0.0.0.0
+# only what must be public, everything else on 127.0.0.1.
+
+services:
+  # ── Local development ──
+  # Publishes Postgres on loopback so `bun run dev` on the host can reach it
+  # at localhost:5432 (#209: never a bare "5432:5432", which binds 0.0.0.0).
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  # ── Production examples (uncomment what this host needs) ──
+  # app:
+  #   ports:
+  #     # Inbound SMTP (SMTP_ENABLED=true, SMTP_PORT=25 in .env; docs/inbound.md)
+  #     - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
+  #     # SMTP submission with STARTTLS (SMTP_SUBMISSION_ENABLED=true and
+  #     # SMTP_SUBMISSION_TLS_CERT / _KEY in .env; docs/smtp-submission.md)
+  #     - "${SMTP_SUBMISSION_PORT:-587}:${SMTP_SUBMISSION_PORT:-587}"
+  #     # ...or plaintext submission for apps on this host only
+  #     # (SMTP_SUBMISSION_ALLOW_INSECURE=true): loopback, never public
+  #     - "127.0.0.1:2587:${SMTP_SUBMISSION_PORT:-587}"
+  #   volumes:
+  #     # TLS certificate and key for submission, readable by uid 1000 (#167)
+  #     - /etc/bunmail/tls:/etc/bunmail/tls:ro
+
+  # Exposing the dashboard and API directly, without a reverse proxy (not
+  # recommended: plain HTTP). Replaces the base list instead of adding to it.
+  # app:
+  #   ports: !override
+  #     - "${PORT:-3000}:${PORT:-3000}"
