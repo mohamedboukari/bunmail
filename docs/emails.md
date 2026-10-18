@@ -138,7 +138,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 
 ## Feedback-ID and Auto-Submitted (#250)
 
-- **`Feedback-ID`** on every queued email: `<source>:<key>:<sender domain>:bunmail`, where `source` is `api` or `smtp` and `key` is the first 12 hex characters of the SHA-256 of the sending API key id (stable per tenant, no internal identifier exposed). Gmail's feedback loop aggregates complaints by it; it is deliberately low-cardinality (no per-message id). It is DKIM-signed. BunMail's own mail uses `system:system:<domain>:bunmail`.
+- **`Feedback-ID`** on every queued email: `<source>:<key>:<sender domain>:bunmail`, where `source` is `api` or `smtp` and `key` is 12 hex characters of a hash (`Bun.hash`) of the sending API key id (stable per tenant, no internal identifier exposed). Gmail's feedback loop aggregates complaints by it; it is deliberately low-cardinality (no per-message id). It is DKIM-signed. BunMail's own mail uses `system:system:<domain>:bunmail`.
 - **`Auto-Submitted: auto-generated`** and **`X-Auto-Response-Suppress: All`** on BunMail's own automatic mail (inbound notifications, invitations, new-device sign-in alerts), so out-of-office and other auto-responders do not reply to it.
 - Both are built by BunMail from typed values, never from caller text; callers cannot set either header (reserved, #177).
 

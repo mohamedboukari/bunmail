@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
@@ -350,11 +349,12 @@ function feedbackField(value: string): string {
  * feedback loop aggregates complaints by it. Low cardinality on purpose
  * (no per-message id, which would defeat the aggregation). The API key
  * id goes in hashed, so recipients see a stable per-tenant value but no
- * internal identifier.
+ * internal identifier. The id is not a secret, so a fast deterministic
+ * non-cryptographic hash (`Bun.hash`, wyhash) is all this tag needs.
  */
 export function feedbackIdHeader(feedback: FeedbackSource, senderDomain: string): string {
   const key = feedback.apiKeyId
-    ? createHash("sha256").update(feedback.apiKeyId).digest("hex").slice(0, 12)
+    ? Bun.hash(feedback.apiKeyId).toString(16).padStart(16, "0").slice(0, 12)
     : "system";
   return [feedback.source, key, senderDomain, "bunmail"].map(feedbackField).join(":");
 }

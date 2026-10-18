@@ -3,7 +3,6 @@
  * Nodemailer's stream transport (no SMTP, no database).
  */
 import { describe, test, expect } from "bun:test";
-import { createHash } from "crypto";
 import { createTransport } from "nodemailer";
 import {
   buildMailOptions,
@@ -40,10 +39,7 @@ describe("Feedback-ID", () => {
         feedback: { source: "api", apiKeyId: "key_secret123" },
       }),
     );
-    const hashed = createHash("sha256")
-      .update("key_secret123")
-      .digest("hex")
-      .slice(0, 12);
+    const hashed = Bun.hash("key_secret123").toString(16).padStart(16, "0").slice(0, 12);
     expect(block).toContain(`Feedback-ID: api:${hashed}:example.com:bunmail`);
     expect(block).not.toContain("key_secret123");
   });
