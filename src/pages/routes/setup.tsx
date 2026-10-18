@@ -25,8 +25,9 @@ export const LABEL_CLASS =
   "block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5";
 
 /**
- * HTML shell shared by the setup pages and the invitation accept pages
- * (#217, `invite.tsx`), whose URLs carry a one-time token too: the same
+ * HTML shell shared by the setup pages, the invitation accept pages
+ * (#217, `invite.tsx`) and the password reset pages (#277, `reset.tsx`),
+ * whose URLs carry a one-time token too: the same
  * head as the login page plus the strict-origin referrer meta tag, and a
  * centered column.
  *

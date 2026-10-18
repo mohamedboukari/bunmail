@@ -22,6 +22,11 @@ interface UsersPageProps {
   viewer: AccountParty;
   /** Optional flash message (after an action). */
   flash?: { message: string; type: "success" | "error" };
+  /**
+   * A password reset link (#277), shown once right after the viewer
+   * issued it (one-time reveal bound to the viewer's session).
+   */
+  revealedResetLink?: string;
 }
 
 /** Shared table header cell styling. */
@@ -66,6 +71,17 @@ function AccountActions({
           <input type="hidden" name="role" value={otherRole} />
           <button type="submit" class={ACTION_BUTTON}>
             {otherRole === "admin" ? "Make admin" : "Make member"}
+          </button>
+        </form>
+      )}
+      {actions.includes("reset_password") && (
+        <form method="POST" action={`${base}/reset-password`}>
+          <button
+            type="submit"
+            class={ACTION_BUTTON}
+            onclick="return confirm('Create a one-time password reset link for this account? It is shown to you once and works for one hour; any earlier link stops working.')"
+          >
+            Reset password
           </button>
         </form>
       )}
@@ -144,7 +160,12 @@ function AccountActions({
  * and status, and the actions the viewer may take on each. Every dynamic
  * value is escaped; no event handler attribute carries a dynamic value.
  */
-export function UsersPage({ accounts, viewer, flash }: UsersPageProps) {
+export function UsersPage({
+  accounts,
+  viewer,
+  flash,
+  revealedResetLink,
+}: UsersPageProps) {
   return (
     <BaseLayout title="Users" activeNav="users">
       <div class="flex items-center justify-between mb-6">
@@ -159,10 +180,32 @@ export function UsersPage({ accounts, viewer, flash }: UsersPageProps) {
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
+      {/* Password reset link (#277), shown once to the admin who issued it */}
+      {!!revealedResetLink && (
+        <div class="bg-amber-50 text-amber-900 border border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800 rounded-lg px-4 py-3 text-sm mb-4">
+          <p class="font-medium mb-1">
+            Copy this password reset link now and give it to the account holder yourself.
+            It won't be shown again:
+          </p>
+          <code
+            class="block bg-amber-100 dark:bg-amber-900 px-3 py-2 rounded font-mono text-xs break-all select-all"
+            safe
+          >
+            {revealedResetLink}
+          </code>
+          <p class="text-xs mt-2">
+            Anyone with this link can set the account's password, so share it privately.
+            It works once, for one hour. Lost it? Create a new one: the old link stops
+            working.
+          </p>
+        </div>
+      )}
+
       <p class="text-xs text-gray-500 dark:text-gray-400 mb-4">
         The owner manages admins and members and is the only one who can change roles or
         hand over ownership; admins manage members. Nobody changes their own account here,
-        and the owner is never deactivated or removed.
+        and the owner is never deactivated, removed or given a reset link (the owner uses
+        reset-owner).
       </p>
 
       {accounts.length === 0 ? (

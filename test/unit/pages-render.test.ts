@@ -42,6 +42,11 @@ import {
   InviteInvalidPage,
 } from "../../src/pages/routes/invite.tsx";
 import { InvitationsPage } from "../../src/pages/routes/invitations.tsx";
+import {
+  PasswordResetInvalidPage,
+  PasswordResetPage,
+} from "../../src/pages/routes/reset.tsx";
+import { UsersPage } from "../../src/pages/routes/users.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
   HtmlPreview,
@@ -508,6 +513,78 @@ describe("Dashboard page render smoke tests", () => {
       /** An admin invitation shown to an admin: no Resend/Revoke for it. */
       expect(html).not.toContain("/dashboard/invitations/utk_1/revoke");
       expect(html).toContain("Owner only");
+    });
+  });
+
+  describe("Password reset pages (#277)", () => {
+    const token = "R".repeat(20) + "b-c_d".repeat(4) + "xyz";
+
+    test("PasswordResetPage: token only in the hidden input, hostile values escaped", async () => {
+      const html = await PasswordResetPage({
+        token,
+        email: "<script>alert(1)</script>@example.com",
+        error: "<img src=x onerror=alert(2)>",
+      });
+      expect(html).toContain('action="/dashboard/reset"');
+      expect(html).toContain(`<input type="hidden" name="token" value="${token}"`);
+      expect(html.split(token).length - 1).toBe(1);
+      expect(html).toContain('<meta name="referrer" content="strict-origin"');
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;@example.com");
+      expect(html).toContain("&lt;img src=x onerror=alert(2)&gt;");
+    });
+
+    test("PasswordResetInvalidPage carries no form", async () => {
+      const html = await PasswordResetInvalidPage();
+      expect(html).toContain("This password reset link is not valid");
+      expect(html).not.toContain("<form");
+    });
+
+    test("UsersPage: the reset action only where allowed, the revealed link escaped", async () => {
+      const html = await UsersPage({
+        accounts: [
+          {
+            id: "usr_owner",
+            email: "owner@example.com",
+            name: null,
+            role: "owner",
+            disabled: false,
+            createdAt: new Date(),
+          },
+          {
+            id: "usr_admin",
+            email: "admin@example.com",
+            name: "Ada",
+            role: "admin",
+            disabled: false,
+            createdAt: new Date(),
+          },
+          {
+            id: "usr_member",
+            email: "member@example.com",
+            name: "Max",
+            role: "member",
+            disabled: false,
+            createdAt: new Date(),
+          },
+          {
+            id: "usr_off",
+            email: "off@example.com",
+            name: "Off",
+            role: "member",
+            disabled: true,
+            createdAt: new Date(),
+          },
+        ],
+        viewer: { id: "usr_admin", role: "admin", disabled: false },
+        revealedResetLink: "https://mail.example.com/dashboard/reset?token=<x>",
+      });
+      expect(html).toContain('action="/dashboard/users/usr_member/reset-password"');
+      expect(html).not.toContain("/dashboard/users/usr_admin/reset-password");
+      expect(html).not.toContain("/dashboard/users/usr_owner/reset-password");
+      expect(html).not.toContain("/dashboard/users/usr_off/reset-password");
+      expect(html).toContain("token=&lt;x&gt;");
+      expect(html).not.toContain("token=<x>");
     });
   });
 });

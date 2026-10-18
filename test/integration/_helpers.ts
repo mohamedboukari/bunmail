@@ -282,6 +282,8 @@ export const seed = {
     createdAt?: SQL | Date;
     rotatedAt?: SQL | Date | null;
     previousToken?: string | null;
+    /** `user_credentials.id` the session is bound to (#277); none by default. */
+    credentialId?: string | null;
   }): Promise<{ id: string; token: string }> {
     const { token, hash } = mintToken();
     const id = generateId("ses");
@@ -295,6 +297,7 @@ export const seed = {
       lastSeenAt: opts.lastSeenAt ?? drizzleSql`now()`,
       createdAt: opts.createdAt ?? drizzleSql`now()`,
       rotatedAt: opts.rotatedAt ?? null,
+      credentialId: opts.credentialId ?? null,
       previousTokenHash:
         opts.previousToken === undefined || opts.previousToken === null
           ? null

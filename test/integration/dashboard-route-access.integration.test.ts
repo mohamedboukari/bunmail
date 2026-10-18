@@ -72,6 +72,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/setup": { access: "public" },
   "GET /dashboard/invite": { access: "public" },
   "POST /dashboard/invite": { access: "public" },
+  "GET /dashboard/reset": { access: "public" },
+  "POST /dashboard/reset": { access: "public" },
 
   "GET /dashboard/": { access: "member" },
   "GET /dashboard/send": { access: "member" },
@@ -127,6 +129,7 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/users/:id/reactivate": { access: "admin" },
   "POST /dashboard/users/:id/remove": { access: "admin", body: { confirm: "x" } },
   "POST /dashboard/users/:id/transfer": { access: "admin", body: { password: "x" } },
+  "POST /dashboard/users/:id/reset-password": { access: "admin" },
 
   "GET /dashboard/domains": { access: "member" },
   "GET /dashboard/domains/:id": { access: "member" },

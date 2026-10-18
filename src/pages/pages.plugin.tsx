@@ -12,13 +12,16 @@ import type {
   AccountActionResult,
   AccountRefusal,
   AttemptLimiter,
+  CreatedSession,
   DashboardAuth,
   InviteActor,
   InviteMailFailure,
   InviteRefusal,
   IssueInvitationResult,
+  IssuePasswordResetResult,
 } from "../modules/users/types/user.types.ts";
 import { redactEmail } from "../utils/redact.ts";
+import { UserStoreError } from "../modules/users/errors.ts";
 import {
   resolveClientIp,
   isLoginRateLimited,
@@ -35,6 +38,7 @@ import {
   InviteAccountExistsPage,
   InviteInvalidPage,
 } from "./routes/invite.tsx";
+import { PasswordResetInvalidPage, PasswordResetPage } from "./routes/reset.tsx";
 import { InvitationsPage } from "./routes/invitations.tsx";
 import { UsersPage } from "./routes/users.tsx";
 import { ForbiddenPage } from "./routes/forbidden.tsx";
@@ -81,6 +85,7 @@ import * as sessionService from "../modules/users/services/session.service.ts";
 import * as loginService from "../modules/users/services/login.service.ts";
 import * as inviteService from "../modules/users/services/invite.service.ts";
 import * as userAdminService from "../modules/users/services/user-admin.service.ts";
+import * as passwordResetService from "../modules/users/services/password-reset.service.ts";
 import {
   grantableRoles,
   inviteNameProblem,
@@ -155,6 +160,12 @@ function redirect(set: Context["set"], location: string): string {
   set.headers["location"] = location;
   return "";
 }
+
+/**
+ * SQLSTATE of a foreign-key violation: a login's session insert naming a
+ * credential that a password reset replaced meanwhile (#277).
+ */
+const FOREIGN_KEY_VIOLATION = "23503";
 
 /** The message a browser sees when the session store cannot be reached. */
 const SESSION_STORE_DOWN = "Dashboard temporarily unavailable";
@@ -365,6 +376,7 @@ const ACCOUNT_REFUSAL_TEXT: Record<AccountRefusal, string> = {
   wrong_password: "Wrong password: ownership was not transferred.",
   not_eligible: "Ownership can only go to an active admin.",
   rate_limited: "Too many failed attempts, try again later.",
+  account_disabled: "Reactivate the account before resetting its password.",
 };
 
 /** Refusals answered with the 403 page: no button on the page leads to them. */
@@ -401,16 +413,15 @@ function transferLimiter(actorId: string, ip: string): AttemptLimiter {
   };
 }
 
-/** 302 back to the Users page with a flash message. */
+/** 302 back to the Users page with a flash message (never a link or token). */
 function usersRedirect(
   set: Context["set"],
   message: string,
   type: "success" | "error",
+  reveal?: string,
 ): string {
-  return redirect(
-    set,
-    `/dashboard/users?flash=${encodeURIComponent(message)}&flashType=${type}`,
-  );
+  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
+  return redirect(set, `/dashboard/users?${query}${reveal ? `&reveal=${reveal}` : ""}`);
 }
 
 /**
@@ -429,6 +440,34 @@ function answerAccountAction(
     return <ForbiddenPage message={ACCOUNT_REFUSAL_TEXT[result.reason]} />;
   }
   return usersRedirect(set, ACCOUNT_REFUSAL_TEXT[result.reason], "error");
+}
+
+/**
+ * Answers an issued password reset link (#277): the link is stashed for a
+ * one-time reveal bound to this user and session (#280) and only the
+ * reveal token goes in the redirect, so the link never appears in a URL,
+ * a flash message or a log. A refusal is answered like any account action.
+ */
+function answerPasswordReset(
+  set: Context["set"],
+  auth: DashboardAuth,
+  result: IssuePasswordResetResult,
+): string | Promise<string> {
+  if (!result.ok) return answerAccountAction(set, result, "");
+  const reveal = stashRevealSecret(
+    result.url,
+    "password_reset_link",
+    revealOwnerOf(auth),
+  );
+  const fallback = result.usedFallback
+    ? " APP_BASE_URL is not set, so the link points at localhost."
+    : "";
+  return usersRedirect(
+    set,
+    `Password reset link created. Copy it below and share it privately: it works once, for one hour.${fallback}`,
+    "success",
+    reveal,
+  );
 }
 
 /* ─── DNS-verify throttle (#133) ─── */
@@ -474,6 +513,8 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
  * - GET  /dashboard/invite?token=   → invitation accept form (public, #217)
  * - POST /dashboard/invite          → create the invited account, sign in (public, #217)
+ * - GET  /dashboard/reset?token=    → password reset form (public, #277)
+ * - POST /dashboard/reset           → set the new password, sign out everywhere, sign in (public, #277)
  * - GET  /dashboard                 → home (stats overview)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -490,6 +531,7 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * - POST /dashboard/users/:id/reactivate → enable again (admin, #218)
  * - POST /dashboard/users/:id/remove → delete, confirmed by email (admin, #218)
  * - POST /dashboard/users/:id/transfer → hand ownership to an admin (owner, checked in the service)
+ * - POST /dashboard/users/:id/reset-password → one-time reset link, revealed once (admin, #277)
  * - GET  /dashboard/domains         → domains list + add form
  * - POST /dashboard/domains         → add domain (form action)
  * - POST /dashboard/domains/:id/delete → delete domain (form action)
@@ -498,8 +540,8 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * Auth (#216): account login with email and password against
  * `user_credentials`, then a server-side session in the `sessions` table
  * whose opaque token rides in the `bm_session` cookie and rotates every
- * minute. The owner setup and invitation accept routes are authorized
- * by their one-time token.
+ * minute. The owner setup, invitation accept and password reset routes
+ * are authorized by their one-time token.
  *
  * Roles (#222): the session guard puts the signed-in account on `auth`,
  * and every protected route carries a role check from `guards.tsx` as its
@@ -569,7 +611,10 @@ export const pagesPlugin = new Elysia({
    * On success a fresh session is opened (a session the browser already
    * presented is revoked first, so sessions do not stack and a planted
    * cookie cannot survive login) and the browser is sent to the fixed
-   * `/dashboard`: no `next` parameter, no open redirect.
+   * `/dashboard`: no `next` parameter, no open redirect. The session is
+   * bound to the verified credential (#277): a password reset that
+   * replaced it meanwhile makes this a failed login. The IP's failures are
+   * cleared only once the session exists.
    *
    * The body schema is deliberately loose (only generous length caps): a
    * schema failure answers 422 JSON from the global handler, not a page,
@@ -646,9 +691,6 @@ export const pagesPlugin = new Elysia({
           return redirect(set, "/dashboard/login?error=invalid");
         }
 
-        /** Success: wipe any accumulated failures for this IP. */
-        if (loginRateLimit.enabled) clearLoginAttempts(ip);
-
         /**
          * Replace the browser's previous session. A token the session had
          * already rotated away from means a copy is in other hands (for
@@ -666,13 +708,41 @@ export const pagesPlugin = new Elysia({
           }
         }
 
-        const { sessionId, token } = await sessionService.createSession({
-          userId: result.userId,
-          assurance: result.assurance,
-          authMethod: "password",
-          ip,
-          userAgent: request.headers.get("user-agent"),
-        });
+        /**
+         * The session is bound to the credential just verified (#277). If a
+         * password reset replaced it in the meantime, the insert fails with
+         * a foreign-key violation: the old password no longer opens
+         * anything, so this is a failed login (already counted), not a 503.
+         */
+        let created: CreatedSession;
+        try {
+          created = await sessionService.createSession({
+            userId: result.userId,
+            assurance: result.assurance,
+            authMethod: "password",
+            credentialId: result.credentialId,
+            ip,
+            userAgent: request.headers.get("user-agent"),
+          });
+        } catch (error: unknown) {
+          if (
+            error instanceof UserStoreError &&
+            error.sqlState === FOREIGN_KEY_VIOLATION
+          ) {
+            logger.warn("Dashboard login failed", {
+              ip,
+              reason: "credential_replaced",
+              userId: result.userId,
+            });
+            return redirect(set, "/dashboard/login?error=invalid");
+          }
+          throw error;
+        }
+        const { sessionId, token } = created;
+
+        /** Success: wipe any accumulated failures for this IP. */
+        if (loginRateLimit.enabled) clearLoginAttempts(ip);
+
         logger.info("Dashboard login successful", {
           userId: result.userId,
           sessionId,
@@ -998,6 +1068,153 @@ export const pagesPlugin = new Elysia({
       body: t.Object({
         token: t.String({ maxLength: 128 }),
         name: t.String({ maxLength: 1024 }),
+        password: t.String({ maxLength: 1024 }),
+        confirm: t.String({ maxLength: 1024 }),
+      }),
+    },
+  )
+
+  /**
+   * GET /dashboard/reset?token=...
+   * Password reset form (#277), from the one-time link an admin issued on
+   * the Users page. Public: the token is the authorization. Mirrors the
+   * invitation accept page: auth-page headers, read-only (link scanners
+   * and prefetchers cannot burn the token), the format checked before any
+   * database call, and one identical 400 page for every unusable link
+   * (missing, malformed, unknown, expired, used, revoked, account or
+   * issuer no longer eligible).
+   */
+  .get(
+    "/reset",
+    async ({ query, set }) => {
+      setAuthPageHeaders(set);
+      const token = query.token ?? "";
+      const target = isWellFormedToken(token)
+        ? await passwordResetService.findLivePasswordReset(token)
+        : null;
+      if (!target) {
+        set.status = 400;
+        return <PasswordResetInvalidPage />;
+      }
+      return <PasswordResetPage token={token} email={target.email} />;
+    },
+    {
+      query: t.Object({
+        token: t.Optional(t.String({ maxLength: 128 })),
+      }),
+    },
+  )
+
+  /**
+   * POST /dashboard/reset
+   * Sets the new password (#277). Same order as the invitation accept
+   * POST: auth-page headers; same-origin first (the session guard's CSRF
+   * check never runs on public routes); token format; an indexed lookup;
+   * the password policy (a failure re-renders the form with 200, no
+   * hashing, no write); only then argon2id inside `completePasswordReset`,
+   * which spends the token, replaces the password, revokes every session
+   * and every other open token of the account and opens a new session, in
+   * one transaction.
+   *
+   * On success the session the browser presented, if any, is revoked
+   * (like login: sessions do not stack, and a superseded token is treated
+   * as reuse), the new cookie is set and the browser goes to `/dashboard`,
+   * which also drops the token from the address bar.
+   *
+   * The body schema is deliberately loose (only length caps): a schema
+   * failure answers 422 JSON from the global handler, not a page.
+   */
+  .post(
+    "/reset",
+    async ({ body, set, request, server }) => {
+      setAuthPageHeaders(set);
+      const ip = resolveClientIp({
+        socketIp: server?.requestIP(request)?.address,
+        forwardedFor: request.headers.get("x-forwarded-for"),
+        trustedProxyHops: config.dashboard.trustedProxyHops,
+      });
+
+      if (!isSameOrigin(request)) {
+        logger.warn("Password reset POST rejected: cross-origin (possible CSRF)", {
+          ip,
+          origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+        });
+        set.status = 403;
+        return "Forbidden: cross-origin request rejected";
+      }
+
+      const target = isWellFormedToken(body.token)
+        ? await passwordResetService.findLivePasswordReset(body.token)
+        : null;
+      if (!target) {
+        /** `debug`, like the invitation page: an anonymous flood must not fill `warn`. */
+        logger.debug("Password reset refused: invalid link", { ip });
+        set.status = 400;
+        return <PasswordResetInvalidPage />;
+      }
+
+      const problem = setupPasswordProblem(body.password, body.confirm);
+      if (problem) {
+        return (
+          <PasswordResetPage token={body.token} email={target.email} error={problem} />
+        );
+      }
+
+      const result = await passwordResetService.completePasswordReset(
+        body.token,
+        body.password,
+        { ip, userAgent: request.headers.get("user-agent") },
+      );
+      if (!result.ok) {
+        logger.debug("Password reset refused: invalid link", {
+          resetId: target.resetId,
+          ip,
+        });
+        set.status = 400;
+        return <PasswordResetInvalidPage />;
+      }
+
+      /**
+       * Replace the browser's previous session, as login does. The new
+       * password is set at this point, so a failure here is logged and the
+       * new session is still issued.
+       */
+      const presented = readSessionCookie(request.headers.get("cookie"));
+      if (presented && isWellFormedToken(presented)) {
+        try {
+          const revoked = await sessionService.revokeSessionByToken(presented);
+          if (!revoked) {
+            const superseded =
+              await sessionService.findSessionBySupersededToken(presented);
+            if (superseded) await revokeOnTokenReuse(superseded, ip);
+          }
+        } catch (error: unknown) {
+          logger.error("Password reset done, but revoking the previous session failed", {
+            userId: result.userId,
+            ip,
+            error: errorMessage(error),
+          });
+        }
+      }
+
+      logger.warn("Password reset completed", {
+        resetId: result.resetId,
+        userId: result.userId,
+        issuedBy: result.issuedBy,
+        email: redactEmail(result.email),
+        sessionsRevoked: result.sessionsRevoked,
+        tokensRevoked: result.tokensRevoked,
+        issuedTokensRevoked: result.issuedTokensRevoked,
+        sessionId: result.sessionId,
+        ip,
+      });
+
+      issueSession(set, result.sessionToken);
+      return redirect(set, "/dashboard");
+    },
+    {
+      body: t.Object({
+        token: t.String({ maxLength: 128 }),
         password: t.String({ maxLength: 1024 }),
         confirm: t.String({ maxLength: 1024 }),
       }),
@@ -1896,14 +2113,22 @@ export const pagesPlugin = new Elysia({
    */
   .get(
     "/users",
-    async ({ query, auth }) => {
+    async ({ query, auth, set }) => {
+      setNoStore(set);
       const accounts = await userAdminService.listAccounts();
       const flash = toFlash(query.flash, query.flashType);
+      /** One-time reveal of a reset link (#277), bound to this user and session (#280). */
+      const revealedResetLink = consumeRevealSecret(
+        query.reveal,
+        "password_reset_link",
+        revealOwnerOf(auth),
+      );
       return (
         <UsersPage
           accounts={accounts}
           viewer={{ id: auth.user.id, role: auth.user.role, disabled: false }}
           flash={flash}
+          revealedResetLink={revealedResetLink}
         />
       );
     },
@@ -1912,6 +2137,7 @@ export const pagesPlugin = new Elysia({
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
+        reveal: t.Optional(t.String()),
       }),
     },
   )
@@ -2027,6 +2253,35 @@ export const pagesPlugin = new Elysia({
       beforeHandle: adminGuard,
       params: t.Object({ id: t.String({ maxLength: 64 }) }),
       body: t.Object({ password: t.String({ maxLength: 1024 }) }),
+    },
+  )
+
+  /**
+   * POST /dashboard/users/:id/reset-password
+   * Issues a one-time password reset link for an account (#277): the
+   * owner for admins and members, an admin for members; never the actor's
+   * own account, never the owner (who uses `reset-owner`), never a
+   * deactivated account. Checked by the service against the live rows.
+   * The link is revealed once to this user and session on the Users page;
+   * it is never emailed, and never in a URL, a flash message or a log.
+   */
+  .post(
+    "/users/:id/reset-password",
+    async ({ params, set, auth }) => {
+      try {
+        const result = await userAdminService.issuePasswordReset(auth.user.id, params.id);
+        return answerPasswordReset(set, auth, result);
+      } catch (error: unknown) {
+        logger.error("Failed to issue a password reset link via dashboard", {
+          targetUserId: params.id,
+          error: errorMessage(error),
+        });
+        return usersRedirect(set, "Failed to create the password reset link.", "error");
+      }
+    },
+    {
+      beforeHandle: adminGuard,
+      params: t.Object({ id: t.String({ maxLength: 64 }) }),
     },
   )
 

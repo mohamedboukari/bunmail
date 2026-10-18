@@ -210,9 +210,17 @@ export interface AccountSummary {
  * - `deactivate` / `reactivate`: set or clear `disabled_at`.
  * - `remove`: delete the account for good.
  * - `transfer_ownership`: make an active admin the owner (owner only).
+ * - `reset_password`: issue a one-time password reset link (#277), shown
+ *   once to the issuer; same "who may manage whom" as deactivation, and
+ *   never for a disabled account.
  */
 export type AccountAction =
-  "change_role" | "deactivate" | "reactivate" | "remove" | "transfer_ownership";
+  | "change_role"
+  | "deactivate"
+  | "reactivate"
+  | "remove"
+  | "transfer_ownership"
+  | "reset_password";
 
 /**
  * Why an account action was refused (#218):
@@ -229,6 +237,8 @@ export type AccountAction =
  * - `wrong_password`: the ownership transfer password is wrong.
  * - `not_eligible`: the transfer target is not an active admin.
  * - `rate_limited`: too many failed ownership transfer password checks.
+ * - `account_disabled`: a password reset for a deactivated account (#277):
+ *   reactivate it first.
  */
 export type AccountRefusal =
   | "actor_inactive"
@@ -241,7 +251,8 @@ export type AccountRefusal =
   | "confirm_mismatch"
   | "wrong_password"
   | "not_eligible"
-  | "rate_limited";
+  | "rate_limited"
+  | "account_disabled";
 
 /**
  * Failed-attempt budget for the ownership transfer password check (#218).
@@ -262,6 +273,79 @@ export interface AttemptLimiter {
 
 /** Outcome of an account action (#218); the service has already logged it. */
 export type AccountActionResult = { ok: true } | { ok: false; reason: AccountRefusal };
+
+/**
+ * A freshly minted password reset token (#277). `token` is the raw value
+ * for the link: it goes into the one-time reveal for the issuer, never
+ * into storage, a URL of ours, a flash message, an email or a log.
+ */
+export interface IssuedPasswordReset {
+  /** `user_tokens.id` (`utk_...`); safe to log. */
+  resetId: string;
+  /** Raw token for `/dashboard/reset?token=`; only its hash is stored. */
+  token: string;
+  /** When the link stops working (one hour after issue, database clock). */
+  expiresAt: Date;
+  /** How many earlier open reset links of the account this one replaced. */
+  replaced: number;
+}
+
+/**
+ * Result of issuing a password reset link (#277): the absolute link for
+ * the one-time reveal, or why nothing was issued (the service has already
+ * logged it).
+ */
+export type IssuePasswordResetResult =
+  | {
+      ok: true;
+      /** `user_tokens.id`; safe to log. */
+      resetId: string;
+      /** Absolute reset link; shown to the issuer once, never stored or logged. */
+      url: string;
+      /** True when `APP_BASE_URL` was unusable and the link points at localhost. */
+      usedFallback: boolean;
+      expiresAt: Date;
+    }
+  | { ok: false; reason: AccountRefusal };
+
+/** What a live password reset token opens (#277): the reset form's subject. */
+export interface PasswordResetTarget {
+  /** `user_tokens.id`; safe to log. */
+  resetId: string;
+  /** `users.id` of the account whose password is reset. */
+  userId: string;
+  /** The account's stored (lower-cased) email, shown on the form. PII. */
+  email: string;
+}
+
+/**
+ * Result of completing a password reset (#277). `invalid` covers every
+ * dead link (unknown, expired, used, revoked, account disabled or gone,
+ * issuer gone, disabled or no longer allowed to manage the account).
+ */
+export type CompletePasswordResetResult =
+  | {
+      ok: true;
+      /** `user_tokens.id` of the spent link. */
+      resetId: string;
+      /** `users.id` of the account. */
+      userId: string;
+      /** The account's stored email. PII: log it redacted. */
+      email: string;
+      /** `users.id` of whoever issued the link. */
+      issuedBy: string;
+      /** How many sessions of the account were revoked. */
+      sessionsRevoked: number;
+      /** How many other open tokens of the account were revoked. */
+      tokensRevoked: number;
+      /** How many open invitations and reset links the account had issued were revoked. */
+      issuedTokensRevoked: number;
+      /** `sessions.id` of the session opened for the account. */
+      sessionId: string;
+      /** Raw cookie value of that session. */
+      sessionToken: string;
+    }
+  | { ok: false; reason: "invalid" };
 
 /**
  * A freshly minted owner setup link (#215). `token` is the raw value for
@@ -321,6 +405,12 @@ export interface NewSessionInput extends SessionClient {
   assurance: SessionAssurance;
   /** Which credential type started the session. */
   authMethod: CredentialType;
+  /**
+   * `user_credentials.id` of the credential that was checked (#277). The
+   * session dies with it: replacing the password deletes the row and
+   * cascades, and a login racing a reset fails to insert (`23503`).
+   */
+  credentialId?: string | null;
 }
 
 /** A freshly opened session. `token` goes into the cookie, never into storage or logs. */
@@ -394,7 +484,13 @@ export type LoginFailureReason = "unknown" | "no_password" | "disabled" | "bad_p
 
 /** Outcome of the first-factor (password) step of login (#216). */
 export type LoginResult =
-  | { ok: true; userId: string; assurance: SessionAssurance }
+  | {
+      ok: true;
+      userId: string;
+      assurance: SessionAssurance;
+      /** The verified `password` credential; the session is bound to it (#277). */
+      credentialId: string;
+    }
   | { ok: false; reason: LoginFailureReason };
 
 /** What a completed owner setup returns (#215, #216). */

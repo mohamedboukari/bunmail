@@ -742,6 +742,7 @@ describe("Account action log lines (#218)", () => {
         newStatus: "disabled",
         sessionsRevoked: 1,
         invitesRevoked: 0,
+        resetLinksRevoked: 0,
       });
       const removed = info.mock.calls.find(([m]) => m === "Account removed");
       expect(removed?.[1]).toMatchObject({

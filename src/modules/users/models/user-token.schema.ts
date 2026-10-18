@@ -43,8 +43,9 @@ export const userTokens = pgTable(
     /** Role an invitation grants on acceptance. */
     role: varchar("role", { length: 10 }),
 
-    /** Who sent an invitation. Kept (set to null) if that user is deleted,
-     *  so invite history survives. */
+    /** Who sent an invitation, or who issued a password reset link (#277):
+     *  for `password_reset` it means "issued by". Set to null if that user
+     *  is deleted, so history survives (a reset link then stops working). */
     invitedBy: varchar("invited_by", { length: 36 }).references(() => users.id, {
       onDelete: "set null",
     }),

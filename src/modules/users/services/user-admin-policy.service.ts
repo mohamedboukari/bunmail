@@ -3,7 +3,8 @@ import { grantableRoles } from "./invite-policy.service.ts";
 
 /**
  * Rules for managing dashboard accounts (#218): who may change the role
- * of, deactivate, reactivate, remove or hand ownership to whom. The
+ * of, deactivate, reactivate, remove, hand ownership to or issue a
+ * password reset link for whom. The
  * database side lives in `user-admin.service.ts`, which applies these
  * rules to the live rows inside its transaction; the Users page uses
  * them only to decide which buttons to show.
@@ -17,6 +18,10 @@ import { grantableRoles } from "./invite-policy.service.ts";
  *   The owner manages admins and members, an admin manages members, a
  *   member manages nobody.
  * - Ownership goes from the owner to an active admin only.
+ * - A password reset link (#277) follows the deactivation rules (the
+ *   owner resets admins and members, an admin members), and is never
+ *   issued for a deactivated account: reactivate it first. The owner's
+ *   password is reset with `bun run src/db/reset-owner.ts` only.
  *
  * Pure: no I/O, no config, so it unit-tests without mocks.
  */
@@ -34,6 +39,7 @@ export interface AccountParty {
 /** Every action, in the order the Users page shows its buttons. */
 const ACTIONS: readonly AccountAction[] = [
   "change_role",
+  "reset_password",
   "deactivate",
   "reactivate",
   "transfer_ownership",
@@ -49,7 +55,8 @@ function canManage(actorRole: UserRole, targetRole: UserRole): boolean {
  * Why `actor` may not perform `action` on `target`, or `null` when the
  * rules allow it. Covers who may act on whom and the target's state
  * (`unchanged` for a no-op, `not_eligible` for a transfer to anyone but
- * an active admin). The action's own input (the new role, the removal
+ * an active admin, `account_disabled` for a reset of a deactivated
+ * account). The action's own input (the new role, the removal
  * confirmation, the password) is checked by the service.
  */
 export function accountActionRefusal(
@@ -73,6 +80,9 @@ export function accountActionRefusal(
     case "transfer_ownership":
       if (actor.role !== "owner") return "role_not_allowed";
       return target.role === "admin" && !target.disabled ? null : "not_eligible";
+    case "reset_password":
+      if (!canManage(actor.role, target.role)) return "role_not_allowed";
+      return target.disabled ? "account_disabled" : null;
   }
 }
 

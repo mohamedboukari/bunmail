@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, pgTable, timestamp, varchar } from "drizzle-orm/pg-core";
 import { users } from "./user.schema.ts";
+import { userCredentials } from "./user-credential.schema.ts";
 import { CREDENTIAL_TYPES, SESSION_ASSURANCES, literals } from "../types/user.types.ts";
 
 /**
@@ -8,7 +9,8 @@ import { CREDENTIAL_TYPES, SESSION_ASSURANCES, literals } from "../types/user.ty
  * The cookie carries an opaque random token; only its SHA-256 hash is
  * stored, so a database leak does not yield usable sessions. Logout,
  * password change and deactivation delete rows, which revokes them for
- * real. Rows live in Postgres, so they work across replicas (#185).
+ * real; so does replacing the credential a session was opened with
+ * (`credential_id`, #277). Rows live in Postgres, so they work across replicas (#185).
  *
  * The token rotates (#216): at most once a minute an active session gets
  * a fresh token, the old hash moves to `previous_token_hash` and stays
@@ -52,6 +54,18 @@ export const sessions = pgTable(
     /** Which credential type started the session (`password`, `passkey`, ...). */
     authMethod: varchar("auth_method", { length: 16 }).notNull().default("password"),
 
+    /**
+     * The credential the session was opened with (#277). Replacing a
+     * password deletes the old credential row, which deletes every session
+     * bound to it, and a login that verified the old password while a
+     * reset replaced it cannot insert its session (foreign-key violation).
+     * Null for sessions opened before this column existed.
+     */
+    credentialId: varchar("credential_id", { length: 36 }).references(
+      () => userCredentials.id,
+      { onDelete: "cascade" },
+    ),
+
     /** Hard expiry; sliding refresh updates it along with `last_seen_at`. */
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 
@@ -72,6 +86,9 @@ export const sessions = pgTable(
 
     /** The guard looks a presented token up by either hash (#216). */
     index("sessions_previous_token_hash_idx").on(table.previousTokenHash),
+
+    /** The cascade from a replaced credential (#277). */
+    index("sessions_credential_id_idx").on(table.credentialId),
 
     check(
       "sessions_assurance_check",

@@ -134,6 +134,13 @@
       "when": 1792333020274,
       "tag": "0018_giant_xorn",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792338693944,
+      "tag": "0019_flimsy_makkari",
+      "breakpoints": true
     }
   ]
 }

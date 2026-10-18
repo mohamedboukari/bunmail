@@ -42,6 +42,7 @@ describe("accountActionRefusal (#218)", () => {
     "reactivate",
     "remove",
     "transfer_ownership",
+    "reset_password",
   ];
 
   test("nobody acts on their own account", () => {
@@ -110,12 +111,35 @@ describe("accountActionRefusal (#218)", () => {
       "role_not_allowed",
     );
   });
+
+  test("password reset links (#277): the owner for admins and members, an admin for members, never a disabled account", () => {
+    expect(accountActionRefusal("reset_password", owner, admin)).toBeNull();
+    expect(accountActionRefusal("reset_password", owner, member)).toBeNull();
+    expect(accountActionRefusal("reset_password", admin, member)).toBeNull();
+    expect(accountActionRefusal("reset_password", admin, otherAdmin)).toBe(
+      "role_not_allowed",
+    );
+    expect(accountActionRefusal("reset_password", member, otherMember)).toBe(
+      "role_not_allowed",
+    );
+    expect(accountActionRefusal("reset_password", owner, disabledAdmin)).toBe(
+      "account_disabled",
+    );
+    expect(accountActionRefusal("reset_password", admin, disabledMember)).toBe(
+      "account_disabled",
+    );
+    /** The role rule comes first: an admin learns nothing about a disabled admin. */
+    expect(accountActionRefusal("reset_password", admin, disabledAdmin)).toBe(
+      "role_not_allowed",
+    );
+  });
 });
 
 describe("allowedAccountActions (#218)", () => {
   test("the owner on an active admin: everything but reactivate", () => {
     expect(allowedAccountActions(owner, admin)).toEqual([
       "change_role",
+      "reset_password",
       "deactivate",
       "transfer_ownership",
       "remove",
@@ -130,8 +154,12 @@ describe("allowedAccountActions (#218)", () => {
     ]);
   });
 
-  test("an admin on a member: deactivate and remove; on an admin or the owner: nothing", () => {
-    expect(allowedAccountActions(admin, member)).toEqual(["deactivate", "remove"]);
+  test("an admin on a member: reset, deactivate and remove; on an admin or the owner: nothing", () => {
+    expect(allowedAccountActions(admin, member)).toEqual([
+      "reset_password",
+      "deactivate",
+      "remove",
+    ]);
     expect(allowedAccountActions(admin, otherAdmin)).toEqual([]);
     expect(allowedAccountActions(admin, owner)).toEqual([]);
   });
