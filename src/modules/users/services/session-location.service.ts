@@ -16,20 +16,26 @@ import { setSessionLocation } from "./session.service.ts";
  * session id and a sanitized message, and the session is left as it is.
  * Runs in the request's log context, so its lines carry the request id.
  *
- * @returns a promise that settles when the lookup is done (callers
- *          `void` it; tests await it).
+ * @returns the location stored, or `null` when none was (callers `void`
+ *          it; the login hands it to the new-device check, #282, which
+ *          waits for it a short while; tests await it).
  */
-export async function locateSession(sessionId: string, ip: string | null): Promise<void> {
+export async function locateSession(
+  sessionId: string,
+  ip: string | null,
+): Promise<string | null> {
   try {
     const location = await geoip.lookupLocation(ip);
-    if (!location) return;
+    if (!location) return null;
     await setSessionLocation(sessionId, location);
     logger.debug("Session location stored", { sessionId });
+    return location;
   } catch (error: unknown) {
     logger.warn("Session location lookup failed", {
       sessionId,
       ip,
       error: error instanceof Error ? error.message : String(error),
     });
+    return null;
   }
 }

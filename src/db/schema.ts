@@ -23,3 +23,4 @@ export { userCredentials } from "../modules/users/models/user-credential.schema.
 export { sessions } from "../modules/users/models/session.schema.ts";
 export { sessionTokenHistory } from "../modules/users/models/session-token-history.schema.ts";
 export { userTokens } from "../modules/users/models/user-token.schema.ts";
+export { userDevices } from "../modules/users/models/user-device.schema.ts";

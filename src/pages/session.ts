@@ -4,7 +4,8 @@
  * The cookie only carries the opaque session token; the session itself
  * lives in the `sessions` table (`src/modules/users/services/session.service.ts`).
  * These helpers read the cookie from a request and build the `Set-Cookie`
- * values, nothing more.
+ * values, nothing more. The device cookie of the new-device alert (#282)
+ * lives here too.
  *
  * Pure: `secure` and the lifetime are passed in, so this unit-tests
  * without config or mocks (#174).
@@ -12,6 +13,12 @@
 
 /** Name of the dashboard session cookie. */
 export const SESSION_COOKIE = "bm_session";
+
+/**
+ * Name of the device cookie (#282): a long-lived random value that lets
+ * the login recognize a browser that signed in before. Not a credential.
+ */
+export const DEVICE_COOKIE = "bm_device";
 
 /**
  * Cookie attributes shared by every `Set-Cookie` of the session (#133):
@@ -25,23 +32,39 @@ function attributes(secure: boolean): string {
 }
 
 /**
- * Reads the session cookie from a `Cookie` header. The name must match
- * exactly (`xbm_session=` is a different cookie), and an empty value counts
- * as missing. With several `bm_session` entries the first wins, which is
- * the one with the most specific path.
- *
- * @returns the raw cookie value, or `undefined` when there is none.
+ * Reads the cookie `name` from a `Cookie` header. The name must match
+ * exactly (`xbm_session=` is a different cookie), and an empty value
+ * counts as missing. With several entries of the name the first wins,
+ * which is the one with the most specific path.
  */
-export function readSessionCookie(cookieHeader: string | null): string | undefined {
+function readCookie(cookieHeader: string | null, name: string): string | undefined {
   if (!cookieHeader) return undefined;
   for (const part of cookieHeader.split(";")) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
-    if (part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
     const value = part.slice(eq + 1).trim();
     return value === "" ? undefined : value;
   }
   return undefined;
+}
+
+/**
+ * Reads the session cookie from a `Cookie` header (see `readCookie`).
+ *
+ * @returns the raw cookie value, or `undefined` when there is none.
+ */
+export function readSessionCookie(cookieHeader: string | null): string | undefined {
+  return readCookie(cookieHeader, SESSION_COOKIE);
+}
+
+/**
+ * Reads the device cookie (#282) from a `Cookie` header. The value is
+ * returned as sent; the caller checks its shape and treats a malformed
+ * one as absent.
+ */
+export function readDeviceCookie(cookieHeader: string | null): string | undefined {
+  return readCookie(cookieHeader, DEVICE_COOKIE);
 }
 
 /**
@@ -62,4 +85,21 @@ export function sessionSetCookie(
 /** `Set-Cookie` value that removes the session cookie from the browser. */
 export function clearSessionCookie(secure: boolean): string {
   return `${SESSION_COOKIE}=; ${attributes(secure)}; Max-Age=0`;
+}
+
+/**
+ * `Set-Cookie` value that stores the device cookie (#282): the session
+ * cookie's attributes (`HttpOnly`, `SameSite=Lax`, `Secure` when asked,
+ * `Path=/dashboard`) and a long `Max-Age`, refreshed at every sign-in.
+ *
+ * @param value     - The device id (43 base64url characters).
+ * @param secure    - Add `Secure` (production).
+ * @param maxAgeSec - Cookie lifetime in seconds.
+ */
+export function deviceSetCookie(
+  value: string,
+  secure: boolean,
+  maxAgeSec: number,
+): string {
+  return `${DEVICE_COOKIE}=${value}; ${attributes(secure)}; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
 }

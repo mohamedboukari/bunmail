@@ -87,8 +87,9 @@ DASHBOARD_TRUSTED_PROXY_HOPS=1
 # Optional: public base URL, used for the dashboard link in inbound notifications,
 # the one-time owner setup link, invitation links and password reset links
 APP_BASE_URL=https://mail.yourdomain.com
-# Optional: sender of invitation emails (a DKIM-verified domain registered in
-# BunMail); unset = the inviter copies the link from the dashboard
+# Optional: sender of invitation emails and new-device sign-in alerts (a
+# DKIM-verified domain registered in BunMail); unset = the inviter copies the
+# link from the dashboard and new-device sign-ins are only logged
 SYSTEM_MAIL_FROM=noreply@yourdomain.com
 # Optional: days an invitation link stays valid (1 to 90, default 7)
 INVITE_EXPIRY_DAYS=7
@@ -110,7 +111,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, invitation links (#217) and admin-issued password reset links (#277). When unset, the setup and reset links fall back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone.
 
-> `SYSTEM_MAIL_FROM` / `INVITE_EXPIRY_DAYS`: dashboard invitations (#217). Admins and the owner invite teammates from the dashboard (**Invite teammates** on the home page). When `SYSTEM_MAIL_FROM` is set to an address on a domain you registered in BunMail and whose DKIM record is verified, BunMail emails the accept link from it, signed with that domain's key. When it is unset, or the domain is missing or unverified, or the send fails, the invitation is still created and the inviter sees the link once on the Invitations page to send by hand (share it privately: anyone with it can create the account). A malformed `SYSTEM_MAIL_FROM` refuses to boot. `INVITE_EXPIRY_DAYS` (default `7`, a whole number from `1` to `90`, anything else refuses to boot) sets how long a link stays valid. See [docs/dashboard.md](dashboard.md#invitations-217).
+> `SYSTEM_MAIL_FROM` / `INVITE_EXPIRY_DAYS`: dashboard invitations (#217). Admins and the owner invite teammates from the dashboard (**Invite teammates** on the home page). When `SYSTEM_MAIL_FROM` is set to an address on a domain you registered in BunMail and whose DKIM record is verified, BunMail emails the accept link from it, signed with that domain's key. When it is unset, or the domain is missing or unverified, or the send fails, the invitation is still created and the inviter sees the link once on the Invitations page to send by hand (share it privately: anyone with it can create the account). A malformed `SYSTEM_MAIL_FROM` refuses to boot. `INVITE_EXPIRY_DAYS` (default `7`, a whole number from `1` to `90`, anything else refuses to boot) sets how long a link stays valid. See [docs/dashboard.md](dashboard.md#invitations-217). The same sender also sends **new-device sign-in alerts** (#282): when an account signs in with its password from a browser it has not used in the last 30 days, it gets "New sign-in to your BunMail account" (browser and OS, IP, approximate location, time, and what to do; no links). Without a usable `SYSTEM_MAIL_FROM` no alert is sent and the sign-in is only logged (`New-device sign-in`). See [docs/dashboard.md](dashboard.md#new-device-alerts-282).
 
 > `INBOUND_NOTIFY_ENABLED` / `INBOUND_NOTIFY_FROM_LOCAL`: inbound notifications (#106). When a domain has a `notify_email` set, received mail for it triggers a summary email from `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default `notifications`). `INBOUND_NOTIFY_ENABLED=false` is a global kill switch. See [docs/inbound.md](inbound.md#inbound-notifications-106).
 
@@ -283,7 +284,7 @@ Sessions (#216) live in the database: a session expires after 24 hours without u
 
 The dashboard lets you manage emails, domains, templates, webhooks, API keys and suppressions, and view delivery status. Admins and the owner invite teammates at **Invitations** and manage accounts at **Users** (roles, deactivation, password reset links, ownership transfer); see [docs/dashboard.md](dashboard.md).
 
-Every account sees its own signed-in devices at **Active sessions** (#281, in the Account group of the sidebar): browser and system, IP address, signed in at, last active, and, when you set up GeoIP below, an approximate location. A user can sign out one device or every other device from there.
+Every account sees its own signed-in devices at **Active sessions** (#281, in the Account group of the sidebar): browser and system, IP address, signed in at, last active, and, when you set up GeoIP below, an approximate location. A user can sign out one device or every other device from there. With `SYSTEM_MAIL_FROM` set, a password sign-in from a browser the account has not used in the last 30 days also emails the account an alert (#282); BunMail recognizes the browser by a long-lived `bm_device` cookie, so a changing IP does not count as a new device.
 
 ### Approximate session locations (GeoIP, #281)
 

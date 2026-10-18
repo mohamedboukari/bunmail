@@ -7,6 +7,7 @@ import {
   purgeOldTombstones,
 } from "../../emails/services/tombstone.service.ts";
 import { purgeExpiredSessions } from "../../users/services/session.service.ts";
+import { purgeStaleUserDevices } from "../../users/services/user-device.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
@@ -98,12 +99,30 @@ export async function runSessionSweep(): Promise<{ deleted: number }> {
 }
 
 /**
- * One purge cycle (trash, tombstone retention, expired sessions) in its own
- * log context (#284), so every line it writes carries `job: "purge"`.
+ * Deletes the sign-in devices (#282) not seen for 400 days, alongside the
+ * session sweep. Such a browser counts as new again at its next sign-in.
+ */
+export async function runDeviceSweep(): Promise<{ deleted: number }> {
+  const deleted = await purgeStaleUserDevices();
+  if (deleted > 0) {
+    logger.info("Stale sign-in device sweep completed", { deleted });
+  }
+  return { deleted };
+}
+
+/**
+ * One purge cycle (trash, tombstone retention, expired sessions, stale
+ * sign-in devices) in its own log context (#284), so every line it writes
+ * carries `job: "purge"`.
  */
 function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
   return runWithLogContext({ job: "purge" }, () =>
-    Promise.allSettled([runTrashPurge(), runTombstoneRetention(), runSessionSweep()]),
+    Promise.allSettled([
+      runTrashPurge(),
+      runTombstoneRetention(),
+      runSessionSweep(),
+      runDeviceSweep(),
+    ]),
   );
 }
 

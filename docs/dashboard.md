@@ -13,7 +13,7 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 | DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout |
 | DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes) |
 | INVITE_EXPIRY_DAYS                 | No       | `7`           | Days an invitation link stays valid (#217): a whole number from 1 to 90; anything else refuses to boot. |
-| SYSTEM_MAIL_FROM                   | No       | _(empty)_     | Sender of invitation emails (#217): one bare address on a domain registered and DKIM-verified in BunMail; malformed refuses to boot. Unset, or its domain unusable: the inviter gets the link once on the Invitations page instead. See [Invitations](#invitations-217). |
+| SYSTEM_MAIL_FROM                   | No       | _(empty)_     | Sender of invitation emails (#217) and new-device sign-in alerts (#282): one bare address on a domain registered and DKIM-verified in BunMail; malformed refuses to boot. Unset, or its domain unusable: the inviter gets the link once on the Invitations page instead, and a sign-in from a new device is only logged. See [Invitations](#invitations-217) and [New-device alerts](#new-device-alerts-282). |
 
 `DASHBOARD_PASSWORD` and `SESSION_SECRET` were removed by account login (#216). A value left in `.env` does nothing except one boot warning: `Dashboard auth env vars are no longer used since #216, remove from .env`.
 
@@ -29,7 +29,7 @@ Account login (#216): email and password against the `users` and `user_credentia
 4. Input bounds: an email over 254 or a password over 256 characters fails without any lookup. (Over 320 or 1024 characters the route's schema rejects the body with the global `422` JSON error.)
 5. `verifyPasswordLogin` runs exactly one argon2id verify on every branch (a missing account or credential is verified against a dummy hash), so the response time does not reveal whether an account exists.
 6. Failure, whatever the reason: counted against the IP, `warn` log `Dashboard login failed` with `ip`, `reason` (`unknown`, `no_password`, `disabled`, `bad_password`, `too_long`) and the email through `redactEmail` (none for `too_long`), and a `302` to `/dashboard/login?error=invalid`, which shows `Invalid email or password.`. The email never goes in the URL.
-7. Success: the IP's failure count is cleared; a well-formed session cookie the browser already sent is revoked first (no session stacking, no planted cookie survives login); a new session is created (`info` log `Dashboard login successful` with `userId`, `sessionId`, `ip`) and the browser is sent to the fixed `/dashboard` (no `next` parameter, no open redirect). A database error answers `503` `Dashboard temporarily unavailable`.
+7. Success: the IP's failure count is cleared; a well-formed session cookie the browser already sent is revoked first (no session stacking, no planted cookie survives login); a new session is created (`info` log `Dashboard login successful` with `userId`, `sessionId`, `ip`) and the browser is sent to the fixed `/dashboard` (no `next` parameter, no open redirect). The response also sets the `bm_device` cookie and the new-device check starts in the background (#282, see [New-device alerts](#new-device-alerts-282)). A database error answers `503` `Dashboard temporarily unavailable`.
 
 **Cookie:** `bm_session=<token>`, where the token is 32 random bytes as base64url (43 characters); only its SHA-256 is stored. `HttpOnly; SameSite=Lax; Path=/dashboard`, plus `Secure` in production (#133), so over plain HTTP the browser drops it (most browsers make an exception for `localhost`). `Max-Age` is 7 days at login; after a rotation it is what is left of the 7 days.
 
@@ -165,6 +165,16 @@ Every signed-in account, the owner included, sees and signs out its own sessions
 **Approximate location** is off by default. With `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or the opt-in online provider (`GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN`, which sends every sign-in IP to ipinfo.io), the location of a new session's IP is looked up once, in the background, after the session is created (login, owner setup, invitation accept, password reset, password change), and stored on the session; it never delays or fails a sign-in. Setup: [docs/self-hosting.md](self-hosting.md#approximate-session-locations-geoip-281).
 
 **Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
+
+### New-device alerts (#282)
+
+A successful `POST /dashboard/login` sets `bm_device` (32 random bytes as base64url; `HttpOnly; SameSite=Lax; Path=/dashboard`, `Secure` in production, `Max-Age` 400 days): the browser's own value when it sent a well-formed one, a new one otherwise (a malformed or oversized value counts as absent). It is set again at every sign-in, which refreshes it, and logout leaves it. It is not a credential: no route accepts it for anything, it only lets the login recognize a browser that signed in before. Then, in the background (the response does not wait and the login never fails because of it):
+
+1. The browser is recorded for the account in `user_devices` (only the cookie's SHA-256, the device label, IP and approximate location).
+2. Seen by this account within the last 30 days: nothing more. The account's first browser ever: recorded without an alert.
+3. Otherwise (new to the account, or not seen for over 30 days): "New sign-in to your BunMail account" goes to the account's address from `SYSTEM_MAIL_FROM` (DKIM-signed), with the masked address, browser and OS, IP, approximate location when known, the time (UTC) and what to do (sign in, **Account > Active sessions > Sign out all other devices**, change the password, tell an administrator). The email contains **no links** at all. Without a usable `SYSTEM_MAIL_FROM` nothing is sent and the event is logged (`New-device sign-in`, `info`).
+
+Owner setup, invitation accept, password reset and password change never send this alert. Internals and log lines: [docs/users.md](users.md#new-device-alerts-282).
 
 ### Brute-force protection (#109)
 
