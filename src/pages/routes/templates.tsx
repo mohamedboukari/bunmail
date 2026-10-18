@@ -3,7 +3,7 @@ import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
-import { LiveHtmlPreview, LiveHtmlPreviewScript } from "../components/html-preview.tsx";
+import { LiveHtmlPreview, LiveHtmlPreviewData } from "../components/html-preview.tsx";
 import type { Template } from "../../modules/templates/types/template.types.ts";
 
 interface TemplatesPageProps {
@@ -50,7 +50,7 @@ export function TemplatesPage({
               name="name"
               required
               placeholder="e.g. Welcome Email"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -66,7 +66,7 @@ export function TemplatesPage({
               name="subject"
               required
               placeholder="e.g. Welcome to {{company}}"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -82,7 +82,7 @@ export function TemplatesPage({
                 name="html"
                 rows="12"
                 placeholder={"<p>Hello {{name}}, welcome!</p>"}
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent font-mono"
               />
               <div class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-900 p-3 overflow-auto">
                 <LiveHtmlPreview textareaId="html" title="New template HTML preview" />
@@ -104,7 +104,7 @@ export function TemplatesPage({
               name="text"
               rows="3"
               placeholder="Plain text fallback"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -119,7 +119,7 @@ export function TemplatesPage({
               id="variables"
               name="variables"
               placeholder="comma-separated: name, company, link"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <button
@@ -130,7 +130,7 @@ export function TemplatesPage({
           </button>
         </form>
       </div>
-      <LiveHtmlPreviewScript />
+      <LiveHtmlPreviewData />
 
       {templates.length === 0 ? (
         <EmptyState message="No templates yet. Create one above to get started." />
@@ -196,7 +196,7 @@ export function TemplatesPage({
                         <button
                           type="submit"
                           class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                          onclick="return confirm('Are you sure you want to delete this template?')"
+                          data-confirm="Are you sure you want to delete this template?"
                         >
                           Delete
                         </button>

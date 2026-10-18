@@ -1,6 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
-import { EmailChipInput, EmailChipInputScript } from "../components/email-chip-input.tsx";
+import { EmailChipInput } from "../components/email-chip-input.tsx";
 import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
 
 /**
@@ -68,7 +68,7 @@ export function SendEmailPage({
                 id="apiKeyId"
                 name="apiKeyId"
                 required
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
               >
                 {apiKeys.map((k) => (
                   <option value={k.id} selected={k.id === defaultApiKeyId} safe>
@@ -98,7 +98,7 @@ export function SendEmailPage({
                 required
                 value={prefill?.from ?? ""}
                 placeholder="hello@yourdomain.com"
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               />
             </div>
             <div>
@@ -115,7 +115,7 @@ export function SendEmailPage({
                 required
                 value={prefill?.to ?? ""}
                 placeholder="recipient@example.com"
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               />
             </div>
           </div>
@@ -182,7 +182,7 @@ export function SendEmailPage({
               maxlength={500}
               value={prefill?.subject ?? ""}
               placeholder="Email subject"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
 
@@ -199,7 +199,7 @@ export function SendEmailPage({
               name="html"
               rows="8"
               placeholder="<p>Hello, world!</p>"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               safe
             >
               {prefill?.html ?? ""}
@@ -219,7 +219,7 @@ export function SendEmailPage({
               name="text"
               rows="4"
               placeholder="Plain text fallback"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
               safe
             >
               {prefill?.text ?? ""}
@@ -234,9 +234,6 @@ export function SendEmailPage({
           </button>
         </form>
       </div>
-
-      {/* Behaviour for the CC / BCC chip inputs: single block handles both. */}
-      <EmailChipInputScript />
     </BaseLayout>
   );
 }

@@ -3,9 +3,10 @@
  * with automatic dark mode support.
  *
  * Injects a small CSS reset into the srcdoc so the iframe background
- * and text color adapt when the parent page toggles dark mode.
- * A MutationObserver on <html>'s class list keeps the iframe in sync
- * with the parent's theme in real time.
+ * and text color adapt when the parent page toggles dark mode. The
+ * dashboard script (`assets/dashboard.js`, "Email HTML previews") keeps
+ * the iframe in sync with the parent's theme through a MutationObserver
+ * on <html>'s class list, and sizes it to its content.
  */
 
 interface HtmlPreviewProps {
@@ -18,11 +19,11 @@ interface HtmlPreviewProps {
  * Dark-mode `<style>` block injected into every preview iframe's srcdoc:
  * - Defaults to white background / dark text
  * - Switches to dark background / light text when `data-theme="dark"` is on `<html>`
- * The parent script toggles the attribute via a MutationObserver.
+ * The dashboard script toggles the attribute via a MutationObserver.
  *
  * Extracted as a constant so the server-rendered srcdoc (`wrapWithDarkModeStyles`)
- * and the client-side live updater (`LiveHtmlPreviewScript`) share one source of
- * truth and produce byte-identical markup: no flash when the script takes over.
+ * and the client-side live updater (fed by `LiveHtmlPreviewData`) share one source
+ * of truth and produce byte-identical markup: no flash when the script takes over.
  */
 const PREVIEW_STYLE_BLOCK = `<style>
 html, body { background: #fff; color: #111; }
@@ -65,7 +66,7 @@ const PREVIEW_SAMPLE_VALUES: Record<string, string> = {
  * `template.service.ts` (so spaced/invalid placeholders like `{{ x }}` are
  * left untouched in both), but always fills matched placeholders with a sample
  * value rather than leaving unmatched ones as-is. Keep this in sync with the
- * client-side `substitute()` in `LiveHtmlPreviewScript`.
+ * client-side `substitute()` in `assets/dashboard.js`.
  */
 export function renderPreviewSamples(html: string): string {
   return html.replace(/\{\{(\w+)\}\}/g, (_match, key: string) => {
@@ -93,64 +94,6 @@ export function HtmlPreview({
   );
 }
 
-/**
- * Script block: include once per page that uses HtmlPreview.
- * Observes the root <html> element for dark mode class changes
- * and propagates theme to all preview iframes.
- */
-export function HtmlPreviewScript() {
-  return (
-    <script>
-      {`
-        (function() {
-          function syncIframeThemes() {
-            var isDark = document.documentElement.classList.contains('dark');
-            document.querySelectorAll('iframe.html-preview-frame').forEach(function(iframe) {
-              try {
-                var doc = iframe.contentDocument;
-                if (doc && doc.documentElement) {
-                  doc.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-                }
-              } catch(e) {}
-            });
-          }
-
-          // Sync on load
-          window.addEventListener('load', function() {
-            setTimeout(syncIframeThemes, 100);
-          });
-
-          // Watch for dark mode toggling
-          var observer = new MutationObserver(function(mutations) {
-            mutations.forEach(function(m) {
-              if (m.attributeName === 'class') syncIframeThemes();
-            });
-          });
-          observer.observe(document.documentElement, { attributes: true });
-
-          function autoResizeIframes() {
-            document.querySelectorAll('iframe.html-preview-frame').forEach(function(iframe) {
-              try {
-                var doc = iframe.contentDocument;
-                if (doc && doc.body) {
-                  iframe.style.height = doc.body.scrollHeight + 'px';
-                }
-              } catch(e) {}
-            });
-          }
-
-          // Sync theme + resize when iframes finish loading
-          document.querySelectorAll('iframe.html-preview-frame').forEach(function(iframe) {
-            iframe.addEventListener('load', function() {
-              setTimeout(function() { syncIframeThemes(); autoResizeIframes(); }, 50);
-            });
-          });
-        })();
-      `}
-    </script>
-  );
-}
-
 interface LiveHtmlPreviewProps {
   /** `id` of the `<textarea>` whose value drives this preview. */
   textareaId: string;
@@ -166,7 +109,7 @@ interface LiveHtmlPreviewProps {
  *
  * The first paint is server-rendered from `initialHtml` (so the saved template
  * shows immediately and degrades gracefully without JS); thereafter
- * `LiveHtmlPreviewScript` updates the iframe's `srcdoc` on every keystroke.
+ * the dashboard script updates the iframe's `srcdoc` on every keystroke.
  * Stays `sandbox="allow-same-origin"` (no `allow-scripts`) so embedded scripts
  * never execute: same posture as the static {@link HtmlPreview}.
  */
@@ -191,86 +134,29 @@ export function LiveHtmlPreview({
 }
 
 /**
- * Script block: include once per page that uses LiveHtmlPreview.
- * Binds each live preview iframe to its source textarea, re-rendering the
- * sample-substituted HTML (debounced) on input, and keeps dark mode +
- * auto-resize in sync. Targets the `live-html-preview-frame` class only, so it
- * never collides with the static {@link HtmlPreviewScript}.
+ * Data block: include once per page that uses LiveHtmlPreview.
+ *
+ * The dashboard script (`assets/dashboard.js`, "Live template previews")
+ * binds each live preview iframe to its source textarea and re-renders the
+ * sample-substituted HTML (debounced) on input, keeping dark mode and the
+ * height in sync. It reads the shared style block and sample dictionary
+ * from this JSON block, so the client output exactly matches the
+ * server-rendered first paint.
+ *
+ * `type="application/json"` is data, never run, so the CSP's
+ * `script-src 'self'` allows it. Every `<` is written as `\u003c` (still
+ * the same JSON), so the style block's `</style>` can never close the
+ * element early. The content is built only from the constants above.
  */
-export function LiveHtmlPreviewScript() {
-  // Inline the shared style block + sample dictionary so client output exactly
-  // matches the server-rendered first paint. JSON.stringify keeps them as valid
-  // JS string/object literals regardless of their contents.
-  const styleLiteral = JSON.stringify(PREVIEW_STYLE_BLOCK);
-  const samplesLiteral = JSON.stringify(PREVIEW_SAMPLE_VALUES);
+export function LiveHtmlPreviewData() {
+  const safeJson = JSON.stringify({
+    style: PREVIEW_STYLE_BLOCK,
+    samples: PREVIEW_SAMPLE_VALUES,
+  }).replace(/</g, "\\u003c");
 
   return (
-    <script>
-      {`
-        (function() {
-          var STYLE = ${styleLiteral};
-          var SAMPLES = ${samplesLiteral};
-
-          // Mirrors renderPreviewSamples() in html-preview.tsx and the
-          // {{\\w+}} matcher of renderTemplate(): fill placeholders with sample
-          // values, falling back to the variable name itself.
-          function substitute(html) {
-            return html.replace(/\\{\\{(\\w+)\\}\\}/g, function(match, key) {
-              return Object.prototype.hasOwnProperty.call(SAMPLES, key) ? SAMPLES[key] : key;
-            });
-          }
-          function wrap(html) {
-            return '<!DOCTYPE html><html><head><meta charset="UTF-8">' + STYLE + '</head><body>' + html + '</body></html>';
-          }
-          function applyTheme(iframe) {
-            try {
-              var isDark = document.documentElement.classList.contains('dark');
-              var doc = iframe.contentDocument;
-              if (doc && doc.documentElement) {
-                doc.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-              }
-            } catch(e) {}
-          }
-          function resize(iframe) {
-            try {
-              var doc = iframe.contentDocument;
-              if (doc && doc.body) iframe.style.height = doc.body.scrollHeight + 'px';
-            } catch(e) {}
-          }
-
-          document.querySelectorAll('iframe.live-html-preview-frame').forEach(function(iframe) {
-            var sourceId = iframe.getAttribute('data-source');
-            var source = sourceId ? document.getElementById(sourceId) : null;
-            if (!source) return;
-
-            var timer = null;
-            function render() {
-              iframe.srcdoc = wrap(substitute(source.value || ''));
-            }
-            // Re-sync theme + height each time the (re)loaded srcdoc is ready.
-            iframe.addEventListener('load', function() {
-              setTimeout(function() { applyTheme(iframe); resize(iframe); }, 30);
-            });
-            source.addEventListener('input', function() {
-              if (timer) clearTimeout(timer);
-              timer = setTimeout(render, 150);
-            });
-            // First paint is server-rendered; just adopt the current theme/size.
-            applyTheme(iframe);
-            resize(iframe);
-          });
-
-          // Keep live previews in sync when the page toggles dark mode.
-          var observer = new MutationObserver(function(mutations) {
-            mutations.forEach(function(m) {
-              if (m.attributeName === 'class') {
-                document.querySelectorAll('iframe.live-html-preview-frame').forEach(applyTheme);
-              }
-            });
-          });
-          observer.observe(document.documentElement, { attributes: true });
-        })();
-      `}
+    <script type="application/json" id="bm-live-preview-data">
+      {safeJson}
     </script>
   );
 }

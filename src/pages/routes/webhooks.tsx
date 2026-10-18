@@ -66,7 +66,7 @@ export function WebhooksPage({ webhooks, flash, secret, creators }: WebhooksPage
               name="url"
               required
               placeholder="https://your-app.com/webhook"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
             />
           </div>
           <div>
@@ -165,7 +165,7 @@ export function WebhooksPage({ webhooks, flash, secret, creators }: WebhooksPage
                         <button
                           type="submit"
                           class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                          onclick="return confirm('Are you sure you want to delete this webhook?')"
+                          data-confirm="Are you sure you want to delete this webhook?"
                         >
                           Delete
                         </button>

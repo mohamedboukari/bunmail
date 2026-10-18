@@ -533,6 +533,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 - Check the container is running: `docker compose ps`
 - If using a reverse proxy, verify it's forwarding to port 3000
 - `Dashboard temporarily unavailable` (HTTP `503`): the dashboard could not reach the session store in Postgres. Check the database with `docker compose ps` and `docker compose logs db`; the API keeps working.
+- Pages render unstyled and the log shows `Dashboard asset missing` for `dashboard.css`: the stylesheet is built, not committed (#255). The Docker image builds it; when running from source, run `bun run build:css` (or `bun run dev`, which builds it first) and restart.
 
 **Can't sign in to the dashboard (for example after upgrading to #216):**
 - The dashboard login is the owner account, not `DASHBOARD_PASSWORD`. If the owner never completed setup, take the newest `Owner setup link` from `docker compose logs app` or run `docker compose exec app bun run src/db/reset-owner.ts`. A forgotten password is reset the same way.

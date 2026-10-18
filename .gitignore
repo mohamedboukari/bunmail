@@ -5,6 +5,8 @@ node_modules
 out
 dist
 *.tgz
+# dashboard stylesheet, built by `bun run build:css` (the Docker image builds it)
+src/pages/assets/dashboard.css
 
 # code coverage
 coverage

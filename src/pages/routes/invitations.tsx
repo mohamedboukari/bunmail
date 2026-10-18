@@ -76,7 +76,7 @@ export function InvitationsPage({
             required
             maxlength="254"
             placeholder="teammate@yourcompany.com"
-            class="flex-1 min-w-[240px] px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+            class="flex-1 min-w-[240px] px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
           />
           <select
             name="role"
@@ -155,7 +155,7 @@ export function InvitationsPage({
                           <button
                             type="submit"
                             class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                            onclick="return confirm('Revoke this invitation? Its link stops working.')"
+                            data-confirm="Revoke this invitation? Its link stops working."
                           >
                             Revoke
                           </button>

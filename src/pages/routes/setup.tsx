@@ -3,6 +3,7 @@ import {
   SETUP_PASSWORD_MAX_LENGTH,
   SETUP_PASSWORD_MIN_LENGTH,
 } from "../../modules/users/services/owner-setup-policy.service.ts";
+import { PageAssets } from "../static-assets.tsx";
 
 /**
  * Owner setup pages (#215): standalone like the login page (no sidebar,
@@ -10,15 +11,15 @@ import {
  *
  * Every page carries `<meta name="referrer" content="strict-origin">` on top
  * of the `Referrer-Policy` header the route sets: the form page has the
- * token in its URL and loads the Tailwind CDN script, so no request it
- * makes may carry that URL in a `Referer` (the origin only). Not
+ * token in its URL and loads the dashboard stylesheet and script, so no
+ * request it makes may carry that URL in a `Referer` (the origin only). Not
  * `no-referrer`: browsers then send `Origin: null` on the form POST and
  * the same-origin check rejects it (see `setAuthPageHeaders`).
  */
 
 /** Shared input styling, matching the login form. */
 export const INPUT_CLASS =
-  "w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent";
+  "w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent";
 
 /** Shared label styling, matching the login form. */
 export const LABEL_CLASS =
@@ -47,22 +48,7 @@ export function SetupShell({
         <meta name="referrer" content="strict-origin" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title safe>{`${title} | BunMail`}</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
-          {`
-            tailwind.config = { darkMode: 'class' };
-          `}
-        </script>
-        <script>
-          {`
-            (function() {
-              var theme = localStorage.getItem('bm-theme');
-              if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                document.documentElement.classList.add('dark');
-              }
-            })();
-          `}
-        </script>
+        <PageAssets />
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
         <div class="w-full max-w-sm mx-auto px-4">

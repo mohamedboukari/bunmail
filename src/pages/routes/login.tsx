@@ -2,6 +2,7 @@ import {
   LOGIN_EMAIL_MAX_LENGTH,
   LOGIN_PASSWORD_MAX_LENGTH,
 } from "../../modules/users/services/session-policy.service.ts";
+import { PageAssets } from "../static-assets.tsx";
 
 /**
  * Login page: standalone (no sidebar navigation).
@@ -24,22 +25,7 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
         <title>Login | BunMail</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script>
-          {`
-            tailwind.config = { darkMode: 'class' };
-          `}
-        </script>
-        <script>
-          {`
-            (function() {
-              var theme = localStorage.getItem('bm-theme');
-              if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                document.documentElement.classList.add('dark');
-              }
-            })();
-          `}
-        </script>
+        <PageAssets />
       </head>
       <body class="h-full bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
         <div class="w-full max-w-sm mx-auto px-4">
@@ -84,7 +70,7 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
                 required
                 autofocus={!disabled}
                 disabled={disabled}
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="you@example.com"
               />
               <label
@@ -101,7 +87,7 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
                 maxlength={String(LOGIN_PASSWORD_MAX_LENGTH)}
                 required
                 disabled={disabled}
-                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
                 placeholder="Enter your password"
               />
               <button

@@ -12,9 +12,14 @@
  * 2. The scanner only checks JSX children, never attribute values, and
  *    `@kitajs/html` escapes only `"` in attributes. A stored value inside
  *    an inline event handler (`onclick={...}`) can end the JavaScript
- *    string with a `'`. Dynamic event-handler attributes are therefore
- *    forbidden under `src/pages`: use static text, or a `data-` attribute
- *    read by a static script.
+ *    string with a `'`.
+ *
+ * Since #255 (part 2) the pages run under `script-src 'self'`, so inline
+ * code would not even run: every event-handler attribute (`onclick="..."`
+ * as well as `onclick={...}`) and every inline `<script>` (one without
+ * `src=`, other than a `type="application/json"` data block) is forbidden
+ * under `src/pages`, and so is the Tailwind CDN. Behaviour goes in
+ * `src/pages/assets/dashboard.js`, wired by a `data-` attribute.
  *
  * Fails closed: `xss-scan` exits 0 even when it crashes, so the run only
  * passes when the scanner printed its success sentinel and the attribute
@@ -38,8 +43,19 @@ const PAGES_DIR = join(import.meta.dir, "..", "src", "pages");
 const UNPATCHED = "return [node.whenFalse, node.whenFalse];";
 const PATCHED = "return [node.whenTrue, node.whenFalse];";
 
-/** A dynamic JSX event-handler attribute: `onclick={`, `onsubmit={`, ... */
-const DYNAMIC_HANDLER_RE = /\bon[a-z]+=\{/;
+/** A JSX event-handler attribute: `onclick="`, `onsubmit={`, ... */
+const HANDLER_RE = /\son[a-z]+=["'{]/;
+
+/** An inline `<script>`: no `src=`, and not a `type="application/json"` data block. */
+const INLINE_SCRIPT_RE = /<script(?![^>]*\bsrc=)(?![^>]*type="application\/json")[\s>]/i;
+
+/**
+ * A `<script src>` or `<link href>` loading from another origin: an absolute
+ * (`https://...`) or protocol-relative (`//...`) URL. The pages loaded the
+ * Tailwind Play CDN this way before #255; every asset is self-hosted now.
+ */
+const THIRD_PARTY_ASSET_RE =
+  /<(?:script|link)\b[^>]*\b(?:src|href)=["'{]?(?:https?:)?\/\//i;
 
 let failed = false;
 function fail(message: string): void {
@@ -74,25 +90,37 @@ function runScanner(): void {
   }
 }
 
-/** Rejects dynamic event-handler attributes under src/pages. */
-async function sweepEventHandlers(): Promise<void> {
-  const hits: string[] = [];
-  for await (const relative of new Bun.Glob("**/*.tsx").scan(PAGES_DIR)) {
+/** Rejects event-handler attributes, inline scripts and the Tailwind CDN under src/pages. */
+async function sweepInlineCode(): Promise<void> {
+  const rules: Array<[(line: string) => boolean, string]> = [
+    [
+      (line) => HANDLER_RE.test(line),
+      "event-handler attribute; wire it in assets/dashboard.js with a data- attribute",
+    ],
+    [
+      (line) => INLINE_SCRIPT_RE.test(line),
+      "inline <script>; the CSP only runs /dashboard/assets/dashboard.js",
+    ],
+    [
+      (line) => THIRD_PARTY_ASSET_RE.test(line),
+      "third-party script or stylesheet; serve it from /dashboard/assets",
+    ],
+  ];
+  for await (const relative of new Bun.Glob("**/*.{ts,tsx}").scan(PAGES_DIR)) {
     const lines = (await Bun.file(join(PAGES_DIR, relative)).text()).split("\n");
     lines.forEach((line, index) => {
-      if (DYNAMIC_HANDLER_RE.test(line)) hits.push(`src/pages/${relative}:${index + 1}`);
+      for (const [matches, why] of rules) {
+        if (matches(line)) fail(`src/pages/${relative}:${index + 1}: ${why}`);
+      }
     });
-  }
-  for (const hit of hits) {
-    fail(
-      `${hit}: dynamic event-handler attribute; attribute escaping does not cover quotes`,
-    );
   }
 }
 
 await patchScanner();
 if (!failed) runScanner();
-await sweepEventHandlers();
+await sweepInlineCode();
 
 if (failed) process.exit(1);
-console.info("xss-gate: ok (scanner clean, no dynamic event handlers under src/pages)");
+console.info(
+  "xss-gate: ok (scanner clean, no inline handlers or scripts under src/pages)",
+);

@@ -234,7 +234,8 @@ Inbound mail arrives via the built-in SMTP server (port 25/2525), gets parsed by
 
 ```bash
 bun install
-bun run dev            # start dev server (--watch)
+bun run dev            # build the dashboard CSS, start dev server (--watch)
+bun run dev:css        # optional, 2nd terminal: rebuild the CSS as classes change
 bun test               # run all tests
 bun test test/unit     # unit tests only
 bun test test/e2e      # e2e (plugin) tests only

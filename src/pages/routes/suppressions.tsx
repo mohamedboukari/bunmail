@@ -77,7 +77,7 @@ export function SuppressionsPage({
               name="email"
               value={filters.email ?? ""}
               placeholder="e.g. gmail.com"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
             />
           </div>
           <div class="min-w-[200px]">
@@ -90,7 +90,7 @@ export function SuppressionsPage({
             <select
               id="apiKeyId"
               name="apiKeyId"
-              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
+              class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500"
             >
               <option value="">All keys</option>
               {apiKeys.map((k) => (
@@ -219,7 +219,7 @@ export function SuppressionsPage({
                           <button
                             type="submit"
                             class="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 font-medium"
-                            onclick="return confirm('Remove this suppression? The address will be able to receive mail from this API key again.')"
+                            data-confirm="Remove this suppression? The address will be able to receive mail from this API key again."
                           >
                             Delete
                           </button>

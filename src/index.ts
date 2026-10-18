@@ -17,7 +17,7 @@ import { withRequestContext } from "./middleware/request-context.ts";
 import { securityHeadersPlugin } from "./middleware/security-headers.ts";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
-import { NotFoundPage } from "./pages/routes/not-found.tsx";
+import { notFoundResponse } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submission.service.ts";
@@ -244,10 +244,7 @@ const app = new Elysia()
 
       const accept = request.headers.get("accept") ?? "";
       if (accept.includes("text/html")) {
-        return new Response("<!doctype html>" + (await NotFoundPage()), {
-          status: 404,
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
+        return notFoundResponse();
       }
 
       return { success: false, error: "Not found" };

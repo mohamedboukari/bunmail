@@ -104,7 +104,7 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
             name="notifyEmail"
             value={domain.notifyEmail ?? ""}
             placeholder="ops@yourcompany.com"
-            class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+            class="flex-1 px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
           />
           <button
             type="submit"
@@ -135,14 +135,14 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
             name="unsubscribeEmail"
             value={domain.unsubscribeEmail ?? ""}
             placeholder="unsubscribe@yourcompany.com"
-            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
           />
           <input
             type="url"
             name="unsubscribeUrl"
             value={domain.unsubscribeUrl ?? ""}
             placeholder="https://yourcompany.com/unsubscribe"
-            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
+            class="px-3 py-2 text-sm bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded-lg text-gray-900 dark:text-gray-100 focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-600"
           />
           <button
             type="submit"

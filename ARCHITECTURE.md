@@ -89,7 +89,7 @@ bunmail/
 │   │   └── reset-owner.ts                ← Shell-only recovery: prints a fresh owner setup link (#215)
 │   ├── middleware/
 │   │   ├── request-context.ts            ← Request ID, X-Request-Id and the per-request log line (#284)
-│   │   ├── security-headers.ts           ← CSP baseline, nosniff, X-Frame-Options, Referrer-Policy, HSTS, dashboard no-store (#255)
+│   │   ├── security-headers.ts           ← CSP (page policy on / and /dashboard, baseline elsewhere), nosniff, X-Frame-Options, Referrer-Policy, HSTS, dashboard no-store (#255)
 │   │   ├── auth.ts                       ← API key bearer auth
 │   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
 │   │   ├── rate-limit-core.ts            ← Pure fixed-window algorithm (unit-tested, #174)
@@ -256,8 +256,13 @@ bunmail/
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
 │       ├── landing.plugin.tsx            ← Public landing page at /
+│       ├── static-assets.tsx             ← Serves dashboard.css / dashboard.js with a content-hash ?v= and a 1-year cache (#255)
+│       ├── assets/
+│       │   ├── dashboard.input.css       ← Tailwind v4 source; `bun run build:css` writes dashboard.css (gitignored, built in Docker) (#255)
+│       │   ├── dashboard.js              ← The only script: theme, confirms, bulk select, chip inputs, time display, previews (#255)
+│       │   └── icons.tsx                 ← Inline SVG icons
 │       ├── layouts/
-│       │   └── base.tsx                  ← HTML shell + Tailwind CDN + nav (admin-only links by viewer role, #218)
+│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218)
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
@@ -844,6 +849,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/invite                  | Create the invited account, spend the token, sign in (#217) | Invite token |
 | GET    | /dashboard/reset?token=            | Password reset form (read-only, never spends the token, #277) | Reset token |
 | POST   | /dashboard/reset                   | Set the new password, spend the token, sign out everywhere, sign in (#277) | Reset token |
+| GET    | /dashboard/assets/dashboard.css    | Self-hosted stylesheet, cached 1 year (#255) | No |
+| GET    | /dashboard/assets/dashboard.js     | Dashboard script, cached 1 year (#255) | No |
 | GET    | /dashboard                         | Stats overview          | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |

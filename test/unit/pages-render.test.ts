@@ -380,7 +380,7 @@ describe("Dashboard page render smoke tests", () => {
       "string",
     );
     expect(typeof TemplatesPage({ templates: [], creators, viewer })).toBe("string");
-    /** Create form ships the live HTML preview iframe + its driver script. */
+    /** Create form ships the live HTML preview iframe + its data block (#255). */
     expect(await TemplatesPage({ templates: [], creators, viewer })).toContain(
       "live-html-preview-frame",
     );
