@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A flaky CI test gets room to run.** The ownership-transfer burst test runs several argon2id verifies in parallel and hit Bun's 5 s default timeout on busy CI runners (passing on re-run); it now has a 30 s timeout like the other argon2-heavy tests. Tests only.
 - **API key middleware tests (#183).** A new integration suite runs the real Bearer-key middleware against Postgres and checks that each malformed `Authorization` header (missing, another scheme, a bare token, an unknown key) gets its own `401`, and that `last_used_at` is written on first use and then at most once a minute per key. With the authorization matrix (#228, every route: no key, invalid and revoked keys, the admin gate, tenant isolation), the deactivated-creator checks (#219) and the allowed-senders suite (REST and SMTP), the middleware no longer depends on stubbed e2e tests for coverage. Tests only.
 
 ### Fixed
