@@ -89,6 +89,7 @@ bunmail/
 │   │   └── reset-owner.ts                ← Shell-only recovery: prints a fresh owner setup link (#215)
 │   ├── middleware/
 │   │   ├── request-context.ts            ← Request ID, X-Request-Id and the per-request log line (#284)
+│   │   ├── security-headers.ts           ← CSP baseline, nosniff, X-Frame-Options, Referrer-Policy, HSTS, dashboard no-store (#255)
 │   │   ├── auth.ts                       ← API key bearer auth
 │   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
 │   │   ├── rate-limit-core.ts            ← Pure fixed-window algorithm (unit-tested, #174)

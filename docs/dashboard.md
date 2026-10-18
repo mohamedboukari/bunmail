@@ -210,6 +210,10 @@ per-replica.
 | GET /dashboard/dmarc-reports/:id | DMARC report detail, per source IP (#41)                          |
 | GET /dashboard/suppressions      | Suppressions across every API key (#89)                           |
 
+## Security headers (#255)
+
+Every response (dashboard, landing page, API, error pages) carries `Content-Security-Policy: object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` response is `Cache-Control: no-store`. `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves. A CSP with `script-src` / `style-src` follows once the Tailwind CDN script and the inline scripts are replaced (#255, part 2).
+
 ## Design System
 
 - **CSS:** Tailwind CSS via CDN
