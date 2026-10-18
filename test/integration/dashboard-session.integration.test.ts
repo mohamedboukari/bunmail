@@ -57,8 +57,12 @@ function login(
   );
 }
 
-/** GET `path` with `bm_session=<token>`. */
-function visit(token: string, path: string = "/dashboard/api-keys"): Promise<Response> {
+/**
+ * GET `path` with `bm_session=<token>`. The default is a member page, so a
+ * session of any role opens it: these tests are about the session, the
+ * role checks (#222) have their own suite.
+ */
+function visit(token: string, path: string = "/dashboard/emails"): Promise<Response> {
   return app.handle(
     new Request(`http://localhost${path}`, {
       headers: { cookie: `bm_session=${token}` },

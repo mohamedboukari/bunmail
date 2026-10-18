@@ -241,6 +241,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Elysia plugin serving /dashboard + login + session guard
+│       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── layouts/
@@ -251,6 +252,7 @@ bunmail/
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── not-found.tsx             ← Custom 404 page
+│       │   ├── forbidden.tsx             ← 403 page for a role or session assurance too low (#222)
 │       │   ├── send-email.tsx            ← Compose & send email form
 │       │   ├── emails.tsx                ← Email logs table + filters
 │       │   ├── email-detail.tsx          ← Single email view
@@ -803,50 +805,62 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /dashboard/logout                  | Revoke the session, clear the cookie | No |
 | GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
-| GET    | /dashboard                         | Stats overview          | Session  |
-| GET    | /dashboard/send                    | Compose & send email    | Session  |
-| POST   | /dashboard/send                    | Queue email for send    | Session  |
-| GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Session |
-| GET    | /dashboard/emails/trash            | Trashed emails view     | Session  |
-| POST   | /dashboard/emails/bulk-trash       | Bulk move to trash      | Session  |
-| POST   | /dashboard/emails/trash/bulk-restore   | Bulk restore        | Session  |
-| POST   | /dashboard/emails/trash/bulk-permanent | Bulk hard-delete    | Session  |
-| POST   | /dashboard/emails/trash/empty      | Empty email trash       | Session  |
-| POST   | /dashboard/emails/:id/trash        | Move single to trash    | Session  |
-| POST   | /dashboard/emails/:id/restore      | Restore single          | Session  |
-| POST   | /dashboard/emails/:id/permanent    | Hard-delete single (writes tombstone) | Session  |
-| GET    | /dashboard/emails/tombstones       | Tombstone list + Message-ID search | Session  |
-| GET    | /dashboard/emails/:id              | Email detail            | Session  |
-| GET    | /dashboard/api-keys                | API keys management     | Session  |
-| POST   | /dashboard/api-keys                | Create API key          | Session  |
-| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key          | Session  |
-| GET    | /dashboard/domains                 | Domains management      | Session  |
-| POST   | /dashboard/domains                 | Add domain              | Session  |
-| POST   | /dashboard/domains/:id/delete      | Delete domain           | Session  |
-| POST   | /dashboard/domains/:id/verify      | Verify domain DNS       | Session  |
-| GET    | /dashboard/domains/:id             | Domain detail           | Session  |
-| GET    | /dashboard/templates               | Templates management    | Session  |
-| POST   | /dashboard/templates               | Create template         | Session  |
-| GET    | /dashboard/templates/:id           | Template detail + edit  | Session  |
-| POST   | /dashboard/templates/:id/edit      | Update template         | Session  |
-| POST   | /dashboard/templates/:id/delete    | Delete template         | Session  |
-| GET    | /dashboard/webhooks                | Webhooks management     | Session  |
-| POST   | /dashboard/webhooks                | Create webhook          | Session  |
-| POST   | /dashboard/webhooks/:id/delete     | Delete webhook          | Session  |
-| GET    | /dashboard/inbound                 | Inbound emails list + bulk-select | Session |
-| GET    | /dashboard/inbound/trash           | Trashed inbound view    | Session  |
-| POST   | /dashboard/inbound/bulk-trash      | Bulk move to trash      | Session  |
-| POST   | /dashboard/inbound/trash/bulk-restore   | Bulk restore       | Session  |
-| POST   | /dashboard/inbound/trash/bulk-permanent | Bulk hard-delete   | Session  |
-| POST   | /dashboard/inbound/trash/empty     | Empty inbound trash     | Session  |
-| POST   | /dashboard/inbound/:id/trash       | Move single to trash    | Session  |
-| POST   | /dashboard/inbound/:id/restore     | Restore single          | Session  |
-| POST   | /dashboard/inbound/:id/permanent   | Hard-delete single      | Session  |
-| GET    | /dashboard/inbound/:id             | Inbound email detail    | Session  |
-| GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Session  |
-| GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Session  |
+| GET    | /dashboard                         | Stats overview          | Member |
+| GET    | /dashboard/send                    | Compose & send email    | Member |
+| POST   | /dashboard/send                    | Queue email for send    | Member |
+| GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Member |
+| GET    | /dashboard/emails/trash            | Trashed emails view     | Member |
+| POST   | /dashboard/emails/bulk-trash       | Bulk move to trash      | Admin |
+| POST   | /dashboard/emails/trash/bulk-restore   | Bulk restore        | Admin |
+| POST   | /dashboard/emails/trash/bulk-permanent | Bulk hard-delete    | Admin |
+| POST   | /dashboard/emails/trash/empty      | Empty email trash       | Admin |
+| POST   | /dashboard/emails/:id/trash        | Move single to trash    | Admin  |
+| POST   | /dashboard/emails/:id/restore      | Restore single          | Member |
+| POST   | /dashboard/emails/:id/permanent    | Hard-delete single (writes tombstone) | Admin |
+| GET    | /dashboard/emails/tombstones       | Tombstone list + Message-ID search | Member |
+| GET    | /dashboard/emails/:id              | Email detail            | Member |
+| GET    | /dashboard/api-keys                | API keys management     | Admin |
+| POST   | /dashboard/api-keys                | Create API key          | Admin |
+| POST   | /dashboard/api-keys/:id/revoke     | Revoke API key          | Admin |
+| POST   | /dashboard/api-keys/:id/admin      | Promote/demote a key to admin (#130) | Admin |
+| POST   | /dashboard/api-keys/:id/senders    | Set a key's allowed senders (#126) | Admin |
+| GET    | /dashboard/domains                 | Domains management      | Member |
+| POST   | /dashboard/domains                 | Add domain              | Admin |
+| POST   | /dashboard/domains/:id/delete      | Delete domain           | Admin |
+| POST   | /dashboard/domains/:id/verify      | Verify domain DNS       | Admin |
+| POST   | /dashboard/domains/:id/notify-email | Set/clear inbound notification address (#106) | Admin |
+| POST   | /dashboard/domains/:id/unsubscribe | Set/clear List-Unsubscribe overrides (#243) | Admin |
+| GET    | /dashboard/domains/:id             | Domain detail           | Member |
+| GET    | /dashboard/templates               | Templates management    | Member |
+| POST   | /dashboard/templates               | Create template         | Member |
+| GET    | /dashboard/templates/:id           | Template detail + edit  | Member |
+| POST   | /dashboard/templates/:id/edit      | Update template         | Admin  |
+| POST   | /dashboard/templates/:id/delete    | Delete template         | Admin |
+| GET    | /dashboard/webhooks                | Webhooks management     | Member |
+| POST   | /dashboard/webhooks                | Create webhook          | Admin |
+| POST   | /dashboard/webhooks/:id/delete     | Delete webhook          | Admin |
+| GET    | /dashboard/webhooks/:id/deliveries | Delivery history of one webhook (#30) | Member |
+| GET    | /dashboard/webhooks/deliveries/:deliveryId | Delivery detail | Member |
+| POST   | /dashboard/webhooks/deliveries/:deliveryId/replay | Re-queue a delivery | Admin |
+| GET    | /dashboard/inbound                 | Inbound emails list + bulk-select | Member |
+| GET    | /dashboard/inbound/trash           | Trashed inbound view    | Member |
+| POST   | /dashboard/inbound/bulk-trash      | Bulk move to trash      | Admin |
+| POST   | /dashboard/inbound/trash/bulk-restore   | Bulk restore       | Admin |
+| POST   | /dashboard/inbound/trash/bulk-permanent | Bulk hard-delete   | Admin |
+| POST   | /dashboard/inbound/trash/empty     | Empty inbound trash     | Admin |
+| POST   | /dashboard/inbound/:id/trash       | Move single to trash    | Admin  |
+| POST   | /dashboard/inbound/:id/restore     | Restore single          | Member |
+| POST   | /dashboard/inbound/:id/permanent   | Hard-delete single      | Admin |
+| GET    | /dashboard/inbound/:id             | Inbound email detail    | Member |
+| GET    | /dashboard/inbound/:id/reply       | Compose form pre-filled as a reply (#86) | Member |
+| GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Member |
+| GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Member |
+| GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |
+| POST   | /dashboard/suppressions/:id/delete | Remove a suppression (#89) | Admin |
 
 Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
+
+Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in account to every protected handler as `auth` (`user: { id, email, role }`, `session: { id, assurance }`) from its single session lookup, and every protected route carries a role check as its own `beforeHandle` (`memberGuard`, `adminGuard` or `ownerGuard`, `src/pages/guards.tsx`; owner > admin > member). The Auth column above is the minimum role. A role too low gets `403` with a small Forbidden page and a `warn` log line. `test/integration/dashboard-route-access.integration.test.ts` fails on any route missing from its table or carrying the wrong guard. See [docs/dashboard.md](docs/dashboard.md#roles-222).
 
 ### Health
 
@@ -864,7 +878,7 @@ Dashboard auth is account login (#216): email and password against `user_credent
 - **Lookup:** Hash incoming token → match against `key_hash` column
 - **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
 - **Bootstrap:** Run `bun run src/db/seed.ts` to create the first API key (admin). The dashboard owner is created on boot from `BUNMAIL_OWNER_EMAIL` (#215); recover a lost setup link with `bun run src/db/reset-owner.ts`
-- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
+- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Every protected route requires a minimum account role (owner > admin > member, #222). Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
 
 ---
 

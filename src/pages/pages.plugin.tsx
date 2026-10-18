@@ -3,6 +3,7 @@ import { html } from "@elysiajs/html";
 import { randomBytes } from "crypto";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
+import { setLogContextUser } from "../utils/log-context.ts";
 import { redactEmail } from "../utils/redact.ts";
 import {
   resolveClientIp,
@@ -36,6 +37,7 @@ import { DmarcReportsPage } from "./routes/dmarc-reports.tsx";
 import { DmarcReportDetailPage } from "./routes/dmarc-report-detail.tsx";
 import { SuppressionsPage } from "./routes/suppressions.tsx";
 import { clearSessionCookie, readSessionCookie, sessionSetCookie } from "./session.ts";
+import { adminGuard, memberGuard, toDashboardAuth } from "./guards.tsx";
 import { parsePagination } from "./pagination.ts";
 
 /* ─── Services ─── */
@@ -344,6 +346,12 @@ function isDnsVerifyThrottled(domainId: string): boolean {
  * whose opaque token rides in the `bm_session` cookie and rotates every
  * minute. The owner setup routes are authorized by the one-time setup
  * token.
+ *
+ * Roles (#222): the session guard puts the signed-in account on `auth`,
+ * and every protected route carries a role check from `guards.tsx` as its
+ * own `beforeHandle`: `memberGuard` (any signed-in account), `adminGuard`
+ * or `ownerGuard`. A new route needs one of them and an entry in the
+ * route table of `dashboard-route-access.integration.test.ts`.
  */
 
 /**
@@ -710,29 +718,30 @@ export const pagesPlugin = new Elysia({
    *    out with this response; when a parallel request rotated first, this
    *    one is served without a new cookie. A rotation error is logged and
    *    the request is served (the old token stays current).
+   * 7. The request goes on with `auth` (#222): the account (id, email,
+   *    role) and the session (id, assurance), all from the lookup in step
+   *    3, so a request costs exactly one session query. Each route's own
+   *    `beforeHandle` (`memberGuard`, `adminGuard`, `ownerGuard` from
+   *    `guards.tsx`) then checks the role.
+   *
+   * It is a `resolve`, not an `onBeforeHandle`, so the type of `auth`
+   * flows to every handler registered after it. A `resolve` can only stop
+   * the request by returning `status()` (any other value is merged into
+   * the context), so each refusal sets its headers on `set` and returns
+   * `status(code, body)`. Like every local hook it applies only to routes
+   * registered after it: the public routes above never run it.
    */
-  .onBeforeHandle(async ({ request, set, path, server }) => {
-    /**
-     * Skip auth for the public routes registered above (login, logout,
-     * owner setup #215). Local hooks only apply to routes registered after
-     * them, so this is defense in depth.
-     */
-    if (
-      path === "/dashboard/login" ||
-      path === "/dashboard/logout" ||
-      path === "/dashboard/setup"
-    ) {
-      return;
-    }
-
+  .resolve(async ({ request, set, path, server, status }) => {
     const token = readSessionCookie(request.headers.get("cookie"));
     if (!token) {
-      return redirect(set, "/dashboard/login");
+      redirect(set, "/dashboard/login");
+      return status(302, "");
     }
     if (!isWellFormedToken(token)) {
       logger.debug("Dashboard session cookie malformed or legacy, clearing it");
       clearSession(set);
-      return redirect(set, "/dashboard/login");
+      redirect(set, "/dashboard/login");
+      return status(302, "");
     }
 
     let session: Awaited<ReturnType<typeof sessionService.findActiveSession>>;
@@ -743,8 +752,7 @@ export const pagesPlugin = new Elysia({
         path,
         error: errorMessage(error),
       });
-      set.status = 503;
-      return SESSION_STORE_DOWN;
+      return status(503, SESSION_STORE_DOWN);
     }
 
     /**
@@ -762,8 +770,7 @@ export const pagesPlugin = new Elysia({
           path,
           error: errorMessage(error),
         });
-        set.status = 503;
-        return SESSION_STORE_DOWN;
+        return status(503, SESSION_STORE_DOWN);
       }
     }
 
@@ -782,17 +789,18 @@ export const pagesPlugin = new Elysia({
           ip,
           error: errorMessage(error),
         });
-        set.status = 503;
-        return SESSION_STORE_DOWN;
+        return status(503, SESSION_STORE_DOWN);
       }
       clearSession(set);
-      return redirect(set, "/dashboard/login");
+      redirect(set, "/dashboard/login");
+      return status(302, "");
     }
 
     if (!session) {
       logger.debug("Dashboard session invalid, redirecting to login");
       clearSession(set);
-      return redirect(set, "/dashboard/login");
+      redirect(set, "/dashboard/login");
+      return status(302, "");
     }
 
     /**
@@ -808,8 +816,7 @@ export const pagesPlugin = new Elysia({
         path,
         origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
       });
-      set.status = 403;
-      return "Forbidden: cross-origin request rejected";
+      return status(403, "Forbidden: cross-origin request rejected");
     }
 
     if (session.matched === "current" && session.rotationDue) {
@@ -823,6 +830,10 @@ export const pagesPlugin = new Elysia({
         });
       }
     }
+
+    /** Every later log line of this request names the user (#222, #284). */
+    setLogContextUser(session.userId);
+    return { auth: toDashboardAuth(session) };
   })
 
   /* ─── Protected Routes ─── */
@@ -831,10 +842,14 @@ export const pagesPlugin = new Elysia({
    * GET /dashboard
    * Dashboard home: shows stat cards with overview counts.
    */
-  .get("/", async () => {
-    const stats = await statsService.getDashboardStats();
-    return <HomePage stats={stats} />;
-  })
+  .get(
+    "/",
+    async () => {
+      const stats = await statsService.getDashboardStats();
+      return <HomePage stats={stats} />;
+    },
+    { beforeHandle: memberGuard },
+  )
 
   /**
    * GET /dashboard/send
@@ -863,6 +878,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -924,6 +940,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: memberGuard,
       body: t.Object({
         apiKeyId: t.String(),
         from: t.String({ format: "email" }),
@@ -990,6 +1007,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -1033,6 +1051,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -1069,6 +1088,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -1095,6 +1115,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -1122,6 +1143,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -1149,6 +1171,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -1159,15 +1182,19 @@ export const pagesPlugin = new Elysia({
    * POST /dashboard/emails/trash/empty
    * Empties the email trash entirely.
    */
-  .post("/emails/trash/empty", async ({ set }) => {
-    const deleted = await emailService.emptyEmailsTrashUnscoped();
-    logger.info("Emptied emails trash via dashboard", { deleted });
+  .post(
+    "/emails/trash/empty",
+    async ({ set }) => {
+      const deleted = await emailService.emptyEmailsTrashUnscoped();
+      logger.info("Emptied emails trash via dashboard", { deleted });
 
-    set.status = 302;
-    set.headers["location"] =
-      `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
-    return "";
-  })
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
+      return "";
+    },
+    { beforeHandle: adminGuard },
+  )
 
   /**
    * POST /dashboard/emails/:id/trash
@@ -1191,7 +1218,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/emails?flash=${encodeURIComponent("Email moved to trash")}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -1213,7 +1240,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -1236,7 +1263,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -1262,6 +1289,7 @@ export const pagesPlugin = new Elysia({
       return "Email not found";
     },
     {
+      beforeHandle: memberGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -1290,6 +1318,7 @@ export const pagesPlugin = new Elysia({
       return <ApiKeysPage keys={keys} flash={flash} rawKey={rawKey} />;
     },
     {
+      beforeHandle: adminGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -1340,6 +1369,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         name: t.String(),
         allowedSenders: t.Optional(t.String()),
@@ -1367,6 +1397,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({ isAdmin: t.String() }),
     },
@@ -1392,6 +1423,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({ allowedSenders: t.Optional(t.String()) }),
     },
@@ -1420,6 +1452,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -1440,6 +1473,7 @@ export const pagesPlugin = new Elysia({
       return <DomainsPage domains={domainList} flash={flash} />;
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -1472,6 +1506,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         name: t.String(),
       }),
@@ -1501,6 +1536,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -1549,6 +1585,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -1591,6 +1628,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({ notifyEmail: t.Optional(t.String({ maxLength: 255 })) }),
     },
@@ -1633,6 +1671,7 @@ export const pagesPlugin = new Elysia({
       return back("Unsubscribe settings saved", "success");
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({
         unsubscribeEmail: t.Optional(t.String({ maxLength: 254 })),
@@ -1660,6 +1699,7 @@ export const pagesPlugin = new Elysia({
       return <DomainDetailPage domain={domain} flash={flash} />;
     },
     {
+      beforeHandle: memberGuard,
       params: t.Object({
         id: t.String(),
       }),
@@ -1680,6 +1720,7 @@ export const pagesPlugin = new Elysia({
       return <TemplatesPage templates={list} flash={flash} />;
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -1726,6 +1767,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: memberGuard,
       body: t.Object({
         name: t.String(),
         subject: t.String(),
@@ -1748,6 +1790,7 @@ export const pagesPlugin = new Elysia({
       return <TemplateDetailPage template={template} flash={flash} />;
     },
     {
+      beforeHandle: memberGuard,
       params: t.Object({ id: t.String() }),
       query: t.Object({
         flash: t.Optional(t.String()),
@@ -1791,6 +1834,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       params: t.Object({ id: t.String() }),
       body: t.Object({
         name: t.Optional(t.String()),
@@ -1824,9 +1868,7 @@ export const pagesPlugin = new Elysia({
       }
       return "";
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   /* ─── Webhooks ─── */
@@ -1842,6 +1884,7 @@ export const pagesPlugin = new Elysia({
       return <WebhooksPage webhooks={hooks} flash={flash} secret={secret} />;
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         flash: t.Optional(t.String()),
         flashType: t.Optional(t.String()),
@@ -1882,6 +1925,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         url: t.String(),
         events: t.Union([t.String(), t.Array(t.String())]),
@@ -1912,9 +1956,7 @@ export const pagesPlugin = new Elysia({
       }
       return "";
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -1967,6 +2009,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       params: t.Object({ id: t.String() }),
       query: t.Object({
         page: t.Optional(t.String()),
@@ -2018,6 +2061,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       params: t.Object({ deliveryId: t.String() }),
       query: t.Object({
         flash: t.Optional(t.String()),
@@ -2052,9 +2096,7 @@ export const pagesPlugin = new Elysia({
         : `/dashboard/webhooks?flash=${encodeURIComponent("Delivery not found")}&flashType=error`;
       return "";
     },
-    {
-      params: t.Object({ deliveryId: t.String() }),
-    },
+    { beforeHandle: adminGuard, params: t.Object({ deliveryId: t.String() }) },
   )
 
   /* ─── Inbound ─── */
@@ -2079,6 +2121,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -2116,6 +2159,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -2139,6 +2183,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -2163,6 +2208,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -2187,6 +2233,7 @@ export const pagesPlugin = new Elysia({
       return "";
     },
     {
+      beforeHandle: adminGuard,
       body: t.Object({
         ids: t.Union([t.Array(t.String()), t.String()]),
       }),
@@ -2194,15 +2241,19 @@ export const pagesPlugin = new Elysia({
   )
 
   /** POST /dashboard/inbound/trash/empty: empty inbound trash entirely. */
-  .post("/inbound/trash/empty", async ({ set }) => {
-    const deleted = await inboundService.emptyInboundTrash();
-    logger.info("Emptied inbound trash via dashboard", { deleted });
+  .post(
+    "/inbound/trash/empty",
+    async ({ set }) => {
+      const deleted = await inboundService.emptyInboundTrash();
+      logger.info("Emptied inbound trash via dashboard", { deleted });
 
-    set.status = 302;
-    set.headers["location"] =
-      `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
-    return "";
-  })
+      set.status = 302;
+      set.headers["location"] =
+        `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
+      return "";
+    },
+    { beforeHandle: adminGuard },
+  )
 
   /** POST /dashboard/inbound/:id/trash, move single inbound to trash. */
   .post(
@@ -2223,7 +2274,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/inbound?flash=${encodeURIComponent("Email moved to trash")}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   /** POST /dashboard/inbound/:id/restore, restore single trashed inbound. */
@@ -2240,7 +2291,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /** POST /dashboard/inbound/:id/permanent, hard-delete single trashed inbound. */
@@ -2259,7 +2310,7 @@ export const pagesPlugin = new Elysia({
         `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
       return "";
     },
-    { params: t.Object({ id: t.String() }) },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   )
 
   .get(
@@ -2274,9 +2325,7 @@ export const pagesPlugin = new Elysia({
       set.status = 404;
       return "Inbound email not found";
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -2368,9 +2417,7 @@ export const pagesPlugin = new Elysia({
         />
       );
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -2404,6 +2451,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -2423,9 +2471,7 @@ export const pagesPlugin = new Elysia({
       }
       return <DmarcReportDetailPage report={result.report} records={result.records} />;
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
   )
 
   /**
@@ -2479,6 +2525,7 @@ export const pagesPlugin = new Elysia({
       );
     },
     {
+      beforeHandle: memberGuard,
       query: t.Object({
         page: t.Optional(t.String()),
         limit: t.Optional(t.String()),
@@ -2512,7 +2559,5 @@ export const pagesPlugin = new Elysia({
         `/dashboard/suppressions?flash=${encodeURIComponent(flash)}&flashType=${flashType}`;
       return "";
     },
-    {
-      params: t.Object({ id: t.String() }),
-    },
+    { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
   );

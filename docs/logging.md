@@ -23,6 +23,7 @@ Every line written while handling a piece of work carries that work's ID, automa
 | Queued email, one send attempt | `job: "email-send"`, `jobId` (the `msg_` email id) | `processEmail` in the queue |
 | SMTP connection (inbound or submission) | `smtpSessionId`, `listener: "inbound" \| "submission"` | each `smtp-server` handler |
 | Webhook delivery | `job: "webhook-delivery"`, `jobId` (the delivery id) | the delivery worker |
+| Signed-in dashboard user (added to the request's context) | `userId` | the session guard, once the session is verified (#222) |
 | Purge cycle (trash, tombstones, expired sessions) | `job: "purge"` | the purge worker |
 
 Contexts nest: a webhook fired while sending an email logs with the email's `jobId`.

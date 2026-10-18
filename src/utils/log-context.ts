@@ -32,6 +32,8 @@ export interface LogContext {
   smtpSessionId?: string;
   /** Which SMTP listener the session belongs to. */
   listener?: "inbound" | "submission";
+  /** The signed-in dashboard user the request acts as (#222), for "who did what". */
+  userId?: string;
 }
 
 const storage = new AsyncLocalStorage<LogContext>();
@@ -43,6 +45,19 @@ const storage = new AsyncLocalStorage<LogContext>();
  */
 export function runWithLogContext<T>(context: LogContext, fn: () => T): T {
   return storage.run({ ...storage.getStore(), ...context }, fn);
+}
+
+/**
+ * Records the signed-in dashboard user on the current context (#222):
+ * every later line of the request, including its `HTTP request` line,
+ * carries `userId`, so a post-mortem can tell who did what. The current
+ * store belongs to this request alone (each `runWithLogContext` creates a
+ * fresh object), so setting a field on it cannot leak into other work.
+ * No-op outside a context.
+ */
+export function setLogContextUser(userId: string): void {
+  const store = storage.getStore();
+  if (store) store.userId = userId;
 }
 
 /** The context of the code currently running, or `undefined` outside any. */

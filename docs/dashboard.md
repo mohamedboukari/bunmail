@@ -40,6 +40,34 @@ Account login (#216): email and password against the `users` and `user_credentia
 4. Reuse detection (see below): every session of the user is revoked, cookie cleared, `302`.
 5. A cross-origin `POST`: `403` (CSRF second layer, #133). It runs before rotation, so a rejected request never carries a new token.
 6. Rotation, when due (see below).
+7. The request goes on with `auth` (#222), then the route's role check (see [Roles](#roles-222)).
+
+The guard is an Elysia `resolve`, so its result is typed on every handler registered after it. A `resolve` can only stop a request by returning `status()`, so each refusal above sets its headers (`location`, `set-cookie`) on `set` and returns `status(302 | 403 | 503, body)`.
+
+### Roles (#222)
+
+Every protected handler gets `auth` on its context, built from the guard's single `findActiveSession` query (the account's email and role and the session's assurance come back with the session row, so there is no second lookup):
+
+```ts
+auth: {
+  user: { id: string; email: string; role: "owner" | "admin" | "member" };
+  session: { id: string; assurance: "password" | "mfa" };
+}
+```
+
+The role is read on every request, so a role change applies on the next request. `src/pages/guards.tsx` holds the checks, used as each route's own `beforeHandle` (they run after the guard):
+
+| Helper | Lets through | Used for |
+|---|---|---|
+| `memberGuard` | any signed-in account | home, send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; editing existing templates waits for per-member ownership in #218), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
+| `adminGuard` | admins and the owner | every API key page and action, every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), template edit and delete, trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `ownerGuard` | the owner | no route yet; account management (#217, #218) will use it |
+
+They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it until 2FA (#220).
+
+A denial answers `403` with a small "Forbidden" page in the dashboard layout (it names the required and the current role, nothing else) and logs `warn` `Dashboard access denied: role too low` with `userId`, `role`, `required`, `method` and `path` (`Dashboard access denied: session assurance too low` with `userId`, `sessionId`, `assurance`, `required`, `method`, `path` for `requireAssurance`). The navigation is not filtered by role yet: a member still sees links to admin pages and gets the 403 page there.
+
+Deny by default: `test/integration/dashboard-route-access.integration.test.ts` reads every route from the plugin and fails when one is missing from its table, when a protected route does not carry exactly the role guard its table entry names, or when a request gets the wrong answer (no cookie: `302` to the login page; a role too low: `403`; a role high enough: neither). A new dashboard route needs a role guard and a table entry.
 
 **Token rotation and reuse detection.** When a request presents the current token and that token is older than 60 seconds, the session gets a fresh token: one conditional `UPDATE` moves the old hash to `previous_token_hash`, stores the new one, and slides `last_seen_at` and `expires_at` forward (this write is also the idle-timeout refresh, so an active session costs at most one write a minute). The response carries the new cookie. Then:
 
@@ -59,7 +87,7 @@ The login page also shows a static first sign-in hint (open the owner setup link
 
 On first boot BunMail creates the owner account for `BUNMAIL_OWNER_EMAIL` and logs a one-time link at `warn` (at `error` when `LOG_LEVEL=error`) (`Owner setup link`): `<APP_BASE_URL>/dashboard/setup?token=...`, or `http://localhost:PORT/...` (with a `hint` field) when `APP_BASE_URL` is unset or not an `http(s)://` URL. The link is single use and valid for 24 hours; until setup is done each restart replaces it, so only the most recent link works. `bun run src/db/reset-owner.ts` (in Docker: `docker compose exec app bun run src/db/reset-owner.ts`) prints a fresh one.
 
-1. `GET /dashboard/setup?token=...` is public (registered before the session guard, and also in its skip list). It only reads the token: a missing, malformed, unknown, expired, used or replaced token gets the same `400` "invalid link" page, which never echoes the token (missing and malformed tokens are rejected before any database call). A `token` longer than 128 characters, or a repeated `token` parameter, fails the route's schema instead and gets the global `422` JSON error.
+1. `GET /dashboard/setup?token=...` is public (registered before the session guard, so the guard never runs for it). It only reads the token: a missing, malformed, unknown, expired, used or replaced token gets the same `400` "invalid link" page, which never echoes the token (missing and malformed tokens are rejected before any database call). A `token` longer than 128 characters, or a repeated `token` parameter, fails the route's schema instead and gets the global `422` JSON error.
 2. A live token renders the form (`200`): the owner email, a hidden token field, password and confirmation (15 to 256 characters, counted in code points).
 3. `POST /dashboard/setup` (form fields `token`, `password`, `confirm`) checks same-origin itself first, since the guard's CSRF check does not run on public routes: a cross-origin `Origin`/`Referer`, or neither header, gets `403` `Forbidden: cross-origin request rejected` and a `warn` log (`Owner setup POST rejected: cross-origin (possible CSRF)`). Then the token (the same `400` invalid page), then the password policy (a policy error re-renders the form with `200`, no hashing and no write), then it spends the token and stores the argon2id password hash. A token spent by a concurrent submission in between also gets the `400` invalid page.
 4. On success the server logs `Owner setup completed` at `warn` (`owner` through `redactEmail`, client `ip`). In the same transaction that stores the password, every session of the owner is deleted and a new one is opened (#216); its token is set as the `bm_session` cookie (the same attributes and 7-day `Max-Age` as a login) and the browser is redirected (`302`) to `/dashboard`.
@@ -123,6 +151,7 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 ```
 src/pages/
 ├── pages.plugin.tsx          ← Plugin with all routes + session guard
+├── guards.tsx                ← Role and assurance checks per route (#222)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── layouts/
@@ -133,6 +162,7 @@ src/pages/
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── not-found.tsx         ← Custom 404 page
+│   ├── forbidden.tsx         ← 403 page for a role or session assurance too low (#222)
 │   ├── send-email.tsx        ← Compose & send email form
 │   ├── emails.tsx            ← Email table with filters
 │   ├── email-detail.tsx      ← Email detail view

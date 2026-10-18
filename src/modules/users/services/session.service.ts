@@ -5,13 +5,15 @@ import { generateId } from "../../../utils/id.ts";
 import { sessions } from "../models/session.schema.ts";
 import { sessionTokenHistory } from "../models/session-token-history.schema.ts";
 import { users } from "../models/user.schema.ts";
-import type {
-  ActiveSession,
-  CreatedSession,
-  DbExecutor,
-  NewSessionInput,
-  RotatedSession,
-  SessionAssurance,
+import {
+  isSessionAssurance,
+  isUserRole,
+  type ActiveSession,
+  type CreatedSession,
+  type DbExecutor,
+  type NewSessionInput,
+  type RotatedSession,
+  type SessionAssurance,
 } from "../types/user.types.ts";
 import {
   SESSION_ABSOLUTE_SECONDS,
@@ -98,7 +100,9 @@ export async function createSession(
  * hash (both indexed), joined to the user. A row only counts when the
  * session has not expired, the user is not disabled, and the assurance is
  * `password` or `mfa`, so a future `pending` session (#220) can never open
- * a protected page.
+ * a protected page. The same row carries the account's email and role and
+ * the session's assurance (#222): the guard builds the handlers' `auth`
+ * from it without a second query.
  */
 export async function findActiveSession(token: string): Promise<ActiveSession | null> {
   const tokenHash = hashToken(token);
@@ -107,6 +111,9 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
       .select({
         sessionId: sessions.id,
         userId: sessions.userId,
+        email: users.email,
+        role: users.role,
+        assurance: sessions.assurance,
         isCurrent: sql<boolean>`${sessions.tokenHash} = ${tokenHash}`,
         rotationDue: sql<boolean>`coalesce(${sessions.rotatedAt}, ${sessions.createdAt}) < now() - ${seconds(SESSION_ROTATE_SECONDS)}`,
         graceOver: sql<boolean>`coalesce(${sessions.rotatedAt} < now() - ${seconds(SESSION_ROTATION_GRACE_SECONDS)}, true)`,
@@ -127,9 +134,17 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
       .limit(1),
   );
   if (!row) return null;
+  /**
+   * Unreachable while the CHECK constraints hold; an unknown role or
+   * assurance is treated as no session (fail closed), never as a guess.
+   */
+  if (!isUserRole(row.role) || !isSessionAssurance(row.assurance)) return null;
   return {
     sessionId: row.sessionId,
     userId: row.userId,
+    email: row.email,
+    role: row.role,
+    assurance: row.assurance,
     matched: row.isCurrent ? "current" : "previous",
     rotationDue: row.rotationDue,
     graceOver: row.graceOver,
