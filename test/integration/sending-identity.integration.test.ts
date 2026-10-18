@@ -6,6 +6,8 @@
 import { describe, test, expect } from "bun:test";
 import {
   checkReverseDns,
+  logReverseDnsAtBoot,
+  peekReverseDnsStatus,
   resolveSendingIps,
   type ReverseDnsDeps,
 } from "../../src/modules/domains/services/sending-ips.service.ts";
@@ -100,5 +102,19 @@ describe("checkReverseDns (#248)", () => {
     const { checks } = await checkReverseDns(deps);
     expect(checks[0]?.ok).toBe(false);
     expect(checks[0]?.reason).toContain("does not resolve back");
+  });
+});
+
+describe("peekReverseDnsStatus (#248)", () => {
+  test("the boot check primes the status the dashboard reads", async () => {
+    if (config.mail.publicIps.length > 0) return;
+    await logReverseDnsAtBoot(
+      dns({ a: { [hostname]: ["203.0.113.10"] }, ptr: { "203.0.113.10": [hostname] } }),
+    );
+    const status = peekReverseDnsStatus();
+    expect(status?.hostname).toBe(hostname);
+    expect(status?.checks).toEqual([
+      expect.objectContaining({ ip: "203.0.113.10", ok: true }),
+    ]);
   });
 });

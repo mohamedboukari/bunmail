@@ -1,6 +1,7 @@
 import { HomePage } from "../routes/home.tsx";
 import { memberGuard, roleAtLeast } from "../guards.tsx";
 import * as statsService from "../../modules/emails/services/stats.service.ts";
+import { peekReverseDnsStatus } from "../../modules/domains/services/sending-ips.service.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 
 /** Dashboard home (#291): the stat cards. */
@@ -15,8 +16,14 @@ export function homePages(app: GuardedDashboard) {
         "/",
         async ({ auth }) => {
           const stats = await statsService.getDashboardStats();
+          const isAdmin = roleAtLeast(auth.user.role, "admin");
           return (
-            <HomePage stats={stats} canInvite={roleAtLeast(auth.user.role, "admin")} />
+            <HomePage
+              stats={stats}
+              canInvite={isAdmin}
+              /** Sending IPs are infrastructure detail: admins and the owner only (#248). */
+              serverIdentity={isAdmin ? { status: peekReverseDnsStatus() } : undefined}
+            />
           );
         },
         { beforeHandle: memberGuard },
