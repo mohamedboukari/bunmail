@@ -313,7 +313,7 @@ Every domain response (create, list, get, verify, update) also carries (#250):
 - `dmarc`: the current DMARC check. `status` is `pass`, `missing`, `multiple` (two or more records), `invalid` (no valid `p=`) or `error` (DNS failure); `ok` is true only for `pass`. `inherited` is true when the organizational domain's record applies, `effectivePolicy` is the policy receivers apply (`sp` when inherited and set, else `p`), `warnings` flag weak settings (`p=none`, `pct` below 100, no `rua`) and `problems` the invalid tag values. See [docs/domains.md](domains.md#dmarc-rules-250).
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
 
-`dmarc` and `mx` come from live DNS, cached for an hour (five minutes after an error); a DNS failure never fails the request. `DELETE` returns them as `null`.
+`dmarc` and `mx` come from live DNS, cached for an hour (five minutes after an error); a DNS failure never fails the request. The list looks up at most 8 domains at once. `DELETE` returns them as `null`.
 
 ---
 

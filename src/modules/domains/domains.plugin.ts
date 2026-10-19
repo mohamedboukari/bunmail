@@ -4,7 +4,10 @@ import { updateDomainDto } from "./dtos/update-domain.dto.ts";
 import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
 import { verifyDomain } from "./services/dns-verification.service.ts";
-import { getDomainDnsStatus } from "./services/domain-dns-status.service.ts";
+import {
+  getDomainDnsStatus,
+  getDomainsDnsStatus,
+} from "./services/domain-dns-status.service.ts";
 import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -87,13 +90,13 @@ export const domainsPlugin = new Elysia({
       logger.info("GET /api/v1/domains");
 
       const domains = await domainService.listDomains();
+      /** At most 8 domains looked up at once (#250). */
+      const statuses = await getDomainsDnsStatus(domains.map((domain) => domain.name));
 
       return {
         success: true,
-        data: await Promise.all(
-          domains.map(async (domain) =>
-            serializeDomain(domain, await getDomainDnsStatus(domain.name)),
-          ),
+        data: domains.map((domain, index) =>
+          serializeDomain(domain, statuses[index] ?? null),
         ),
       };
     },

@@ -148,6 +148,7 @@ Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns 
 ### domain-dns-status.service.ts
 
 - `getDomainDnsStatus(name): Promise<{ dmarc, mx }>`: the cached live status. Never rejects.
+- `getDomainsDnsStatus(names, concurrency = 8)`: the same for a list, in order, with at most `DNS_STATUS_CONCURRENCY` (8) domains looked up at once (a small worker pool), so listing a large install with a cold cache stays bounded. Used by `GET /api/v1/domains`.
 - `rememberDmarcCheck(name, check)`: stores a fresh check (used by `verifyDomain`).
 - `mailFlowFeatures(mx, smtpEnabled)`: the four mail flows with `active` and a one-line explanation.
 

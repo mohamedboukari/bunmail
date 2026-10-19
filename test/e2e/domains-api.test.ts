@@ -132,6 +132,10 @@ void mock.module(
   "../../src/modules/domains/services/domain-dns-status.service.ts",
   () => ({
     getDomainDnsStatus: mock(() => Promise.resolve(dnsStatus)),
+    getDomainsDnsStatus: mock((names: string[]) =>
+      Promise.resolve(names.map(() => dnsStatus)),
+    ),
+    DNS_STATUS_CONCURRENCY: 8,
     rememberDmarcCheck: mock(() => {}),
     setDomainDnsDeps: mock(() => {}),
     mailFlowFeatures: mock(() => []),

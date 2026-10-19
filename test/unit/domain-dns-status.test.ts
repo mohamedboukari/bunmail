@@ -7,7 +7,9 @@ import {
   type MxCheckDeps,
 } from "../../src/modules/bounces/services/return-path-mx.ts";
 import {
+  DNS_STATUS_CONCURRENCY,
   getDomainDnsStatus,
+  getDomainsDnsStatus,
   mailFlowFeatures,
   rememberDmarcCheck,
   setDomainDnsDeps,
@@ -182,5 +184,34 @@ describe("mailFlowFeatures", () => {
         false,
       );
     }
+  });
+});
+
+describe("getDomainsDnsStatus: bounded lookups", () => {
+  test("at most 8 domains are looked up at once, results in order", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    /** Each domain's one TXT lookup holds its slot for a tick, so concurrency is visible. */
+    setDomainDnsDeps({
+      resolveTxt: async (name) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        return [[`v=DMARC1; p=reject; rua=mailto:d@${name.slice("_dmarc.".length)}`]];
+      },
+      resolveMx: () => Promise.resolve([]),
+    });
+    const names = Array.from({ length: 50 }, (_, i) => `d${i}.io`);
+    const statuses = await getDomainsDnsStatus(names);
+
+    expect(statuses).toHaveLength(50);
+    expect(statuses.map((s) => s.dmarc.recordDomain)).toEqual(names);
+    expect(DNS_STATUS_CONCURRENCY).toBe(8);
+    expect(peak).toBe(8);
+  });
+
+  test("an empty list looks nothing up", async () => {
+    expect(await getDomainsDnsStatus([])).toEqual([]);
   });
 });

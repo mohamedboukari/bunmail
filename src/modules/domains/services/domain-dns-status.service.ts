@@ -118,6 +118,33 @@ export async function getDomainDnsStatus(name: string): Promise<DomainDnsStatus>
   return { dmarc, mx };
 }
 
+/** Most domains whose DNS status is looked up at once by one list request. */
+export const DNS_STATUS_CONCURRENCY = 8;
+
+/**
+ * The DNS status of several domains, in the order given, with at most
+ * `concurrency` domains looked up at once: with a cold cache, listing an
+ * install with hundreds of domains would otherwise fire every lookup from
+ * one request. A small worker pool; never rejects.
+ */
+export async function getDomainsDnsStatus(
+  names: readonly string[],
+  concurrency: number = DNS_STATUS_CONCURRENCY,
+): Promise<DomainDnsStatus[]> {
+  /** Filled by index, so the order matches `names` whatever finishes first. */
+  const results: DomainDnsStatus[] = [];
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < names.length) {
+      const index = next++;
+      results[index] = await getDomainDnsStatus(names[index] ?? "");
+    }
+  }
+  const workers = Math.max(1, Math.min(concurrency, names.length));
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return results;
+}
+
 /** Whether one mail flow is active for a domain, with why. */
 export interface MailFlowFeature {
   name: string;
