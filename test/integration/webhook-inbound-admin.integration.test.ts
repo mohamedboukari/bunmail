@@ -62,3 +62,25 @@ describe("email.received subscriptions (GHSA-8r3q-hqf8-2264)", () => {
     expect((await createHook(rawKey, ["email.sent", "email.bounced"])).status).toBe(200);
   });
 });
+
+describe("domain event subscriptions (#250)", () => {
+  test.each(["domain.verification_failed", "domain.verified"])(
+    "a restricted key gets 403 for %p",
+    async (event) => {
+      const { rawKey } = await seed.apiKey({ isAdmin: false });
+      const res = await createHook(rawKey, ["email.sent", event]);
+      expect(res.status).toBe(403);
+      const body = await readJson<{ code?: string }>(res);
+      expect(body.code).toBe("INBOUND_EVENTS_REQUIRE_ADMIN");
+    },
+  );
+
+  test("an admin key may subscribe to both", async () => {
+    const { rawKey } = await seed.apiKey({ isAdmin: true });
+    const res = await createHook(rawKey, [
+      "domain.verification_failed",
+      "domain.verified",
+    ]);
+    expect(res.status).toBe(200);
+  });
+});

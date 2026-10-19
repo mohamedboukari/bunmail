@@ -12,7 +12,10 @@ src/modules/domains/
 │   ├── dkim-keys.ts                ← Key generation, selector rules, dated selectors, TXT match (#250)
 │   ├── dkim-rotation.service.ts    ← DKIM key rotation: start, complete, cancel (#250)
 │   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
-│   ├── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification
+│   ├── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification (pass, fail or unknown)
+│   ├── domain-check-state.ts       ← Verification state machine: failure count, flip, schedule (#250)
+│   ├── domain-check.service.ts     ← Stores a check and its webhook event in one transaction (#250)
+│   ├── domain-reverify.service.ts  ← Scheduled re-verification worker: claim, check, reschedule (#250)
 │   ├── dmarc-check.service.ts      ← DMARC discovery, org-domain fallback, strict tag parsing (#250)
 │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status, mail-flow summary (#250)
 │   ├── required-dns-records.ts     ← The DNS records to publish (`dnsRecords`, #250)
@@ -24,7 +27,8 @@ src/modules/domains/
 ├── serializations/
 │   └── domain.serialization.ts     ← Strips private keys, exposes DKIM DNS record
 └── types/
-    └── domain.types.ts             ← Domain type + CreateDomainInput
+    ├── domain.types.ts             ← Domain type + CreateDomainInput
+    └── domain-check.types.ts       ← Check outcome (`pass`, `fail`, `unknown`) and result (#250)
 ```
 
 ## Database Schema
@@ -51,7 +55,11 @@ Table: `domains`
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
-| verified_at       | timestamp      | nullable                     |
+| verified_at       | timestamp      | nullable: when every required check (SPF, DKIM, DMARC) passed; kept while they keep passing or a lookup fails, cleared only when the domain flips to failing (#250) |
+| last_checked_at   | timestamptz    | nullable: when the checks last ran, by Verify or the loop (#250) |
+| next_check_at     | timestamptz    | nullable, indexed: when the loop checks the domain next; NULL = due now (#250) |
+| consecutive_failures | integer     | NOT NULL, default `0`: checks in a row with a definitive failure (#250) |
+| last_check_result | jsonb          | nullable: `{ spf, dkim, dmarc, checkedAt }`, each check `{ status: "pass" \| "fail" \| "unknown", reason }` (#250) |
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
 | created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed: who created it (#219, attribution only; NULL = the owner) |
@@ -95,7 +103,35 @@ The `dns-verification.service.ts` checks three DNS record types:
 | DKIM   | `<selector>._domainkey.<domain>`        | TXT record containing the expected public key |
 | DMARC  | `_dmarc.<domain>`, else `_dmarc.<organizational domain>` | exactly one record matching `v=DMARC1` with a valid `p=` (#250, see below) |
 
-Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button.
+Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button, or let the scheduled loop run it (below).
+
+Each check is `pass`, `fail` (a definitive answer: the record is missing or does not match) or `unknown` (the lookup itself failed: SERVFAIL, a timeout, the network, an SPF `temperror`, or no known sending IP). `verified_at` is set only when all three pass (#250).
+
+### Scheduled re-verification (#250)
+
+`domain-reverify.service.ts` re-checks every domain in the background, so a record removed or changed after verification is noticed. It is started at boot (`DOMAIN_REVERIFY_ENABLED`, default `true`) and never sends mail.
+
+- **Schedule.** The worker wakes every 5 minutes (plus or minus 20%, so replicas do not wake in lockstep). A run claims due domains in batches of 50 (at most 10 batches) and checks them 8 at a time with the same code as Verify (`runDnsChecks` + `applyDomainCheck`). After a pass the next check is `DOMAIN_REVERIFY_INTERVAL_HOURS` later (default 24, 6 to 168) plus or minus one hour; after a failure or an `unknown`, one hour later. A new domain (`next_check_at` NULL) is due at once.
+- **Claim.** One statement: `UPDATE domains SET next_check_at = NOW() + 15 minutes WHERE id IN (SELECT id FROM domains WHERE next_check_at IS NULL OR next_check_at <= NOW() ORDER BY next_check_at NULLS FIRST LIMIT n FOR UPDATE SKIP LOCKED) RETURNING *`. Concurrent claims return disjoint domains, and the lease means a replica that dies mid-check releases its domains after 15 minutes.
+- **DMARC cache.** The loop always looks DMARC up afresh (never the page's status cache) and stores its answer in that cache, except a failed lookup, so a DNS blip never replaces a good cached answer.
+- **Logs.** Each run runs in `runWithLogContext({ job: "domain-reverify", jobId: "drv_..." })` and logs one line, `Domain re-verification run completed` with `checked`, `passed`, `failed`, `unknown`, `flipped`, `recovered`, `errors` and `durationMs` (at `debug` when nothing was due). Per-domain detail is at `debug`; a domain whose check or store throws is logged at `error` and retried when its lease ends.
+
+### Failure rule (#250)
+
+DNS blips must never stop sending. `domain-check-state.ts` decides what one check does, for Verify, the inline check of `REQUIRE_VERIFIED_DOMAIN` and the loop alike:
+
+| Outcome | `consecutive_failures` | Flags | `verified_at` | Next check |
+|---------|------------------------|-------|---------------|------------|
+| All pass | reset to 0 | all true | kept, or set now (event `domain.verified`) | interval plus or minus 1 h |
+| No failure, some `unknown` | unchanged | passing checks set, the others kept | kept | 1 h |
+| A failure, first in a row | +1 | passing checks set, a true flag stays true | kept | 1 h |
+| A failure, second (or later) in a row | +1 | follow the result | cleared (event `domain.verification_failed` when it was set) | 1 h |
+
+The overall outcome is a failure when any check failed, else `unknown` when any lookup failed, else a pass. The flip runs in one transaction (`applyDomainCheck`): the row is locked and re-read, the new state written, and the event enqueued through the webhook outbox (`enqueueEvent(tx, ...)`, #184), so the flip and its event commit together. It also logs `Domain verification failed: verifiedAt cleared` at `warn` with the domain id and the failed checks. Both events go to admin keys' webhooks only (`{ adminOnly: true }`): a domain has no owning API key and managing domains is admin-only, like `email.received`. Payloads: `domain.verification_failed` `{ domainId, domain, failedChecks, checkedAt }`, `domain.verified` `{ domainId, domain, checkedAt }`. See [webhooks.md](webhooks.md).
+
+With `REQUIRE_VERIFIED_DOMAIN=true` a send needs the DKIM flag: it stays true through an `unknown` and through one failure, and turns false at the flip when DKIM is among the failed checks; the send is then refused (after the usual inline re-check). The domain page shows **Last checked**, each check's last result and reason, and a banner while the domain is failing (two or more failures in a row and not verified).
+
+Migration `0033` cleared `verified_at` on domains where a flag was false: it used to be set by every Verify, whatever the result.
 
 ### DMARC rules (#250)
 
@@ -175,8 +211,26 @@ Pure helpers shared by create, rotation and Verify: `generateDkimKeyPair()`, `is
 
 ### dns-verification.service.ts
 
-#### `verifyDomain(domain): Promise<VerificationResult>`
-Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns `{ spf, dkim, dmarc, spfReason, dmarcReason }`. SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
+#### `verifyDomain(domain, deps?, options?): Promise<VerificationResult>`
+Runs SPF, DKIM, and DMARC checks in parallel (`runDnsChecks`), stores the outcome with `applyDomainCheck` (the failure rule above), and returns `{ spf, dkim, dmarc, spfReason, dkimReason, dmarcReason, checks }`: the booleans are true only for `pass`, `checks` has each check's `status` and `reason`. `options.source` is `manual` (default) or `scheduled` (the loop: per-domain logs at `debug`, a failed DMARC lookup not cached). SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
+
+#### `runDnsChecks(domain, deps?, options?): Promise<DomainCheckResult>`
+The three checks without storing anything. Never rejects on a DNS error: that check is `unknown`.
+
+### domain-check-state.ts (#250)
+
+- `nextDomainCheckState(previous, result, now, intervalMs, random?)`: the failure rule, pure. Returns the next state, the overall outcome, the next check time, the failed checks and the event (`failed`, `verified` or none).
+- `overallOutcome(result)`, `nextCheckAfterPass(now, intervalMs, random?)`; constants `FLIP_AFTER_FAILURES` (2), `RECHECK_AFTER_PROBLEM_MS` (1 h), `RECHECK_JITTER_MS` (1 h).
+
+### domain-check.service.ts (#250)
+
+- `applyDomainCheck(domainId, result, now?, intervalMs?)`: one transaction that locks the row, applies `nextDomainCheckState`, writes `last_checked_at`, `next_check_at` and `last_check_result`, and enqueues `domain.verification_failed` or `domain.verified` through the outbox. Logs the flip at `warn`. `undefined` when the domain was deleted meanwhile.
+
+### domain-reverify.service.ts (#250)
+
+- `start()` / `stop()`: the worker (no-op while `DOMAIN_REVERIFY_ENABLED=false`).
+- `runReverifyCycle(deps?)`: one run, in its own log context; returns the run summary. Does nothing while disabled.
+- `claimDueDomains(limit, executor?)`: the claim described above.
 
 ### dmarc-check.service.ts
 
@@ -202,6 +256,7 @@ The `serializeDomain(domain, dns)` function:
 - **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS (unsplit)
 - **Exposes** `dkimPending` (`{ selector, host, dnsRecord, createdAt }` or `null`) and `dkimPrevious` (`{ selector, host, dnsRecord, rotatedAt, advice }` or `null`) for key rotation (#250)
 - **Adds** `dnsRecords` (always), and `dmarc` and `mx` from `dns`, which is `null` on `DELETE` (no lookup for a removed domain) (#250)
+- **Exposes** `lastCheckedAt` and `lastCheckResult` (`{ spf, dkim, dmarc, checkedAt }`, each check `{ status, reason }`, or `null` before the first check) (#250); `next_check_at` and `consecutive_failures` stay internal
 
 ## API Endpoints
 

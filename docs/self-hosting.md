@@ -85,6 +85,10 @@ TRASH_RETENTION_DAYS=7
 # Optional: hours an Idempotency-Key on the send API is remembered (#188),
 # 1 to 168, default 24
 # IDEMPOTENCY_KEY_TTL_HOURS=24
+# Optional: scheduled DNS re-verification of domains (#250), on by default;
+# hours between checks of a passing domain, 6 to 168, default 24
+# DOMAIN_REVERIFY_ENABLED=true
+# DOMAIN_REVERIFY_INTERVAL_HOURS=24
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -135,6 +139,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > `MAIL_ALLOW_PRIVATE_MX`: by default BunMail refuses to deliver to an MX host that resolves to a private, loopback or link-local address, since recipient domains (and their MX records) are chosen by API callers. Set `true` only if you deliberately deliver to an internal mail server.
 
 > `REQUIRE_VERIFIED_DOMAIN`: refuse sends from a sender domain whose DKIM record is not verified (#245). Default `false`: the email is queued and `POST /api/v1/emails/send` returns `warnings` (`dkim_unverified`, `spf_unverified`, `dmarc_unverified`), the dashboard flash names them, and SMTP submission logs them. With `true`, a registered domain whose stored DKIM flag is false is re-verified in DNS once before the send (a failure is remembered for 5 minutes per domain, so retries do not query DNS each time; running **Verify** on the domain takes effect at once), then refused with `422 SENDER_DOMAIN_UNVERIFIED` (SMTP `550`); an unregistered domain is refused in every environment. SPF and DMARC only warn. Only `true` or `false`; anything else refuses to boot.
+
+> `DOMAIN_REVERIFY_ENABLED` / `DOMAIN_REVERIFY_INTERVAL_HOURS` (#250): a background loop re-checks every domain's SPF, DKIM and DMARC records, so a record removed or changed after verification is noticed. A passing domain is checked again every `DOMAIN_REVERIFY_INTERVAL_HOURS` (default `24`, 6 to 168, plus or minus an hour), a failing or inconclusive one after an hour. A failed lookup (SERVFAIL, timeout) never counts; two definitive failures in a row flip a verified domain to failing: `verifiedAt` is cleared, the failing flags are cleared (with `REQUIRE_VERIFIED_DOMAIN=true` and DKIM failing, its sends are then refused) and `domain.verification_failed` fires to admin keys' webhooks. Several replicas share the work safely. `DOMAIN_REVERIFY_ENABLED=false` (default `true`) turns the loop off: domains are then only checked by **Verify** and the inline check of `REQUIRE_VERIFIED_DOMAIN`. Only `true` or `false`, and only a whole number in range; anything else refuses to boot. See [domains.md](domains.md#scheduled-re-verification-250).
 
 > `MAIL_PUBLIC_IP` (#247, #248): the public IPs this server sends from, comma-separated. Optional: unset, BunMail uses the A/AAAA records of `MAIL_HOSTNAME`. SPF verification checks that the domain authorizes these addresses, and every boot logs whether their PTR records name `MAIL_HOSTNAME` and resolve back (`Reverse DNS confirmed for every sending IP`, or a `warn` with the fix). Behind NAT the container can't see its egress address: set this to the real one.
 

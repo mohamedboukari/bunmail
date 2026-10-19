@@ -234,13 +234,18 @@ export function domainPages(app: GuardedDashboard) {
 
           const result = await verifyDomain(domain);
           const allPassed = result.spf && result.dkim && result.dmarc;
+          /** ? for a failed lookup (#250): it changes nothing, try again later. */
+          const mark = (passed: boolean, status: string | undefined): string =>
+            passed ? "✓" : status === "unknown" ? "? (DNS lookup failed)" : "✗";
           const message = allPassed
             ? "All DNS records verified successfully!"
-            : `Verification: SPF ${result.spf ? "✓" : "✗"}, DKIM ${result.dkim ? "✓" : "✗"}, DMARC ${result.dmarc ? "✓" : "✗"}`;
+            : `Verification: SPF ${mark(result.spf, result.checks?.spf.status)}, DKIM ${mark(result.dkim, result.checks?.dkim.status)}, DMARC ${mark(result.dmarc, result.checks?.dmarc.status)}`;
 
           logger.info("Domain DNS verification via dashboard", {
             id: params.id,
-            ...result,
+            spf: result.spf,
+            dkim: result.dkim,
+            dmarc: result.dmarc,
           });
           await recordAuditEvent({
             ...dashboardAudit(auth, request, server),

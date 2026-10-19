@@ -22,6 +22,8 @@ const WEBHOOK_EVENTS = [
   "email.failed",
   "email.bounced",
   "email.unsubscribed",
+  "domain.verified",
+  "domain.verification_failed",
 ] as const;
 
 /**

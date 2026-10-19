@@ -19,6 +19,8 @@ export const createWebhookDto = t.Object({
       t.Literal("email.complained"),
       t.Literal("email.received"),
       t.Literal("email.unsubscribed"),
+      t.Literal("domain.verified"),
+      t.Literal("domain.verification_failed"),
     ]),
     { minItems: 1 },
   ),

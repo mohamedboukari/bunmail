@@ -367,6 +367,29 @@ export function readAuditLogRetentionDays(
   );
 }
 
+/** Default and bounds of `DOMAIN_REVERIFY_INTERVAL_HOURS` (#250), in hours. */
+export const DEFAULT_DOMAIN_REVERIFY_INTERVAL_HOURS = 24;
+export const MIN_DOMAIN_REVERIFY_INTERVAL_HOURS = 6;
+export const MAX_DOMAIN_REVERIFY_INTERVAL_HOURS = 168;
+
+/**
+ * Reads `DOMAIN_REVERIFY_INTERVAL_HOURS`, how long after a passing DNS
+ * check a domain is checked again by the re-verification loop (#250).
+ * Unset or blank: 24. Anything other than a whole number of hours from 6
+ * to 168 refuses to boot.
+ */
+export function readDomainReverifyIntervalHours(
+  raw: string | undefined = process.env["DOMAIN_REVERIFY_INTERVAL_HOURS"],
+): number {
+  return optionalBoundedInt(
+    "DOMAIN_REVERIFY_INTERVAL_HOURS",
+    DEFAULT_DOMAIN_REVERIFY_INTERVAL_HOURS,
+    MIN_DOMAIN_REVERIFY_INTERVAL_HOURS,
+    MAX_DOMAIN_REVERIFY_INTERVAL_HOURS,
+    raw,
+  );
+}
+
 /** Default and bounds of `WEBHOOKS_MAX_PER_API_KEY` (#258). */
 export const DEFAULT_WEBHOOKS_MAX_PER_API_KEY = 10;
 export const MIN_WEBHOOKS_MAX_PER_API_KEY = 1;
@@ -963,6 +986,24 @@ export const config = {
      * days: long enough to cover most receiver feedback windows.
      */
     tombstoneRetentionDays: parseInt(optionalEnv("TOMBSTONE_RETENTION_DAYS", "90"), 10),
+  },
+
+  /** Scheduled DNS re-verification of registered domains (#250). */
+  domainReverify: {
+    /**
+     * Whether the re-verification loop runs (`DOMAIN_REVERIFY_ENABLED`,
+     * default true, strictly `true` or `false`). Off, domains are only
+     * checked by Verify and the inline check of `REQUIRE_VERIFIED_DOMAIN`.
+     */
+    enabled: optionalStrictBoolean("DOMAIN_REVERIFY_ENABLED", true),
+
+    /**
+     * Hours between two checks of a passing domain
+     * (`DOMAIN_REVERIFY_INTERVAL_HOURS`, default 24, a whole number from 6
+     * to 168), plus or minus one hour of jitter. A failing or inconclusive
+     * check is retried after one hour whatever this is.
+     */
+    intervalHours: readDomainReverifyIntervalHours(),
   },
 
   /** Audit log of security-relevant actions (#221). */

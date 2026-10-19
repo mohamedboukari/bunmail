@@ -40,9 +40,10 @@ export function signPayload(timestamp: string, body: string, secret: string): st
  * - `{ apiKeyId }`: an event about one API key's email (`email.sent`,
  *   `email.failed`, `email.bounced`, `email.complained`,
  *   `email.unsubscribed`). Only that key's webhooks receive it.
- * - `{ adminOnly: true }`: an event with no owning key (`email.received`:
- *   domains and inbound mail aren't owned by a key). Only webhooks owned by
- *   admin keys receive it, matching the admin-only inbound API (#130).
+ * - `{ adminOnly: true }`: an event with no owning key (`email.received`,
+ *   `domain.verified`, `domain.verification_failed`: domains and inbound
+ *   mail aren't owned by a key). Only webhooks owned by admin keys receive
+ *   it, matching the admin-only inbound and domains APIs (#130, #250).
  */
 export type DispatchScope = { apiKeyId: string } | { adminOnly: true };
 

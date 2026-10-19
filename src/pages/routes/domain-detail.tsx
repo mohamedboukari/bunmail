@@ -17,6 +17,11 @@ import type {
   Domain,
   RequiredDnsRecord,
 } from "../../modules/domains/types/domain.types.ts";
+import type {
+  DnsCheckOutcome,
+  DnsCheckStatus,
+} from "../../modules/domains/types/domain-check.types.ts";
+import { FLIP_AFTER_FAILURES } from "../../modules/domains/services/domain-check-state.ts";
 
 interface DomainDetailPageProps {
   domain: Domain;
@@ -66,15 +71,41 @@ export function DomainDetailPage({
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}
 
+      {isFailing(domain) && (
+        <FailingBanner consecutiveFailures={domain.consecutiveFailures} />
+      )}
+
       {/* Verification status grid */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
-        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-4">
+        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
           DNS Verification
         </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          {domain.lastCheckedAt == null ? (
+            "Not checked yet."
+          ) : (
+            <span>
+              Last checked <TimeDisplay value={domain.lastCheckedAt} />.
+            </span>
+          )}{" "}
+          Checked again automatically about once a day, hourly while a check fails.
+        </p>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <VerificationCard label="SPF" verified={domain.spfVerified} />
-          <VerificationCard label="DKIM" verified={domain.dkimVerified} />
-          <VerificationCard label="DMARC" verified={domain.dmarcVerified} />
+          <VerificationCard
+            label="SPF"
+            verified={domain.spfVerified}
+            check={domain.lastCheckResult?.spf ?? null}
+          />
+          <VerificationCard
+            label="DKIM"
+            verified={domain.dkimVerified}
+            check={domain.lastCheckResult?.dkim ?? null}
+          />
+          <VerificationCard
+            label="DMARC"
+            verified={domain.dmarcVerified}
+            check={domain.lastCheckResult?.dmarc ?? null}
+          />
         </div>
       </div>
 
@@ -199,7 +230,7 @@ export function DomainDetailPage({
           {domain.verifiedAt != null && (
             <div>
               <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
-                Last Verified
+                Verified Since
               </p>
               <p class="text-gray-900 dark:text-gray-100 break-all">
                 <TimeDisplay value={domain.verifiedAt} />
@@ -213,10 +244,57 @@ export function DomainDetailPage({
 }
 
 /**
- * Verification card: shows a single DNS record's verification status.
- * Displayed in a 3-column grid on the domain detail page.
+ * Whether a domain's checks keep failing (#250): after `FLIP_AFTER_FAILURES`
+ * definitive failures in a row it is not verified, and a send can be refused.
  */
-function VerificationCard({ label, verified }: { label: string; verified: boolean }) {
+function isFailing(domain: Domain): boolean {
+  return domain.verifiedAt == null && domain.consecutiveFailures >= FLIP_AFTER_FAILURES;
+}
+
+/** The banner of a domain whose checks keep failing (#250). */
+function FailingBanner({ consecutiveFailures }: { consecutiveFailures: number }) {
+  return (
+    <div
+      class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950 p-4 mb-6 text-sm text-red-800 dark:text-red-200"
+      role="alert"
+    >
+      <p class="font-medium mb-1">DNS verification is failing</p>
+      <p>
+        The last {consecutiveFailures} checks found a record missing or wrong (see below),
+        so this domain is not verified. While its DKIM record fails and
+        REQUIRE_VERIFIED_DOMAIN is on, sends from this domain are refused. Fix the
+        records, then click Verify DNS Records.
+      </p>
+    </div>
+  );
+}
+
+/** What the last check of one record found, in a few words. */
+function checkStatusText(status: DnsCheckStatus): string {
+  switch (status) {
+    case "pass":
+      return "Last check: passed";
+    case "fail":
+      return "Last check: failed";
+    case "unknown":
+      return "Last check: DNS lookup failed (nothing changed)";
+  }
+}
+
+/**
+ * Verification card: shows a single DNS record's verification status and
+ * what its last check found (#250). Displayed in a 3-column grid on the
+ * domain detail page. The reason may quote DNS names: escaped.
+ */
+function VerificationCard({
+  label,
+  verified,
+  check,
+}: {
+  label: string;
+  verified: boolean;
+  check: DnsCheckOutcome | null;
+}) {
   return (
     <div class="text-center">
       <div class="mb-2">
@@ -225,6 +303,14 @@ function VerificationCard({ label, verified }: { label: string; verified: boolea
       <p class="text-xs text-gray-500 dark:text-gray-400">
         {verified ? "Verified" : "Not verified"}
       </p>
+      {check != null && (
+        <p
+          class={`text-xs mt-1 ${check.status === "fail" ? "text-red-600 dark:text-red-400" : "text-gray-500 dark:text-gray-400"}`}
+          safe
+        >
+          {`${checkStatusText(check.status)}: ${check.reason}`}
+        </p>
+      )}
     </div>
   );
 }

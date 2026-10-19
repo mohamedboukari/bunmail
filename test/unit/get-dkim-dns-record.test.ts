@@ -15,6 +15,8 @@ void mock.module("../../src/config.ts", () => ({
     mail: { hostname: "localhost", publicIps: [] },
     dashboard: { ownerEmail: null },
     logLevel: "error",
+    /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
+    domainReverify: { enabled: true, intervalHours: 24 },
   },
 }));
 
@@ -66,6 +68,10 @@ function makeDomain(overrides: Record<string, unknown> = {}) {
     dkimVerified: false,
     dmarcVerified: false,
     verifiedAt: null,
+    lastCheckedAt: null,
+    nextCheckAt: null,
+    consecutiveFailures: 0,
+    lastCheckResult: null,
     unsubscribeEmail: null,
     unsubscribeUrl: null,
     notifyEmail: null,

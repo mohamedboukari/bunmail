@@ -13,6 +13,16 @@ import { config } from "../../../config.ts";
 import type { Webhook, CreateWebhookInput } from "../types/webhook.types.ts";
 
 /**
+ * Events delivered to admin keys' webhooks only (`{ adminOnly: true }`):
+ * inbound mail and domains have no owning API key (#130, #250).
+ */
+const ADMIN_ONLY_EVENTS: ReadonlySet<string> = new Set([
+  "email.received",
+  "domain.verified",
+  "domain.verification_failed",
+]);
+
+/**
  * Creates a new webhook endpoint.
  * Generates a random signing secret that the consumer uses to verify payloads.
  *
@@ -55,11 +65,11 @@ export async function createWebhook(
       .for("no key update");
 
     /**
-     * Inbound events are admin-only: `email.received` has no owning API key,
-     * so only admin keys may subscribe to it. Checked here (not in the route)
-     * so the REST API and the dashboard enforce it alike.
+     * Inbound and domain events are admin-only: they have no owning API
+     * key, so only admin keys may subscribe to them. Checked here (not in
+     * the route) so the REST API and the dashboard enforce it alike.
      */
-    if (input.events.includes("email.received") && !key?.isAdmin) {
+    if (input.events.some((event) => ADMIN_ONLY_EVENTS.has(event)) && !key?.isAdmin) {
       throw new InboundEventsRequireAdminError();
     }
 

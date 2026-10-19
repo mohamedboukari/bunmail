@@ -32,14 +32,35 @@ void mock.module("dns/promises", () => ({
   lookup: mock(async () => []),
 }));
 
+/** The domain row the fake transaction locks and reads. */
+let currentRow: Record<string, unknown> = {};
+/** Statements `enqueueEvent` ran on the fake transaction. */
+let executed = 0;
+
+/** The parts of a drizzle transaction `applyDomainCheck` uses. */
+const fakeTx = {
+  select: () => ({
+    from: () => ({ where: () => ({ for: () => Promise.resolve([currentRow]) }) }),
+  }),
+  update: () => ({
+    set: (values: Record<string, unknown>) => {
+      dbUpdates.push(values);
+      return {
+        where: () => ({
+          returning: () => Promise.resolve([{ ...currentRow, ...values }]),
+        }),
+      };
+    },
+  }),
+  execute: () => {
+    executed++;
+    return Promise.resolve([]);
+  },
+};
+
 void mock.module("../../src/db/index.ts", () => ({
   db: {
-    update: mock(() => ({
-      set: mock((values: Record<string, unknown>) => {
-        dbUpdates.push(values);
-        return { where: mock(() => Promise.resolve()) };
-      }),
-    })),
+    transaction: mock((fn: (tx: typeof fakeTx) => Promise<unknown>) => fn(fakeTx)),
   },
 }));
 
@@ -65,6 +86,10 @@ const baseDomain = {
   dkimVerified: false,
   dmarcVerified: false,
   verifiedAt: null as Date | null,
+  lastCheckedAt: null,
+  nextCheckAt: null,
+  consecutiveFailures: 0,
+  lastCheckResult: null,
   unsubscribeEmail: null as string | null,
   unsubscribeUrl: null as string | null,
   notifyEmail: null as string | null,
@@ -78,6 +103,8 @@ const expectedPubKey = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA";
 beforeEach(() => {
   txtRecords = {};
   dbUpdates.length = 0;
+  currentRow = { ...baseDomain };
+  executed = 0;
 });
 
 /** A and AAAA records for the fake SPF resolver. */
@@ -289,18 +316,97 @@ describe("verifyDomain: DMARC", () => {
   });
 });
 
-describe("verifyDomain: persistence", () => {
-  test("writes the verification result to the domains row with a fresh verifiedAt", async () => {
+describe("verifyDomain: persistence (#250)", () => {
+  /** SPF, DKIM and DMARC all published and correct. */
+  function publishAll(): void {
     txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    txtRecords["bunmail._domainkey.example.com"] = [
+      [`v=DKIM1; k=rsa; p=${expectedPubKey}`],
+    ];
     txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=none"]];
+  }
 
+  test("sets verifiedAt only when every check passes", async () => {
+    publishAll();
     await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
 
     expect(dbUpdates).toHaveLength(1);
     const update = dbUpdates[0]!;
     expect(update.spfVerified).toBe(true);
-    expect(update.dkimVerified).toBe(false);
+    expect(update.dkimVerified).toBe(true);
     expect(update.dmarcVerified).toBe(true);
     expect(update.verifiedAt).toBeInstanceOf(Date);
+    expect(update.consecutiveFailures).toBe(0);
+    expect(update.lastCheckedAt).toBeInstanceOf(Date);
+    /** The domain became verified: `domain.verified` is enqueued in the transaction. */
+    expect(executed).toBe(1);
+  });
+
+  test("a partial result no longer sets verifiedAt", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=none"]];
+
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+
+    expect(result.checks?.dkim.status).toBe("fail");
+    const update = dbUpdates[0]!;
+    expect(update.spfVerified).toBe(true);
+    expect(update.dkimVerified).toBe(false);
+    expect(update.dmarcVerified).toBe(true);
+    expect(update.verifiedAt).toBeNull();
+    expect(update.consecutiveFailures).toBe(1);
+    expect(update.lastCheckedAt).toBeInstanceOf(Date);
+    expect(executed).toBe(0);
+  });
+
+  test("stores the per-check result with reasons", async () => {
+    publishAll();
+    await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    const stored = dbUpdates[0]!.lastCheckResult;
+    expect(stored).toMatchObject({
+      spf: { status: "pass" },
+      dkim: {
+        status: "pass",
+        reason: "The DKIM key is published at bunmail._domainkey.example.com",
+      },
+      dmarc: { status: "pass" },
+    });
+  });
+});
+
+describe("verifyDomain: a failed lookup is unknown, not a failure (#250)", () => {
+  const servfail = (): Promise<never> =>
+    Promise.reject(Object.assign(new Error("SERVFAIL"), { code: "ESERVFAIL" }));
+
+  test("SERVFAIL on every lookup gives unknown for all three checks", async () => {
+    const deps = spfDeps(["203.0.113.10"]);
+    deps.resolveTxt = servfail;
+    const result = await verifyDomain(baseDomain, deps);
+    expect(result.checks?.spf.status).toBe("unknown");
+    expect(result.checks?.dkim.status).toBe("unknown");
+    expect(result.checks?.dmarc.status).toBe("unknown");
+    /** Nothing counted. */
+    expect(dbUpdates[0]!.consecutiveFailures).toBe(0);
+  });
+
+  test("an SPF temperror is unknown", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    const deps = spfDeps(["203.0.113.10"]);
+    deps.evaluateSpf = () => Promise.resolve("temperror");
+    expect((await verifyDomain(baseDomain, deps)).checks?.spf.status).toBe("unknown");
+  });
+
+  test("unknown sending IPs are unknown: this server's DNS, not the domain's record", async () => {
+    txtRecords["example.com"] = [["v=spf1 ip4:203.0.113.10 -all"]];
+    expect((await verifyDomain(baseDomain, spfDeps([]))).checks?.spf.status).toBe(
+      "unknown",
+    );
+  });
+
+  test("NXDOMAIN is a definitive failure", async () => {
+    const result = await verifyDomain(baseDomain, spfDeps(["203.0.113.10"]));
+    expect(result.checks?.spf.status).toBe("fail");
+    expect(result.checks?.dkim.status).toBe("fail");
+    expect(result.checks?.dmarc.status).toBe("fail");
   });
 });

@@ -1,5 +1,15 @@
-import { index, pgTable, varchar, boolean, timestamp, text } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  pgTable,
+  varchar,
+  boolean,
+  timestamp,
+  text,
+} from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
 import { users } from "../../users/models/user.schema.ts";
+import type { DomainCheckResult } from "../types/domain-check.types.ts";
 
 /**
  * Domains table: tracks sender domains and their email authentication status.
@@ -71,8 +81,33 @@ export const domains = pgTable(
     /** Whether the DMARC DNS record has been verified for this domain */
     dmarcVerified: boolean("dmarc_verified").notNull().default(false),
 
-    /** When DNS verification last succeeded (null if never verified) */
+    /**
+     * When the domain became verified: every required check (SPF, DKIM,
+     * DMARC) passed (#250). Kept while checks keep passing or are
+     * inconclusive (a DNS error), cleared only when the domain flips to
+     * failing (two definitive failures in a row). Null: not verified.
+     */
     verifiedAt: timestamp("verified_at"),
+
+    /** When the DNS checks last ran, by Verify or the re-verification loop (#250). */
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+
+    /**
+     * When the re-verification loop checks the domain next (#250). Null:
+     * due now (a new domain). A claim pushes it forward before checking,
+     * so two replicas never check one domain at once.
+     */
+    nextCheckAt: timestamp("next_check_at", { withTimezone: true }),
+
+    /**
+     * Checks in a row with at least one definitive failure (#250). A pass
+     * resets it, an inconclusive check leaves it. At 2 a verified domain
+     * flips to failing.
+     */
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+
+    /** The outcome of the last check per record, with a short reason (#250). */
+    lastCheckResult: jsonb<DomainCheckResult | null>("last_check_result"),
 
     /**
      * Mailbox that receives `List-Unsubscribe` mailto requests for messages
@@ -123,5 +158,7 @@ export const domains = pgTable(
   (table) => [
     /** Ownership transfer and the boot backfill update by creator. */
     index("domains_created_by_user_id_idx").on(table.createdByUserId),
+    /** The re-verification loop claims due domains by it (#250). */
+    index("domains_next_check_at_idx").on(table.nextCheckAt),
   ],
 );

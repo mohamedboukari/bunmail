@@ -2,18 +2,20 @@ import { DrizzleQueryError } from "drizzle-orm";
 
 /**
  * Thrown by `webhook.service.createWebhook` when a non-admin API key tries
- * to subscribe to `email.received`. Inbound mail has no owning API key, and
- * reading it is admin-only (#130), so delivering it to a restricted key's
- * webhook would bypass that boundary. The global `.onError` handler in
- * `src/index.ts` maps this to HTTP 403 with
- * `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
+ * to subscribe to an admin-only event: `email.received`, `domain.verified`
+ * or `domain.verification_failed`. Inbound mail and domains have no owning
+ * API key, and managing them is admin-only (#130), so delivering them to a
+ * restricted key's webhook would bypass that boundary. The global
+ * `.onError` handler in `src/index.ts` maps this to HTTP 403 with
+ * `code: "INBOUND_EVENTS_REQUIRE_ADMIN"` (named after the first such event,
+ * kept for compatibility).
  */
 export class InboundEventsRequireAdminError extends Error {
   override readonly name = "InboundEventsRequireAdminError";
 
   constructor() {
     super(
-      "Only admin API keys can subscribe to email.received (inbound mail is admin-only).",
+      "Only admin API keys can subscribe to email.received, domain.verified and domain.verification_failed (inbound mail and domains are admin-only).",
     );
   }
 }
