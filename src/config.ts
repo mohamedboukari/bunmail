@@ -883,7 +883,7 @@ export const config = {
     allowInsecureAuth: optionalEnv("SMTP_SUBMISSION_ALLOW_INSECURE", "false") === "true",
 
     /**
-     * Per-IP connection rate limiting (sliding window), mirroring the
+     * Per-IP connection rate limiting (fixed window), mirroring the
      * inbound receiver. Blunts abusive connection churn.
      */
     connectionRateLimit: {
@@ -897,7 +897,8 @@ export const config = {
      * API key, unbounded failed AUTH attempts would let an attacker
      * brute-force keys. After `maxAttempts` failures within the window an
      * IP is rejected before the key is even checked. Mirrors the dashboard
-     * login throttle (#109). A successful AUTH clears the counter.
+     * login throttle (#109). Only failures are counted, and they expire
+     * only with their window: a successful AUTH does not clear them (#190).
      */
     authRateLimit: {
       enabled: optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED", "true") === "true",
@@ -1005,11 +1006,13 @@ export const config = {
     ),
 
     /**
-     * Brute-force protection for the login form (#109). Failed logins
-     * (any reason) are counted per client IP in a sliding window; once
-     * `maxAttempts` is reached the login POST returns HTTP 429 until the
-     * window expires. A successful login clears the counter. State is
-     * in-memory and per-replica (same caveat as the API rate limiter).
+     * Brute-force protection for the login form (#109). Every attempt is
+     * counted per client IP in a fixed window, before the password check;
+     * once `maxAttempts` is reached the login POST returns HTTP 429 until
+     * the window expires. A successful login gives back only its own
+     * attempt on the IP's counter (#256), so earlier failures stay until
+     * the window ends. State is in-memory and per-replica (same caveat as
+     * the API rate limiter).
      */
     loginRateLimit: {
       /** Master switch: set to "false" to disable login throttling. */
@@ -1133,9 +1136,9 @@ export const config = {
   /**
    * Webhook delivery queue (#30). Persisted retry loop config:
    * tuned for the realistic consumer-outage profile rather than burst
-   * latency. The retry schedule itself (1m / 5m / 15m / 1h / 6h) lives
-   * in `webhook-delivery.service.ts` because it's a behavioural
-   * contract, not an operator knob.
+   * latency. The retry schedule itself (waits of 1m / 5m / 15m / 1h, so
+   * 5 attempts over about 80 minutes) lives in `webhook-delivery.service.ts`
+   * because it's a behavioural contract, not an operator knob.
    */
   webhookDelivery: {
     /**

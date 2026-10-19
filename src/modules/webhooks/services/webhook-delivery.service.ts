@@ -15,13 +15,14 @@
  *      `pending` so the next poll re-attempts it. Operator-driven via
  *      the dashboard / API.
  *
- * Retry schedule (see {@link RETRY_BACKOFF_MINUTES}): 1m, 5m, 15m, 1h,
- * 6h. After 5 failed attempts the row settles at `failed`. Finished rows
+ * Retry schedule (see {@link RETRY_BACKOFF_MINUTES}): waits of 1m, 5m,
+ * 15m and 1h between attempts, so 5 attempts over about 80 minutes.
+ * After the 5th failed attempt the row settles at `failed`. Finished rows
  * (`delivered` and `failed`) get reaped by the retention cleanup after
  * `WEBHOOK_DELIVERY_RETENTION_DAYS` (see {@link purgeOldDeliveries}).
  *
  * The signature is NOT stored on the row: it's recomputed per attempt
- * with a fresh timestamp so a 6-hour-old retry doesn't ship a stale
+ * with a fresh timestamp so an hour-old retry doesn't ship a stale
  * signature that the consumer's freshness window (5 min default) would
  * reject. Body bytes are stored verbatim once at enqueue time.
  */
@@ -59,7 +60,7 @@ import { recordReplay, REPLAYS_PER_DELIVERY_PER_HOUR } from "./replay-limit.serv
  *
  * Tuned for the realistic consumer-outage profile: a brief deploy
  * (recovers within minutes) gets one or two retries; an extended
- * outage gets up-to-7-hours of cover before we stop trying.
+ * outage gets about 80 minutes of cover before we stop trying.
  */
 export const RETRY_BACKOFF_MINUTES = [1, 5, 15, 60] as const;
 export const MAX_DELIVERY_ATTEMPTS = RETRY_BACKOFF_MINUTES.length + 1; // 5

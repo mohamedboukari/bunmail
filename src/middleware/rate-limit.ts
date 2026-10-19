@@ -62,7 +62,7 @@ export function stopRateLimitCleanup(): void {
 /**
  * Rate-limit middleware: enforces per-API-key request limits.
  *
- * Sliding window algorithm:
+ * Fixed window algorithm:
  * 1. Look up the API key's current window in the in-memory map
  * 2. If the window has expired, reset the counter
  * 3. Increment the counter

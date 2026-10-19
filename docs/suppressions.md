@@ -145,6 +145,8 @@ The bounce module (#24) closes the loop: when the inbound SMTP receives a Delive
 
 Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 
+A sender policy block never suppresses, inline (#246) or in a DSN (#250): a DSN with a `5.7.x` status (`5.7.1`, `5.7.26`), or a `5.x.x` whose diagnostic names a blocklist, reputation or SPF/DKIM/DMARC, is classified by the same rules as an inline reply and is about the sender, not the recipient. No suppression is written or changed; a `sent` email is marked `failed` and `email.failed` fires with `blocked: true`. See [bounces.md](bounces.md#policy-dsns-250).
+
 When the queue's retry window runs out (#180, `MAIL_RETRY_MAX_AGE_HOURS`), only one temporary failure files a suppression (#250): a recipient whose **last** failure was an SMTP reply with the enhanced code exactly `4.2.2` (mailbox full) gets a soft bounce through `addFromBounce` (`bounce_type = 'soft'`, `diagnostic_code = '4.2.2'`, `expires_at` 24 h later, `source_email_id` the email), with a soft `email.bounced`, in the email's outcome transaction. `addFromBounce`'s precedence applies: it refreshes a temporary row and leaves a permanent one (complaint, unsubscribe, manual, hard bounce) exactly as it is. There is no soft-to-hard escalation on this path. Every other temporary failure (`4.2.0`, `4.7.x`, any other 4xx, and failures with no SMTP reply: DNS, network, TLS, MTA-STS) ends `failed` with no suppression and no bounce event, since it says nothing reliable about the mailbox. See [bounces.md](bounces.md#inline-5xx-flow-68).
 
 ## One-click unsubscribe

@@ -34,7 +34,7 @@ Receivers handle "address doesn't exist" / "address rejects mail" in **two disti
 | **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's outcome path: [queue.service.ts → `recordSendOutcome`](../src/modules/emails/services/queue.service.ts) (#68) |
 | **Async DSN** | The MX accepts at 250, tries to deliver later, fails, sends a Delivery Status Notification back to the envelope sender. | The bounce module: [bounce-parser](../src/modules/bounces/services/bounce-parser.service.ts) + [bounce-handler](../src/modules/bounces/services/bounce-handler.service.ts) (#24) |
 
-Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook (an inline sender policy block, #246, suppresses nobody and fires `email.failed` instead, see [Inline 5xx flow](#inline-5xx-flow-68)). From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
+Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook (a sender policy block, inline (#246) or in an async DSN (#250), suppresses nobody and fires `email.failed` instead, see [Inline 5xx flow](#inline-5xx-flow-68) and [Policy DSNs](#policy-dsns-250)). From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
 
 Modern Gmail / Outlook / Yahoo prefer **inline 5xx** for obvious-nonexistence cases. Async DSNs are more common for "address used to exist" / "mailbox full" / "domain temporarily unreachable" cases.
 
@@ -50,7 +50,7 @@ Triggered when the message's `Content-Type` is `multipart/report; report-type=de
 |---|---|
 | `Final-Recipient` | The recipient address that bounced |
 | `Original-Recipient` | Optional: the address as first submitted, before forwarding or alias expansion (see recipient check below) |
-| `Status` | Enhanced SMTP status code (`5.x.x` = hard, `4.x.x` = soft, `2.x.x` = ignored) |
+| `Status` | Enhanced SMTP status code, classified with the inline classifier (`parseSmtpError`, #250): `5.7.x` (or a `5.x.x` whose diagnostic names a sender block) = policy, other `5.x.x` = hard, `4.x.x` = soft, `2.x.x` = ignored |
 | `Diagnostic-Code` | Human-readable reason: persisted on the suppression row |
 | `Original-Message-ID` | Optional and informational: the return path, not this field, links the bounce to its email (#236). Postfix, for one, does not send it |
 
@@ -124,7 +124,7 @@ Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for furt
 
 ## Async DSN → suppression flow
 
-When a DSN parses cleanly and arrived at a verified return path, the bounce handler does five things for the email and recipient that return path names (see [Signed return paths](#signed-return-paths-236)):
+When a DSN parses cleanly as a hard or soft bounce and arrived at a verified return path, the bounce handler does five things for the email and recipient that return path names (see [Signed return paths](#signed-return-paths-236)):
 
 1. **Look up existing suppression** for `(api_key_id, recipient)`.
 2. **Decide hard vs soft** with escalation:
@@ -136,6 +136,16 @@ When a DSN parses cleanly and arrived at a verified return path, the bounce hand
 5. **Enqueue the `email.bounced` webhook** (a `webhook_deliveries` row per subscribed webhook, see [webhooks.md](webhooks.md#transactional-outbox-184)) with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the suppression in effect: the one just written, or the permanent one left in place).
 
 Steps 3 to 5 are one transaction (#184): the suppression, the status and the event commit together or not at all. A failure is logged (`Bounce not recorded: transaction rolled back`) and the receiver answers the DSN with `451`, so the sending MTA delivers it again later.
+
+### Policy DSNs (#250)
+
+A DSN is classified with the same classifier as an inline reply (`parseSmtpError` in [src/utils/smtp-error.ts](../src/utils/smtp-error.ts), #246): a `5.7.x` status (`5.7.1` blocked, `5.7.26` DMARC failure), or a `5.x.x` whose diagnostic names a blocklist, reputation or SPF/DKIM/DMARC, is kind `policy` unless the text also says the recipient does not exist. Before #250 any `5.x.x` DSN was a hard bounce, so a sender-side block suppressed a recipient who did nothing wrong. A policy DSN is handled like an inline policy failure:
+
+- **nobody is suppressed** and no suppression is read or changed (a permanent one on file stays as it was, #191); no `email.bounced`;
+- a `sent` email is marked `failed` with `last_error` = `Receiver refused the sender (DSN <status>): <diagnostic>` (at most 1000 characters), and `email.failed` is enqueued with the inline fields (`emailId`, `from`, `to`, `subject`, `error`, `blocked: true`), in one transaction (#184; a failure rolls both back, is logged as `Policy DSN not recorded: transaction rolled back`, and the DSN is answered with `451`);
+- an email in any other state (still queued or sending, already `failed`, or `bounced`) is left alone and nothing fires, so a repeated DSN, or one for a second recipient, fires `email.failed` once.
+
+Each policy DSN is logged at `warn` (`Policy DSN: receiver refused the sender, recipient not suppressed`, with the redacted recipient and the status). Fix the sending IP's reputation or the domain's authentication, then resend.
 
 ## Webhook payload
 

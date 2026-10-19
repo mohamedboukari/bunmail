@@ -5,6 +5,13 @@
  * the one recipient the return path names, mark the original email row as
  * bounced, and enqueue the `email.bounced` webhook.
  *
+ * A `policy` DSN (#250: a `5.7.x`, or a refusal whose wording names the
+ * sender, classified like an inline reply, #246) is about the sender, not
+ * the recipient, so it is handled like an inline policy failure instead:
+ * no suppression and no `email.bounced`; a sent email is marked `failed`
+ * with the reason and `email.failed` (`blocked: true`) is enqueued, in one
+ * transaction.
+ *
  * The return path is the only link from a DSN to an email
  * ({@link resolveReturnPath}): the Message-ID in a DSN body is visible to
  * every recipient of the email, so linking by it let one recipient forge
@@ -34,6 +41,9 @@ import { parseReturnPath, recipientOrder, returnPathMacMatches } from "./return-
 
 /** Public-facing email status string for bounced rows. */
 const STATUS_BOUNCED = "bounced";
+
+/** Longest `last_error` a policy DSN writes: its diagnostic is free text. */
+const MAX_POLICY_ERROR_LENGTH = 1000;
 
 /** The fields of the original `emails` row the handler needs. */
 export interface OriginalEmail {
@@ -138,20 +148,41 @@ export interface BounceHandlerDeps<T> {
   markEmailBounced: (tx: T, emailId: string) => Promise<void>;
 
   /**
-   * Enqueue `email.bounced` for the key's webhooks, in the same
-   * transaction (see `enqueueEvent`). Throws when the insert fails, which
-   * rolls the suppression and the status back with it.
+   * A policy DSN (#250): moves a `sent` email to `failed` with
+   * `lastError`, and returns the fields `email.failed` carries, or `null`
+   * when the row was in any other state (still queued or sending, already
+   * failed or bounced) and was left alone.
+   */
+  markEmailBlocked: (
+    tx: T,
+    emailId: string,
+    lastError: string,
+  ) => Promise<BlockedEmail | null>;
+
+  /**
+   * Enqueue `email.bounced` (or, for a policy DSN, `email.failed`) for the
+   * key's webhooks, in the same transaction (see `enqueueEvent`). Throws
+   * when the insert fails, which rolls the suppression and the status back
+   * with it.
    */
   enqueueEvent: (
     tx: T,
-    event: "email.bounced",
+    event: "email.bounced" | "email.failed",
     data: Record<string, unknown>,
     scope: { apiKeyId: string },
   ) => Promise<unknown>;
 }
 
+/** The fields of an email a policy DSN marked failed, for `email.failed`. */
+export interface BlockedEmail {
+  fromAddress: string;
+  toAddress: string;
+  subject: string;
+}
+
 export interface HandleBounceResult {
-  outcome: "applied" | "escalated";
+  /** `blocked`: a policy DSN (#250), nothing suppressed. */
+  outcome: "applied" | "escalated" | "blocked";
   emailId: string;
   apiKeyId: string;
   /** The suppression in effect for the recipient afterwards, when known. */
@@ -159,6 +190,76 @@ export interface HandleBounceResult {
   bounceType?: "hard" | "soft";
   /** False when a permanent suppression was already on file and kept (#191). */
   suppressionApplied?: boolean;
+  /** Policy DSN only: whether the email moved from `sent` to `failed`. */
+  markedFailed?: boolean;
+}
+
+/**
+ * A policy DSN (#250): the receiver refused the SENDER (`5.7.x`: SPF,
+ * DMARC, reputation, a blocklist), so the recipient did nothing wrong and
+ * is not suppressed, and no `email.bounced` fires. Mirrors an inline
+ * policy failure (#246): the email is marked `failed` with the reason and
+ * `email.failed` is enqueued with `blocked: true` and the same fields, in
+ * one transaction (#184). Only a `sent` email changes: a row still being
+ * retried is the queue's, and a `bounced` one keeps the stronger outcome.
+ * The event fires only when the row changed, so a repeated DSN (or one
+ * for a second recipient) does not fire it again.
+ */
+async function handlePolicyBounce<T>(
+  parsed: ParsedBounce,
+  binding: ReturnPathBinding,
+  deps: BounceHandlerDeps<T>,
+): Promise<HandleBounceResult> {
+  const original = binding.email;
+  const lastError = `Receiver refused the sender (DSN ${parsed.status})${
+    parsed.diagnostic ? `: ${parsed.diagnostic}` : ""
+  }`.slice(0, MAX_POLICY_ERROR_LENGTH);
+
+  let markedFailed: boolean;
+  try {
+    markedFailed = await deps.transaction(async (tx) => {
+      const blocked = await deps.markEmailBlocked(tx, original.id, lastError);
+      if (blocked === null) return false;
+      await deps.enqueueEvent(
+        tx,
+        "email.failed",
+        {
+          emailId: original.id,
+          from: blocked.fromAddress,
+          to: blocked.toAddress,
+          subject: blocked.subject,
+          error: lastError,
+          /** The receiver refused the sender (#246), not the recipient. */
+          blocked: true,
+        },
+        { apiKeyId: original.apiKeyId },
+      );
+      return true;
+    });
+  } catch (error) {
+    logger.error("Policy DSN not recorded: transaction rolled back", {
+      emailId: original.id,
+      apiKeyId: original.apiKeyId,
+      error: loggableError(error),
+    });
+    throw error;
+  }
+
+  logger.warn("Policy DSN: receiver refused the sender, recipient not suppressed", {
+    emailId: original.id,
+    apiKeyId: original.apiKeyId,
+    to: redactEmail(binding.recipient),
+    status: parsed.status,
+    source: parsed.source,
+    markedFailed,
+  });
+
+  return {
+    outcome: "blocked",
+    emailId: original.id,
+    apiKeyId: original.apiKeyId,
+    markedFailed,
+  };
 }
 
 /**
@@ -204,6 +305,9 @@ export async function handleBounce<T>(
       },
     );
   }
+
+  /** About the sender, not the recipient (#250): never suppresses. */
+  if (parsed.kind === "policy") return handlePolicyBounce(parsed, binding, deps);
 
   const existing = await deps.isSuppressed(original.apiKeyId, recipient);
   const finalKind = escalateIfRepeat(parsed.kind, existing);
@@ -317,6 +421,18 @@ export async function handleParsedBounce(
         .update(emails)
         .set({ status: STATUS_BOUNCED, updatedAt: new Date() })
         .where(and(eq(emails.id, emailId), inArray(emails.status, ["sent", "failed"])));
+    },
+    markEmailBlocked: async (tx, emailId, lastError) => {
+      const [row] = await tx
+        .update(emails)
+        .set({ status: "failed", lastError, updatedAt: new Date() })
+        .where(and(eq(emails.id, emailId), eq(emails.status, "sent")))
+        .returning({
+          fromAddress: emails.fromAddress,
+          toAddress: emails.toAddress,
+          subject: emails.subject,
+        });
+      return row ?? null;
     },
     enqueueEvent,
   });

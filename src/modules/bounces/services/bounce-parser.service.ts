@@ -29,7 +29,23 @@
  * is part of the evidence that a plain-text message is a bounce at all.
  */
 
+import { parseSmtpError } from "../../../utils/smtp-error.ts";
 import type { ParsedBounce } from "../types/bounce.types.ts";
+
+/**
+ * Classifies a DSN with the shared SMTP classifier inline send failures
+ * use (#246), so a `5.7.x` (or a `5.x.x` whose text names a sender-side
+ * block: SPF, DMARC, reputation, a blocklist) is a `policy` refusal of the
+ * sender, never a hard bounce of the recipient. The status goes first, so
+ * it is the code the classifier reads; the diagnostic adds the wording.
+ * `null` for a `2.x.x` (delivered) report.
+ */
+function classifyDsn(
+  status: string,
+  diagnostic: string | undefined,
+): ParsedBounce["kind"] | null {
+  return parseSmtpError(`${status} ${diagnostic ?? ""}`)?.kind ?? null;
+}
 
 /**
  * `multipart/report; ...; report-type=delivery-status` is checked as two
@@ -109,7 +125,8 @@ function parseRfc3464(raw: string): ParsedBounce | null {
   if (!recipientLine || !statusLine) return null;
 
   const status = statusLine[1]!;
-  const kind = status.startsWith("5") ? "hard" : status.startsWith("4") ? "soft" : null;
+  const diagnostic = diagnosticLine ? diagnosticLine[1]!.trim() : undefined;
+  const kind = classifyDsn(status, diagnostic);
   /** 2.x.x is "delivered", not a bounce. */
   if (!kind) return null;
 
@@ -128,7 +145,7 @@ function parseRfc3464(raw: string): ParsedBounce | null {
     originalRecipient,
     originalMessageId,
     status,
-    diagnostic: diagnosticLine ? diagnosticLine[1]!.trim() : undefined,
+    diagnostic,
     source: "rfc3464",
   };
 }
@@ -173,9 +190,6 @@ function parseFallback(raw: string): ParsedBounce | null {
     else if (code >= 400 && code < 500) status = "4.0.0";
   }
   if (!status) return null;
-
-  const kind = status.startsWith("5") ? "hard" : status.startsWith("4") ? "soft" : null;
-  if (!kind) return null;
 
   /**
    * Search for the recipient in the **body**, not the headers: `<msg-id@host>`
@@ -226,6 +240,10 @@ function parseFallback(raw: string): ParsedBounce | null {
     .split(/\r?\n/)
     .find((l) => l.includes(status) || (basicMatch && l.includes(basicMatch[0])))
     ?.trim();
+
+  /** Same classifier as the RFC 3464 path; the status line is the wording. */
+  const kind = classifyDsn(status, diagnostic);
+  if (!kind) return null;
 
   return {
     kind,

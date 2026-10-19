@@ -73,7 +73,7 @@ let server: SMTPServer | null = null;
 /** Interval handle for the periodic rate-limit map cleanup. */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-/* ─── Per-IP sliding-window counters ─── */
+/* ─── Per-IP fixed-window counters ─── */
 
 interface WindowEntry {
   /** Number of events in the current window. */

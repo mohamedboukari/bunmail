@@ -1,11 +1,16 @@
 /**
  * Output of the bounce parser. The handler reads this to decide what kind
- * of suppression to file (hard / soft) and what the webhook reports. Which
- * email and recipient it applies to comes from the signed return path the
- * DSN arrived at (#236), not from these fields.
+ * of suppression to file (hard / soft, or none for a policy block) and
+ * what the webhook reports. Which email and recipient it applies to comes
+ * from the signed return path the DSN arrived at (#236), not from these
+ * fields.
  *
- * `kind: "hard" | "soft"` is derived from the SMTP enhanced status code:
- *   - `5.x.x` → permanent failure → hard
+ * `kind` comes from the shared SMTP classifier (`parseSmtpError` in
+ * `src/utils/smtp-error.ts`), the one inline send failures use (#246):
+ *   - `5.x.x` → permanent failure of the recipient → hard
+ *   - `5.7.x`, or a `5.x.x` whose diagnostic says the SENDER was refused
+ *     (blocklist, reputation, SPF/DKIM/DMARC) and not that the recipient
+ *     is unknown → policy: never suppresses the recipient
  *   - `4.x.x` → transient failure → soft
  *
  * Anything else (`2.x.x` "delivered" reports, malformed status, status
@@ -13,8 +18,11 @@
  * returns `null` and the inbound path falls through to normal storage.
  */
 export interface ParsedBounce {
-  /** "hard" = permanent suppression; "soft" = time-windowed suppression. */
-  kind: "hard" | "soft";
+  /**
+   * "hard" = permanent suppression; "soft" = time-windowed suppression;
+   * "policy" = the receiver refused the sender, no suppression (#246).
+   */
+  kind: "hard" | "policy" | "soft";
 
   /** The address that bounced. Lower-cased, no angle brackets. */
   recipient: string;

@@ -90,6 +90,19 @@ export const sendEmailDto = t.Object({
     }),
   ),
 
+  /**
+   * Not supported (#250). Declared so the property reaches `createEmail`,
+   * which refuses the send with `422 ATTACHMENTS_NOT_SUPPORTED` whatever
+   * the value is (an empty array included), instead of queuing it without
+   * them. Every other unknown property is still ignored.
+   */
+  attachments: t.Optional(
+    t.Unknown({
+      description:
+        "Not supported: a send with this property, whatever its value (an empty array included), is refused with 422 ATTACHMENTS_NOT_SUPPORTED and nothing is queued.",
+    }),
+  ),
+
   headers: t.Optional(
     t.Record(
       t.String({ pattern: "^[\\x21-\\x39\\x3b-\\x7e]{1,64}$" }),

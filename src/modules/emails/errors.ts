@@ -190,3 +190,21 @@ export class MarketingRequiresOneClickError extends EmailSendRejectedError {
     this.reason = reason;
   }
 }
+
+/**
+ * A REST send whose body has an `attachments` property, whatever its
+ * value (an empty array included). Attachments are not supported yet, and
+ * the body schema ignores unknown fields, so without this check they were
+ * accepted and silently dropped (#250): a recipient missing an attachment
+ * is worse than a clear refusal. Nothing is queued. SMTP submission
+ * refuses a message with attachments the same way, with SMTP `550`.
+ */
+export class AttachmentsNotSupportedError extends EmailSendRejectedError {
+  override readonly name = "AttachmentsNotSupportedError";
+  readonly status = 422;
+  readonly code = "ATTACHMENTS_NOT_SUPPORTED";
+
+  constructor() {
+    super("Attachments are not supported: send the email without them.");
+  }
+}

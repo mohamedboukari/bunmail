@@ -34,6 +34,7 @@ import {
   IdempotencyKeyReusedError,
   InvalidFromNameError,
   MarketingRequiresOneClickError,
+  AttachmentsNotSupportedError,
 } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -240,7 +241,18 @@ async function prepareEmail(
   });
 
   /**
-   * Custom headers (#177), checked first: it is pure input validation,
+   * Attachments are not supported (#250): a body that carries the
+   * property at all, whatever its value, is refused before anything else
+   * rather than queued without them. Pure input validation, no database
+   * work. The log line names no file and holds no content.
+   */
+  if (input.attachments !== undefined) {
+    logger.warn("Send blocked: attachments not supported", { id, apiKeyId, source });
+    throw new AttachmentsNotSupportedError();
+  }
+
+  /**
+   * Custom headers (#177), checked next: it is pure input validation,
    * so a refused header costs no database work. Shared by every ingress
    * (REST, dashboard, SMTP submission) because they all call this
    * function. The log line names the header and the rule, never the value.
