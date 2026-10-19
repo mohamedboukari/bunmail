@@ -20,6 +20,7 @@ import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { redactUrl } from "../../utils/redact.ts";
+import { ReplayLimitReachedError } from "../../modules/webhooks/errors.ts";
 
 /** Webhook pages (#291): list, create, delete, deliveries and replay. */
 export function webhookPages(app: GuardedDashboard) {
@@ -268,17 +269,38 @@ export function webhookPages(app: GuardedDashboard) {
 
       /** POST /dashboard/webhooks/deliveries/:deliveryId/replay, flip a
        *  failed/pending delivery back to pending so the worker re-tries it
-       *  on the next poll. Redirects to the detail page with a flash. */
+       *  on the next poll. Redirects to the detail page with a flash. Over
+       *  the replay limit (#258) it answers 429 with `Retry-After` on the
+       *  detail page instead. */
       .post(
         "/webhooks/deliveries/:deliveryId/replay",
         async ({ params, set }) => {
           const hooks = await webhookService.listAllWebhooks();
           let replayed = false;
           for (const hook of hooks) {
-            const row = await webhookDeliveryService.replayDelivery({
-              deliveryId: params.deliveryId,
-              apiKeyId: hook.apiKeyId,
-            });
+            let row: Awaited<ReturnType<typeof webhookDeliveryService.replayDelivery>>;
+            try {
+              row = await webhookDeliveryService.replayDelivery({
+                deliveryId: params.deliveryId,
+                apiKeyId: hook.apiKeyId,
+              });
+            } catch (error) {
+              if (!(error instanceof ReplayLimitReachedError)) throw error;
+              const delivery = await webhookDeliveryService.getDeliveryById({
+                deliveryId: params.deliveryId,
+                apiKeyId: hook.apiKeyId,
+              });
+              if (!delivery) throw error;
+              set.status = error.status;
+              set.headers["retry-after"] = String(error.retryAfterSec);
+              return (
+                <WebhookDeliveryDetailPage
+                  delivery={delivery}
+                  webhook={hook}
+                  flash={{ message: error.message, type: "error" }}
+                />
+              );
+            }
             if (row) {
               replayed = true;
               break;

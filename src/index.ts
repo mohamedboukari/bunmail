@@ -13,7 +13,11 @@ import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { EmailSendRejectedError } from "./modules/emails/errors.ts";
 import { DomainAlreadyRegisteredError } from "./modules/domains/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
-import { InboundEventsRequireAdminError } from "./modules/webhooks/errors.ts";
+import {
+  InboundEventsRequireAdminError,
+  ReplayLimitReachedError,
+  WebhookLimitReachedError,
+} from "./modules/webhooks/errors.ts";
 import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { withRequestContext } from "./middleware/request-context.ts";
 import { securityHeadersPlugin } from "./middleware/security-headers.ts";
@@ -369,6 +373,19 @@ const app = new Elysia()
         error: error.message,
         code: "INBOUND_EVENTS_REQUIRE_ADMIN",
       };
+    }
+
+    /** The key already has `WEBHOOKS_MAX_PER_API_KEY` webhooks (#258) → 422. */
+    if (error instanceof WebhookLimitReachedError) {
+      set.status = error.status;
+      return { success: false, error: error.message, code: error.code };
+    }
+
+    /** A delivery replayed 5 times this hour (#258) → 429 with `Retry-After`. */
+    if (error instanceof ReplayLimitReachedError) {
+      set.status = error.status;
+      set.headers["retry-after"] = String(error.retryAfterSec);
+      return { success: false, error: error.message, code: error.code };
     }
 
     if (error instanceof BlockedUrlError) {

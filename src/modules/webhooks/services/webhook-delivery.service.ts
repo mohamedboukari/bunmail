@@ -16,9 +16,9 @@
  *      the dashboard / API.
  *
  * Retry schedule (see {@link RETRY_BACKOFF_MINUTES}): 1m, 5m, 15m, 1h,
- * 6h. After 5 failed attempts the row settles at `failed` and is kept
- * indefinitely for forensics. `delivered` rows get reaped by the
- * retention cleanup (see {@link purgeOldDeliveries}).
+ * 6h. After 5 failed attempts the row settles at `failed`. Finished rows
+ * (`delivered` and `failed`) get reaped by the retention cleanup after
+ * `WEBHOOK_DELIVERY_RETENTION_DAYS` (see {@link purgeOldDeliveries}).
  *
  * The signature is NOT stored on the row: it's recomputed per attempt
  * with a fresh timestamp so a 6-hour-old retry doesn't ship a stale
@@ -26,7 +26,7 @@
  * reject. Body bytes are stored verbatim once at enqueue time.
  */
 
-import { and, desc, eq, sql, inArray, lt } from "drizzle-orm";
+import { and, desc, eq, sql, inArray, lt, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { webhookDeliveries } from "../models/webhook-delivery.schema.ts";
 import { webhooks } from "../models/webhook.schema.ts";
@@ -44,6 +44,8 @@ import {
 } from "../../../utils/ssrf-guard.ts";
 import { config } from "../../../config.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
+import { ReplayLimitReachedError } from "../errors.ts";
+import { recordReplay, REPLAYS_PER_DELIVERY_PER_HOUR } from "./replay-limit.service.ts";
 
 /**
  * Backoff schedule per the issue's acceptance criteria. The value at
@@ -181,6 +183,52 @@ export function nextAttemptAt(attempts: number, now: Date = new Date()): Date | 
 }
 
 /**
+ * The ids of the next `n` due `pending` deliveries, shared fairly across
+ * the API keys that own their webhooks (#258), each row locked
+ * `FOR UPDATE SKIP LOCKED`.
+ *
+ * A plain global FIFO let one key with a large backlog (or a webhook that
+ * is down and collecting retries) fill every batch, delaying every other
+ * key's events. Deliveries carry no `api_key_id`, so the key comes from
+ * the owning webhook:
+ *
+ *   1. For each webhook, a `LATERAL` subquery takes its first `n` due
+ *      rows in due order through `webhook_deliveries_due_per_webhook_idx`,
+ *      locking them `SKIP LOCKED`: one short index probe per webhook,
+ *      whatever the backlog (webhooks per key are capped, see
+ *      `WEBHOOKS_MAX_PER_API_KEY`).
+ *   2. The candidates are ranked within the webhook's API key by due time,
+ *      and the batch takes the lowest ranks first, oldest first within a
+ *      rank: round-robin across keys. A single key keeps FIFO order.
+ *
+ * The lock sits in the per-webhook subqueries because Postgres refuses
+ * `FOR UPDATE` at the level of a window function; there it keeps
+ * concurrent workers' claims disjoint. Candidates locked but not taken
+ * are released when the claim's transaction ends.
+ */
+function fairDueDeliveryIds(n: number): SQL {
+  return sql`
+    SELECT fair.id FROM (
+      SELECT due.id, due.next_attempt_at,
+        row_number() OVER (
+          PARTITION BY ${webhooks.apiKeyId} ORDER BY due.next_attempt_at, due.id
+        ) AS key_rank
+      FROM ${webhooks} CROSS JOIN LATERAL (
+        SELECT ${webhookDeliveries.id}, ${webhookDeliveries.nextAttemptAt}
+        FROM ${webhookDeliveries}
+        WHERE ${webhookDeliveries.webhookId} = ${webhooks.id}
+          AND ${webhookDeliveries.status} = 'pending'
+          AND ${webhookDeliveries.nextAttemptAt} <= NOW()
+        ORDER BY ${webhookDeliveries.nextAttemptAt}
+        LIMIT ${n}
+        FOR UPDATE OF ${webhookDeliveries} SKIP LOCKED
+      ) AS due
+    ) AS fair
+    ORDER BY fair.key_rank, fair.next_attempt_at, fair.id
+    LIMIT ${n}`;
+}
+
+/**
  * Claims up to `n` due `pending` rows and returns them with the
  * webhook secret + url joined in. Atomic: two concurrent workers will
  * never see the same row, same guarantee as the email queue claim
@@ -214,7 +262,8 @@ export async function claimDueDeliveries(
   }>
 > {
   /**
-   * Inner: pick + lock the next `n` due rows.
+   * Inner: pick + lock the next `n` due rows, shared fairly across API
+   * keys (#258, see {@link fairDueDeliveryIds}).
    *
    * The "is this row due?" comparison uses Postgres `NOW()` rather
    * than the JS `now` we got from the caller. Why: rows set
@@ -227,18 +276,7 @@ export async function claimDueDeliveries(
    * skew entirely. The OUTER UPDATE below still uses the Node `now`
    * for its set values; minor skew on those is harmless.
    */
-  const pickIds = db
-    .select({ id: webhookDeliveries.id })
-    .from(webhookDeliveries)
-    .where(
-      and(
-        eq(webhookDeliveries.status, "pending"),
-        sql`${webhookDeliveries.nextAttemptAt} <= NOW()`,
-      ),
-    )
-    .orderBy(webhookDeliveries.nextAttemptAt)
-    .limit(n)
-    .for("update", { skipLocked: true });
+  const pickIds = fairDueDeliveryIds(n);
 
   /** Outer: push `next_attempt_at` forward by ATTEMPT_LOCK_MS so the
    *  row is invisible to subsequent claims for the duration of the
@@ -269,7 +307,7 @@ export async function claimDueDeliveries(
         attempts: sql`${webhookDeliveries.attempts} + 1`,
         updatedAt: now,
       })
-      .where(inArray(webhookDeliveries.id, pickIds))
+      .where(sql`${webhookDeliveries.id} IN (${pickIds})`)
       .returning();
 
     if (claimed.length === 0) return [];
@@ -659,6 +697,9 @@ export async function getDeliveryById(opts: {
  * cycle, not continuing the old one. Otherwise replay of a 5x-failed
  * row would immediately re-flip to `failed` after one more attempt.
  *
+ * At most `REPLAYS_PER_DELIVERY_PER_HOUR` (5) replays per delivery per
+ * hour (#258): one more throws `ReplayLimitReachedError` (429).
+ *
  * Returns `undefined` if the delivery doesn't exist or doesn't belong
  * to the calling api key.
  */
@@ -671,6 +712,25 @@ export async function replayDelivery(opts: {
   /** Ownership check via the parent webhook. */
   const existing = await getDeliveryById(opts);
   if (!existing) return undefined;
+
+  /**
+   * Replay budget (#258), counted only once ownership is proven: a key
+   * that guesses another key's delivery id can neither use up its budget
+   * nor learn from a 429 that the id exists.
+   */
+  const decision = recordReplay(existing.id, now.getTime());
+  if (decision.limited) {
+    logger.warn("Webhook delivery replay refused: replay limit reached", {
+      deliveryId: existing.id,
+      webhookId: existing.webhookId,
+      limit: REPLAYS_PER_DELIVERY_PER_HOUR,
+      retryAfterSec: decision.retryAfterSec,
+    });
+    throw new ReplayLimitReachedError(
+      REPLAYS_PER_DELIVERY_PER_HOUR,
+      decision.retryAfterSec,
+    );
+  }
 
   const [updated] = await db
     .update(webhookDeliveries)
@@ -698,24 +758,47 @@ export async function replayDelivery(opts: {
 
 /* ─── Retention cleanup ─── */
 
+/** Rows per retention delete, and how many batches one cleanup pass runs at most. */
+const PURGE_BATCH_SIZE = 5000;
+const PURGE_MAX_BATCHES = 100;
+
 /**
- * Purges `delivered` rows older than the retention cutoff. `failed`
- * rows are kept indefinitely: operators want them for forensic
- * "did this event ever land?" queries even months later.
+ * Deletes finished deliveries (`delivered` and `failed`) whose last change
+ * (`updated_at`: delivery, final failure) is older than `olderThan`, in
+ * batches of `batchSize`, at most {@link PURGE_MAX_BATCHES} batches per
+ * call (the rest goes at the next pass). `pending` rows, including the
+ * ones in flight, are never deleted, whatever their age.
  *
- * Run from the worker poll loop (once an hour, not on every tick).
+ * `failed` rows used to be kept forever (#258): one key whose receiver
+ * stayed down could grow the table without bound. They now age out with
+ * `WEBHOOK_DELIVERY_RETENTION_DAYS` like delivered ones. A replayed row is
+ * `pending` again and its clock restarts when it finishes.
+ *
+ * Run from the worker's hourly cleanup (see `runCleanupCycle`).
  */
 export async function purgeOldDeliveries(opts: {
   olderThan: Date;
+  batchSize?: number;
 }): Promise<{ deleted: number }> {
-  const result = await db
-    .delete(webhookDeliveries)
-    .where(
-      and(
-        eq(webhookDeliveries.status, "delivered"),
-        lt(webhookDeliveries.createdAt, opts.olderThan),
-      ),
-    )
-    .returning({ id: webhookDeliveries.id });
-  return { deleted: result.length };
+  const batchSize = opts.batchSize ?? PURGE_BATCH_SIZE;
+  const finishedBefore = and(
+    inArray(webhookDeliveries.status, ["delivered", "failed"]),
+    lt(webhookDeliveries.updatedAt, opts.olderThan),
+  );
+  let deleted = 0;
+  for (let batch = 0; batch < PURGE_MAX_BATCHES; batch += 1) {
+    const expired = db
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(finishedBefore)
+      .limit(batchSize);
+    const rows = await db
+      .delete(webhookDeliveries)
+      /** Re-checked on the row itself: a replay between the two reads keeps it. */
+      .where(and(inArray(webhookDeliveries.id, expired), finishedBefore))
+      .returning({ id: webhookDeliveries.id });
+    deleted += rows.length;
+    if (rows.length < batchSize) break;
+  }
+  return { deleted };
 }

@@ -33,6 +33,7 @@ interface WebhookResponse {
 interface WebhookListResponse {
   success: boolean;
   data: SerializedWebhook[];
+  pagination: { page: number; limit: number; total: number };
 }
 
 interface ErrorResponse {
@@ -83,7 +84,7 @@ void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () =>
   createWebhook: mock(() =>
     Promise.resolve({ webhook: mockWebhook, secret: "supersecret123" }),
   ),
-  listWebhooks: mock(() => Promise.resolve([mockWebhook])),
+  listWebhooks: mock(() => Promise.resolve({ data: [mockWebhook], total: 1 })),
   listAllWebhooks: mock(() => Promise.resolve([mockWebhook])),
   deleteWebhook: mock((id: string) =>
     Promise.resolve(id === "whk_test123" ? mockWebhook : undefined),
@@ -169,6 +170,8 @@ describe("Webhooks API E2E", () => {
       expect(body.data[0]!.url).toBe("https://example.com/hook");
       /** Secret must not be exposed in list response */
       expect(body.data[0]).not.toHaveProperty("secret");
+      /** Paginated since #258: default limit 100. */
+      expect(body.pagination).toEqual({ page: 1, limit: 100, total: 1 });
     });
   });
 

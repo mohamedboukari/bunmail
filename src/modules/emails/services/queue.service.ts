@@ -1,11 +1,12 @@
 import { randomBytes } from "crypto";
 import { hostname } from "os";
-import { eq, asc, and, or, isNull, inArray, sql, getTableColumns } from "drizzle-orm";
+import { eq, and, sql, getTableColumns, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
+import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions } from "./mailer.service.ts";
 import { listUnsubscribeOptions } from "./list-unsubscribe.ts";
@@ -297,6 +298,77 @@ export function stop(): void {
 }
 
 /**
+ * `COALESCE(lease_until, updated_at + 15 minutes) < NOW()`: the lease of
+ * a `sending` row has expired. A row with no lease (claimed by a version
+ * without leases, e.g. an old replica during a rolling deploy) counts as
+ * leased until 15 minutes after its last update; `updated_at` holds UTC
+ * wall time written by the app.
+ */
+const LEASE_EXPIRED = sql`COALESCE(${emails.leaseUntil}, (${emails.updatedAt} AT TIME ZONE 'UTC') + interval ${sql.raw(`'${LEASE_MINUTES} minutes'`)}) < NOW()`;
+
+/**
+ * The ids of the next `n` claimable emails, shared fairly across API keys
+ * (#258), each row locked `FOR UPDATE SKIP LOCKED`.
+ *
+ * A plain global FIFO let one key with a large backlog fill every batch,
+ * so another key's single email waited behind all of it. Instead:
+ *
+ *   1. For each API key, a `LATERAL` subquery takes its first `n` due
+ *      queued rows in due order (`next_attempt_at`, then `created_at`)
+ *      through `idx_emails_due_per_key`, locking them `SKIP LOCKED`. The
+ *      cost is one short index probe per key, whatever the backlog.
+ *      Rows whose lease expired (their worker died) are added from
+ *      `idx_emails_lease`, at most `n` of them.
+ *   2. The candidates are ranked within their key (1 = the key's oldest
+ *      due row), and the batch takes the lowest ranks first, oldest first
+ *      within a rank: round-robin across keys. A single key keeps plain
+ *      FIFO order.
+ *
+ * The lock sits in the per-key subqueries because Postgres refuses
+ * `FOR UPDATE` at the level of a window function. Locking there keeps
+ * `SKIP LOCKED` doing its job: concurrent workers skip each other's rows
+ * and take the next ones, so their claims stay disjoint. Candidates that
+ * are locked but not taken are released when the statement ends. The
+ * eligibility test sits in the same subqueries, so a row another worker
+ * claimed in the meantime is re-checked against its new state and dropped.
+ */
+function fairDueEmailIds(n: number): SQL {
+  return sql`
+    SELECT fair.id FROM (
+      SELECT due.id, due.next_attempt_at, due.created_at,
+        row_number() OVER (
+          PARTITION BY due.api_key_id ORDER BY due.next_attempt_at, due.created_at, due.id
+        ) AS key_rank
+      FROM (
+        SELECT per_key.* FROM ${apiKeys} CROSS JOIN LATERAL (
+          SELECT ${emails.id}, ${emails.apiKeyId}, ${emails.nextAttemptAt}, ${emails.createdAt}
+          FROM ${emails}
+          WHERE ${emails.apiKeyId} = ${apiKeys.id}
+            AND ${emails.status} = 'queued'
+            AND ${emails.deletedAt} IS NULL
+            AND ${emails.nextAttemptAt} <= NOW()
+          ORDER BY ${emails.nextAttemptAt}, ${emails.createdAt}
+          LIMIT ${n}
+          FOR UPDATE OF ${emails} SKIP LOCKED
+        ) AS per_key
+        UNION ALL
+        SELECT expired.* FROM (
+          SELECT ${emails.id}, ${emails.apiKeyId}, ${emails.nextAttemptAt}, ${emails.createdAt}
+          FROM ${emails}
+          WHERE ${emails.status} = 'sending'
+            AND ${emails.deletedAt} IS NULL
+            AND ${LEASE_EXPIRED}
+          ORDER BY ${emails.nextAttemptAt}, ${emails.createdAt}
+          LIMIT ${n}
+          FOR UPDATE OF ${emails} SKIP LOCKED
+        ) AS expired
+      ) AS due
+    ) AS fair
+    ORDER BY fair.key_rank, fair.next_attempt_at, fair.created_at, fair.id
+    LIMIT ${n}`;
+}
+
+/**
  * Atomically claims up to `n` queued emails for processing.
  *
  * The query is a single statement that flips `queued → sending` with
@@ -318,34 +390,15 @@ export function stop(): void {
  * Eligible rows (#180): `queued` rows whose `next_attempt_at` has passed
  * (retries wait out their backoff), and `sending` rows whose lease has
  * expired (their worker died). Both comparisons use the database clock.
- * A `sending` row with no lease (claimed by a version without leases,
- * e.g. an old replica during a rolling deploy) counts as leased until 15
- * minutes after its last update. The claim takes a lease for this worker.
+ * The batch is shared across API keys round-robin (#258, see
+ * {@link fairDueEmailIds}). The claim takes a lease for this worker.
  *
  * Exported so the integration test can hit it directly without going
  * through the poll loop.
  */
 export async function claimNextEmails(n: number): Promise<ClaimedEmail[]> {
-  /** Inner subquery that picks the next `n` due ids and locks them. */
-  const pickIds = db
-    .select({ id: emails.id })
-    .from(emails)
-    .where(
-      and(
-        isNull(emails.deletedAt),
-        or(
-          and(eq(emails.status, "queued"), sql`${emails.nextAttemptAt} <= NOW()`),
-          and(
-            eq(emails.status, "sending"),
-            /** `updated_at` holds UTC wall time written by the app. */
-            sql`COALESCE(${emails.leaseUntil}, (${emails.updatedAt} AT TIME ZONE 'UTC') + interval ${sql.raw(`'${LEASE_MINUTES} minutes'`)}) < NOW()`,
-          ),
-        ),
-      ),
-    )
-    .orderBy(asc(emails.nextAttemptAt), asc(emails.createdAt))
-    .limit(n)
-    .for("update", { skipLocked: true });
+  /** Inner subquery that picks the next `n` due ids, fairly, and locks them. */
+  const pickIds = fairDueEmailIds(n);
 
   /** Outer UPDATE flips state, bumps attempts and takes the lease. */
   const claimed = await db
@@ -357,7 +410,7 @@ export async function claimNextEmails(n: number): Promise<ClaimedEmail[]> {
       leaseUntil: LEASE_EXPIRY,
       updatedAt: new Date(),
     })
-    .where(inArray(emails.id, pickIds))
+    .where(sql`${emails.id} IN (${pickIds})`)
     .returning({
       ...getTableColumns(emails),
       ageMs:

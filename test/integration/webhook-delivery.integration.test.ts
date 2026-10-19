@@ -25,7 +25,11 @@ import {
   purgeOldDeliveries,
   RETRY_BACKOFF_MINUTES,
 } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
-import { runPollCycle } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
+import {
+  runCleanupCycle,
+  runPollCycle,
+} from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
+import { generateId } from "../../src/utils/id.ts";
 import { truncateAll, seed, db } from "./_helpers.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import { webhooks } from "../../src/modules/webhooks/models/webhook.schema.ts";
@@ -471,59 +475,131 @@ describe("listDeliveriesForWebhook: pagination + status filter + tenant scoping"
   });
 });
 
-describe("purgeOldDeliveries: retention cleanup", () => {
-  test("deletes only delivered rows older than the cutoff; failed kept indefinitely", async () => {
-    installFetch(() => new Response("ok", { status: 200 }));
+describe("purgeOldDeliveries: retention cleanup (#258)", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** A delivery row in `status`, last changed `ageMs` ago. */
+  async function deliveryAged(
+    webhookId: string,
+    status: "pending" | "delivered" | "failed",
+    ageMs: number,
+    extra: Partial<typeof webhookDeliveries.$inferInsert> = {},
+  ): Promise<string> {
+    const at = new Date(Date.now() - ageMs);
+    const id = generateId("wdl");
+    await db.insert(webhookDeliveries).values({
+      id,
+      webhookId,
+      event: "email.sent",
+      payload: "{}",
+      status,
+      createdAt: at,
+      updatedAt: at,
+      ...extra,
+    });
+    return id;
+  }
+
+  async function exists(id: string): Promise<boolean> {
+    const rows = await db
+      .select({ id: webhookDeliveries.id })
+      .from(webhookDeliveries)
+      .where(eq(webhookDeliveries.id, id));
+    return rows.length === 1;
+  }
+
+  async function hook(): Promise<string> {
     const { id: apiKeyId } = await seed.apiKey();
-    const { id: webhookId } = await seed.webhook({
+    const { id } = await seed.webhook({
       apiKeyId,
       url: "https://93.184.216.34/x",
       events: ["email.sent"],
     });
-    const { id: oldDelivered } = await enqueueDelivery({
-      webhookId,
-      envelope: envelope(),
-    });
-    const { id: newDelivered } = await enqueueDelivery({
-      webhookId,
-      envelope: envelope(),
-    });
-    /** Run the worker so both transition to delivered. */
-    await runPollCycle();
+    return id;
+  }
 
-    /** Backdate one of them: pretend it was created 60 days ago. */
-    await db
-      .update(webhookDeliveries)
-      .set({ createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) })
-      .where(eq(webhookDeliveries.id, oldDelivered));
-
-    /** Also seed a failed row that's old, should NOT be purged. */
-    installFetch(() => new Response("nope", { status: 500 }));
-    const { id: oldFailed } = await enqueueDelivery({
+  test("deletes delivered AND failed rows finished before the cutoff, keeps newer ones", async () => {
+    const webhookId = await hook();
+    const cutoff = new Date(Date.now() - 30 * DAY_MS);
+    const oldDelivered = await deliveryAged(webhookId, "delivered", 30 * DAY_MS + 60_000);
+    const oldFailed = await deliveryAged(webhookId, "failed", 30 * DAY_MS + 60_000);
+    const freshDelivered = await deliveryAged(
       webhookId,
-      envelope: envelope(),
-    });
-    for (let i = 0; i < 5; i++) {
-      await runPollCycle();
-      await db
-        .update(webhookDeliveries)
-        .set({ nextAttemptAt: new Date(Date.now() - 1000) })
-        .where(eq(webhookDeliveries.id, oldFailed));
-    }
-    await db
-      .update(webhookDeliveries)
-      .set({ createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) })
-      .where(eq(webhookDeliveries.id, oldFailed));
+      "delivered",
+      30 * DAY_MS - 60_000,
+    );
+    const freshFailed = await deliveryAged(webhookId, "failed", 30 * DAY_MS - 60_000);
 
-    /** Run cleanup with a 30-day cutoff. */
-    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const result = await purgeOldDeliveries({ olderThan: cutoff });
-    expect(result.deleted).toBe(1);
 
-    /** The old delivered row is gone; the new one survives; the failed one survives. */
-    expect(await getDeliveryById({ deliveryId: oldDelivered, apiKeyId })).toBeUndefined();
-    expect(await getDeliveryById({ deliveryId: newDelivered, apiKeyId })).toBeDefined();
-    expect(await getDeliveryById({ deliveryId: oldFailed, apiKeyId })).toBeDefined();
+    expect(result.deleted).toBe(2);
+    expect(await exists(oldDelivered)).toBe(false);
+    expect(await exists(oldFailed)).toBe(false);
+    expect(await exists(freshDelivered)).toBe(true);
+    expect(await exists(freshFailed)).toBe(true);
+  });
+
+  test("never deletes pending or in-flight rows, however old", async () => {
+    const webhookId = await hook();
+    const cutoff = new Date(Date.now() - 30 * DAY_MS);
+    /** Waiting for its next retry. */
+    const pending = await deliveryAged(webhookId, "pending", 90 * DAY_MS, {
+      nextAttemptAt: new Date(Date.now() + 60_000),
+    });
+    /** Claimed: still `pending`, its next attempt pushed out by the claim lock. */
+    const inFlight = await deliveryAged(webhookId, "pending", 90 * DAY_MS, {
+      attempts: 3,
+      nextAttemptAt: new Date(Date.now() + 30_000),
+    });
+
+    const result = await purgeOldDeliveries({ olderThan: cutoff });
+
+    expect(result.deleted).toBe(0);
+    expect(await exists(pending)).toBe(true);
+    expect(await exists(inFlight)).toBe(true);
+  });
+
+  test("age counts from the last change: an old row finished recently is kept", async () => {
+    const webhookId = await hook();
+    const replayedThenFailed = await deliveryAged(webhookId, "failed", 60 * 1000, {
+      createdAt: new Date(Date.now() - 90 * DAY_MS),
+    });
+
+    await purgeOldDeliveries({ olderThan: new Date(Date.now() - 30 * DAY_MS) });
+
+    expect(await exists(replayedThenFailed)).toBe(true);
+  });
+
+  test("deletes in batches until nothing old is left", async () => {
+    const webhookId = await hook();
+    const old: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      old.push(
+        await deliveryAged(webhookId, i % 2 ? "failed" : "delivered", 40 * DAY_MS),
+      );
+    }
+    const kept = await deliveryAged(webhookId, "pending", 40 * DAY_MS);
+
+    const result = await purgeOldDeliveries({
+      olderThan: new Date(Date.now() - 30 * DAY_MS),
+      batchSize: 2,
+    });
+
+    expect(result.deleted).toBe(7);
+    for (const id of old) expect(await exists(id)).toBe(false);
+    expect(await exists(kept)).toBe(true);
+  });
+
+  test("the worker's cleanup cycle applies WEBHOOK_DELIVERY_RETENTION_DAYS (default 30)", async () => {
+    const webhookId = await hook();
+    const old = await deliveryAged(webhookId, "failed", 31 * DAY_MS);
+    const fresh = await deliveryAged(webhookId, "failed", 29 * DAY_MS);
+
+    const result = await runCleanupCycle();
+
+    expect(result.deleted).toBe(1);
+    expect(await exists(old)).toBe(false);
+    expect(await exists(fresh)).toBe(true);
   });
 });
 

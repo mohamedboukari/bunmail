@@ -31,6 +31,7 @@ interface TemplateResponse {
 interface TemplateListResponse {
   success: boolean;
   data: SerializedTemplate[];
+  pagination: { page: number; limit: number; total: number };
 }
 
 interface ErrorResponse {
@@ -87,7 +88,7 @@ const updatedTemplate = {
 void mock.module("../../src/modules/templates/services/template.service.ts", () => ({
   renderTemplate: mock(() => ""),
   createTemplate: mock(() => Promise.resolve(mockTemplate)),
-  listTemplates: mock(() => Promise.resolve([mockTemplate])),
+  listTemplates: mock(() => Promise.resolve({ data: [mockTemplate], total: 1 })),
   listAllTemplates: mock(() => Promise.resolve([mockTemplate])),
   getTemplateById: mock((id: string) =>
     Promise.resolve(id === "tpl_test123" ? mockTemplate : undefined),
@@ -187,6 +188,8 @@ describe("Templates API E2E", () => {
       expect(body.success).toBe(true);
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.name).toBe("Welcome");
+      /** Paginated since #258: default limit 100. */
+      expect(body.pagination).toEqual({ page: 1, limit: 100, total: 1 });
     });
   });
 

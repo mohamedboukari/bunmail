@@ -10,9 +10,9 @@
  * Two periodic tasks:
  *   - **Poll** (every {@link POLL_INTERVAL_MS}): claim the next batch
  *     of due rows, attempt POST for each, persist outcome.
- *   - **Cleanup** (every {@link CLEANUP_INTERVAL_MS}): delete
- *     `delivered` rows older than `config.webhookDelivery.retentionDays`.
- *     `failed` rows kept indefinitely for forensics.
+ *   - **Cleanup** (every {@link CLEANUP_INTERVAL_MS}): delete finished
+ *     rows (`delivered` and `failed`) whose last change is older than
+ *     `config.webhookDelivery.retentionDays` (#258), in batches.
  *
  * The worker is concurrency-safe (multiple replicas safe by
  * construction: same SKIP LOCKED pattern as #20). Single-instance
@@ -188,24 +188,34 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
   return { claimed: batch.length };
 }
 
-/** Deletes `delivered` rows older than the retention cutoff. */
-export async function runCleanupCycle(): Promise<{ deleted: number }> {
-  try {
-    const cutoff = new Date(
-      Date.now() - config.webhookDelivery.retentionDays * 24 * 60 * 60 * 1000,
-    );
-    const result = await purgeOldDeliveries({ olderThan: cutoff });
-    if (result.deleted > 0) {
-      logger.info("Webhook worker: purged old delivered rows", {
-        deleted: result.deleted,
-        retentionDays: config.webhookDelivery.retentionDays,
+/**
+ * Deletes finished deliveries older than the retention cutoff (#258), in
+ * its own log context so every line carries `job: "webhook-delivery-cleanup"`.
+ * Logs the outcome once when anything was deleted; a failure is logged
+ * and swallowed, the next hourly pass tries again.
+ */
+export function runCleanupCycle(): Promise<{ deleted: number }> {
+  return runWithLogContext({ job: "webhook-delivery-cleanup" }, async () => {
+    const { retentionDays } = config.webhookDelivery;
+    const startedAt = Date.now();
+    try {
+      const cutoff = new Date(startedAt - retentionDays * 24 * 60 * 60 * 1000);
+      const result = await purgeOldDeliveries({ olderThan: cutoff });
+      if (result.deleted > 0) {
+        logger.info("Webhook worker: purged finished deliveries", {
+          deleted: result.deleted,
+          retentionDays,
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      return result;
+    } catch (err) {
+      /** The logger strips a drizzle error's query parameters (#260). */
+      logger.error("Webhook worker: cleanup failed", {
+        retentionDays,
+        error: err instanceof Error ? err.message : String(err),
       });
+      return { deleted: 0 };
     }
-    return result;
-  } catch (err) {
-    logger.error("Webhook worker: cleanup failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return { deleted: 0 };
-  }
+  });
 }

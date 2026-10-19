@@ -15,3 +15,47 @@ export class InboundEventsRequireAdminError extends Error {
     );
   }
 }
+
+/**
+ * Thrown by `webhook.service.createWebhook` when the API key already has
+ * `WEBHOOKS_MAX_PER_API_KEY` webhooks (#258). Every event fans out to each
+ * subscribed webhook of its key, so the cap bounds that fan-out. The
+ * global `.onError` handler in `src/index.ts` maps this to HTTP 422 with
+ * `code: "WEBHOOK_LIMIT_REACHED"`; the dashboard shows the message.
+ */
+export class WebhookLimitReachedError extends Error {
+  override readonly name = "WebhookLimitReachedError";
+  readonly status = 422;
+  readonly code = "WEBHOOK_LIMIT_REACHED";
+  /** The cap that was hit. */
+  readonly limit: number;
+
+  constructor(limit: number) {
+    super(
+      `This API key already has the maximum of ${limit} webhooks. Delete one before adding another.`,
+    );
+    this.limit = limit;
+  }
+}
+
+/**
+ * Thrown by `webhook-delivery.service.replayDelivery` when the delivery
+ * was already replayed `REPLAYS_PER_DELIVERY_PER_HOUR` times in the
+ * current hour (#258). Mapped to HTTP 429 with a `Retry-After` header and
+ * `code: "REPLAY_LIMIT_REACHED"` (REST, in `src/index.ts`); the dashboard
+ * answers 429 on the delivery page.
+ */
+export class ReplayLimitReachedError extends Error {
+  override readonly name = "ReplayLimitReachedError";
+  readonly status = 429;
+  readonly code = "REPLAY_LIMIT_REACHED";
+  /** Seconds until the delivery may be replayed again. */
+  readonly retryAfterSec: number;
+
+  constructor(limit: number, retryAfterSec: number) {
+    super(
+      `This delivery was already replayed ${limit} times in the last hour. Try again in ${Math.max(1, Math.ceil(retryAfterSec / 60))} minute(s).`,
+    );
+    this.retryAfterSec = retryAfterSec;
+  }
+}

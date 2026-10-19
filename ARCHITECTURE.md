@@ -153,9 +153,11 @@ bunmail/
 │   │   │   │   ├── webhook.service.ts             ← CRUD
 │   │   │   │   ├── webhook-dispatch.service.ts    ← Enqueues into webhook_deliveries (#30)
 │   │   │   │   ├── webhook-delivery.service.ts    ← Claim / send / reschedule / replay (#30)
-│   │   │   │   └── webhook-delivery-worker.service.ts ← Poll loop + retention cleanup (#30)
+│   │   │   │   ├── webhook-delivery-worker.service.ts ← Poll loop + retention cleanup (#30)
+│   │   │   │   └── replay-limit.service.ts        ← Replay budget per delivery, in memory (#258)
 │   │   │   ├── dtos/
 │   │   │   │   ├── create-webhook.dto.ts
+│   │   │   │   ├── list-webhooks.dto.ts           (#258)
 │   │   │   │   └── list-deliveries.dto.ts         (#30)
 │   │   │   ├── models/
 │   │   │   │   ├── webhook.schema.ts              ← webhooks pgTable
@@ -170,7 +172,8 @@ bunmail/
 │   │   │   ├── services/
 │   │   │   │   └── template.service.ts   ← CRUD + renderTemplate()
 │   │   │   ├── dtos/
-│   │   │   │   └── create-template.dto.ts
+│   │   │   │   ├── create-template.dto.ts
+│   │   │   │   └── list-templates.dto.ts          (#258)
 │   │   │   ├── models/
 │   │   │   │   └── template.schema.ts    ← templates pgTable
 │   │   │   ├── serializations/
@@ -424,17 +427,19 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │  0. FREE SLOTS: QUEUE_MAX_CONCURRENT_SENDS (10) - in flight;    │
 │     none free → claim nothing. Polls never overlap.             │
 │                                                                 │
-│  1. ATOMIC CLAIM (#20, leases #180):                            │
+│  1. ATOMIC, FAIR CLAIM (#20, leases #180, fairness #258):       │
 │     UPDATE emails SET status = 'sending',                       │
 │                       attempts = attempts + 1,                  │
 │                       locked_by = <worker>,                     │
 │                       lease_until = now() + 15 min              │
 │     WHERE id IN (                                               │
-│       SELECT id FROM emails WHERE deleted_at IS NULL AND (      │
-│         (status = 'queued' AND next_attempt_at <= now())        │
-│         OR (status = 'sending' AND lease_until < now()))        │
-│       ORDER BY next_attempt_at LIMIT min(batch 5, free slots)   │
-│       FOR UPDATE SKIP LOCKED   ← concurrent-safe                │
+│       per API key (LATERAL): its first n due 'queued' rows      │
+│         ORDER BY next_attempt_at LIMIT n                        │
+│         FOR UPDATE SKIP LOCKED   ← concurrent-safe              │
+│       + rows whose lease expired (at most n)                    │
+│       ranked within their key (row_number), then                │
+│       ORDER BY rank, next_attempt_at                            │
+│       LIMIT n = min(batch 5, free slots)  ← round-robin by key  │
 │     ) RETURNING *;                                              │
 │                                                                 │
 │  2. For each claimed row, in the background (not awaited):      │
@@ -462,6 +467,8 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 ```
 
 `FOR UPDATE SKIP LOCKED` makes the claim safe under concurrency: two workers running the same statement at the same time get **disjoint** result sets: never the same row twice. Single-instance today, but the queue is no longer the blocker for horizontal scaling. (#20)
+
+The batch is shared across API keys round-robin (#258): each key's oldest due row ranks 1, its next one 2, and the batch takes the lowest ranks first, so one key's backlog cannot delay another key's mail; a single key keeps FIFO order. Each key's rows are read through the partial index `idx_emails_due_per_key` (`api_key_id, next_attempt_at, created_at` WHERE `status = 'queued' AND deleted_at IS NULL`), one short probe per key whatever the backlog. The webhook delivery worker claims the same way, per webhook through `webhook_deliveries_due_per_webhook_idx` and ranked by the webhook's key. Details: [docs/emails.md](docs/emails.md#queue-architecture), [docs/webhooks.md](docs/webhooks.md#delivery-behavior).
 
 **Email Status Flow:**
 
@@ -535,6 +542,8 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | created_at    | timestamp      | NOT NULL, default `now()`       |
 | updated_at    | timestamp      | NOT NULL, default `now()`       |
 | deleted_at    | timestamp      | nullable (soft-delete marker)   |
+
+Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180).
 
 `domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
@@ -629,7 +638,9 @@ Persisted retry queue. Every dispatch enqueues one row per subscribed webhook; t
 | created_at            | timestamptz    | NOT NULL, default `now()`                     |
 | updated_at            | timestamptz    | NOT NULL, default `now()`                     |
 
-Indexes: `(next_attempt_at)` partial WHERE `status='pending'` (worker hot path), `(webhook_id, created_at)` (dashboard inspection).
+Indexes: `(webhook_id, next_attempt_at)` partial WHERE `status='pending'` (fair worker claim, #258), `(webhook_id, created_at)` (dashboard inspection).
+
+Retention: finished rows (`delivered` and `failed`) are deleted by the worker's hourly cleanup once their `updated_at` is older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default 30, 1 to 365), in batches of 5,000; `pending` rows never are (#258).
 
 ### `templates`
 
@@ -842,11 +853,11 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | Method | Path                          | Description           | Auth |
 |--------|-------------------------------|-----------------------|------|
 | POST   | /api/v1/webhooks              | Register webhook      | Yes  |
-| GET    | /api/v1/webhooks              | List webhooks         | Yes  |
+| GET    | /api/v1/webhooks              | List webhooks (paginated, default limit 100, #258) | Yes  |
 | DELETE | /api/v1/webhooks/:id          | Delete webhook (cascades to deliveries) | Yes  |
 | GET    | /api/v1/webhooks/:id/deliveries | List delivery attempts (filter by `?status=`) | Yes |
 | GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
-| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` | Yes |
+| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` (5 per delivery per hour, #258) | Yes |
 
 Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.unsubscribed` (#249), all scoped to the sending key; `email.received` to admin keys only; `email.complained` reserved. See [docs/webhooks.md](docs/webhooks.md#event-types).
 
@@ -855,7 +866,7 @@ Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.un
 | Method | Path                          | Description           | Auth |
 |--------|-------------------------------|-----------------------|------|
 | POST   | /api/v1/templates             | Create template       | Yes  |
-| GET    | /api/v1/templates             | List templates        | Yes  |
+| GET    | /api/v1/templates             | List templates (paginated, default limit 100, #258) | Yes  |
 | GET    | /api/v1/templates/:id         | Get template          | Yes  |
 | PUT    | /api/v1/templates/:id         | Update template       | Yes  |
 | DELETE | /api/v1/templates/:id         | Delete template       | Yes  |
@@ -1106,7 +1117,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1138,6 +1149,8 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
   - `UnauthorizedSenderError` → 403 with `{ code: "UNAUTHORIZED_SENDER", sender }`: `From` not in the key's allowed-senders list (#126)
   - `InboundEventsRequireAdminError` → 403 `INBOUND_EVENTS_REQUIRE_ADMIN`
   - `BlockedUrlError` → 422 `WEBHOOK_URL_BLOCKED` (#128)
+  - `WebhookLimitReachedError` → 422 `WEBHOOK_LIMIT_REACHED` (#258)
+  - `ReplayLimitReachedError` → 429 `REPLAY_LIMIT_REACHED` with `Retry-After` (#258)
   - Unhandled errors → 500; the client gets `"Internal server error"` in production (#133), the message in development; the detail is logged server-side
 - Email queue failures are logged and stored in the `last_error` column
 
