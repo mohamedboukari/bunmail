@@ -184,13 +184,16 @@ bunmail/
 │   │   │   ├── inbound.plugin.ts         ← Routes: list, get, trash/restore/permanent/empty
 │   │   │   ├── services/
 │   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server)
+│   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
+│   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
 │   │   │   │   └── inbound.service.ts    ← Reads + trash/restore/permanent
 │   │   │   ├── models/
 │   │   │   │   └── inbound-email.schema.ts ← inbound_emails pgTable
 │   │   │   ├── serializations/
 │   │   │   │   └── inbound.serialization.ts
 │   │   │   └── types/
-│   │   │       └── inbound.types.ts
+│   │   │       ├── inbound.types.ts
+│   │   │       └── feedback-report.types.ts ← Parsed report, action and outcome (#191)
 │   │   ├── smtp-submission/                ← AUTH-required SMTP relay for apps to send THROUGH BunMail (#120)
 │   │   │   ├── smtp-submission.plugin.ts    ← Route: GET /stats (usage + quota, #123)
 │   │   │   ├── services/
@@ -213,7 +216,7 @@ bunmail/
 │   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
 │   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
 │   │   │   ├── services/
-│   │   │   │   ├── suppression.service.ts ← isSuppressed gate + create/list/delete + addFromBounce / addFromUnsubscribe hooks
+│   │   │   │   ├── suppression.service.ts ← isSuppressed gate + create/list/delete + addFromBounce / addFromUnsubscribe / addFromComplaint hooks
 │   │   │   │   ├── unsubscribe-token.ts  ← Stateless per-recipient unsubscribe token: HMAC mint/parse/verify (#249)
 │   │   │   │   └── unsubscribe.service.ts ← Verify a token against its email row, suppress, fire email.unsubscribed (#249)
 │   │   │   ├── dtos/                     ← create-suppression.dto, list-suppressions.dto
@@ -675,14 +678,14 @@ Retention: finished rows (`delivered` and `failed`) are deleted by the worker's 
 
 ### `suppressions`
 
-Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `createEmail` rejects with HTTP 422 before any insert / queue / SMTP work. Auto-populated by the bounce handler (#24) when DSNs come back.
+Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `createEmail` rejects with HTTP 422 before any insert / queue / SMTP work. Auto-populated by the bounce handler (#24) when DSNs come back, by the unsubscribe flow (#249), and by feedback-loop complaints (#191).
 
 | Column            | Type           | Constraints                  |
 |-------------------|----------------|------------------------------|
 | id                | varchar(36)    | PK, prefixed `sup_`          |
 | api_key_id        | varchar(36)    | FK → api_keys.id, NOT NULL, `ON DELETE CASCADE` |
 | email             | varchar(255)   | NOT NULL; stored lower-cased + trimmed |
-| reason            | text           | NOT NULL; one of `bounce | complaint | manual | unsubscribe` (validated at API boundary; column stays text for forward compat). `unsubscribe` is set by the one-click unsubscribe flow (#249) |
+| reason            | text           | NOT NULL; one of `bounce | complaint | manual | unsubscribe` (validated at API boundary; column stays text for forward compat). `unsubscribe` is set by the one-click unsubscribe flow (#249) and `opt-out` feedback reports; `complaint` by feedback-loop complaints (#191), which take precedence over every other reason |
 | bounce_type       | varchar(20)    | nullable; `hard | soft | null` |
 | diagnostic_code   | text           | nullable; SMTP enhanced status (e.g. `5.1.1`) |
 | source_email_id   | varchar(36)    | FK → emails.id, `ON DELETE SET NULL` |
@@ -804,7 +807,7 @@ users     ──1:N──▶ user_credentials, sessions, user_tokens, user_devic
 user_credentials ──1:N──▶ sessions  (credential_id, CASCADE, #277)
 user_credentials ──1:N──▶ user_recovery_codes  (credential_id of the totp row, CASCADE, #220)
 sessions  ──1:N──▶ session_token_history  (CASCADE, #216)
-emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce)
+emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce, unsubscribe or complaint)
 dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 ```
 
@@ -859,7 +862,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
 | POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` (5 per delivery per hour, #258) | Yes |
 
-Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.unsubscribed` (#249), all scoped to the sending key; `email.received` to admin keys only; `email.complained` reserved. See [docs/webhooks.md](docs/webhooks.md#event-types).
+Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (#191), `email.unsubscribed` (#249), all scoped to the sending key; `email.received` to admin keys only. See [docs/webhooks.md](docs/webhooks.md#event-types).
 
 ### Templates
 
@@ -1063,10 +1066,13 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
+- A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180) (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 
 **Unsubscribe → Suppression (#249):** single-recipient mail carries a per-recipient `List-Unsubscribe` (`<APP_BASE_URL/u/<token>>` + One-Click, and `<mailto:unsub+<token>@<domain>>` when `SMTP_ENABLED`). A one-click POST, the confirmation page or a message to that mailbox (handled before generic inbound storage) becomes a permanent `unsubscribe` suppression under the sending key and fires `email.unsubscribed` once.
+
+**Complaint → Suppression (#191):** ARF feedback reports (RFC 5965, `multipart/report; report-type=feedback-report`) from mailbox-provider feedback loops arrive at the inbound SMTP and are routed to the feedback handler before the bounce parser, never stored as inbound mail. A report counts only when its Original-Message-ID (feedback part, or the reported message's headers) exactly matches the Message-ID of an email BunMail sent; unlinkable reports are logged and dropped. `abuse` / `fraud` (or no type) → permanent `complaint` suppression for the recipient under the email's key (strongest reason: replaces any other) + `email.complained`; `opt-out` → the #249 unsubscribe path (`source: "fbl"`); `not-spam`, `virus` and the rest are dropped. DKIM on the report is checked with mailauth and logged, not required. See [docs/feedback-loops.md](docs/feedback-loops.md).
 
 ---
 

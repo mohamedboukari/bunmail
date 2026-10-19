@@ -517,6 +517,7 @@ New IPs have no reputation, which is treated as suspicious. Build it gradually:
 - **Increase gradually**: double volume each week
 - **Send to engaged recipients**: avoid sending to lists that haven't opted in
 - **Monitor bounces**: high bounce rates destroy reputation fast
+- **Process spam complaints**: enrol in the mailbox providers' feedback loops (Yahoo/AOL CFL, Microsoft JMRP and SNDS) with an address that reaches BunMail's inbound SMTP, so recipients who mark your mail as spam are suppressed automatically; Gmail reports only aggregate rates per `Feedback-ID` in Postmaster Tools. See [feedback-loops.md](feedback-loops.md)
 
 Check if your IP is blacklisted:
 
@@ -573,6 +574,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 [ ] MAIL_HOSTNAME in .env matches PTR
 [ ] IP not on any blacklists
 [ ] Tested with mail-tester.com (aim for 8+/10)
+[ ] Feedback loops enrolled, FBL address routed to BunMail (docs/feedback-loops.md)
 ```
 
 ---

@@ -27,6 +27,8 @@ interface CallLog {
 function makeDeps(opts: {
   email?: OriginalEmail;
   existing?: { id: string; bounceType: string | null };
+  /** A permanent suppression already on file, kept by addFromBounce (#191). */
+  keptSuppressionId?: string;
 }): {
   deps: Parameters<typeof handleBounce>[1];
   calls: CallLog;
@@ -57,7 +59,9 @@ function makeDeps(opts: {
           bounceType: input.bounceType,
           expiresAt: input.expiresAt,
         });
-        return { id: "sup_new123" };
+        return opts.keptSuppressionId === undefined
+          ? { suppressionId: "sup_new123", applied: true }
+          : { suppressionId: opts.keptSuppressionId, applied: false };
       },
       markEmailBounced: async (emailId) => {
         calls.markEmailBounced.push(emailId);
@@ -237,5 +241,21 @@ describe("handleBounce: recipient matching", () => {
     expect(result.outcome).toBe("applied");
     expect(calls.addFromBounce[0]!.email).toBe("user@example.com");
     expect(calls.dispatchEvent[0]!.data.to).toBe("user@example.com");
+  });
+
+  test("a permanent suppression kept on file: still marked bounced and the webhook still fires (#191)", async () => {
+    const { deps, calls } = makeDeps({
+      email: ORIGINAL,
+      keptSuppressionId: "sup_complaint",
+    });
+
+    const result = await handleBounce(HARD_BOUNCE, deps);
+
+    expect(result.outcome).toBe("applied");
+    expect(result.suppressionApplied).toBe(false);
+    expect(result.suppressionId).toBe("sup_complaint");
+    expect(calls.markEmailBounced).toEqual(["msg_orig123"]);
+    expect(calls.dispatchEvent).toHaveLength(1);
+    expect(calls.dispatchEvent[0]!.data.suppressionId).toBe("sup_complaint");
   });
 });

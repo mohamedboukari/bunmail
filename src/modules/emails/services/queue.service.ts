@@ -754,7 +754,8 @@ async function sendClaimedEmail(
         continue; /** Synthetic DNS failures + transient exhaust handled separately. */
 
       for (const rcpt of group.recipients) {
-        const suppression = await addFromBounce(email.apiKeyId, {
+        /** Never weakens a permanent suppression already on file (#191). */
+        const { suppression, applied } = await addFromBounce(email.apiKeyId, {
           email: rcpt,
           bounceType: "hard",
           diagnosticCode: parsed.code,
@@ -770,7 +771,7 @@ async function sendClaimedEmail(
             bounceType: "hard",
             status: parsed.code,
             diagnostic: group.lastError ?? "(no diagnostic)",
-            suppressionId: suppression.id,
+            suppressionId: suppression?.id ?? null,
             source: "inline",
           },
           { apiKeyId: email.apiKeyId },
@@ -780,7 +781,8 @@ async function sendClaimedEmail(
           apiKeyId: email.apiKeyId,
           recipient: redactEmail(rcpt),
           status: parsed.code,
-          suppressionId: suppression.id,
+          suppressionId: suppression?.id ?? null,
+          suppressionApplied: applied,
         });
       }
     }
