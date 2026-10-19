@@ -41,6 +41,7 @@ import { createSession } from "./session.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
  * Dashboard invitations (#217): the only way an account other than the
@@ -79,6 +80,9 @@ const PENDING_LIST_LIMIT = 500;
 
 /** SQLSTATE of a unique violation: `users.email` taken by a concurrent writer. */
 const UNIQUE_VIOLATION = "23505";
+
+/** No request metadata (a script, a test): the event is still recorded. */
+const NO_CLIENT: SessionClient = { ip: null, userAgent: null };
 
 /**
  * Runs `fn` in a transaction that first takes the advisory lock of
@@ -360,6 +364,7 @@ export async function createInvitation(
   actor: InviteActor,
   rawEmail: string,
   rawRole: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<IssueInvitationResult> {
   const email = normalizeInviteEmail(rawEmail);
   const requestedRole = isUserRole(rawRole) ? rawRole : "unknown";
@@ -376,9 +381,24 @@ export async function createInvitation(
   }
   const role = rawRole;
 
-  const result = await withInviteLock(email, (tx) =>
-    replaceInvite(tx, { email, role, actor }),
-  );
+  const result = await withInviteLock(email, async (tx) => {
+    const replaced = await replaceInvite(tx, { email, role, actor });
+    /** Recorded with the invitation (#221): both commit, or neither. */
+    if (replaced.ok) {
+      const { invitation } = replaced.issued;
+      await recordAuditEvent(
+        {
+          action: "user.invitation.created",
+          actor: { type: "user", id: actor.id },
+          ...client,
+          target: { type: "invitation", id: invitation.invitationId, label: email },
+          metadata: { role, replaced: invitation.replaced },
+        },
+        tx,
+      );
+    }
+    return replaced;
+  });
   if (!result.ok) {
     logRefusal("create", actor, result.reason, {
       requestedRole,
@@ -422,6 +442,7 @@ async function findPendingById(
 export async function resendInvitation(
   actor: InviteActor,
   id: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<IssueInvitationResult> {
   const pending = await withSanitizedErrors(() => findPendingById(db, id));
   if (!pending) {
@@ -441,7 +462,28 @@ export async function resendInvitation(
     if (!(await findPendingById(tx, id))) {
       return { ok: false as const, reason: "not_found" as const };
     }
-    return replaceInvite(tx, { email: pending.email, role: pending.role, actor });
+    const replaced = await replaceInvite(tx, {
+      email: pending.email,
+      role: pending.role,
+      actor,
+    });
+    if (replaced.ok) {
+      await recordAuditEvent(
+        {
+          action: "user.invitation.resent",
+          actor: { type: "user", id: actor.id },
+          ...client,
+          target: {
+            type: "invitation",
+            id: replaced.issued.invitation.invitationId,
+            label: pending.email,
+          },
+          metadata: { role: pending.role, previousInvitationId: id },
+        },
+        tx,
+      );
+    }
+    return replaced;
   });
   if (!result.ok) {
     logRefusal("resend", actor, result.reason, { invitationId: id, role: pending.role });
@@ -468,6 +510,7 @@ export async function resendInvitation(
 export async function revokeInvitation(
   actor: InviteActor,
   id: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<{ ok: true } | { ok: false; reason: InviteRefusal }> {
   const pending = await withSanitizedErrors(() => findPendingById(db, id));
   if (!pending) {
@@ -483,11 +526,27 @@ export async function revokeInvitation(
   }
 
   const rows = await withSanitizedErrors(() =>
-    db
-      .update(userTokens)
-      .set({ revokedAt: sql`now()` })
-      .where(and(openInvite(), eq(userTokens.id, id)))
-      .returning({ id: userTokens.id }),
+    db.transaction(async (tx) => {
+      const revoked = await tx
+        .update(userTokens)
+        .set({ revokedAt: sql`now()` })
+        .where(and(openInvite(), eq(userTokens.id, id)))
+        .returning({ id: userTokens.id });
+      /** Recorded with the revocation (#221): both commit, or neither. */
+      if (revoked.length > 0) {
+        await recordAuditEvent(
+          {
+            action: "user.invitation.revoked",
+            actor: { type: "user", id: actor.id },
+            ...client,
+            target: { type: "invitation", id, label: pending.email },
+            metadata: { role: pending.role },
+          },
+          tx,
+        );
+      }
+      return revoked;
+    }),
   );
   if (rows.length === 0) {
     logRefusal("revoke", actor, "not_found", { invitationId: id });
@@ -616,6 +675,7 @@ export async function acceptInvitation(
           .set({ usedAt: sql`now()` })
           .where(and(acceptableInvite(), eq(userTokens.tokenHash, tokenHash)))
           .returning({
+            invitationId: userTokens.id,
             email: userTokens.email,
             role: userTokens.role,
             invitedBy: userTokens.invitedBy,
@@ -643,6 +703,17 @@ export async function acceptInvitation(
             authMethod: PASSWORD_CREDENTIAL,
             credentialId,
             ...client,
+          },
+          tx,
+        );
+        /** Recorded with the new account (#221): both commit, or neither. */
+        await recordAuditEvent(
+          {
+            action: "user.invitation.accepted",
+            actor: { type: "user", id: userId, label: email },
+            ...client,
+            target: { type: "invitation", id: spent.invitationId, label: email },
+            metadata: { role, invitedBy: spent.invitedBy },
           },
           tx,
         );

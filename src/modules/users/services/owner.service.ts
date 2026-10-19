@@ -23,6 +23,7 @@ import { removeTwoFactor } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { normalizeLoginEmail, sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
  * The dashboard owner account and its one-time setup link (#215).
@@ -268,6 +269,18 @@ export async function bootstrapOwner(
   const { result, ownerId, assigned } = await withOwnerLock(async (tx) => {
     const outcome = await bootstrapOwnerRow(tx, email, now);
     const owner = await findOwner(tx);
+    /** A new setup link is an audit event (#221), recorded with it. */
+    if (owner && (outcome.kind === "created" || outcome.kind === "reissued")) {
+      await recordAuditEvent(
+        {
+          action: "auth.owner_setup.issued",
+          actor: { type: "system", label: "boot" },
+          target: { type: "user", id: owner.id, label: owner.email },
+          metadata: { via: "boot", sessionsRevoked: 0 },
+        },
+        tx,
+      );
+    }
     const counts: RecordCounts | null = owner
       ? await assignUnownedRecords(tx, owner.id)
       : null;
@@ -323,8 +336,10 @@ export async function issueOwnerSetupLink(
             isNull(userTokens.revokedAt),
           ),
         );
-      await revokeAllUserSessions(owner.id, tx);
-      return replaceSetupToken(tx, owner.id, owner.email, now);
+      const sessionsRevoked = await revokeAllUserSessions(owner.id, tx);
+      const link = await replaceSetupToken(tx, owner.id, owner.email, now);
+      await recordResetOwnerLink(tx, owner, sessionsRevoked);
+      return link;
     }
 
     if (ownerEmail === null) {
@@ -338,8 +353,28 @@ export async function issueOwnerSetupLink(
         "BUNMAIL_OWNER_EMAIL already belongs to a non-owner account; it is never promoted",
       );
     }
-    return createOwner(tx, email, now);
+    const link = await createOwner(tx, email, now);
+    const created = await findOwner(tx);
+    if (created) await recordResetOwnerLink(tx, created, 0);
+    return link;
   });
+}
+
+/** Records a `reset-owner` link in the audit log (#221), in its transaction. */
+async function recordResetOwnerLink(
+  tx: Tx,
+  owner: { id: string; email: string },
+  sessionsRevoked: number,
+): Promise<void> {
+  await recordAuditEvent(
+    {
+      action: "auth.owner_setup.issued",
+      actor: { type: "system", label: "reset-owner" },
+      target: { type: "user", id: owner.id, label: owner.email },
+      metadata: { via: "reset_owner", sessionsRevoked },
+    },
+    tx,
+  );
 }
 
 /**
@@ -467,6 +502,26 @@ export async function completeOwnerSetup(
       .set({ updatedAt: sql`now()` })
       .where(eq(users.id, userId))
       .returning({ userId: users.id, email: users.email });
+
+    /** Recorded with the change (#221): both commit, or neither. */
+    const actor = { type: "user" as const, id: userId };
+    const target = { type: "user" as const, id: userId };
+    await recordAuditEvent(
+      { action: "auth.owner_setup.completed", actor, ...client, target },
+      tx,
+    );
+    if (twoFactorRemoved) {
+      await recordAuditEvent(
+        {
+          action: "auth.two_factor.removed",
+          actor,
+          ...client,
+          target,
+          metadata: { via: "owner_setup" },
+        },
+        tx,
+      );
+    }
     return owner
       ? { owner: { ...owner, sessionToken, twoFactorRemoved }, sessionId }
       : null;

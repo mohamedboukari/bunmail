@@ -6,6 +6,8 @@ import * as apiKeyService from "./services/api-key.service.ts";
 import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
+import { recordAuditEvent } from "../audit/services/audit.service.ts";
+import { restAuditContext } from "../audit/services/audit-context.service.ts";
 
 /**
  * API Keys plugin: registers all API key management routes under /api/v1/api-keys.
@@ -40,7 +42,7 @@ export const apiKeysPlugin = new Elysia({
    */
   .post(
     "/",
-    async ({ body, apiKeyCreatedByUserId }) => {
+    async ({ body, apiKeyCreatedByUserId, apiKeyId, apiKeyName, request, server }) => {
       logger.info("POST /api/v1/api-keys", { name: body.name });
 
       const { apiKey, rawKey } = await apiKeyService.createApiKey({
@@ -48,6 +50,15 @@ export const apiKeysPlugin = new Elysia({
         allowedSenders: body.allowedSenders,
         /** The new key belongs to the calling key's user (#219). */
         createdByUserId: apiKeyCreatedByUserId,
+      });
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "api_key.created",
+        target: { type: "api_key", id: apiKey.id, label: apiKey.name },
+        metadata: {
+          isAdmin: apiKey.isAdmin,
+          allowedSenders: apiKey.allowedSenders.length,
+        },
       });
 
       return {
@@ -95,7 +106,7 @@ export const apiKeysPlugin = new Elysia({
 
   .patch(
     "/:id",
-    async ({ params, body, set }) => {
+    async ({ params, body, set, apiKeyId, apiKeyName, request, server }) => {
       logger.info("PATCH /api/v1/api-keys/:id", {
         apiKeyId: params.id,
         fields: Object.keys(body),
@@ -109,6 +120,25 @@ export const apiKeysPlugin = new Elysia({
       if (!apiKey) {
         set.status = 404;
         return { success: false, error: "API key not found" };
+      }
+
+      /** An empty body changes nothing, so it records nothing (#221). */
+      const fields = [
+        ...(body.name === undefined ? [] : ["name"]),
+        ...(body.allowedSenders === undefined ? [] : ["allowedSenders"]),
+      ];
+      if (fields.length > 0) {
+        await recordAuditEvent({
+          ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+          action: "api_key.updated",
+          target: { type: "api_key", id: apiKey.id, label: apiKey.name },
+          metadata: {
+            fields,
+            ...(body.allowedSenders === undefined
+              ? {}
+              : { allowedSenders: apiKey.allowedSenders.length }),
+          },
+        });
       }
 
       return { success: true, data: serializeApiKey(apiKey) };
@@ -128,7 +158,7 @@ export const apiKeysPlugin = new Elysia({
 
   .delete(
     "/:id",
-    async ({ params, set }) => {
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
       logger.info("DELETE /api/v1/api-keys/:id", { apiKeyId: params.id });
 
       const apiKey = await apiKeyService.revokeApiKey(params.id);
@@ -140,6 +170,12 @@ export const apiKeysPlugin = new Elysia({
           error: "API key not found",
         };
       }
+
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "api_key.revoked",
+        target: { type: "api_key", id: apiKey.id, label: apiKey.name },
+      });
 
       return {
         success: true,

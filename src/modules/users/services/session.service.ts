@@ -279,9 +279,12 @@ export async function findSessionBySupersededToken(
  * previous token, so a logout sent with a just-rotated cookie still ends
  * the session.
  *
- * @returns the revoked `ses_` id, or `null` when nothing matched.
+ * @returns the revoked `ses_` id and its user (for the audit log, #221),
+ *          or `null` when nothing matched.
  */
-export async function revokeSessionByToken(token: string): Promise<string | null> {
+export async function revokeSessionByToken(
+  token: string,
+): Promise<{ sessionId: string; userId: string } | null> {
   const tokenHash = hashToken(token);
   const [row] = await withSanitizedErrors(() =>
     db
@@ -289,9 +292,9 @@ export async function revokeSessionByToken(token: string): Promise<string | null
       .where(
         or(eq(sessions.tokenHash, tokenHash), eq(sessions.previousTokenHash, tokenHash)),
       )
-      .returning({ id: sessions.id }),
+      .returning({ sessionId: sessions.id, userId: sessions.userId }),
   );
-  return row?.id ?? null;
+  return row ?? null;
 }
 
 /**

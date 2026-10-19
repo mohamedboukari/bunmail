@@ -17,6 +17,7 @@ import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardClient } from "../lib/audit.ts";
 
 /* ─── Invitation helpers (#217) ─── */
 
@@ -151,12 +152,13 @@ export function invitationPages(app: GuardedDashboard) {
        */
       .post(
         "/invitations",
-        async ({ body, set, auth }) => {
+        async ({ body, set, auth, request, server }) => {
           try {
             const result = await inviteService.createInvitation(
               inviteActorOf(auth),
               body.email,
               body.role,
+              dashboardClient(request, server),
             );
             return answerIssuedInvitation(set, auth, result, "sent");
           } catch (error: unknown) {
@@ -182,10 +184,11 @@ export function invitationPages(app: GuardedDashboard) {
        */
       .post(
         "/invitations/:id/revoke",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           const result = await inviteService.revokeInvitation(
             inviteActorOf(auth),
             params.id,
+            dashboardClient(request, server),
           );
           if (!result.ok) return answerInviteRefusal(set, result.reason);
           return invitationsRedirect(set, "Invitation revoked.", "success");
@@ -204,11 +207,12 @@ export function invitationPages(app: GuardedDashboard) {
        */
       .post(
         "/invitations/:id/resend",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           try {
             const result = await inviteService.resendInvitation(
               inviteActorOf(auth),
               params.id,
+              dashboardClient(request, server),
             );
             return answerIssuedInvitation(set, auth, result, "resent");
           } catch (error: unknown) {

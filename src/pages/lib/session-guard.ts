@@ -128,7 +128,7 @@ export function withSessionGuard(app: PublicDashboard) {
         trustedProxyHops: config.dashboard.trustedProxyHops,
       });
       try {
-        await revokeOnTokenReuse(reusedBy, ip);
+        await revokeOnTokenReuse(reusedBy, ip, request.headers.get("user-agent"));
       } catch (error: unknown) {
         logger.error("Session token reuse detected, but revoking the sessions failed", {
           userId: reusedBy.userId,

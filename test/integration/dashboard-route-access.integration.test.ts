@@ -165,6 +165,8 @@ const ROUTES: Record<string, RouteSpec> = {
 
   /** The role and owner rules are in the service (users-admin integration test). */
   "GET /dashboard/users": { access: "admin" },
+  /** Read-only security history (#221): the owner and admins, never members. */
+  "GET /dashboard/audit-log": { access: "admin" },
   "POST /dashboard/users/:id/role": { access: "admin", body: { role: "member" } },
   "POST /dashboard/users/:id/deactivate": { access: "admin" },
   "POST /dashboard/users/:id/reactivate": { access: "admin" },

@@ -1,7 +1,10 @@
 import { t, type Context } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
-import type { CreatedSession } from "../../modules/users/types/user.types.ts";
+import type {
+  CreatedSession,
+  LoginFailureReason,
+} from "../../modules/users/types/user.types.ts";
 import { redactEmail } from "../../utils/redact.ts";
 import { UserStoreError } from "../../modules/users/errors.ts";
 import {
@@ -9,7 +12,13 @@ import {
   isLoginRateLimited,
   recordFailedLogin,
   refundLoginAttempt,
+  shouldAuditLockout,
 } from "../../middleware/login-rate-limit.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import type {
+  AuditActor,
+  AuditLoginFailureReason,
+} from "../../modules/audit/types/audit.types.ts";
 import { LoginPage } from "../routes/login.tsx";
 import { OwnerSetupPage, OwnerSetupInvalidPage } from "../routes/setup.tsx";
 import {
@@ -98,6 +107,28 @@ const LOGIN_ERRORS = new Map<string, string>([
     "Too many invalid codes. Wait a few minutes, then sign in again.",
   ],
 ]);
+
+/**
+ * How a failed password step is recorded in the audit log (#221). The
+ * reasons are never shown to the client, only to admins on that page.
+ */
+const LOGIN_FAILURE_AUDIT: Record<LoginFailureReason, AuditLoginFailureReason> = {
+  unknown: "unknown_account",
+  no_password: "no_password",
+  disabled: "deactivated",
+  bad_password: "wrong_password",
+};
+
+/**
+ * The actor of a sign-in attempt whose email matched no account (#221):
+ * no id, no label. The typed address is never stored.
+ */
+const UNKNOWN_ACCOUNT: AuditActor = { type: "user", id: null, label: null };
+
+/** A dashboard user, by id: the audit log reads the email from the row. */
+function userActor(userId: string): AuditActor {
+  return { type: "user", id: userId };
+}
 
 /** The client IP of a request (the login limiter's resolution). */
 function requestIp(request: Request, socketIp: string | undefined): string {
@@ -250,6 +281,17 @@ export function authPages(app: PublicDashboard) {
                 ip,
                 retryAfterSec,
               });
+              /** Once per address and window (#221): a flood records one row. */
+              if (shouldAuditLockout(ip, windowMs)) {
+                await recordAuditEvent({
+                  action: "auth.login.rate_limited",
+                  outcome: "failure",
+                  actor: UNKNOWN_ACCOUNT,
+                  ip,
+                  userAgent: request.headers.get("user-agent"),
+                  metadata: { retryAfterSec },
+                });
+              }
               set.status = 429;
               set.headers["retry-after"] = String(retryAfterSec);
               const minutes = Math.max(1, Math.ceil(retryAfterSec / 60));
@@ -265,6 +307,7 @@ export function authPages(app: PublicDashboard) {
 
           const email = normalizeLoginEmail(body.email);
           const tooLong = loginInputTooLong(email, body.password);
+          const client = { ip, userAgent: request.headers.get("user-agent") };
 
           try {
             const result = tooLong
@@ -277,6 +320,17 @@ export function authPages(app: PublicDashboard) {
                 ip,
                 reason: result ? result.reason : "too_long",
                 ...(result ? { email: redactEmail(email) } : {}),
+              });
+              /** An unknown email is recorded without it (#221). */
+              await recordAuditEvent({
+                action: "auth.login.failed",
+                outcome: "failure",
+                actor: result?.userId ? userActor(result.userId) : UNKNOWN_ACCOUNT,
+                ...client,
+                metadata: {
+                  step: "password",
+                  reason: result ? LOGIN_FAILURE_AUDIT[result.reason] : "input_too_long",
+                },
               });
               return redirect(set, "/dashboard/login?error=invalid");
             }
@@ -294,7 +348,13 @@ export function authPages(app: PublicDashboard) {
               if (!revoked) {
                 const superseded =
                   await sessionService.findSessionBySupersededToken(presented);
-                if (superseded) await revokeOnTokenReuse(superseded, ip);
+                if (superseded) {
+                  await revokeOnTokenReuse(
+                    superseded,
+                    ip,
+                    request.headers.get("user-agent"),
+                  );
+                }
               }
             }
 
@@ -324,6 +384,13 @@ export function authPages(app: PublicDashboard) {
                   reason: "credential_replaced",
                   userId: result.userId,
                 });
+                await recordAuditEvent({
+                  action: "auth.login.failed",
+                  outcome: "failure",
+                  actor: userActor(result.userId),
+                  ...client,
+                  metadata: { step: "password", reason: "credential_replaced" },
+                });
                 return redirect(set, "/dashboard/login?error=invalid");
               }
               throw error;
@@ -344,6 +411,12 @@ export function authPages(app: PublicDashboard) {
                 sessionId,
                 ip,
               });
+              await recordAuditEvent({
+                action: "auth.login.two_factor_required",
+                actor: userActor(result.userId),
+                ...client,
+                target: { type: "session", id: sessionId, label: null },
+              });
               issueSession(set, token, SESSION_PENDING_SECONDS);
               return redirect(set, TWO_FACTOR_LOGIN_PAGE);
             }
@@ -352,6 +425,13 @@ export function authPages(app: PublicDashboard) {
               userId: result.userId,
               sessionId,
               ip,
+            });
+            await recordAuditEvent({
+              action: "auth.login.succeeded",
+              actor: userActor(result.userId),
+              ...client,
+              target: { type: "session", id: sessionId, label: null },
+              metadata: { method: "password" },
             });
 
             /** Location (#281) and the new-device alert (#282), in the background. */
@@ -465,6 +545,12 @@ export function authPages(app: PublicDashboard) {
             }
 
             const limiter = twoFactorLoginLimiter(pending.userId, ip);
+            const audit = {
+              actor: userActor(pending.userId),
+              ip,
+              userAgent: request.headers.get("user-agent"),
+              target: { type: "session" as const, id: pending.sessionId, label: null },
+            };
             const result = await twoFactorService.completeTwoFactorLogin(
               pending,
               token,
@@ -487,6 +573,13 @@ export function authPages(app: PublicDashboard) {
                   sessionId: pending.sessionId,
                   ip,
                 });
+                /** Bounded by the code budget: 5 per account per 15 minutes. */
+                await recordAuditEvent({
+                  ...audit,
+                  action: "auth.login.failed",
+                  outcome: "failure",
+                  metadata: { step: "two_factor", reason: "wrong_code" },
+                });
               }
               /** Budget spent (now or before): the pending session ends here. */
               if (result.reason === "rate_limited" || limiter.isLimited()) {
@@ -495,6 +588,12 @@ export function authPages(app: PublicDashboard) {
                   "Two-factor sign-in blocked: too many attempts, pending session revoked",
                   { userId: pending.userId, sessionId: pending.sessionId, ip },
                 );
+                /** Once per pending session: it is gone, so a retry needs the password again. */
+                await recordAuditEvent({
+                  ...audit,
+                  action: "auth.login.two_factor_locked",
+                  outcome: "failure",
+                });
                 /**
                  * The account's own budget ran out: the password was right
                  * and the codes kept failing, a likely password compromise.
@@ -533,6 +632,17 @@ export function authPages(app: PublicDashboard) {
                 ip,
               });
             }
+            await recordAuditEvent({
+              ...audit,
+              action: "auth.login.succeeded",
+              metadata:
+                result.recoveryCodesLeft === null
+                  ? { method: result.method }
+                  : {
+                      method: result.method,
+                      recoveryCodesLeft: result.recoveryCodesLeft,
+                    },
+            });
 
             completeSignIn(set, request, {
               userId: pending.userId,
@@ -587,13 +697,31 @@ export function authPages(app: PublicDashboard) {
         const token = readSessionCookie(request.headers.get("cookie"));
         if (token && isWellFormedToken(token)) {
           try {
-            const sessionId = await sessionService.revokeSessionByToken(token);
-            if (!sessionId) {
+            const revoked = await sessionService.revokeSessionByToken(token);
+            if (!revoked) {
               /** A superseded token: someone else holds the live one. */
               const superseded = await sessionService.findSessionBySupersededToken(token);
-              if (superseded) await revokeOnTokenReuse(superseded, ip);
+              if (superseded) {
+                await revokeOnTokenReuse(
+                  superseded,
+                  ip,
+                  request.headers.get("user-agent"),
+                );
+              }
             }
-            logger.info("Dashboard logout", { sessionId, ip });
+            logger.info("Dashboard logout", {
+              sessionId: revoked?.sessionId ?? null,
+              ip,
+            });
+            if (revoked) {
+              await recordAuditEvent({
+                action: "auth.logout",
+                actor: userActor(revoked.userId),
+                ip,
+                userAgent: request.headers.get("user-agent"),
+                target: { type: "session", id: revoked.sessionId, label: null },
+              });
+            }
           } catch (error: unknown) {
             logger.error("Dashboard logout: session revoke failed", {
               ip,
@@ -853,7 +981,13 @@ export function authPages(app: PublicDashboard) {
               if (!revoked) {
                 const superseded =
                   await sessionService.findSessionBySupersededToken(presented);
-                if (superseded) await revokeOnTokenReuse(superseded, ip);
+                if (superseded) {
+                  await revokeOnTokenReuse(
+                    superseded,
+                    ip,
+                    request.headers.get("user-agent"),
+                  );
+                }
               }
             } catch (error: unknown) {
               logger.error(
@@ -1007,7 +1141,13 @@ export function authPages(app: PublicDashboard) {
               if (!revoked) {
                 const superseded =
                   await sessionService.findSessionBySupersededToken(presented);
-                if (superseded) await revokeOnTokenReuse(superseded, ip);
+                if (superseded) {
+                  await revokeOnTokenReuse(
+                    superseded,
+                    ip,
+                    request.headers.get("user-agent"),
+                  );
+                }
               }
             } catch (error: unknown) {
               logger.error(

@@ -87,11 +87,12 @@ export async function verifyPasswordLogin(
   const verified = await verifyPassword(password, storedHash ?? (await getDummyHash()));
 
   if (!row) return { ok: false, reason: "unknown" };
-  if (row.disabledAt !== null) return { ok: false, reason: "disabled" };
+  const { userId } = row;
+  if (row.disabledAt !== null) return { ok: false, reason: "disabled", userId };
   if (storedHash === null || row.credentialId === null) {
-    return { ok: false, reason: "no_password" };
+    return { ok: false, reason: "no_password", userId };
   }
-  if (!verified) return { ok: false, reason: "bad_password" };
+  if (!verified) return { ok: false, reason: "bad_password", userId };
 
   const credentialId = row.credentialId;
   await withSanitizedErrors(() =>

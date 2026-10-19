@@ -27,6 +27,7 @@ import { removeTwoFactor } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
  * Admin-issued password reset links (#277).
@@ -309,6 +310,32 @@ export async function completePasswordReset(
       .returning({ email: users.email });
     /** Unreachable: `usableReset` saw the account under the same lock. Rolls back. */
     if (!account) throw new Error("Password reset account vanished");
+
+    /** Recorded with the change (#221): both commit, or neither. */
+    const actor = { type: "user" as const, id: userId, label: account.email };
+    const target = { type: "user" as const, id: userId, label: account.email };
+    await recordAuditEvent(
+      {
+        action: "auth.password_reset.completed",
+        actor,
+        ...client,
+        target,
+        metadata: { issuedBy, sessionsRevoked },
+      },
+      tx,
+    );
+    if (twoFactorRemoved) {
+      await recordAuditEvent(
+        {
+          action: "auth.two_factor.removed",
+          actor,
+          ...client,
+          target,
+          metadata: { via: "password_reset" },
+        },
+        tx,
+      );
+    }
 
     return {
       ok: true,

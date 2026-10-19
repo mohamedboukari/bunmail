@@ -37,6 +37,8 @@ import {
 } from "../lib/two-factor-limiter.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 import { sessionIp } from "../../modules/users/services/session-policy.service.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import { dashboardAudit, dashboardClient } from "../lib/audit.ts";
 
 /* ─── Password change helpers (#279) ─── */
 
@@ -161,6 +163,7 @@ async function endSessionIfBudgetSpent(
   limiter: TwoFactorLimiter,
   auth: DashboardAuth,
   set: Context["set"],
+  request: Request,
   ip: string,
   action: "disable" | "recovery_codes",
 ): Promise<string | undefined> {
@@ -171,6 +174,15 @@ async function endSessionIfBudgetSpent(
     sessionId: auth.session.id,
     action,
     ip,
+  });
+  await recordAuditEvent({
+    action: "auth.session.revoked",
+    outcome: "failure",
+    actor: { type: "user", id: auth.user.id, label: auth.user.email },
+    ip,
+    userAgent: request.headers.get("user-agent"),
+    target: { type: "session", id: auth.session.id, label: null },
+    metadata: { current: true, reason: "code_budget_spent" },
   });
   clearSession(set);
   return redirect(set, "/dashboard/login");
@@ -275,6 +287,12 @@ export function accountPages(app: GuardedDashboard) {
               sessionsRevoked: revoked,
               ip,
             });
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "auth.session.others_revoked",
+              target: { type: "user", id: userId, label: auth.user.email },
+              metadata: { sessionsRevoked: revoked },
+            });
             return toSessionsPage(
               set,
               revoked === 0
@@ -341,6 +359,12 @@ export function accountPages(app: GuardedDashboard) {
               currentSessionId: auth.session.id,
               current: isCurrent,
               ip,
+            });
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "auth.session.revoked",
+              target: { type: "session", id: params.id, label: null },
+              metadata: { current: isCurrent, reason: "user" },
             });
             if (isCurrent) {
               clearSession(set);
@@ -515,6 +539,7 @@ export function accountPages(app: GuardedDashboard) {
               auth.user.id,
               auth.session.id,
               body.code,
+              dashboardClient(request, server),
             );
             if (!result.ok) {
               logger.warn("Two-factor enrolment refused", {
@@ -577,6 +602,7 @@ export function accountPages(app: GuardedDashboard) {
               auth.user.id,
               body.code,
               limiter,
+              dashboardClient(request, server),
             );
             if (!result.ok) {
               logger.warn("Recovery codes not regenerated", {
@@ -589,6 +615,7 @@ export function accountPages(app: GuardedDashboard) {
                 limiter,
                 auth,
                 set,
+                request,
                 ip,
                 "recovery_codes",
               );
@@ -652,6 +679,7 @@ export function accountPages(app: GuardedDashboard) {
               body.password,
               body.code,
               limiter,
+              dashboardClient(request, server),
             );
             if (!result.ok) {
               logger.warn("Two-factor disable refused", {
@@ -664,6 +692,7 @@ export function accountPages(app: GuardedDashboard) {
                 limiter,
                 auth,
                 set,
+                request,
                 ip,
                 "disable",
               );

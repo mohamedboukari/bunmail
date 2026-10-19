@@ -16,6 +16,7 @@ import {
   LockIcon,
   DevicesIcon,
   ShieldIcon,
+  AuditIcon,
 } from "../assets/icons.tsx";
 import { PageAssets } from "../static-assets.tsx";
 import { viewerIsAdmin } from "../viewer.ts";
@@ -40,6 +41,7 @@ interface BaseLayoutProps {
     | "dmarc-reports"
     | "suppressions"
     | "users"
+    | "audit-log"
     | "account"
     | "account-sessions"
     | "account-two-factor";
@@ -134,6 +136,13 @@ function Nav({ activeNav }: { activeNav?: string }) {
       label: "Users",
       href: "/dashboard/users",
       icon: UsersIcon,
+      adminOnly: true,
+    },
+    {
+      id: "audit-log",
+      label: "Audit log",
+      href: "/dashboard/audit-log",
+      icon: AuditIcon,
       adminOnly: true,
     },
   ];

@@ -17,7 +17,8 @@ type IdPrefix =
   | "ses" // dashboard session (#214)
   | "utk" // one-time token: owner setup, invite, password reset (#214)
   | "udv" // browser an account signed in from (#282)
-  | "rcv"; // TOTP recovery code (#220)
+  | "rcv" // TOTP recovery code (#220)
+  | "aud"; // audit log event (#221)
 
 /**
  * Generates a prefixed unique ID.

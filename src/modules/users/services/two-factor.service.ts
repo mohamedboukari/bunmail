@@ -17,6 +17,7 @@ import type {
   PendingSession,
   RegenerateRecoveryCodesResult,
   SecondFactorMethod,
+  SessionClient,
   Tx,
   TwoFactorLoginResult,
   TwoFactorStatus,
@@ -35,6 +36,7 @@ import {
   totpPendingSecretOf,
 } from "./session.service.ts";
 import * as totp from "./totp.service.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
  * TOTP two-factor authentication for the dashboard (#220): enrolment,
@@ -78,6 +80,26 @@ const PASSWORD_CREDENTIAL = "password";
 
 /** SQLSTATE of a unique violation: a second `totp` row for the account. */
 const UNIQUE_VIOLATION = "23505";
+
+/** No request metadata (a script, a test): the event is still recorded. */
+const NO_CLIENT: SessionClient = { ip: null, userAgent: null };
+
+/** The account acting on its own second factor, as the audit log records it (#221). */
+function selfAudit(
+  userId: string,
+  client: SessionClient,
+): {
+  actor: { type: "user"; id: string };
+  ip: string | null;
+  userAgent: string | null;
+  target: { type: "user"; id: string };
+} {
+  return {
+    actor: { type: "user", id: userId },
+    ...client,
+    target: { type: "user", id: userId },
+  };
+}
 
 /** A matched second factor, with the `totp` credential it belongs to. */
 type FactorMatch =
@@ -333,6 +355,7 @@ export async function confirmEnrolment(
   userId: string,
   sessionId: string,
   code: string,
+  client: SessionClient = NO_CLIENT,
   nowMs: number = Date.now(),
 ): Promise<ConfirmEnrolmentResult> {
   try {
@@ -371,6 +394,15 @@ export async function confirmEnrolment(
           .update(users)
           .set({ updatedAt: sql`now()` })
           .where(eq(users.id, userId));
+        /** Recorded with the change (#221): both commit, or neither. */
+        await recordAuditEvent(
+          {
+            ...selfAudit(userId, client),
+            action: "auth.two_factor.enabled",
+            metadata: { sessionsRevoked: revoked.length },
+          },
+          tx,
+        );
 
         return { ok: true, recoveryCodes, sessionsRevoked: revoked.length };
       }),
@@ -451,6 +483,7 @@ export async function disableTwoFactor(
   password: string,
   code: string,
   limiter: AttemptLimiter,
+  client: SessionClient = NO_CLIENT,
   nowMs: number = Date.now(),
 ): Promise<DisableTwoFactorResult> {
   if (!(await withSanitizedErrors(() => totpCredentialOf(db, userId)))) {
@@ -474,6 +507,14 @@ export async function disableTwoFactor(
         .set({ updatedAt: sql`now()` })
         .where(eq(users.id, userId));
       const method: SecondFactorMethod = match.method;
+      await recordAuditEvent(
+        {
+          ...selfAudit(userId, client),
+          action: "auth.two_factor.disabled",
+          metadata: { method },
+        },
+        tx,
+      );
       return { ok: true, method };
     }),
   );
@@ -493,6 +534,7 @@ export async function regenerateRecoveryCodes(
   userId: string,
   code: string,
   limiter: AttemptLimiter,
+  client: SessionClient = NO_CLIENT,
   nowMs: number = Date.now(),
 ): Promise<RegenerateRecoveryCodesResult> {
   if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
@@ -504,6 +546,13 @@ export async function regenerateRecoveryCodes(
       if (!match.ok) return { ok: false, reason: match.reason };
       await tx.delete(userRecoveryCodes).where(eq(userRecoveryCodes.userId, userId));
       const recoveryCodes = await issueRecoveryCodes(tx, userId, match.credentialId);
+      await recordAuditEvent(
+        {
+          ...selfAudit(userId, client),
+          action: "auth.two_factor.recovery_codes_regenerated",
+        },
+        tx,
+      );
       return { ok: true, recoveryCodes };
     }),
   );

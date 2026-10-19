@@ -7,6 +7,8 @@ import * as suppressionService from "../../modules/suppressions/services/suppres
 import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardAudit } from "../lib/audit.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 
 /** Suppression pages (#291): the list and per-row delete. */
 export function suppressionPages(app: GuardedDashboard) {
@@ -86,10 +88,17 @@ export function suppressionPages(app: GuardedDashboard) {
        */
       .post(
         "/suppressions/:id/delete",
-        async ({ params, set }) => {
+        async ({ params, set, auth, request, server }) => {
           const removed = await suppressionService.deleteSuppressionByIdUnscoped(
             params.id,
           );
+          if (removed) {
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "suppression.deleted",
+              target: { type: "suppression", id: removed.id, label: removed.email },
+            });
+          }
           const flash = removed
             ? `Suppression for ${removed.email} removed`
             : "Suppression not found (already deleted?)";

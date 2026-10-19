@@ -24,6 +24,7 @@ import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardClient } from "../lib/audit.ts";
 
 /* ─── Account management helpers (#218) ─── */
 
@@ -192,11 +193,12 @@ export function userPages(app: GuardedDashboard) {
        */
       .post(
         "/users/:id/role",
-        async ({ params, body, set, auth }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const result = await userAdminService.changeAccountRole(
             auth.user.id,
             params.id,
             body.role,
+            dashboardClient(request, server),
           );
           return answerAccountAction(set, result, `Role changed to ${body.role}.`);
         },
@@ -215,10 +217,11 @@ export function userPages(app: GuardedDashboard) {
        */
       .post(
         "/users/:id/deactivate",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           const result = await userAdminService.deactivateAccount(
             auth.user.id,
             params.id,
+            dashboardClient(request, server),
           );
           return answerAccountAction(set, result, "Account deactivated and signed out.");
         },
@@ -235,10 +238,11 @@ export function userPages(app: GuardedDashboard) {
        */
       .post(
         "/users/:id/reactivate",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           const result = await userAdminService.reactivateAccount(
             auth.user.id,
             params.id,
+            dashboardClient(request, server),
           );
           return answerAccountAction(set, result, "Account reactivated.");
         },
@@ -255,11 +259,12 @@ export function userPages(app: GuardedDashboard) {
        */
       .post(
         "/users/:id/remove",
-        async ({ params, body, set, auth }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const result = await userAdminService.removeAccount(
             auth.user.id,
             params.id,
             body.confirm,
+            dashboardClient(request, server),
           );
           return answerAccountAction(set, result, "Account removed.");
         },
@@ -290,6 +295,7 @@ export function userPages(app: GuardedDashboard) {
             params.id,
             body.password,
             transferLimiter(auth.user.id, ip),
+            { ip, userAgent: request.headers.get("user-agent") },
           );
           return answerAccountAction(
             set,
@@ -315,11 +321,12 @@ export function userPages(app: GuardedDashboard) {
        */
       .post(
         "/users/:id/reset-password",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           try {
             const result = await userAdminService.issuePasswordReset(
               auth.user.id,
               params.id,
+              dashboardClient(request, server),
             );
             return answerPasswordReset(set, auth, result);
           } catch (error: unknown) {

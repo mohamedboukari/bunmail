@@ -197,6 +197,13 @@
       "when": 1792363570886,
       "tag": "0027_panoramic_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792367988531,
+      "tag": "0028_audit_events",
+      "breakpoints": true
     }
   ]
 }

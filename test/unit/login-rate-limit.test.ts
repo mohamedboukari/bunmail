@@ -8,6 +8,7 @@ import {
   clearLoginAttempts,
   pruneExpiredLoginAttempts,
   loginAttemptMap,
+  shouldAuditLockout,
 } from "../../src/middleware/login-rate-limit.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -280,5 +281,33 @@ describe("unproxied request warning (#256)", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("shouldAuditLockout (#221)", () => {
+  const WINDOW = 60_000;
+
+  test("true once per key and window, false without a live window", () => {
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, 1_000)).toBe(false);
+    recordFailedLogin("192.0.2.1", WINDOW, 1_000);
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, 2_000)).toBe(true);
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, 3_000)).toBe(false);
+    /** Another key has its own flag. */
+    recordFailedLogin("192.0.2.2", WINDOW, 1_000);
+    expect(shouldAuditLockout("192.0.2.2", WINDOW, 2_000)).toBe(true);
+  });
+
+  test("a new window resets the flag; an expired one says false", () => {
+    recordFailedLogin("192.0.2.1", WINDOW, 0);
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, 1)).toBe(true);
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, WINDOW)).toBe(false);
+    recordFailedLogin("192.0.2.1", WINDOW, WINDOW + 1);
+    expect(shouldAuditLockout("192.0.2.1", WINDOW, WINDOW + 2)).toBe(true);
+  });
+
+  test("an IPv6 /64 shares one flag, like its bucket", () => {
+    recordFailedLogin("2001:db8::1", WINDOW, 0);
+    expect(shouldAuditLockout("2001:db8::1", WINDOW, 1)).toBe(true);
+    expect(shouldAuditLockout("2001:db8::ffff", WINDOW, 2)).toBe(false);
   });
 });

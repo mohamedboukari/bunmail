@@ -12,6 +12,8 @@ import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 import { redactUrl } from "../../utils/redact.ts";
+import { recordAuditEvent } from "../audit/services/audit.service.ts";
+import { restAuditContext } from "../audit/services/audit-context.service.ts";
 
 /**
  * Webhooks plugin: registers webhook management routes under /api/v1/webhooks.
@@ -30,7 +32,7 @@ export const webhooksPlugin = new Elysia({
 
   .post(
     "/",
-    async ({ body, apiKeyId, apiKeyCreatedByUserId }) => {
+    async ({ body, apiKeyId, apiKeyName, apiKeyCreatedByUserId, request, server }) => {
       logger.info("POST /api/v1/webhooks", {
         url: redactUrl(body.url),
         events: body.events,
@@ -42,6 +44,13 @@ export const webhooksPlugin = new Elysia({
         /** Belongs to the calling key's user (#219). */
         apiKeyCreatedByUserId,
       );
+      /** Labelled by origin only: the path or query may carry a credential (#260). */
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "webhook.created",
+        target: { type: "webhook", id: webhook.id, label: redactUrl(webhook.url) },
+        metadata: { events: webhook.events },
+      });
 
       return {
         success: true,
@@ -85,13 +94,18 @@ export const webhooksPlugin = new Elysia({
 
   .delete(
     "/:id",
-    async ({ params, set, apiKeyId }) => {
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
       const webhook = await webhookService.deleteWebhook(params.id, apiKeyId);
 
       if (!webhook) {
         set.status = 404;
         return { success: false, error: "Webhook not found" };
       }
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "webhook.deleted",
+        target: { type: "webhook", id: webhook.id, label: redactUrl(webhook.url) },
+      });
 
       return {
         success: true,

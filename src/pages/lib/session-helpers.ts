@@ -5,6 +5,7 @@ import { clearSessionCookie, deviceSetCookie, sessionSetCookie } from "../sessio
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { SESSION_ABSOLUTE_SECONDS } from "../../modules/users/services/session-policy.service.ts";
 import { DEVICE_COOKIE_MAX_AGE_SECONDS } from "../../modules/users/services/device-policy.service.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 
 /* ─── Session Helpers ─── */
 
@@ -62,18 +63,28 @@ export const SESSION_STORE_DOWN = "Dashboard temporarily unavailable";
 /**
  * Token reuse (#216): a token the session already rotated away from was
  * presented, so two parties hold copies of the cookie. Every session of
- * the user is revoked (the thief's and the victim's) and the event is
- * logged; the caller then clears the cookie. Throws when the revoke fails,
- * so callers can fail closed.
+ * the user is revoked (the thief's and the victim's), and the event is
+ * logged and written to the audit log (#221, by BunMail itself, with the
+ * address that presented the old token); the caller then clears the
+ * cookie. Throws when the revoke fails, so callers can fail closed.
  */
 export async function revokeOnTokenReuse(
   owner: { userId: string; sessionId: string },
   ip: string,
+  userAgent: string | null,
 ): Promise<void> {
   await sessionService.revokeAllUserSessions(owner.userId);
   logger.warn("Session token reuse detected: all sessions of the user revoked", {
     userId: owner.userId,
     sessionId: owner.sessionId,
     ip,
+  });
+  await recordAuditEvent({
+    action: "auth.session.token_reuse_detected",
+    outcome: "failure",
+    actor: { type: "system", label: "session guard" },
+    ip,
+    userAgent,
+    target: { type: "user", id: owner.userId },
   });
 }

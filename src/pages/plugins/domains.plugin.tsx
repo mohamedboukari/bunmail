@@ -10,6 +10,8 @@ import { verifyDomain } from "../../modules/domains/services/dns-verification.se
 import { toFlash } from "../lib/responses.ts";
 import { creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardAudit } from "../lib/audit.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 
 /* ─── DNS-verify throttle (#133) ─── */
 
@@ -76,12 +78,17 @@ export function domainPages(app: GuardedDashboard) {
        */
       .post(
         "/domains",
-        async ({ body, set, auth }) => {
+        async ({ body, set, auth, request, server }) => {
           try {
             /** Attributed to the signed-in account (#219). */
-            await domainService.createDomain({
+            const domain = await domainService.createDomain({
               name: body.name,
               createdByUserId: auth.user.id,
+            });
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "domain.created",
+              target: { type: "domain", id: domain.id, label: domain.name },
             });
 
             logger.info("Domain added via dashboard", {
@@ -119,7 +126,7 @@ export function domainPages(app: GuardedDashboard) {
        */
       .post(
         "/domains/:id/delete",
-        async ({ params, set }) => {
+        async ({ params, set, auth, request, server }) => {
           const domain = await domainService.deleteDomain(params.id);
 
           if (!domain) {
@@ -128,6 +135,11 @@ export function domainPages(app: GuardedDashboard) {
               `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
             return "";
           }
+          await recordAuditEvent({
+            ...dashboardAudit(auth, request, server),
+            action: "domain.deleted",
+            target: { type: "domain", id: domain.id, label: domain.name },
+          });
 
           logger.info("Domain deleted via dashboard", { id: params.id });
           set.status = 302;
@@ -149,7 +161,7 @@ export function domainPages(app: GuardedDashboard) {
        */
       .post(
         "/domains/:id/verify",
-        async ({ params, set }) => {
+        async ({ params, set, auth, request, server }) => {
           const domain = await domainService.getDomainById(params.id);
 
           if (!domain) {
@@ -178,6 +190,12 @@ export function domainPages(app: GuardedDashboard) {
             id: params.id,
             ...result,
           });
+          await recordAuditEvent({
+            ...dashboardAudit(auth, request, server),
+            action: "domain.verified",
+            target: { type: "domain", id: domain.id, label: domain.name },
+            metadata: { spf: result.spf, dkim: result.dkim, dmarc: result.dmarc },
+          });
 
           set.status = 302;
           set.headers["location"] =
@@ -199,7 +217,7 @@ export function domainPages(app: GuardedDashboard) {
        */
       .post(
         "/domains/:id/notify-email",
-        async ({ params, body, set }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const raw = (body.notifyEmail ?? "").trim();
           /** Empty clears the address; otherwise require a plausible email. */
           const value = raw === "" ? null : raw;
@@ -218,6 +236,12 @@ export function domainPages(app: GuardedDashboard) {
               `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
             return "";
           }
+          await recordAuditEvent({
+            ...dashboardAudit(auth, request, server),
+            action: "domain.updated",
+            target: { type: "domain", id: updated.id, label: updated.name },
+            metadata: { fields: ["notifyEmail"] },
+          });
 
           const message = value
             ? "Inbound notifications enabled"
@@ -241,7 +265,7 @@ export function domainPages(app: GuardedDashboard) {
        */
       .post(
         "/domains/:id/unsubscribe",
-        async ({ params, body, set }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const email = (body.unsubscribeEmail ?? "").trim() || null;
           const url = (body.unsubscribeUrl ?? "").trim() || null;
           const back = (message: string, type: "success" | "error"): string => {
@@ -268,6 +292,12 @@ export function domainPages(app: GuardedDashboard) {
               `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
             return "";
           }
+          await recordAuditEvent({
+            ...dashboardAudit(auth, request, server),
+            action: "domain.updated",
+            target: { type: "domain", id: updated.id, label: updated.name },
+            metadata: { fields: ["unsubscribeEmail", "unsubscribeUrl"] },
+          });
           return back("Unsubscribe settings saved", "success");
         },
         {

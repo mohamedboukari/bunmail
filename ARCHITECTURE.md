@@ -200,7 +200,12 @@ bunmail/
 │   │   │       └── stats.serialization.ts
 │   │   ├── trash/
 │   │   │   └── services/
-│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216)
+│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216, audit log retention, #221)
+│   │   ├── audit/                        ← Audit log of security-relevant actions (#221), no REST plugin
+│   │   │   ├── models/audit-event.schema.ts ← audit_events pgTable (append-only, no FKs)
+│   │   │   ├── services/                 ← audit.service.ts (record / list / purge), audit-context.service.ts (actor, IP, user agent of a request)
+│   │   │   ├── types/audit.types.ts      ← actions, per-action metadata, labels
+│   │   │   └── errors.ts                 ← AuditStoreError (SQLSTATE only)
 │   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
 │   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
 │   │   │   ├── services/
@@ -268,7 +273,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, emails, api-keys, invitations, users, domains, templates, webhooks, inbound, dmarc, suppressions)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions)
 │       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
@@ -289,6 +294,7 @@ bunmail/
 │       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
 │       │   ├── users.tsx                 ← Users: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
+│       │   ├── audit-log.tsx             ← Audit log: security-relevant actions, filters (#221)
 │       │   ├── reset.tsx                 ← Password reset form + invalid-link page (standalone, #277)
 │       │   ├── account-password.tsx      ← Change password form for the signed-in user (#279)
 │       │   ├── account-sessions.tsx      ← Active sessions of the signed-in user (#281)
@@ -490,7 +496,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 
 `TRASH_RETENTION_DAYS` is configurable via env (default `7`). The purge runs once on boot to catch anything that aged out while the server was offline.
 
-The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself. It also deletes sign-in devices not seen for 400 days (`runDeviceSweep` → `purgeStaleUserDevices`, #282, logged as `Stale sign-in device sweep completed`).
+The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself. It also deletes sign-in devices not seen for 400 days (`runDeviceSweep` → `purgeStaleUserDevices`, #282, logged as `Stale sign-in device sweep completed`), and audit events older than `AUDIT_LOG_RETENTION_DAYS` (default 365, #221: `runAuditRetention` → `purgeOldAuditEvents`, in batches of 5000, logged as `Audit log retention sweep completed` and recorded in the audit log itself as `audit_log.purged`).
 
 ---
 
@@ -760,6 +766,10 @@ One-time tokens (`purpose` CHECK IN `owner_setup`,`invite`,`password_reset`), st
 
 The browsers each account signed in from with a password, for the new-device sign-in alert (migration `0026`). `id` (`udv_`), `user_id` (FK `users` ON DELETE CASCADE), `device_hash` (SHA-256 of the `bm_device` cookie value; the value is never stored), `user_agent` (the device label, "Chrome on macOS"), `ip`, `location` (nullable, #281), `first_seen_at`, `last_seen_at`. UNIQUE `(user_id, device_hash)` (the sign-in upsert's conflict target); indexes on `user_id` and `last_seen_at` (the 400-day sweep). Rules: [docs/users.md](docs/users.md#new-device-alerts-282).
 
+### `audit_events` (#221)
+
+Security-relevant actions (migration `0028`): `id` (`aud_`), `occurred_at` (default `now()`), `actor_type` (CHECK IN `user`,`api_key`,`system`), `actor_id` and `actor_label` (snapshot: email or key name), `action` (code-level union, e.g. `auth.login.failed`), `outcome` (CHECK IN `success`,`failure`), `target_type` / `target_id` / `target_label`, `ip` (IP literal only), `user_agent` (256 characters at most), `metadata` (jsonb, small typed details, never secrets). Indexes: `(occurred_at DESC, id DESC)`, `(action, occurred_at DESC)`, `(actor_id, occurred_at DESC)`. **No foreign keys**: deleting a user or a key never touches its history. **Append-only**: the statement-level trigger `audit_events_no_update` raises on any `UPDATE`; `DELETE` is left to the retention purge (`AUDIT_LOG_RETENTION_DAYS`). Read on `/dashboard/audit-log` (admins and the owner). Details: [docs/audit-log.md](docs/audit-log.md).
+
 ### `__bunmail_migrations`
 
 System table managed by the Bun-native migration runner ([src/db/migrate.ts](src/db/migrate.ts), #56). Each row is one applied migration tag (`0000_wonderful_psylocke`, etc.). The runner reads the committed `drizzle/<n>_*.sql` files at boot, applies anything not yet recorded, and auto-baselines legacy `db:push`-provisioned databases by detecting the schema's first table. The whole run holds a session-level advisory lock (`pg_advisory_lock(hashtext('bunmail:migrations'))`) on a single pinned connection (#175), so concurrent runs from several replicas serialize instead of racing.
@@ -923,6 +933,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/invitations/:id/revoke  | Revoke an invitation (roles the actor may grant) | Admin |
 | POST   | /dashboard/invitations/:id/resend  | New link for the same address and role, sent again | Admin |
 | GET    | /dashboard/users                   | Every account with role, status and allowed actions (#218) | Admin |
+| GET    | /dashboard/audit-log               | Security-relevant actions, filter by action, actor and outcome; read-only (#221) | Admin |
 | POST   | /dashboard/users/:id/role          | Member to admin or back (owner only, in the service) | Admin |
 | POST   | /dashboard/users/:id/deactivate    | Disable, revoke sessions and open invitations (owner: any non-owner; admin: members) | Admin |
 | POST   | /dashboard/users/:id/reactivate    | Enable again (same rules) | Admin |
@@ -1077,7 +1088,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 

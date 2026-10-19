@@ -17,6 +17,9 @@ import {
   NO_USABLE_KEY_TEXT,
 } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardAudit } from "../lib/audit.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import { redactUrl } from "../../utils/redact.ts";
 
 /** Webhook pages (#291): list, create, delete, deliveries and replay. */
 export function webhookPages(app: GuardedDashboard) {
@@ -59,7 +62,7 @@ export function webhookPages(app: GuardedDashboard) {
 
       .post(
         "/webhooks",
-        async ({ body, set, auth }) => {
+        async ({ body, set, auth, request, server }) => {
           try {
             /**
              * The key the webhook is attached to (#219): the user's own active key;
@@ -77,12 +80,19 @@ export function webhookPages(app: GuardedDashboard) {
             const events = Array.isArray(body.events)
               ? body.events
               : [body.events].filter(Boolean);
-            const { secret } = await webhookService.createWebhook(
+            const { webhook, secret } = await webhookService.createWebhook(
               { url: body.url, events },
               activeKey.id,
               /** Attributed to the signed-in account (#219). */
               auth.user.id,
             );
+            /** Labelled by origin only: the path or query may carry a credential (#260). */
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "webhook.created",
+              target: { type: "webhook", id: webhook.id, label: redactUrl(webhook.url) },
+              metadata: { events: webhook.events },
+            });
             /** One-time reveal token in the URL (#132): never the secret. */
             const reveal = stashRevealSecret(
               secret,
@@ -110,7 +120,7 @@ export function webhookPages(app: GuardedDashboard) {
 
       .post(
         "/webhooks/:id/delete",
-        async ({ params, set }) => {
+        async ({ params, set, auth, request, server }) => {
           try {
             const hooks = await webhookService.listAllWebhooks();
             const hook = hooks.find((h) => h.id === params.id);
@@ -120,7 +130,18 @@ export function webhookPages(app: GuardedDashboard) {
                 `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`;
               return "";
             }
-            await webhookService.deleteWebhook(params.id, hook.apiKeyId);
+            const deleted = await webhookService.deleteWebhook(params.id, hook.apiKeyId);
+            if (deleted) {
+              await recordAuditEvent({
+                ...dashboardAudit(auth, request, server),
+                action: "webhook.deleted",
+                target: {
+                  type: "webhook",
+                  id: deleted.id,
+                  label: redactUrl(deleted.url),
+                },
+              });
+            }
             set.status = 302;
             set.headers["location"] =
               `/dashboard/webhooks?flash=${encodeURIComponent("Webhook deleted")}`;

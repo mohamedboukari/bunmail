@@ -592,7 +592,15 @@ export type LoginResult =
       /** The verified `password` credential; the session is bound to it (#277). */
       credentialId: string;
     }
-  | { ok: false; reason: LoginFailureReason };
+  | {
+      ok: false;
+      reason: LoginFailureReason;
+      /**
+       * The account the email matched, for the audit log (#221); absent
+       * for `unknown`. Never shown to the client.
+       */
+      userId?: string;
+    };
 
 /* ─── Two-factor authentication (#220) ─── */
 
