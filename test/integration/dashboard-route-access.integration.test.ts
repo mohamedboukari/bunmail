@@ -182,6 +182,9 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   "POST /dashboard/domains/:id/delete": { access: "admin" },
   "POST /dashboard/domains/:id/verify": { access: "admin" },
+  "POST /dashboard/domains/:id/dkim/rotate": { access: "admin" },
+  "POST /dashboard/domains/:id/dkim/rotate/complete": { access: "admin" },
+  "POST /dashboard/domains/:id/dkim/rotate/cancel": { access: "admin" },
   "POST /dashboard/domains/:id/notify-email": {
     access: "admin",
     body: { notifyEmail: "" },

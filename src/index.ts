@@ -11,7 +11,11 @@ import {
 } from "./modules/api-keys/errors.ts";
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
 import { EmailSendRejectedError } from "./modules/emails/errors.ts";
-import { DomainAlreadyRegisteredError } from "./modules/domains/errors.ts";
+import {
+  DkimRotationError,
+  DomainAlreadyRegisteredError,
+  InvalidDkimSelectorError,
+} from "./modules/domains/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import {
   InboundEventsRequireAdminError,
@@ -60,7 +64,8 @@ await encryptDomainKeys();
  * start, naming the domains, like the other boot guards. Development
  * warns and sends unsigned.
  */
-const undecryptableDomains = await findUndecryptableDomainKeys();
+const undecryptableKeys = await findUndecryptableDomainKeys();
+const undecryptableDomains = undecryptableKeys.active;
 if (undecryptableDomains.length > 0) {
   const detail = {
     domains: undecryptableDomains,
@@ -75,6 +80,21 @@ if (undecryptableDomains.length > 0) {
   logger.warn(
     "DKIM private keys do not decrypt: those domains send unsigned (development only)",
     detail,
+  );
+}
+
+/**
+ * A pending rotation key (#250) that does not decrypt holds no mail: mail
+ * is signed with the active key, and completing the rotation refuses such
+ * a key. Reported on its own, in every environment, so the boot goes on.
+ */
+if (undecryptableKeys.pending.length > 0) {
+  logger.warn(
+    "Pending DKIM rotation keys do not decrypt: cancel those rotations and start new ones",
+    {
+      domains: undecryptableKeys.pending,
+      hint: "DKIM_ENCRYPTION_KEY differs from the key these were encrypted with (SECURITY.md, Rotation)",
+    },
   );
 }
 
@@ -310,6 +330,18 @@ const app = new Elysia()
     /** A domain name already registered (case-insensitive) → 409. */
     if (error instanceof DomainAlreadyRegisteredError) {
       set.status = 409;
+      return { success: false, error: error.message, code: error.code };
+    }
+
+    /** A DKIM selector that is not one lowercase DNS label (#250) → 422. */
+    if (error instanceof InvalidDkimSelectorError) {
+      set.status = 422;
+      return { success: false, error: error.message, code: error.code };
+    }
+
+    /** A DKIM key rotation step refused on the domain's state (#250) → 409. */
+    if (error instanceof DkimRotationError) {
+      set.status = error.status;
       return { success: false, error: error.message, code: error.code };
     }
 

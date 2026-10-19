@@ -167,14 +167,16 @@ describe("boot check", () => {
     await domainWithUnreadableKey("broken-a.example.com");
     await domainWithUnreadableKey("broken-b.example.com");
 
-    expect((await findUndecryptableDomainKeys()).toSorted()).toEqual([
+    const found = await findUndecryptableDomainKeys();
+    expect(found.active.toSorted()).toEqual([
       "broken-a.example.com",
       "broken-b.example.com",
     ]);
+    expect(found.pending).toEqual([]);
   });
 
   test("is empty when every key decrypts", async () => {
     await seed.domain({ name: "fine.example.com" });
-    expect(await findUndecryptableDomainKeys()).toEqual([]);
+    expect(await findUndecryptableDomainKeys()).toEqual({ active: [], pending: [] });
   });
 });

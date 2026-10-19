@@ -72,6 +72,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/domains         → add domain (form action)
  * - POST /dashboard/domains/:id/delete → delete domain (form action)
  * - GET  /dashboard/domains/:id     → domain detail
+ * - POST /dashboard/domains/:id/dkim/rotate          → start a DKIM key rotation (admin, #250)
+ * - POST /dashboard/domains/:id/dkim/rotate/complete → switch to the pending key once published (admin, #250)
+ * - POST /dashboard/domains/:id/dkim/rotate/cancel   → drop the pending key (admin, #250)
  *
  * Auth (#216): account login with email and password against
  * `user_credentials`, then a server-side session in the `sessions` table

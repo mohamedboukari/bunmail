@@ -85,6 +85,7 @@ recordAuditEvent(input, tx?)
 | `user.ownership.transferred` | user | user (the new owner) | on a wrong password: outcome `failure`, `reason` |
 | `api_key.created` / `updated` / `admin_changed` / `revoked` | user or api_key | api_key | `isAdmin`, `allowedSenders` (a count), `fields` |
 | `domain.created` / `updated` / `verified` / `deleted` | user or api_key | domain | `fields`; `spf`, `dkim`, `dmarc` |
+| `domain.dkim_rotation_started` / `_completed` / `_cancelled` (#250) | user or api_key | domain | `selector` (the pending selector; on completion, the new active one) |
 | `webhook.created` / `deleted` | user or api_key | webhook (label: origin only) | `events` |
 | `suppression.created` / `deleted` | api_key or user | suppression (label: the address) | `reason` |
 | `audit_log.purged` | system (`retention purge`) | audit_log | `deleted`, `retentionDays` |

@@ -9,6 +9,8 @@ src/modules/domains/
 ├── domains.plugin.ts               ← Elysia plugin (route group)
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
+│   ├── dkim-keys.ts                ← Key generation, selector rules, dated selectors, TXT match (#250)
+│   ├── dkim-rotation.service.ts    ← DKIM key rotation: start, complete, cancel (#250)
 │   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
 │   ├── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification
 │   ├── dmarc-check.service.ts      ← DMARC discovery, org-domain fallback, strict tag parsing (#250)
@@ -35,7 +37,14 @@ Table: `domains`
 | name              | varchar(255)   | NOT NULL, UNIQUE             |
 | dkim_private_key  | text           | nullable (auto-generated, **AES-256-GCM encrypted at rest**: `v1:<iv>:<ct>:<tag>` format, see #23) |
 | dkim_public_key   | text           | nullable (auto-generated, plaintext: published in DNS) |
-| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
+| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`: the active key's selector, chosen on create (#250) or set by a completed rotation |
+| dkim_pending_selector | varchar(63) | nullable: the dated selector of a pending key rotation (#250) |
+| dkim_pending_private_key | text     | nullable: the pending private key, AES-256-GCM encrypted like `dkim_private_key` (#250) |
+| dkim_pending_public_key | text      | nullable: the pending public key (#250) |
+| dkim_pending_created_at | timestamp | nullable: when the pending rotation started (#250) |
+| dkim_previous_selector | varchar(63) | nullable: the selector active before the last completed rotation, informational only (#250) |
+| dkim_previous_public_key | text     | nullable: its public key, to recognise the record to keep for now (#250) |
+| dkim_rotated_at   | timestamp      | nullable: when the last rotation switched keys (#250) |
 | unsubscribe_email | varchar(255)   | nullable: overrides the default `unsubscribe@<from-domain>` mailto in the `List-Unsubscribe` header (#40). On single-recipient mail with inbound SMTP off it is kept next to the per-recipient link; with inbound SMTP on, the `unsub+<token>` mailto replaces it (#249) |
 | unsubscribe_url   | text           | nullable: adds an `https` URL form to `List-Unsubscribe` and enables `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (#40). Used only for mail with cc, bcc or several recipients, or when `APP_BASE_URL` is not `https://`: otherwise BunMail's per-recipient `/u/<token>` link takes precedence, since a static URL cannot tell who clicked (#249) |
 | notify_email      | varchar(255)   | nullable, when set, inbound mail received for this domain triggers a summary notification email to this address (#106). Use an external mailbox. |
@@ -55,6 +64,26 @@ When a domain is created, BunMail automatically generates a 2048-bit RSA keypair
 - **Public key**: stored plaintext in `dkim_public_key`, provided as a DNS TXT record value
 
 The DKIM DNS record the user needs to add is returned in the API response as `dkimDnsRecord`.
+
+### Selector (#250)
+
+The key's TXT record lives at `<selector>._domainkey.<domain>`. The selector defaults to `bunmail`; `POST /api/v1/domains` (and the dashboard's add form) accept an optional `dkimSelector`, for example when `bunmail` is already taken in the zone. It must be one lowercase DNS label: 1 to 63 characters, `[a-z0-9]`, with inner hyphens allowed (`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`). Anything else is `422` (`VALIDATION_ERROR` from the DTO, `INVALID_DKIM_SELECTOR` from the service), and the dashboard shows the reason as an error flash.
+
+### Key rotation (#250)
+
+A key can be replaced without a window where mail is unsigned or fails verification. Rotation is admin-only (admin API key, or `adminGuard` on the dashboard) and takes three steps:
+
+1. **Start**: `POST /api/v1/domains/:id/dkim/rotate` (dashboard: **Rotate DKIM key** on the domain page, with a confirmation). BunMail generates a new RSA 2048 key pair, the same way as on create, under a dated selector `bm<YYYYMMDD>` (UTC). When that name is the current or the previous selector (a second rotation the same day), `-2`, `-3`, ... is appended, so it is never the current selector. The pending selector, the encrypted private key, the public key and the start time are stored. The response carries the TXT record to publish (`dnsRecord`), which also appears in `dnsRecords` with `pending: true`. Only one rotation can be pending: starting another is `409 DKIM_ROTATION_PENDING`.
+2. **Publish** the pending TXT record at your DNS provider **next to** the current one. Do not replace the current record: mail is still signed with the current key while the rotation is pending.
+3. **Complete**: `POST /api/v1/domains/:id/dkim/rotate/complete` (dashboard: **Complete rotation**). BunMail looks up `<pending selector>._domainkey.<domain>` and compares it with the pending public key, the same way Verify compares the active key. Only when it matches does one transaction switch: the pending key becomes the active key, the old selector and public key are kept as `previous` with the switch time (`dkim_rotated_at`), and `dkim_verified` is set (the new record was just found). Otherwise the answer is `409 DKIM_PENDING_NOT_PUBLISHED` with the reason (no record yet, a record with another key, or a temporary DNS failure) and nothing changes. A pending private key that does not decrypt with `DKIM_ENCRYPTION_KEY` is refused with `409 DKIM_PENDING_KEY_UNREADABLE`: cancel and start again. **Verify DNS** never switches on its own: the operator decides when.
+
+**Cancel** with `DELETE /api/v1/domains/:id/dkim/rotate` (dashboard: **Cancel rotation**): the pending fields are cleared and the active key is untouched. Completing or cancelling with nothing pending is `409 DKIM_NO_PENDING_ROTATION`.
+
+**The previous selector.** After a switch, the API (`dkimPrevious`) and the domain page show the previous selector with the advice: keep its DNS record published for at least 7 days after the switch, then remove it. Messages signed before the switch (still queued, delayed, forwarded or re-checked later) are verified against it. It is informational only: its private key is dropped at the switch and BunMail never signs with it. A later rotation replaces it.
+
+**Audit.** `domain.dkim_rotation_started`, `domain.dkim_rotation_completed` and `domain.dkim_rotation_cancelled` are recorded in the same transaction as the change (actor: the dashboard user or the API key; target: the domain; metadata: `{ selector }` only, never key material). A complete refused because the record is not published changes nothing, so it is only logged (`info`, `DKIM rotation not completed: pending key not published`).
+
+**Boot check.** `findUndecryptableDomainKeys()` also checks pending keys and returns `{ active, pending }`. An active key that does not decrypt refuses the boot in production (#244); a pending one only warns, in every environment, since mail is never signed with it.
 
 ## DNS Verification
 
@@ -89,12 +118,13 @@ The result is returned as `dmarc` (below). `verifyDomain` stores `dmarc_verified
 
 ### DNS records to publish: `dnsRecords` (#250)
 
-`getRequiredDnsRecords(domain, { mailHostname, publicIps })` (pure; defaults from `config`) returns `{ type, host, value, purpose, optional, note? }` entries, in this order:
+`getRequiredDnsRecords(domain, { mailHostname, publicIps })` (pure; defaults from `config`) returns `{ type, host, value, purpose, optional, note?, pending? }` entries, in this order:
 
 | Type | Host | Value | Notes |
 |------|------|-------|-------|
 | TXT | `<domain>` | `v=spf1 a:<MAIL_HOSTNAME> -all` | merge the `a:` term into an existing SPF record instead |
 | TXT | `<selector>._domainkey.<domain>` | the DKIM record as quoted strings of at most 255 characters | left out when the domain has no public key |
+| TXT | `<pending selector>._domainkey.<domain>` | the pending key's DKIM record, split the same way | only while a key rotation is pending; `pending: true` (#250) |
 | TXT | `_dmarc.<domain>` | `v=DMARC1; p=none; rua=mailto:dmarc@<domain>` | BunMail stores the reports when inbound SMTP is on and the MX points here; otherwise use an address you read |
 | A / AAAA | `MAIL_HOSTNAME` | each `MAIL_PUBLIC_IP` | described ("this server's public IP address") when `MAIL_PUBLIC_IP` is unset; once per server |
 | PTR | each sending IP | `MAIL_HOSTNAME` | set at the hosting provider, not in the zone |
@@ -107,7 +137,7 @@ There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 ### domain.service.ts
 
 #### `createDomain(input): Promise<Domain>`
-Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
+Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing, under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
 
 #### `getDkimDnsRecord(domain): string | null`
 Returns the DKIM DNS TXT record value (`v=DKIM1; k=rsa; p=<base64>`) for a domain.
@@ -129,6 +159,15 @@ Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243); only the fields prese
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
 Hard-deletes a domain and its keys.
+
+### dkim-keys.ts (#250)
+
+Pure helpers shared by create, rotation and Verify: `generateDkimKeyPair()`, `isValidDkimSelector()` and `DKIM_SELECTOR_PATTERN` (also the DTO's pattern), `datedDkimSelector(now, taken)`, `dkimRecordValue(pem)`, `dkimRecordHost(selector, domain)` and `dkimRecordsMatchKey(records, pem)` (the publish comparison: one record or all of them joined carries `v=DKIM1` and `p=<key>`, whitespace ignored).
+
+### dkim-rotation.service.ts (#250)
+
+- `startDkimRotation(id, audit, now?)`, `completeDkimRotation(id, audit, deps?, now?)`, `cancelDkimRotation(id, audit)`: the steps above. Each returns the updated domain, or `undefined` for an unknown id, and throws `DkimRotationError` (`409` with `code`) when the domain's state refuses the step. Each locks the row (`FOR UPDATE`) and writes the change and its audit event in one transaction. Complete looks up DNS before the transaction and, inside it, checks that the pending key is still the one it looked up.
+- `checkDkimKeyPublished(domain, selector, pem, deps?)`: the publish check with its reason; the TXT lookup goes through the domains DNS seam (`resolveDomainTxt`), so `setDomainDnsDeps()` stubs it in tests.
 
 ### domain-dkim.service.ts
 
@@ -154,13 +193,14 @@ Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns 
 
 ### required-dns-records.ts
 
-- `getRequiredDnsRecords(domain, settings?)`: the table above. `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
+- `getRequiredDnsRecords(domain, settings?)`: the table above. `pendingDkimDnsRecord(domain)` is the pending rotation's entry alone (or `null`). `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
 
 ## Serialization
 
 The `serializeDomain(domain, dns)` function:
-- **Strips** `dkimPrivateKey` and `dkimPublicKey` (never exposed in API responses)
+- **Strips** every private key, active and pending, and the public keys (never exposed in API responses)
 - **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS (unsplit)
+- **Exposes** `dkimPending` (`{ selector, host, dnsRecord, createdAt }` or `null`) and `dkimPrevious` (`{ selector, host, dnsRecord, rotatedAt, advice }` or `null`) for key rotation (#250)
 - **Adds** `dnsRecords` (always), and `dmarc` and `mx` from `dns`, which is `null` on `DELETE` (no lookup for a removed domain) (#250)
 
 ## API Endpoints
@@ -175,9 +215,13 @@ All routes require Bearer token auth and are rate-limited.
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records       |
 | PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings (#243) |
 | DELETE | /api/v1/domains/:id           | Delete domain            |
+| POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) |
+| POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) |
+| DELETE | /api/v1/domains/:id/dkim/rotate | Cancel the pending rotation (#250) |
 
 `POST /api/v1/domains` accepts an optional `notifyEmail` field to set the
-inbound-notification address at create time (see below).
+inbound-notification address at create time (see below), and an optional
+`dkimSelector` (see Selector above).
 
 ## Inbound Notifications (#106)
 

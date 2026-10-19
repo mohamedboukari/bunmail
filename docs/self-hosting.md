@@ -186,7 +186,7 @@ Start at `p=none`, which only collects reports, and move to `p=quarantine`, then
 |------|----------------------|--------------------------|
 | TXT  | `bunmail._domainkey` | `v=DKIM1; k=rsa; p=...`  |
 
-A 2048-bit key is longer than the 255 characters one TXT string holds: the domain page shows it split into quoted strings to paste as they are; providers that take one long value split it themselves.
+A 2048-bit key is longer than the 255 characters one TXT string holds: the domain page shows it split into quoted strings to paste as they are; providers that take one long value split it themselves. `bunmail` is the default selector: pass `dkimSelector` when registering the domain to use another one, and replace a key later without downtime with a DKIM key rotation (#250, see [domains.md](domains.md#key-rotation-250)).
 
 ### PTR Record (Reverse DNS)
 

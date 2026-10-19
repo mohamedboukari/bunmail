@@ -129,6 +129,9 @@ export interface AuditMetadataByAction {
   "domain.updated": { fields: string[] };
   "domain.verified": { spf: boolean; dkim: boolean; dmarc: boolean };
   "domain.deleted": null;
+  "domain.dkim_rotation_started": { selector: string };
+  "domain.dkim_rotation_completed": { selector: string };
+  "domain.dkim_rotation_cancelled": { selector: string };
   "webhook.created": { events: string[] };
   "webhook.deleted": null;
   "suppression.created": { reason: string };
@@ -180,6 +183,9 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "domain.updated": "Domain settings changed",
   "domain.verified": "Domain DNS verified",
   "domain.deleted": "Domain deleted",
+  "domain.dkim_rotation_started": "DKIM key rotation started",
+  "domain.dkim_rotation_completed": "DKIM key rotation completed",
+  "domain.dkim_rotation_cancelled": "DKIM key rotation cancelled",
   "webhook.created": "Webhook created",
   "webhook.deleted": "Webhook deleted",
   "suppression.created": "Suppression added",

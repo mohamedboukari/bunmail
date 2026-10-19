@@ -5,6 +5,12 @@ import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
 import { verifyDomain } from "./services/dns-verification.service.ts";
 import {
+  cancelDkimRotation,
+  completeDkimRotation,
+  startDkimRotation,
+} from "./services/dkim-rotation.service.ts";
+import { pendingDkimDnsRecord } from "./services/required-dns-records.ts";
+import {
   getDomainDnsStatus,
   getDomainsDnsStatus,
 } from "./services/domain-dns-status.service.ts";
@@ -22,6 +28,10 @@ import { restAuditContext } from "../audit/services/audit-context.service.ts";
  * - GET /         → List all registered domains
  * - GET /:id      → Get a single domain by ID
  * - DELETE /:id   → Delete a domain
+ * - POST /:id/verify                 → Run DNS verification
+ * - POST /:id/dkim/rotate            → Start a DKIM key rotation (#250)
+ * - POST /:id/dkim/rotate/complete   → Switch to the pending key once published
+ * - DELETE /:id/dkim/rotate          → Cancel the pending rotation
  *
  * All routes are protected by Bearer token auth and rate limiting.
  */
@@ -61,6 +71,8 @@ export const domainsPlugin = new Elysia({
         unsubscribeUrl: body.unsubscribeUrl,
         /** Attributed to the calling key's user (#219). */
         createdByUserId: apiKeyCreatedByUserId,
+        /** Validated by the DTO (#250); omitted means `bunmail`. */
+        dkimSelector: body.dkimSelector,
       });
       await recordAuditEvent({
         ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
@@ -254,6 +266,117 @@ export const domainsPlugin = new Elysia({
         summary: "Verify domain DNS",
         description:
           "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * POST /api/v1/domains/:id/dkim/rotate
+   *
+   * Starts a DKIM key rotation (#250): a new key under a dated selector,
+   * pending until completed. Mail stays signed with the active key.
+   * `409 DKIM_ROTATION_PENDING` while one is pending.
+   */
+  .post(
+    "/:id/dkim/rotate",
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
+      logger.info("POST /api/v1/domains/:id/dkim/rotate", { domainId: params.id });
+
+      const domain = await startDkimRotation(
+        params.id,
+        restAuditContext({ apiKeyId, apiKeyName, request, server }),
+      );
+      if (!domain) {
+        set.status = 404;
+        return { success: false, error: "Domain not found" };
+      }
+
+      /** A key change never waits on DNS: `dmarc` and `mx` are null. */
+      return {
+        success: true,
+        data: serializeDomain(domain, null),
+        dnsRecord: pendingDkimDnsRecord(domain),
+      };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Start DKIM key rotation",
+        description:
+          "Generates a new DKIM key under a dated selector (bm<YYYYMMDD>) and returns the TXT record to publish (dnsRecord, also in dnsRecords with pending: true). Mail stays signed with the current key until the rotation is completed. 409 DKIM_ROTATION_PENDING when a rotation is already pending.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * POST /api/v1/domains/:id/dkim/rotate/complete
+   *
+   * Switches to the pending key (#250), only once its TXT record is
+   * published with the pending key; otherwise `409
+   * DKIM_PENDING_NOT_PUBLISHED` with the reason, and nothing changes.
+   */
+  .post(
+    "/:id/dkim/rotate/complete",
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
+      logger.info("POST /api/v1/domains/:id/dkim/rotate/complete", {
+        domainId: params.id,
+      });
+
+      const domain = await completeDkimRotation(
+        params.id,
+        restAuditContext({ apiKeyId, apiKeyName, request, server }),
+      );
+      if (!domain) {
+        set.status = 404;
+        return { success: false, error: "Domain not found" };
+      }
+
+      return { success: true, data: serializeDomain(domain, null) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Complete DKIM key rotation",
+        description:
+          "Looks up the pending selector's TXT record and, when it carries the pending key, makes that key the active one; the old selector is returned as dkimPrevious. 409 DKIM_PENDING_NOT_PUBLISHED (with the reason), DKIM_NO_PENDING_ROTATION or DKIM_PENDING_KEY_UNREADABLE otherwise, with nothing changed.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * DELETE /api/v1/domains/:id/dkim/rotate
+   *
+   * Cancels the pending rotation (#250): its key is dropped, the active key
+   * is untouched. `409 DKIM_NO_PENDING_ROTATION` when none is pending.
+   */
+  .delete(
+    "/:id/dkim/rotate",
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
+      logger.info("DELETE /api/v1/domains/:id/dkim/rotate", { domainId: params.id });
+
+      const domain = await cancelDkimRotation(
+        params.id,
+        restAuditContext({ apiKeyId, apiKeyName, request, server }),
+      );
+      if (!domain) {
+        set.status = 404;
+        return { success: false, error: "Domain not found" };
+      }
+
+      return { success: true, data: serializeDomain(domain, null) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Cancel DKIM key rotation",
+        description:
+          "Drops the pending DKIM key; the active key is untouched. 409 DKIM_NO_PENDING_ROTATION when no rotation is pending.",
         security: [{ bearerAuth: [] }],
       },
     },

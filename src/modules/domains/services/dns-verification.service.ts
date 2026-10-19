@@ -7,6 +7,7 @@ import type { Domain } from "../types/domain.types.ts";
 import { config } from "../../../config.ts";
 import { resolveSendingIps, type SendingIps } from "./sending-ips.service.ts";
 import { checkDmarc } from "./dmarc-check.service.ts";
+import { dkimRecordHost, dkimRecordsMatchKey } from "./dkim-keys.ts";
 import { rememberDmarcCheck, resolveDomainTxt } from "./domain-dns-status.service.ts";
 
 export interface VerificationResult {
@@ -65,17 +66,6 @@ async function resolveTxt(hostname: string, deps: VerificationDeps): Promise<str
   } catch {
     return [];
   }
-}
-
-/**
- * Extracts the raw base64 public key from a PEM-encoded key,
- * stripping headers, footers, and whitespace.
- */
-function extractPubKeyBase64(pem: string): string {
-  return pem
-    .replace(/-----BEGIN PUBLIC KEY-----/g, "")
-    .replace(/-----END PUBLIC KEY-----/g, "")
-    .replace(/\s/g, "");
 }
 
 /** The version tag that starts an SPF record (RFC 7208 4.5). */
@@ -158,16 +148,9 @@ async function verifyDKIM(
 ): Promise<boolean> {
   if (!publicKeyPem) return false;
 
-  const host = `${selector}._domainkey.${domainName}`;
-  const records = await resolveTxt(host, deps);
-  const expectedKey = extractPubKeyBase64(publicKeyPem);
-
-  const allCandidates = [...records, records.join("")];
-
-  return allCandidates.some((r) => {
-    const cleaned = r.replace(/\s/g, "");
-    return cleaned.includes("v=DKIM1") && cleaned.includes(`p=${expectedKey}`);
-  });
+  const records = await resolveTxt(dkimRecordHost(selector, domainName), deps);
+  /** The same comparison completing a key rotation uses (#250). */
+  return dkimRecordsMatchKey(records, publicKeyPem);
 }
 
 /**
