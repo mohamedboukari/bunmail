@@ -10,6 +10,21 @@ Suppressions are **per `api_key_id`**, not global. Different API keys often repr
 
 A consequence: revoking a key cascades to its suppression list (`ON DELETE CASCADE`). If you rotate a key and want its suppressions to carry over, copy them to the new key first via the API.
 
+### Shared hard suppressions (`SUPPRESSIONS_SHARED_HARD`, #250)
+
+Every key sends from the same IP and signs with DKIM domains on the same server, so one key mailing a bad list damages delivery for all of them. With `SUPPRESSIONS_SHARED_HARD=true` (default `false`, strictly `true` or `false`) the send gate also refuses an address that **any** key holds one of these for:
+
+- a permanent hard bounce written by the bounce paths (`reason = 'bounce'`, `bounce_type = 'hard'`, `expires_at IS NULL`: the inline 5xx, or a DSN);
+- a permanent complaint from a feedback loop (`reason = 'complaint'`, `source_email_id` set, `expires_at IS NULL`).
+
+Everything else stays per key, because it is the tenant's own decision: unsubscribes, manual entries (whatever `reason` they were given through `POST /api/v1/suppressions`: a manual row never has a `bounce_type` or a `source_email_id`, so one key cannot block another key's recipients), and every temporary row (soft bounces, entries with an expiry).
+
+The flag applies to every send gate: `POST /api/v1/emails/send` and the dashboard send (via `createEmail`), SMTP submission (`550`), and the queue's re-check before a retry (#262). The key's own row is checked first and wins: its refusal is unchanged. A shared refusal is the same `422 RECIPIENT_SUPPRESSED` (SMTP `550`) with the same message, and `suppressionId: null`: the error never names the other key or its row, and the logs do not either (`Shared suppression applied` at `info` with the requesting `apiKeyId` and the redacted address, then the usual `Send blocked by suppression list` with `shared: true` and no id or reason). Nothing is copied: lists, `GET /api/v1/suppressions` and the dashboard page are unchanged, each key still sees only its own rows, and deleting the other key's row (from the dashboard) lifts the shared block.
+
+The cross-key lookup is served by the partial index `suppressions_shared_hard_email_idx` (migration `0034`).
+
+Known limit: a complaint's `source_email_id` is set to `NULL` when its email is purged from the trash, and the row then stops being shared (it still blocks its own key).
+
 ## Lookup behaviour
 
 The gate normalises the recipient address before the lookup: `Alice@Example.COM` and `alice@example.com` resolve to the same suppression. RFC 5321 says the local part is technically case-sensitive, but every real receiver folds case, and matching that behaviour at the gate avoids surprise bypasses.
@@ -48,6 +63,7 @@ The DB column is plain `text` for forward compatibility: a finer split (e.g. `bo
 Indexes:
 - `UNIQUE (api_key_id, email)`: service uses this for `ON CONFLICT DO UPDATE`
 - `(api_key_id, email)`: composite btree, serves the gate's hot lookup
+- `suppressions_shared_hard_email_idx`: `(email) WHERE expires_at IS NULL AND reason IN ('bounce', 'complaint')`, serves the cross-key lookup of `SUPPRESSIONS_SHARED_HARD` (#250)
 
 ## API surface
 
@@ -98,7 +114,7 @@ Content-Type: application/json
 }
 ```
 
-The `suppressionId` lets clients pivot directly to `DELETE /api/v1/suppressions/:id` if the block was a mistake.
+The `suppressionId` lets clients pivot directly to `DELETE /api/v1/suppressions/:id` if the block was a mistake. It is `null` when a [shared hard suppression](#shared-hard-suppressions-suppressions_shared_hard-250) of another key applied: that row is not the caller's to read or lift.
 
 The email is **not** inserted into the `emails` table. There's no row to retry, no queue entry, no SMTP attempt: the gate is hard-fail before any side effect.
 
@@ -108,7 +124,7 @@ The bounce module (#24) closes the loop: when the inbound SMTP receives a Delive
 
 Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 
-The `processEmail` retry path deliberately **does not** auto-suppress when the retry window runs out: that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
+When the queue's retry window runs out (#180, `MAIL_RETRY_MAX_AGE_HOURS`), only one temporary failure files a suppression (#250): a recipient whose **last** failure was an SMTP reply with the enhanced code exactly `4.2.2` (mailbox full) gets a soft bounce through `addFromBounce` (`bounce_type = 'soft'`, `diagnostic_code = '4.2.2'`, `expires_at` 24 h later, `source_email_id` the email), with a soft `email.bounced`, in the email's outcome transaction. `addFromBounce`'s precedence applies: it refreshes a temporary row and leaves a permanent one (complaint, unsubscribe, manual, hard bounce) exactly as it is. There is no soft-to-hard escalation on this path. Every other temporary failure (`4.2.0`, `4.7.x`, any other 4xx, and failures with no SMTP reply: DNS, network, TLS, MTA-STS) ends `failed` with no suppression and no bounce event, since it says nothing reliable about the mailbox. See [bounces.md](bounces.md#inline-5xx-flow-68).
 
 ## One-click unsubscribe
 
@@ -171,6 +187,12 @@ A bounce never weakens a suppression (#191): before, `addFromBounce` overwrote w
 
 #### `addFromBounce(apiKeyId, input, executor = db): Promise<{ applied, suppression }>`
 `applied` is `true` when the row was created or a temporary one rewritten, `false` when a permanent row was left in place; `suppression` is the row in effect afterwards (the kept one in the second case), `undefined` only if it was deleted between the write and the read-back. Callers enqueue `email.bounced` either way, passing as `executor` the transaction that also enqueues it (#184); `addFromUnsubscribe` and `addFromComplaint` take theirs the same way.
+
+#### `isSuppressed(apiKeyId, email): Promise<SuppressionMatch | undefined>`
+The send gate. `{ shared: false, suppression }` for the key's own active row (any reason), `{ shared: true }` for a [shared hard suppression](#shared-hard-suppressions-suppressions_shared_hard-250) of another key (only with `SUPPRESSIONS_SHARED_HARD=true`; it carries nothing of that row), `undefined` when the address may be sent to.
+
+#### `findActiveSuppression(apiKeyId, email): Promise<Suppression | undefined>`
+The key's own active row only, never a shared one. The DSN bounce handler uses it to escalate a repeated soft bounce, which is about that key's own history.
 
 #### `createSuppression(apiKeyId, input): Promise<Suppression>`
 The manual upsert behind `POST /api/v1/suppressions`. Returns the written row, or the permanent complaint it left in place.

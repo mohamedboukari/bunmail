@@ -311,7 +311,8 @@ const app = new Elysia()
      * Suppression-list rejection (#25). The service throws
      * `SuppressedRecipientError`; map to 422 with structured body so
      * clients can pivot to `DELETE /api/v1/suppressions/:id` via the
-     * `suppressionId` field.
+     * `suppressionId` field: `null` when a shared suppression applied
+     * (#250), whose row belongs to another key and is never revealed.
      */
     if (error instanceof SuppressedRecipientError) {
       set.status = 422;

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   varchar,
@@ -17,7 +18,10 @@ import { emails } from "../../emails/models/email.schema.ts";
  * Scope: per `api_key_id`. Different API keys often represent different
  * customer environments (transactional / marketing / dev), so one key's
  * bounces should never gate another key's sends. Mirrors what
- * SES / SendGrid / Resend do.
+ * SES / SendGrid / Resend do. The one exception is opt-in: with
+ * `SUPPRESSIONS_SHARED_HARD=true` (#250) the send gate also refuses an
+ * address any key holds an automatic permanent hard bounce or complaint
+ * for, since the sending IP and DKIM domains are shared.
  *
  * Auto-suppression on bounces is the responsibility of #24 (DSN
  * parsing); this module only provides the storage + lookup primitive
@@ -107,5 +111,18 @@ export const suppressions = pgTable(
      * documentation of intent.
      */
     index("suppressions_api_key_email_idx").on(table.apiKeyId, table.email),
+
+    /**
+     * The shared send gate (`SUPPRESSIONS_SHARED_HARD`, #250) looks an
+     * address up across every API key: `WHERE email = $1 AND expires_at
+     * IS NULL AND reason IN ('bounce', 'complaint')`. The composite
+     * indexes above lead with `api_key_id`, so they cannot serve it. Partial,
+     * so it holds only the permanent bounce and complaint rows. Stored
+     * addresses are already trimmed and lower-cased by the service, so a
+     * plain column index matches.
+     */
+    index("suppressions_shared_hard_email_idx")
+      .on(table.email)
+      .where(sql`expires_at IS NULL AND reason IN ('bounce', 'complaint')`),
   ],
 );

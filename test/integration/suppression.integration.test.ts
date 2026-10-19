@@ -44,9 +44,11 @@ describe("isSuppressed", () => {
       reason: "manual",
     });
     const result = await isSuppressed(apiKeyId, "blocked@example.com");
-    expect(result?.id).toBe(supId);
-    expect(result?.reason).toBe("manual");
-    expect(result?.expiresAt).toBeNull();
+    expect(result?.shared).toBe(false);
+    const row = result?.shared === false ? result.suppression : undefined;
+    expect(row?.id).toBe(supId);
+    expect(row?.reason).toBe("manual");
+    expect(row?.expiresAt).toBeNull();
   });
 
   test("returns the row when expiresAt is in the future", async () => {
@@ -60,7 +62,7 @@ describe("isSuppressed", () => {
     });
     const result = await isSuppressed(apiKeyId, "soft@example.com");
     expect(result).toBeDefined();
-    expect(result?.bounceType).toBe("soft");
+    expect(result?.shared === false ? result.suppression.bounceType : null).toBe("soft");
   });
 
   test("returns undefined when expiresAt is in the past", async () => {

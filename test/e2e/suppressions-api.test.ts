@@ -98,6 +98,8 @@ void mock.module(
       Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
     ),
     isSuppressed: mock(() => Promise.resolve(undefined)),
+    findActiveSuppression: mock(() => Promise.resolve(undefined)),
+    SOFT_BOUNCE_WINDOW_MS: 24 * 60 * 60 * 1000,
     addFromBounce: mock(() =>
       Promise.resolve({ applied: true, suppression: mockBounceSuppression }),
     ),

@@ -5,7 +5,8 @@
  * at all.
  *
  * One table of cases, one per event and entry point (the queue's
- * `email.sent`, `email.failed` and inline `email.bounced`, the DSN
+ * `email.sent`, `email.failed`, inline hard `email.bounced` and soft one
+ * after an exhausted `4.2.2`, the DSN
  * handler's `email.bounced`, the unsubscribe path, feedback-loop
  * complaints and inbound mail). Each case runs the production entry point
  * and is checked for:
@@ -267,6 +268,34 @@ const CASES: Case[] = [
     stored: async (ctx) =>
       (await suppressionReason(ctx)) === "bounce" &&
       (await emailStatus(ctx)) === "bounced",
+    stateRow: () => ({ table: "suppressions", match: { email: RECIPIENT } }),
+  },
+  {
+    name: "email.bounced (queue, soft 4.2.2 after the retry window)",
+    event: "email.bounced",
+    emailStatus: "queued",
+    run: async (ctx) => {
+      /** Older than `MAIL_RETRY_MAX_AGE_HOURS`: this attempt is the last (#250). */
+      await db
+        .update(emails)
+        .set({ createdAt: sql`NOW() - interval '49 hours'` })
+        .where(eq(emails.id, ctx.emailId));
+      await queueCycle(
+        mailer({
+          status: "retry",
+          failureKind: "soft",
+          failureCode: "4.2.2",
+          lastError: "452 4.2.2 Mailbox full",
+        }),
+      );
+    },
+    throwsOnFailure: false,
+    failureLog:
+      "Email outcome not saved: transaction rolled back, retried after the lease",
+    enqueueFailure: "degraded",
+    stored: async (ctx) =>
+      (await suppressionReason(ctx)) === "bounce" &&
+      (await emailStatus(ctx)) === "failed",
     stateRow: () => ({ table: "suppressions", match: { email: RECIPIENT } }),
   },
   {

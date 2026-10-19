@@ -462,6 +462,18 @@ export function readIdempotencyKeyTtlHours(
 }
 
 /**
+ * Reads `SUPPRESSIONS_SHARED_HARD` (#250): whether the send gate also
+ * refuses an address that ANY API key holds a permanent hard-bounce or
+ * complaint suppression for. Unset or blank: `false`. Only `true` or
+ * `false`; anything else refuses to boot.
+ */
+export function readSuppressionsSharedHard(
+  raw: string | undefined = process.env["SUPPRESSIONS_SHARED_HARD"],
+): boolean {
+  return optionalStrictBoolean("SUPPRESSIONS_SHARED_HARD", false, raw);
+}
+
+/**
  * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
  * #217) is sent from. Trimmed and lower-cased; unset or empty means no
  * system sender, and the dashboard shows invitation links for the inviter
@@ -986,6 +998,20 @@ export const config = {
      * days: long enough to cover most receiver feedback windows.
      */
     tombstoneRetentionDays: parseInt(optionalEnv("TOMBSTONE_RETENTION_DAYS", "90"), 10),
+  },
+
+  /** The suppression list's send gate (#250). */
+  suppressions: {
+    /**
+     * Whether the send gate also refuses an address that any API key holds
+     * a permanent hard-bounce or complaint suppression for
+     * (`SUPPRESSIONS_SHARED_HARD`, default false, strictly `true` or
+     * `false`). The sending IP and the DKIM domains are shared, so one
+     * key's bad list hurts every key's delivery. Unsubscribe, manual and
+     * temporary rows stay per key, and the refusal never names the other
+     * key or its row.
+     */
+    sharedHard: readSuppressionsSharedHard(),
   },
 
   /** Scheduled DNS re-verification of registered domains (#250). */

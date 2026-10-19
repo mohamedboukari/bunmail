@@ -7,14 +7,16 @@
  *
  * Carrying `suppressionId` in the body lets clients pivot directly to
  * `DELETE /api/v1/suppressions/:id` when they want to undo (e.g. a
- * recipient who confirmed they want emails again).
+ * recipient who confirmed they want emails again). It is `null` when a
+ * shared suppression applied (`SUPPRESSIONS_SHARED_HARD`, #250): that row
+ * belongs to another API key, so neither its id nor its key is revealed.
  */
 export class SuppressedRecipientError extends Error {
   override readonly name = "SuppressedRecipientError";
-  readonly suppressionId: string;
+  readonly suppressionId: string | null;
   readonly recipient: string;
 
-  constructor(args: { suppressionId: string; recipient: string }) {
+  constructor(args: { suppressionId: string | null; recipient: string }) {
     super(
       `Recipient is on the suppression list. Remove the suppression first if this is intentional.`,
     );

@@ -1,0 +1,1 @@
+CREATE INDEX "suppressions_shared_hard_email_idx" ON "suppressions" USING btree ("email") WHERE expires_at IS NULL AND reason IN ('bounce', 'complaint');
