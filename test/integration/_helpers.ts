@@ -34,18 +34,45 @@ import type {
 } from "../../src/modules/users/types/user.types.ts";
 import { config } from "../../src/config.ts";
 
+/** Database names the integration helpers may wipe. */
+const WIPEABLE_DATABASE_RE = /_(test|scratch)$/;
+
 /**
- * Wipe every test-relevant table in dependency order. Inbound emails,
- * trash purge state, and the migrations bookkeeping table are
- * intentionally NOT truncated: the schema is set up by
+ * Refuses to wipe anything but a `*_test` or `*_scratch` database. The
+ * preload points `db` at one, but a test file run without it (a bare
+ * `bun test test/integration/x.test.ts` in a shell that loaded `.env`)
+ * would reach the dev database, and `truncateAll` would erase it. This
+ * check sits where the damage happens, so no entry point can skip it.
+ */
+function assertWipeableDatabase(): void {
+  const name = new URL(config.database.url).pathname.replace(/^\//, "");
+  if (!WIPEABLE_DATABASE_RE.test(name)) {
+    throw new Error(
+      `Refusing to truncate database "${name}": integration tests only run against a *_test or *_scratch database. Use bun run test:integration.`,
+    );
+  }
+}
+
+/**
+ * Wipe every test-relevant table in dependency order. Trash purge state
+ * and the migrations bookkeeping table are intentionally NOT truncated:
+ * the schema is set up by
  * `scripts/test-integration-setup.ts` (or `db:migrate` in CI) and
  * persists across test runs to keep the suite fast.
  *
  * `CASCADE` ensures that if any test row picks up an unexpected FK
  * dependency, the truncate still completes; better than a flaky failure
  * later that's hard to attribute.
+ *
+ * `inbound_emails` is listed before `emails` on purpose (#192): it
+ * references `emails`, and Postgres locks the listed tables in order. An
+ * inbound insert still finishing from the previous test holds
+ * `inbound_emails` and then needs `emails` for its foreign key check, so
+ * locking `emails` first (as a bare `CASCADE` from `emails` would) can
+ * deadlock; this order makes the truncate wait for it instead.
  */
 export async function truncateAll(): Promise<void> {
+  assertWipeableDatabase();
   await db.execute(
     drizzleSql`TRUNCATE TABLE
       audit_events,
@@ -57,6 +84,7 @@ export async function truncateAll(): Promise<void> {
       users,
       suppressions,
       idempotency_keys,
+      inbound_emails,
       emails,
       email_tombstones,
       webhooks,
