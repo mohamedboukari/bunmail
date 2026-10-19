@@ -48,6 +48,7 @@ import { config } from "../../src/config.ts";
 export async function truncateAll(): Promise<void> {
   await db.execute(
     drizzleSql`TRUNCATE TABLE
+      audit_events,
       user_devices,
       user_recovery_codes,
       user_tokens,

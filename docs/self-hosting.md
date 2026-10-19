@@ -80,6 +80,8 @@ SMTP_ENABLED=true
 SMTP_PORT=25
 LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
+# Optional: days audit log entries are kept (#221), 30 to 3650, default 365
+# AUDIT_LOG_RETENTION_DAYS=365
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -111,6 +113,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > Generate a DKIM encryption key: `openssl rand -base64 32`. **Required**: boot fails with a clear error if missing or not 32 bytes after base64 decode. Encrypts every domain's DKIM private key (#23) and every webhook signing secret (#259) at rest with AES-256-GCM. See [SECURITY.md](../SECURITY.md#dkim-private-key-encryption-at-rest) for the format and rotation procedure.
 
 > `TRASH_RETENTION_DAYS`: how long soft-deleted emails (outbound and inbound) stay in trash before being permanently purged. Default `7`.
+
+> `AUDIT_LOG_RETENTION_DAYS`: how long entries of the audit log (#221: sign-ins, account, two-factor, API key, domain, webhook and suppression changes, read on the dashboard's **Audit log** page by admins and the owner) are kept before the purge worker deletes them. Default `365`; a whole number from `30` to `3650`, anything else refuses to boot. Entries cannot be edited, even through SQL from the app's connection (a database trigger refuses any `UPDATE`); they are not shipped anywhere, so back the database up if you need them beyond the host. See [docs/audit-log.md](audit-log.md).
 
 > `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, invitation links (#217) and admin-issued password reset links (#277). When unset, the setup and reset links fall back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone.
 

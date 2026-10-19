@@ -372,15 +372,17 @@ const rotateSession = mock(
   },
 );
 
-const revokeSessionByToken = mock((token: string): Promise<string | null> => {
-  for (const [current, s] of fakeSessions) {
-    if (current === token || s.previous === token) {
-      fakeSessions.delete(current);
-      return Promise.resolve(s.sessionId);
+const revokeSessionByToken = mock(
+  (token: string): Promise<{ sessionId: string; userId: string } | null> => {
+    for (const [current, s] of fakeSessions) {
+      if (current === token || s.previous === token) {
+        fakeSessions.delete(current);
+        return Promise.resolve({ sessionId: s.sessionId, userId: s.userId });
+      }
     }
-  }
-  return Promise.resolve(null);
-});
+    return Promise.resolve(null);
+  },
+);
 
 const revokeAllUserSessions = mock(
   (userId: string, _executor?: unknown): Promise<number> => {
@@ -2271,7 +2273,13 @@ describe("Dashboard E2E", () => {
       expect(response.status).toBe(302);
       const location = decodeURIComponent(response.headers.get("location") ?? "");
       expect(location).toContain("/dashboard/users?flash=Role changed to member.");
-      expect(accountAction).toHaveBeenCalledWith(OWNER.userId, "usr_admin", "member");
+      /** The request's client goes along, for the audit log (#221). */
+      expect(accountAction).toHaveBeenCalledWith(
+        OWNER.userId,
+        "usr_admin",
+        "member",
+        expect.objectContaining({ ip: expect.any(String) }),
+      );
     });
 
     test("a refusal no button leads to gets the 403 page", async () => {
@@ -2491,7 +2499,11 @@ describe("Dashboard E2E", () => {
       expect(location).toContain("reveal=");
       expect(location).not.toContain(RESET_TOKEN);
       expect(decodeURIComponent(location)).toContain("Password reset link created");
-      expect(issuePasswordReset).toHaveBeenCalledWith(OWNER.userId, "usr_admin");
+      expect(issuePasswordReset).toHaveBeenCalledWith(
+        OWNER.userId,
+        "usr_admin",
+        expect.objectContaining({ ip: expect.any(String) }),
+      );
 
       /** Another session of the same user cannot redeem it, nor destroy it. */
       const other = await (await getWithSession(location, seedSession())).text();

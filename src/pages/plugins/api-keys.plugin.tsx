@@ -9,6 +9,8 @@ import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import { recordActorOf, managesAll, creatorDirectory } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { dashboardAudit } from "../lib/audit.ts";
+import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 
 /**
  * Parses the comma-joined value the allowed-senders chip input submits
@@ -85,7 +87,7 @@ export function apiKeyPages(app: GuardedDashboard) {
        */
       .post(
         "/api-keys",
-        async ({ body, set, auth }) => {
+        async ({ body, set, auth, request, server }) => {
           try {
             const { apiKey, rawKey } = await apiKeyService.createApiKey(
               {
@@ -103,6 +105,15 @@ export function apiKeyPages(app: GuardedDashboard) {
               name: body.name,
               isAdmin: apiKey.isAdmin,
               userId: auth.user.id,
+            });
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "api_key.created",
+              target: { type: "api_key", id: apiKey.id, label: apiKey.name },
+              metadata: {
+                isAdmin: apiKey.isAdmin,
+                allowedSenders: apiKey.allowedSenders.length,
+              },
             });
 
             /**
@@ -152,11 +163,21 @@ export function apiKeyPages(app: GuardedDashboard) {
        */
       .post(
         "/api-keys/:id/admin",
-        async ({ params, body, set }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const isAdmin = body.isAdmin === "true";
           const result = await apiKeyService.setApiKeyAdmin(params.id, isAdmin);
 
           if (result.ok) {
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "api_key.admin_changed",
+              target: {
+                type: "api_key",
+                id: result.apiKey.id,
+                label: result.apiKey.name,
+              },
+              metadata: { isAdmin: result.apiKey.isAdmin },
+            });
             return redirect(
               set,
               `/dashboard/api-keys?flash=${encodeURIComponent(isAdmin ? "Key promoted to admin" : "Key set to restricted")}`,
@@ -188,12 +209,23 @@ export function apiKeyPages(app: GuardedDashboard) {
        */
       .post(
         "/api-keys/:id/senders",
-        async ({ params, body, set, auth }) => {
+        async ({ params, body, set, auth, request, server }) => {
           const updated = await apiKeyService.updateApiKey(
             params.id,
             { allowedSenders: parseSenderList(body.allowedSenders) },
             recordActorOf(auth),
           );
+          if (updated) {
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "api_key.updated",
+              target: { type: "api_key", id: updated.id, label: updated.name },
+              metadata: {
+                fields: ["allowedSenders"],
+                allowedSenders: updated.allowedSenders.length,
+              },
+            });
+          }
 
           set.status = 302;
           set.headers["location"] = updated
@@ -215,8 +247,15 @@ export function apiKeyPages(app: GuardedDashboard) {
        */
       .post(
         "/api-keys/:id/revoke",
-        async ({ params, set, auth }) => {
+        async ({ params, set, auth, request, server }) => {
           const apiKey = await apiKeyService.revokeApiKey(params.id, recordActorOf(auth));
+          if (apiKey) {
+            await recordAuditEvent({
+              ...dashboardAudit(auth, request, server),
+              action: "api_key.revoked",
+              target: { type: "api_key", id: apiKey.id, label: apiKey.name },
+            });
+          }
 
           if (!apiKey) {
             set.status = 302;

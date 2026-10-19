@@ -4,6 +4,7 @@ import { db } from "../../../db/index.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { withSanitizedErrors } from "../errors.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 import { users } from "../models/user.schema.ts";
 import { userCredentials } from "../models/user-credential.schema.ts";
 import { userTokens } from "../models/user-token.schema.ts";
@@ -18,6 +19,7 @@ import {
   type IssuedPasswordReset,
   type IssuePasswordResetResult,
   type ContentRecordCounts,
+  type SessionClient,
   type Tx,
   type UserRole,
 } from "../types/user.types.ts";
@@ -97,6 +99,9 @@ import {
 
 /** Longest account list the Users page shows; a backstop, not paging. */
 const ACCOUNT_LIST_LIMIT = 1000;
+
+/** No request metadata (a script, a test): the event is still recorded. */
+const NO_CLIENT: SessionClient = { ip: null, userAgent: null };
 
 /** Status of an account in a log line; `removed` once it is deleted. */
 type AccountStatus = "active" | "disabled" | "removed";
@@ -194,6 +199,83 @@ async function lockAccount(tx: Tx, id: string): Promise<AccountRow | null> {
   return toAccountRow(row);
 }
 
+/**
+ * Writes an applied action to the audit log (#221), inside its
+ * transaction: the change and its record commit together. The actor and
+ * the target come from the locked rows, so the labels are the live
+ * emails (the target's is passed explicitly: a removal deletes the row).
+ */
+async function recordAccountAction(
+  tx: Tx,
+  action: AccountAction,
+  parties: { actor: AccountRow; target: AccountRow; change: AccountChange },
+  client: SessionClient,
+): Promise<void> {
+  const { actor, target, change } = parties;
+  const common = {
+    actor: { type: "user" as const, id: actor.id, label: actor.email },
+    ...client,
+    target: { type: "user" as const, id: target.id, label: target.email },
+  };
+  switch (action) {
+    case "change_role":
+      await recordAuditEvent(
+        {
+          ...common,
+          action: "user.role.changed",
+          metadata: { from: target.role, to: change.newRole ?? target.role },
+        },
+        tx,
+      );
+      return;
+    case "deactivate":
+      await recordAuditEvent(
+        {
+          ...common,
+          action: "user.deactivated",
+          metadata: {
+            sessionsRevoked: change.sessionsRevoked ?? 0,
+            keysDisabled: change.keysDisabled ?? 0,
+          },
+        },
+        tx,
+      );
+      return;
+    case "reactivate":
+      await recordAuditEvent({ ...common, action: "user.reactivated" }, tx);
+      return;
+    case "remove":
+      await recordAuditEvent(
+        {
+          ...common,
+          action: "user.removed",
+          metadata: { role: target.role, keysDisabled: change.keysDisabled ?? 0 },
+        },
+        tx,
+      );
+      return;
+    case "transfer_ownership":
+      await recordAuditEvent(
+        { ...common, action: "user.ownership.transferred", metadata: {} },
+        tx,
+      );
+      return;
+    case "reset_password":
+      await recordAuditEvent(
+        {
+          ...common,
+          action: "auth.password_reset.issued",
+          metadata: {
+            expiresAt: change.expiresAt ?? "",
+            linksReplaced: change.resetLinksRevoked ?? 0,
+          },
+        },
+        tx,
+      );
+      return;
+  }
+}
+
 /** Logs a refused action at `warn`: IDs, roles and the reason only. */
 function logRefusal(
   action: AccountAction,
@@ -221,6 +303,7 @@ async function runAccountAction(
     actor: AccountRow,
     target: AccountRow,
   ) => Promise<AccountChange | AccountRefusal>,
+  client: SessionClient,
 ): Promise<AccountActionResult> {
   const outcome = await withOwnerLock(async (tx): Promise<LockedOutcome> => {
     const actor = await lockAccount(tx, actorId);
@@ -234,6 +317,7 @@ async function runAccountAction(
 
     const result = await mutate(tx, actor, target);
     if (typeof result === "string") return { ok: false, reason: result, ...roles };
+    await recordAccountAction(tx, action, { actor, target, change: result }, client);
     return { ok: true, actorRole: actor.role, change: result };
   });
 
@@ -304,6 +388,7 @@ export async function changeAccountRole(
   actorId: string,
   targetId: string,
   rawRole: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<AccountActionResult> {
   if (!isInviteRole(rawRole)) {
     logRefusal("change_role", actorId, targetId, { reason: "invalid_role" });
@@ -340,6 +425,7 @@ export async function changeAccountRole(
         adminKeysDowngraded,
       };
     },
+    client,
   );
 }
 
@@ -353,27 +439,38 @@ export async function changeAccountRole(
 export async function deactivateAccount(
   actorId: string,
   targetId: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<AccountActionResult> {
-  return runAccountAction("deactivate", actorId, targetId, async (tx, _actor, target) => {
-    await tx
-      .update(users)
-      .set({ disabledAt: sql`now()`, updatedAt: sql`now()` })
-      .where(eq(users.id, target.id));
-    const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
-    const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
-    const resetLinksRevoked =
-      (await revokeResetLinks(tx, { userId: target.id })) +
-      (await revokeResetLinks(tx, { issuedBy: target.id }));
-    const keysDisabled = await disableKeysCreatedBy(tx, target.id, "creator_deactivated");
-    return {
-      oldStatus: statusOf(target),
-      newStatus: "disabled",
-      sessionsRevoked,
-      invitesRevoked,
-      resetLinksRevoked,
-      keysDisabled,
-    };
-  });
+  return runAccountAction(
+    "deactivate",
+    actorId,
+    targetId,
+    async (tx, _actor, target) => {
+      await tx
+        .update(users)
+        .set({ disabledAt: sql`now()`, updatedAt: sql`now()` })
+        .where(eq(users.id, target.id));
+      const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
+      const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
+      const resetLinksRevoked =
+        (await revokeResetLinks(tx, { userId: target.id })) +
+        (await revokeResetLinks(tx, { issuedBy: target.id }));
+      const keysDisabled = await disableKeysCreatedBy(
+        tx,
+        target.id,
+        "creator_deactivated",
+      );
+      return {
+        oldStatus: statusOf(target),
+        newStatus: "disabled",
+        sessionsRevoked,
+        invitesRevoked,
+        resetLinksRevoked,
+        keysDisabled,
+      };
+    },
+    client,
+  );
 }
 
 /**
@@ -387,15 +484,22 @@ export async function deactivateAccount(
 export async function reactivateAccount(
   actorId: string,
   targetId: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<AccountActionResult> {
-  return runAccountAction("reactivate", actorId, targetId, async (tx, _actor, target) => {
-    await tx
-      .update(users)
-      .set({ disabledAt: null, updatedAt: sql`now()` })
-      .where(eq(users.id, target.id));
-    const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
-    return { oldStatus: statusOf(target), newStatus: "active", sessionsRevoked };
-  });
+  return runAccountAction(
+    "reactivate",
+    actorId,
+    targetId,
+    async (tx, _actor, target) => {
+      await tx
+        .update(users)
+        .set({ disabledAt: null, updatedAt: sql`now()` })
+        .where(eq(users.id, target.id));
+      const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
+      return { oldStatus: statusOf(target), newStatus: "active", sessionsRevoked };
+    },
+    client,
+  );
 }
 
 /**
@@ -412,24 +516,31 @@ export async function removeAccount(
   actorId: string,
   targetId: string,
   confirm: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<AccountActionResult> {
-  return runAccountAction("remove", actorId, targetId, async (tx, _actor, target) => {
-    if (!removalConfirmed(confirm, target.email)) return "confirm_mismatch";
-    const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
-    const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
-    /** Before the delete: afterwards the keys no longer name their creator. */
-    const keysDisabled = await disableKeysCreatedBy(tx, target.id, "creator_removed");
-    await tx.delete(users).where(eq(users.id, target.id));
-    return {
-      oldRole: target.role,
-      oldStatus: statusOf(target),
-      newStatus: "removed",
-      sessionsRevoked,
-      invitesRevoked,
-      keysDisabled,
-      email: redactEmail(target.email),
-    };
-  });
+  return runAccountAction(
+    "remove",
+    actorId,
+    targetId,
+    async (tx, _actor, target) => {
+      if (!removalConfirmed(confirm, target.email)) return "confirm_mismatch";
+      const invitesRevoked = await revokeInvitesIssuedBy(tx, target.id);
+      const sessionsRevoked = await revokeAllUserSessions(target.id, tx);
+      /** Before the delete: afterwards the keys no longer name their creator. */
+      const keysDisabled = await disableKeysCreatedBy(tx, target.id, "creator_removed");
+      await tx.delete(users).where(eq(users.id, target.id));
+      return {
+        oldRole: target.role,
+        oldStatus: statusOf(target),
+        newStatus: "removed",
+        sessionsRevoked,
+        invitesRevoked,
+        keysDisabled,
+        email: redactEmail(target.email),
+      };
+    },
+    client,
+  );
 }
 
 /** The actor's `password` credential hash, or `null` when it has none. */
@@ -488,6 +599,7 @@ export async function transferOwnership(
   targetId: string,
   password: string,
   limiter: AttemptLimiter,
+  client: SessionClient = NO_CLIENT,
 ): Promise<AccountActionResult> {
   const action: AccountAction = "transfer_ownership";
   const [actor, target] = await Promise.all([
@@ -529,6 +641,15 @@ export async function transferOwnership(
       reason: "wrong_password",
       actorRole: actor.role,
       targetRole: target.role,
+    });
+    /** A failed password check on the owner's account (#221); bounded by `limiter`. */
+    await recordAuditEvent({
+      action: "user.ownership.transferred",
+      outcome: "failure",
+      actor: { type: "user", id: actor.id, label: actor.email },
+      ...client,
+      target: { type: "user", id: target.id, label: target.email },
+      metadata: { reason: "wrong_password" },
     });
     return { ok: false, reason: "wrong_password" };
   }
@@ -576,6 +697,7 @@ export async function transferOwnership(
         recordsMoved,
       };
     },
+    client,
   );
   if (result.ok) limiter.clear();
   return result;
@@ -598,6 +720,7 @@ export async function transferOwnership(
 export async function issuePasswordReset(
   actorId: string,
   targetId: string,
+  client: SessionClient = NO_CLIENT,
 ): Promise<IssuePasswordResetResult> {
   /** Set by the locked step; a holder object, so TypeScript keeps its type. */
   const minted: { reset?: IssuedPasswordReset } = {};
@@ -614,6 +737,7 @@ export async function issuePasswordReset(
         expiresAt: reset.expiresAt.toISOString(),
       };
     },
+    client,
   );
   if (!result.ok) return result;
   const { reset } = minted;

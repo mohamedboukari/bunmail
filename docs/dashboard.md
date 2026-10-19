@@ -13,6 +13,7 @@ Server-rendered web UI for managing BunMail. Built with Elysia JSX (`@elysiajs/h
 | DASHBOARD_LOGIN_RATE_LIMIT_MAX     | No       | `5`           | Failed attempts per IP per window before lockout: a whole number from 1 to 100; anything else (not a number, 0, a decimal, out of range) refuses to boot (#220). Also budgets the password checks of the ownership transfer, the password change and the 2FA enrolment start. Two-factor code checks have a fixed budget of their own (5 per 15 minutes), whatever this says |
 | DASHBOARD_LOGIN_RATE_LIMIT_WINDOW  | No       | `900`         | Lockout window in seconds (default 15 minutes): 60 to 86400; anything else refuses to boot (#220) |
 | REQUIRE_2FA                        | No       | `none`        | Who must set up two-factor authentication before using the dashboard (#220): `none` (nobody), `owner` (the owner), `admin` (admins and the owner). Case-insensitive; anything else refuses to boot. An account it covers without a second factor can open only its Two-factor page until it enrols. The default `none` means upgrading never locks anyone out. See [Two-factor authentication](#two-factor-authentication-220). |
+| AUDIT_LOG_RETENTION_DAYS           | No       | `365`         | Days audit log entries are kept (#221): a whole number from 30 to 3650; anything else refuses to boot. See [Audit log](#audit-log-221). |
 | INVITE_EXPIRY_DAYS                 | No       | `7`           | Days an invitation link stays valid (#217): a whole number from 1 to 90; anything else refuses to boot. |
 | SYSTEM_MAIL_FROM                   | No       | _(empty)_     | Sender of invitation emails (#217) and new-device sign-in alerts (#282): one bare address on a domain registered and DKIM-verified in BunMail; malformed refuses to boot. Unset, or its domain unusable: the inviter gets the link once on the Invitations page instead, and a sign-in from a new device is only logged. See [Invitations](#invitations-217) and [New-device alerts](#new-device-alerts-282). |
 
@@ -215,6 +216,12 @@ Every account, the owner included, can protect its sign-in with a time-based cod
 
 **Policy.** `REQUIRE_2FA` (`none` by default, `owner`, or `admin` for admins and the owner) holds an account it covers on its Two-factor page until it enrols (see the guard above); the page says `Your role requires two-factor authentication`. It applies to every session of such an account, including those opened by owner setup, invitation accept and a password reset.
 
+### Audit log (#221)
+
+`GET /dashboard/audit-log`, **Audit log** in the sidebar (admins and the owner; `adminGuard`, a member gets the 403 page and no sidebar link). Security-relevant actions, newest first: time (UTC), actor (an account's email, an API key's name, or BunMail itself for the boot, `reset-owner`, token reuse detection and the retention purge), action, target, outcome (`success`/`failure`) and client (IP and user agent). Filters by action, actor and outcome (unknown values are ignored); 50 per page. Read-only and `Cache-Control: no-store`; every value is escaped. What is recorded, how, and the append-only trigger: [docs/audit-log.md](audit-log.md).
+
+Recorded from the dashboard: sign-in (success, each failure with its reason, a lockout once per address and window, the 2FA step and its lock), sign-out, session revocations and token reuse, two-factor changes, password change, reset links issued and completed, owner setup, invitations, role changes, deactivation, reactivation, removal, ownership transfer (and a wrong-password attempt), API key, domain, webhook and suppression changes. The REST API records its API key, domain, webhook and suppression changes with the calling key as the actor.
+
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
@@ -276,6 +283,7 @@ per-replica.
 | GET /dashboard/api-keys          | API keys list + create form: every key with its creator and why it is disabled (admins, owner), or the member's own keys (#219) |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
 | GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
+| GET /dashboard/audit-log         | Security-relevant actions (sign-ins, account, 2FA, API key, domain, webhook, suppression changes), filter by action, actor and outcome; read-only (admin, #221) |
 | GET /dashboard/domains           | Domains list (with who added each, #219) + add form               |
 | GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
 | GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
@@ -345,6 +353,7 @@ src/pages/
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
 │   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
+│   ├── audit-log.plugin.tsx  ← Audit log page (#221)
 │   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), detail
 │   ├── templates.plugin.tsx  ← Templates
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
@@ -357,6 +366,7 @@ src/pages/
 │   ├── same-origin.ts        ← CSRF same-origin check
 │   ├── responses.ts          ← `redirect`, `setNoStore`, `toFlash`
 │   ├── record-ownership.ts   ← Record actor, "Created by" names (#219)
+│   ├── audit.ts              ← Audit context (user, IP, user agent) of a dashboard request (#221)
 │   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
 │   ├── two-factor-limiter.ts ← Failed-attempt budget of every two-factor code check (#220)
 │   ├── error-message.ts      ← Error text for a log line
@@ -380,6 +390,7 @@ src/pages/
 │   ├── invite.tsx            ← Invitation accept form, invalid-link and account-exists pages (#217)
 │   ├── invitations.tsx       ← Invitations page: invite form, pending list, one-time link (#217)
 │   ├── users.tsx             ← Users page: accounts, role change, deactivate, remove, transfer (#218), reset link (#277)
+│   ├── audit-log.tsx         ← Audit log page: events table, filters (#221)
 │   ├── reset.tsx             ← Password reset form and invalid-link page (#277)
 │   ├── account-password.tsx  ← Change password form for the signed-in user (#279)
 │   ├── account-sessions.tsx  ← Active sessions page for the signed-in user (#281)

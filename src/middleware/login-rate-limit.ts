@@ -147,6 +147,12 @@ interface LoginAttemptEntry {
   count: number;
   /** Timestamp (ms) when the current window started */
   windowStart: number;
+  /**
+   * The lockout of this window was already written to the audit log
+   * (#221): a flood of refused attempts records one row, not one each.
+   * A new window is a new entry, so the flag resets with it.
+   */
+  lockoutAudited?: boolean;
 }
 
 /**
@@ -183,6 +189,26 @@ export function isLoginRateLimited(
   }
 
   return { limited: false, retryAfterSec: 0 };
+}
+
+/**
+ * True the first time it is asked during a key's current lockout window,
+ * false afterwards (#221): the login records a rate-limited attempt in the
+ * audit log once per key and window, so a flood cannot fill the table.
+ * Reuses the limiter's own entry, so it needs no state of its own; false
+ * when the key has no live window.
+ */
+export function shouldAuditLockout(
+  ip: string,
+  windowMs: number,
+  now: number = Date.now(),
+): boolean {
+  const entry = loginAttemptMap.get(rateLimitBucket(ip));
+  if (!entry || now - entry.windowStart >= windowMs || entry.lockoutAudited) {
+    return false;
+  }
+  entry.lockoutAudited = true;
+  return true;
 }
 
 /**

@@ -2,7 +2,7 @@
 
 Dashboard user accounts (#214): the first piece of the invite-only accounts epic (#225), which replaces the shared `DASHBOARD_PASSWORD` with real accounts, roles and revocable sessions.
 
-#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Account management (#218) lets the owner and admins change roles, deactivate, reactivate and remove accounts, and the owner hand over ownership (see [Account management](#account-management-218)). Record ownership (#219) ties API keys, templates, domains and webhooks to the user who created them (see [Record ownership](#record-ownership-219)). Admin-issued reset links (#277) let a user who forgot their password back in (see [Password resets](#password-resets-277)), and every signed-in user can change their own password (#279, see [Password change](#password-change-279)) and see and sign out their own sessions (#281, see [Active sessions](#active-sessions-281)). A password sign-in from a browser the account has not used recently emails the account an alert (#282, see [New-device alerts](#new-device-alerts-282)). Any account can add TOTP two-factor authentication with recovery codes, and `REQUIRE_2FA` can make it mandatory for the owner or for admins and the owner (#220, see [Two-factor authentication](#two-factor-authentication-220)).
+#214 shipped the **schema and the pure helpers**. The owner bootstrap (#215) is the first feature that reads and writes these tables: it creates the single owner from `BUNMAIL_OWNER_EMAIL` and lets them set a password through a one-time link (see [Owner bootstrap](#owner-bootstrap-215)). Account login (#216) made that account the dashboard login, with server-side sessions in `sessions` (see [Sessions](#sessions-216)), and removed `DASHBOARD_PASSWORD` and `SESSION_SECRET`. The auth guard (#222) enforces the roles on every dashboard route (see [Roles enforcement](#roles-enforcement-222)). Invitations (#217) are the only way other accounts come to exist (see [Invitations](#invitations-217)). Account management (#218) lets the owner and admins change roles, deactivate, reactivate and remove accounts, and the owner hand over ownership (see [Account management](#account-management-218)). Record ownership (#219) ties API keys, templates, domains and webhooks to the user who created them (see [Record ownership](#record-ownership-219)). Admin-issued reset links (#277) let a user who forgot their password back in (see [Password resets](#password-resets-277)), and every signed-in user can change their own password (#279, see [Password change](#password-change-279)) and see and sign out their own sessions (#281, see [Active sessions](#active-sessions-281)). A password sign-in from a browser the account has not used recently emails the account an alert (#282, see [New-device alerts](#new-device-alerts-282)). Any account can add TOTP two-factor authentication with recovery codes, and `REQUIRE_2FA` can make it mandatory for the owner or for admins and the owner (#220, see [Two-factor authentication](#two-factor-authentication-220)). Every one of these actions, and every sign-in, is recorded in the audit log (#221, [docs/audit-log.md](audit-log.md)).
 
 ## Design
 
@@ -423,8 +423,8 @@ In memory and per replica, like the login limiter.
 
 Every write for an address runs in a transaction under its `bunmail:invite:<email>` advisory lock. Never logs a token, its hash or the link.
 
-- `createInvitation(actor, email, role): Promise<IssueInvitationResult>`: checks, replaces the address's open invitations (never a higher-role one), sends or reports the email. `{ ok: true, invitation, url, delivery }` or `{ ok: false, reason }`.
-- `resendInvitation(actor, id)`, `revokeInvitation(actor, id)`: as above, for a pending invitation of a role the actor may grant.
+- `createInvitation(actor, email, role, client?): Promise<IssueInvitationResult>`: checks, replaces the address's open invitations (never a higher-role one), sends or reports the email. `{ ok: true, invitation, url, delivery }` or `{ ok: false, reason }`.
+- `resendInvitation(actor, id, client?)`, `revokeInvitation(actor, id, client?)`: as above, for a pending invitation of a role the actor may grant. Creating, resending, revoking and accepting write their audit event (#221) in the same transaction.
 - `revokeInvitesIssuedBy(executor, inviterId, role?): Promise<number>`: revokes the open invitations an account issued (only those granting `role` when given); shared by account management and a completed password reset (#277).
 - `listPendingInvitations(): Promise<PendingInvitation[]>`: open and unexpired, newest first, with the inviter's name or email.
 - `findLiveInvitation(token): Promise<InviteTarget | null>`: read-only lookup for the accept form (live, and the inviter re-check).
@@ -441,8 +441,8 @@ Every write for an address runs in a transaction under its `bunmail:invite:<emai
 Every action runs under the `bunmail:owner` lock with both rows locked; logs every outcome.
 
 - `listAccounts(): Promise<AccountSummary[]>`: every account, oldest first.
-- `changeAccountRole(actorId, targetId, role)`, `deactivateAccount(actorId, targetId)`, `reactivateAccount(actorId, targetId)`, `removeAccount(actorId, targetId, confirm)`, `transferOwnership(actorId, targetId, password, limiter)`: `Promise<AccountActionResult>` (`{ ok: true }` or `{ ok: false, reason }`).
-- `issuePasswordReset(actorId, targetId): Promise<IssuePasswordResetResult>` (#277): the rules, then `replaceResetToken`, in one locked transaction; returns the link for the one-time reveal.
+- `changeAccountRole(actorId, targetId, role, client?)`, `deactivateAccount(actorId, targetId, client?)`, `reactivateAccount(actorId, targetId, client?)`, `removeAccount(actorId, targetId, confirm, client?)`, `transferOwnership(actorId, targetId, password, limiter, client?)`: `Promise<AccountActionResult>` (`{ ok: true }` or `{ ok: false, reason }`). An applied action is written to the audit log (#221) in its own transaction; `client` (`{ ip, userAgent }`) is the request's, null fields when omitted.
+- `issuePasswordReset(actorId, targetId, client?): Promise<IssuePasswordResetResult>` (#277): the rules, then `replaceResetToken`, in one locked transaction; returns the link for the one-time reveal.
 
 ### password-reset-policy.service.ts
 
@@ -489,7 +489,7 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 - `createSession(input, executor?): Promise<CreatedSession>`: mints the token, inserts the row (`ip` and `user_agent` cleaned with `sessionIp` and `clampUserAgent`), returns `{ sessionId, token }`.
 - `findActiveSession(token): Promise<ActiveSession | null>`: the guard's single lookup described above. `ActiveSession` is `{ sessionId, userId, email, role, assurance, matched, rotationDue, graceOver }`.
 - `rotateSession(sessionId, presentedToken): Promise<RotatedSession | null>`: the conditional rotation; `null` when another request rotated first.
-- `revokeSessionByToken(token): Promise<string | null>`: deletes the session whose current or previous hash matches; returns its `ses_` id.
+- `revokeSessionByToken(token): Promise<{ sessionId, userId } | null>`: deletes the session whose current or previous hash matches; returns its `ses_` id and its user (for the audit log, #221).
 - `revokeAllUserSessions(userId, executor?): Promise<number>`: deletes every session of a user.
 - `purgeExpiredSessions(): Promise<number>`: deletes expired rows.
 - `listUserSessions(userId): Promise<UserSessionSummary[]>`, `revokeUserSession(userId, sessionId): Promise<boolean>`, `revokeOtherUserSessions(userId, keepSessionId): Promise<number>`, `setSessionLocation(sessionId, location): Promise<void>`: the Active sessions page (#281), described above.
@@ -525,9 +525,9 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 Never logs; database errors leave it as `UserStoreError`.
 
 - `twoFactorStatus(userId): Promise<TwoFactorStatus>`.
-- `startEnrolment(userId, sessionId, password, limiter)` (re-authentication first), `pendingEnrolment(userId, sessionId, account): Promise<PendingEnrolment | null>`, `confirmEnrolment(userId, sessionId, code, nowMs?): Promise<ConfirmEnrolmentResult>`.
+- `startEnrolment(userId, sessionId, password, limiter)` (re-authentication first), `pendingEnrolment(userId, sessionId, account): Promise<PendingEnrolment | null>`, `confirmEnrolment(userId, sessionId, code, client?, nowMs?): Promise<ConfirmEnrolmentResult>`.
 - `completeTwoFactorLogin(pending, presentedToken, code, limiter, nowMs?): Promise<TwoFactorLoginResult>`: the budget, then one transaction locking the pending session, spending the code and elevating the session.
-- `disableTwoFactor(userId, password, code, limiter, nowMs?)`, `regenerateRecoveryCodes(userId, code, limiter, nowMs?)`.
+- `disableTwoFactor(userId, password, code, limiter, client?, nowMs?)`, `regenerateRecoveryCodes(userId, code, limiter, client?, nowMs?)`. Enabling, disabling and regenerating write their audit event (#221) in the change's transaction.
 - `removeTwoFactor(executor, userId): Promise<boolean>`: inside a completed reset or owner setup.
 
 ### login.service.ts

@@ -8,6 +8,10 @@ import {
 } from "../../emails/services/tombstone.service.ts";
 import { purgeExpiredSessions } from "../../users/services/session.service.ts";
 import { purgeStaleUserDevices } from "../../users/services/user-device.service.ts";
+import {
+  purgeOldAuditEvents,
+  recordAuditEvent,
+} from "../../audit/services/audit.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
@@ -111,9 +115,30 @@ export async function runDeviceSweep(): Promise<{ deleted: number }> {
 }
 
 /**
+ * Deletes audit events older than `AUDIT_LOG_RETENTION_DAYS` (#221), in
+ * batches. The only delete the audit log ever sees; when it removed
+ * anything, the purge itself is recorded (by BunMail, with the count), so
+ * the log shows when history was dropped and under which retention.
+ */
+export async function runAuditRetention(): Promise<{ deleted: number }> {
+  const { retentionDays } = config.auditLog;
+  const deleted = await purgeOldAuditEvents(retentionDays);
+  if (deleted > 0) {
+    logger.info("Audit log retention sweep completed", { deleted, retentionDays });
+    await recordAuditEvent({
+      action: "audit_log.purged",
+      actor: { type: "system", label: "retention purge" },
+      target: { type: "audit_log", id: null, label: null },
+      metadata: { deleted, retentionDays },
+    });
+  }
+  return { deleted };
+}
+
+/**
  * One purge cycle (trash, tombstone retention, expired sessions, stale
- * sign-in devices) in its own log context (#284), so every line it writes
- * carries `job: "purge"`.
+ * sign-in devices, audit log retention) in its own log context (#284), so
+ * every line it writes carries `job: "purge"`.
  */
 function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
   return runWithLogContext({ job: "purge" }, () =>
@@ -122,6 +147,7 @@ function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
       runTombstoneRetention(),
       runSessionSweep(),
       runDeviceSweep(),
+      runAuditRetention(),
     ]),
   );
 }

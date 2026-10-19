@@ -25,3 +25,4 @@ export { sessionTokenHistory } from "../modules/users/models/session-token-histo
 export { userTokens } from "../modules/users/models/user-token.schema.ts";
 export { userDevices } from "../modules/users/models/user-device.schema.ts";
 export { userRecoveryCodes } from "../modules/users/models/user-recovery-code.schema.ts";
+export { auditEvents } from "../modules/audit/models/audit-event.schema.ts";

@@ -17,6 +17,7 @@ import { hashPassword, verifyPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
+import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
  * A signed-in user changing their own password (#279), from
@@ -191,6 +192,18 @@ export async function changePassword(
       .update(users)
       .set({ updatedAt: sql`now()` })
       .where(eq(users.id, userId));
+
+    /** Recorded with the change (#221): both commit, or neither. */
+    await recordAuditEvent(
+      {
+        action: "auth.password.changed",
+        actor: { type: "user", id: userId },
+        ...client,
+        target: { type: "user", id: userId },
+        metadata: { sessionsRevoked },
+      },
+      tx,
+    );
 
     return {
       ok: true,

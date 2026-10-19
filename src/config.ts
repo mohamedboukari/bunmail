@@ -344,6 +344,29 @@ export function readInviteExpiryDays(
   return value;
 }
 
+/** Default and bounds of `AUDIT_LOG_RETENTION_DAYS` (#221), in days. */
+export const DEFAULT_AUDIT_LOG_RETENTION_DAYS = 365;
+export const MIN_AUDIT_LOG_RETENTION_DAYS = 30;
+export const MAX_AUDIT_LOG_RETENTION_DAYS = 3650;
+
+/**
+ * Reads `AUDIT_LOG_RETENTION_DAYS`, how long audit events are kept
+ * (#221). Unset or blank: 365. Anything other than a whole number of days
+ * from 30 to 3650 refuses to boot, in every environment: a typo must never
+ * shorten the security history silently.
+ */
+export function readAuditLogRetentionDays(
+  raw: string | undefined = process.env["AUDIT_LOG_RETENTION_DAYS"],
+): number {
+  return optionalBoundedInt(
+    "AUDIT_LOG_RETENTION_DAYS",
+    DEFAULT_AUDIT_LOG_RETENTION_DAYS,
+    MIN_AUDIT_LOG_RETENTION_DAYS,
+    MAX_AUDIT_LOG_RETENTION_DAYS,
+    raw,
+  );
+}
+
 /**
  * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
  * #217) is sent from. Trimmed and lower-cased; unset or empty means no
@@ -860,6 +883,17 @@ export const config = {
      * days: long enough to cover most receiver feedback windows.
      */
     tombstoneRetentionDays: parseInt(optionalEnv("TOMBSTONE_RETENTION_DAYS", "90"), 10),
+  },
+
+  /** Audit log of security-relevant actions (#221). */
+  auditLog: {
+    /**
+     * Days an audit event is kept before the purge worker deletes it
+     * (`AUDIT_LOG_RETENTION_DAYS`, default 365). A whole number from 30 to
+     * 3650; anything else refuses to boot, so a typo can never shorten the
+     * history silently.
+     */
+    retentionDays: readAuditLogRetentionDays(),
   },
 
   /**

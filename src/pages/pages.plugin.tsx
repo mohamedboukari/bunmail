@@ -9,6 +9,7 @@ import { emailPages } from "./plugins/emails.plugin.tsx";
 import { apiKeyPages } from "./plugins/api-keys.plugin.tsx";
 import { invitationPages } from "./plugins/invitations.plugin.tsx";
 import { userPages } from "./plugins/users.plugin.tsx";
+import { auditLogPages } from "./plugins/audit-log.plugin.tsx";
 import { domainPages } from "./plugins/domains.plugin.tsx";
 import { templatePages } from "./plugins/templates.plugin.tsx";
 import { webhookPages } from "./plugins/webhooks.plugin.tsx";
@@ -66,6 +67,7 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/users/:id/remove → delete, confirmed by email (admin, #218)
  * - POST /dashboard/users/:id/transfer → hand ownership to an admin (owner, checked in the service)
  * - POST /dashboard/users/:id/reset-password → one-time reset link, revealed once (admin, #277)
+ * - GET  /dashboard/audit-log       → security-relevant actions, filterable, read-only (admin, #221)
  * - GET  /dashboard/domains         → domains list + add form
  * - POST /dashboard/domains         → add domain (form action)
  * - POST /dashboard/domains/:id/delete → delete domain (form action)
@@ -134,6 +136,7 @@ export const pagesPlugin = new Elysia({
   .use(apiKeyPages)
   .use(invitationPages)
   .use(userPages)
+  .use(auditLogPages)
   .use(domainPages)
   .use(templatePages)
   .use(webhookPages)

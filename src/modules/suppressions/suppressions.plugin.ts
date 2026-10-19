@@ -7,6 +7,8 @@ import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
+import { recordAuditEvent } from "../audit/services/audit.service.ts";
+import { restAuditContext } from "../audit/services/audit-context.service.ts";
 
 /**
  * Suppression list plugin: addresses we refuse to send to.
@@ -30,7 +32,7 @@ export const suppressionsPlugin = new Elysia({
 
   .post(
     "/",
-    async ({ body, apiKeyId }) => {
+    async ({ body, apiKeyId, apiKeyName, request, server }) => {
       logger.info("POST /api/v1/suppressions", {
         apiKeyId,
         email: redactEmail(body.email),
@@ -48,6 +50,12 @@ export const suppressionsPlugin = new Elysia({
         email: body.email,
         reason: body.reason,
         expiresAt,
+      });
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "suppression.created",
+        target: { type: "suppression", id: row.id, label: row.email },
+        metadata: { reason: row.reason },
       });
 
       return { success: true, data: serializeSuppression(row) };
@@ -127,7 +135,7 @@ export const suppressionsPlugin = new Elysia({
 
   .delete(
     "/:id",
-    async ({ params, apiKeyId, set }) => {
+    async ({ params, apiKeyId, apiKeyName, set, request, server }) => {
       logger.info("DELETE /api/v1/suppressions/:id", { apiKeyId, id: params.id });
 
       const row = await suppressionService.deleteSuppression(params.id, apiKeyId);
@@ -135,6 +143,11 @@ export const suppressionsPlugin = new Elysia({
         set.status = 404;
         return { success: false, error: "Suppression not found" };
       }
+      await recordAuditEvent({
+        ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
+        action: "suppression.deleted",
+        target: { type: "suppression", id: row.id, label: row.email },
+      });
 
       return { success: true, data: serializeSuppression(row) };
     },
