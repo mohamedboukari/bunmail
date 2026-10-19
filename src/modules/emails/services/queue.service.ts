@@ -7,7 +7,8 @@ import { emails } from "../models/email.schema.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { sendMail } from "./mailer.service.ts";
-import type { DkimOptions, UnsubscribeOptions } from "./mailer.service.ts";
+import type { DkimOptions } from "./mailer.service.ts";
+import { listUnsubscribeOptions } from "./list-unsubscribe.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -616,7 +617,6 @@ async function sendClaimedEmail(
     }
 
     let dkim: DkimOptions | undefined;
-    let unsubscribe: UnsubscribeOptions | undefined;
 
     if (domain?.dkimPrivateKey) {
       dkim = {
@@ -630,12 +630,13 @@ async function sendClaimedEmail(
       });
     }
 
-    if (domain?.unsubscribeEmail || domain?.unsubscribeUrl) {
-      unsubscribe = {
-        mailto: domain.unsubscribeEmail ?? undefined,
-        url: domain.unsubscribeUrl ?? undefined,
-      };
-    }
+    /**
+     * `List-Unsubscribe` (#249): a per-recipient one-click link (and
+     * `unsub+<token>` mailto) when the email names one recipient and
+     * `APP_BASE_URL` is HTTPS, else the domain's static settings. Rebuilt
+     * on every attempt; the token is deterministic, so retries match.
+     */
+    const unsubscribe = listUnsubscribeOptions(email, domain);
 
     /**
      * Canonical Message-ID: locked in on first attempt, reused on

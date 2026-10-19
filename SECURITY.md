@@ -100,6 +100,8 @@ Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_
 
 A safer rolling rotation (read with old key, write with new) needs both keys to coexist briefly, see the follow-up issue for the planned design.
 
+**Unsubscribe links (#249).** The per-recipient `List-Unsubscribe` tokens are HMACs under a key derived (HKDF) from `DKIM_ENCRYPTION_KEY`, and nothing is stored to re-encrypt: rotating the key invalidates every unsubscribe link and `unsub+` address in mail already sent. Those recipients then see "This link is not valid", and mailbox providers' one-click requests fail with `404`. Rotate when no recent bulk mail is outstanding if you can, and expect some recipients to fall back to "Report spam" otherwise.
+
 ### What's *not* protected by this
 
 - **Application-level memory.** A core dump or live-process attacker still sees plaintext PEMs in queue-thread memory while a send is in flight.

@@ -1,4 +1,4 @@
-import { and, eq, desc, gt, isNull, or, sql } from "drizzle-orm";
+import { and, eq, desc, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { suppressions } from "../models/suppression.schema.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -8,6 +8,7 @@ import type {
   Suppression,
   CreateSuppressionInput,
   AddFromBounceInput,
+  AddFromUnsubscribeInput,
 } from "../types/suppression.types.ts";
 
 /**
@@ -156,6 +157,63 @@ export async function addFromBounce(
     .returning();
 
   return row!;
+}
+
+/**
+ * Suppression from an unsubscribe request (#249): the one-click POST, the
+ * confirmation page or the `unsub+<token>` mailto, each verified against
+ * its token before this runs. Permanent, `reason = 'unsubscribe'`, scoped
+ * to the key the email was sent with.
+ *
+ * Idempotent, and never weakens an entry: a permanent suppression already
+ * on file for the key and address (a hard bounce, a complaint, a manual
+ * entry, an earlier unsubscribe) is left exactly as it is. A temporary
+ * one (a soft-bounce backoff with `expires_at`) is turned into the
+ * permanent unsubscribe, since it would otherwise lapse and mail would
+ * resume.
+ *
+ * @returns The row when this call created it or made it a permanent
+ *   unsubscribe (the caller fires `email.unsubscribed` then), `undefined`
+ *   when it was already permanent (a repeated request).
+ */
+export async function addFromUnsubscribe(
+  input: AddFromUnsubscribeInput,
+): Promise<Suppression | undefined> {
+  const target = normaliseEmail(input.email);
+
+  const [row] = await db
+    .insert(suppressions)
+    .values({
+      id: generateId("sup"),
+      apiKeyId: input.apiKeyId,
+      email: target,
+      reason: "unsubscribe",
+      sourceEmailId: input.emailId,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: [suppressions.apiKeyId, suppressions.email],
+      set: {
+        reason: "unsubscribe",
+        bounceType: null,
+        diagnosticCode: null,
+        sourceEmailId: input.emailId,
+        expiresAt: null,
+      },
+      /** Only a temporary entry is replaced; a permanent one stays. */
+      setWhere: isNotNull(suppressions.expiresAt),
+    })
+    .returning();
+
+  logger.info("Unsubscribe request processed", {
+    emailId: input.emailId,
+    apiKeyId: input.apiKeyId,
+    email: redactEmail(target),
+    source: input.source,
+    outcome: row ? "suppressed" : "already-suppressed",
+  });
+
+  return row;
 }
 
 /**

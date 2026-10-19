@@ -160,6 +160,8 @@ export const seed = {
     domainId?: string | null;
     fromAddress?: string;
     toAddress?: string;
+    cc?: string | null;
+    bcc?: string | null;
     subject?: string;
     status?: "queued" | "sending" | "sent" | "failed" | "bounced";
     messageId?: string | null;
@@ -171,6 +173,8 @@ export const seed = {
       domainId: opts.domainId ?? null,
       fromAddress: opts.fromAddress ?? "hello@example.com",
       toAddress: opts.toAddress ?? "user@example.com",
+      cc: opts.cc ?? null,
+      bcc: opts.bcc ?? null,
       subject: opts.subject ?? "test",
       html: "<p>test</p>",
       textContent: "test",

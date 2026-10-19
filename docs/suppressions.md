@@ -27,7 +27,7 @@ Expired rows stay in the table: they're not auto-purged today. If you need clean
 | `bounce` | Auto-set by the bounce module (#24) when a Delivery Status Notification arrives at the inbound SMTP. The DSN parser calls `addFromBounce()` and persists `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. See [docs/bounces.md](bounces.md). |
 | `complaint` | Reserved for FBL (Feedback Loop) processing, when a recipient marks your message as spam. Not implemented yet. |
 | `manual` | Operator/customer added the address themselves (e.g. "I know this address bounces, just block it"). |
-| `unsubscribe` | Reserved for future one-click unsubscribe handling per Gmail's Feb-2024 sender requirements. The DB column accepts it today; no endpoint sets it yet. |
+| `unsubscribe` | Set by the one-click unsubscribe flow (#249): a recipient used the per-recipient `List-Unsubscribe` link or mailto. Permanent; `source_email_id` is the email whose link was used. See [One-click unsubscribe](#one-click-unsubscribe). Can also be set manually. |
 
 The DB column is plain `text` for forward compatibility: a finer split (e.g. `bounce.hard.no_user`) can land later without a migration. The API DTO restricts incoming reasons to the four values above.
 
@@ -110,9 +110,45 @@ Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 
 
 The `processEmail` retry path deliberately **does not** auto-suppress when the retry window runs out: that path can't tell hard bounces from network blips. The bounce module handles the classification authoritatively from the DSN's status code.
 
+## One-click unsubscribe
+
+Unsubscribe requests become suppressions (#249). Outgoing mail with exactly one recipient (no cc, no bcc) carries a per-recipient `List-Unsubscribe` header when `APP_BASE_URL` is `https://` (header rules: [emails.md](emails.md#list-unsubscribe)). Its token names that email, its recipient and the sending key, so any of the three ways in below suppresses exactly that address under exactly that key.
+
+**Token** (`services/unsubscribe-token.ts`): `<email id hex>.<MAC>`, stateless (no table).
+
+- MAC: HMAC-SHA256 over `unsubscribe:v1:<email id>:<lowercased recipient>`, truncated to 128 bits. The sending API key is not part of it: the token verifies only against its own email row, which fixes the key.
+- Key: HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` with a fixed label, so there is no new secret to configure. **Rotating `DKIM_ENCRYPTION_KEY` invalidates every unsubscribe link already sent** (SECURITY.md, Rotation).
+- Lowercase hex, 57 characters; `unsub+<token>` is 63, inside RFC 5321's 64-character local part. Verification is case-insensitive (an MTA may fold the case of a local part).
+- Verification loads the email row by id, recomputes the MAC from the row (recipient and key) and compares in constant time. Malformed, unknown or purged email, an email with cc or bcc, a wrong MAC: all the same "not valid" result. No expiry other than the email row's existence (soft-deleted emails still work until purged).
+
+**Ways in:**
+
+| Path | Source | Behaviour |
+|---|---|---|
+| `GET /u/:token` | none | Confirmation page ("Stop sending mail to `u***@example.org` from `acme.io`?") with a POST button. **Never suppresses**: link scanners and prefetchers fetch GETs. Invalid token: neutral "not valid" page, `404`. |
+| `POST /u/:token` with `List-Unsubscribe=One-Click` | `one_click` | RFC 8058 request from the mailbox provider (form-encoded or multipart). Suppresses, `200`. |
+| `POST /u/:token` with `confirm=unsubscribe` | `link` | The confirmation page's button. Suppresses, `200`. Any other body: `400`, nothing written. |
+| Mail to `unsub+<token>@<sender domain>` | `mailto` | Inbound SMTP receiver (`SMTP_ENABLED`, MX pointing here). Valid token: accepted, suppressed, never stored as inbound mail, no inbound notification. Invalid token or another domain: refused at `RCPT TO` with `550` (nothing stored, no bounce of ours to a possibly forged sender). |
+
+Both HTTP routes are public (no auth, not under `/api/v1`), rate limited to 30 requests a minute per client IP (IPv6 per /64, resolved like the dashboard login, honouring `DASHBOARD_TRUSTED_PROXY_HOPS`), and answer with `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex, nofollow` and the page CSP with no script. They never show the token or the full address. The POST has no CSRF or same-origin check on purpose: providers POST from their own servers, cross-origin by design, and a forged POST can do no more than the token allows.
+
+**Effect** (`addFromUnsubscribe`): a permanent suppression, `reason = 'unsubscribe'`, under the email's API key. Idempotent: a permanent suppression already on file (bounce, complaint, manual, earlier unsubscribe) is left as it is and the request still succeeds; a temporary one (soft-bounce window) is turned into the permanent unsubscribe. Only when a row is created or upgraded does `email.unsubscribed` fire to that key's webhooks (`{ emailId, recipient, source, unsubscribedAt }`, see [webhooks.md](webhooks.md)). Each request logs `Unsubscribe request processed` at `info` with `emailId`, `apiKeyId`, the redacted address, `source` and `outcome`.
+
+Files: `services/unsubscribe-token.ts` (mint, parse, verify, `soleRecipient`), `services/unsubscribe.service.ts` (`resolveUnsubscribeToken`, `unsubscribe`), `services/suppression.service.ts` (`addFromUnsubscribe`), the pages in `src/pages/unsubscribe.plugin.tsx` and `src/pages/routes/unsubscribe.tsx`, and the inbound branch in `src/modules/inbound/services/smtp-receiver.service.ts`.
+
+### Service methods
+
+#### `addFromUnsubscribe(input): Promise<Suppression | undefined>`
+`{ apiKeyId, email, emailId, source }`, from a verified token only. Returns the row when it was created or upgraded from a temporary entry, `undefined` when a permanent one was already there.
+
+#### `resolveUnsubscribeToken(token, key?): Promise<UnsubscribeTarget | null>`
+Verifies a token against its email row: `{ emailId, apiKeyId, recipient, senderDomain }`, or `null` for every failure.
+
+#### `unsubscribe(target, source): Promise<boolean>`
+`addFromUnsubscribe`, then `email.unsubscribed` on first creation. `true` when this request created the suppression.
+
 ## Out of scope (separate tickets)
 
-- One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
 - Complaint Feedback Loop (FBL) ingestion
 - Bulk import (CSV upload)
 - Dashboard UI for managing suppressions

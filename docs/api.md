@@ -11,7 +11,7 @@ BunMail exposes an auto-generated OpenAPI 3.0 spec:
 
 ## Authentication
 
-All endpoints (except `/health`) require a Bearer token in the `Authorization` header:
+All endpoints (except `/health` and the public unsubscribe pages, `/u/:token`) require a Bearer token in the `Authorization` header:
 
 ```
 Authorization: Bearer bm_live_<your-api-key>
@@ -58,6 +58,20 @@ Returns server health status. No authentication required.
   "timestamp": "2026-03-15T12:00:00.000Z"
 }
 ```
+
+---
+
+### Unsubscribe (public, #249)
+
+#### `GET /u/:token` / `POST /u/:token`
+
+The per-recipient one-click link BunMail puts in `List-Unsubscribe` (see [emails.md](emails.md#list-unsubscribe)). No Bearer token: the token in the path is the credential. HTML responses, not JSON.
+
+- `GET`: confirmation page. Never suppresses (link scanners and prefetchers fetch GETs).
+- `POST`: body `List-Unsubscribe=One-Click` (RFC 8058, form-encoded or multipart, sent by mailbox providers) or `confirm=unsubscribe` (the confirmation button). Adds a permanent `unsubscribe` suppression for the recipient under the sending key and fires `email.unsubscribed` the first time. `200` also when already suppressed. Any other body: `400`.
+- Invalid, unknown or purged token: `404` with a neutral page, nothing written. Over 30 requests a minute from one client IP: `429` with `Retry-After`.
+
+See [suppressions.md](suppressions.md#one-click-unsubscribe).
 
 ---
 
@@ -218,7 +232,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 |---------------------|--------|----------|--------------------------------------------------------------------------------------------------|
 | `name`              | string | Yes      | Domain name (e.g. "example.com")                                                                 |
 | `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
-| `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. |
+| `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Single-recipient mail carries BunMail's own per-recipient `/u/<token>` link instead when `APP_BASE_URL` is `https://` (#249). |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
 
 **Response:**
@@ -362,7 +376,7 @@ Register a new webhook endpoint.
 | `url`    | string   | Yes      | HTTPS endpoint URL                                 |
 | `events` | string[] | Yes      | Events to subscribe to (min 1)                     |
 
-Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`
+Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`, `email.unsubscribed` (#249)
 
 Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) is admin-only: a restricted key subscribing to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 
