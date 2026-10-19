@@ -92,6 +92,8 @@ TRASH_RETENTION_DAYS=7
 # Optional: also refuse addresses any API key hard-bounced or got a complaint
 # for (#250), default false
 # SUPPRESSIONS_SHARED_HARD=false
+# Optional: daily DNSBL self-check of the sending IPs (#250), on by default
+# SENDING_IP_DNSBL_CHECK=true
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -146,6 +148,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > `DOMAIN_REVERIFY_ENABLED` / `DOMAIN_REVERIFY_INTERVAL_HOURS` (#250): a background loop re-checks every domain's SPF, DKIM and DMARC records, so a record removed or changed after verification is noticed. A passing domain is checked again every `DOMAIN_REVERIFY_INTERVAL_HOURS` (default `24`, 6 to 168, plus or minus an hour), a failing or inconclusive one after an hour. A failed lookup (SERVFAIL, timeout) never counts; two definitive failures in a row flip a verified domain to failing: `verifiedAt` is cleared, the failing flags are cleared (with `REQUIRE_VERIFIED_DOMAIN=true` and DKIM failing, its sends are then refused) and `domain.verification_failed` fires to admin keys' webhooks. Several replicas share the work safely. `DOMAIN_REVERIFY_ENABLED=false` (default `true`) turns the loop off: domains are then only checked by **Verify** and the inline check of `REQUIRE_VERIFIED_DOMAIN`. Only `true` or `false`, and only a whole number in range; anything else refuses to boot. See [domains.md](domains.md#scheduled-re-verification-250).
 
 > `MAIL_PUBLIC_IP` (#247, #248): the public IPs this server sends from, comma-separated. Optional: unset, BunMail uses the A/AAAA records of `MAIL_HOSTNAME`. SPF verification checks that the domain authorizes these addresses, and every boot logs whether their PTR records name `MAIL_HOSTNAME` and resolve back (`Reverse DNS confirmed for every sending IP`, or a `warn` with the fix). Behind NAT the container can't see its egress address: set this to the real one.
+
+> `SENDING_IP_DNSBL_CHECK` (#250): about a minute after boot, then every 24 hours, BunMail looks up each sending IP on three blocklists and shows the result on the dashboard home (**Blocklists** card); see [Blocklists](#blocklists-dnsbl-self-check-250) below. Default `true` (a few DNS lookups a day). `false` turns it off. Only `true` or `false`; anything else refuses to boot.
 
 > `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h. A recipient whose last reply was `4.2.2` (mailbox full) when the window ends gets a 24-hour soft suppression and a soft `email.bounced` (#250); every other temporary failure gets neither.
 
@@ -548,13 +552,21 @@ New IPs have no reputation, which is treated as suspicious. Build it gradually:
 - **Monitor bounces**: high bounce rates destroy reputation fast
 - **Process spam complaints**: enrol in the mailbox providers' feedback loops (Yahoo/AOL CFL, Microsoft JMRP and SNDS) with an address that reaches BunMail's inbound SMTP, so recipients who mark your mail as spam are suppressed automatically; Gmail reports only aggregate rates per `Feedback-ID` in Postmaster Tools. See [feedback-loops.md](feedback-loops.md)
 
-Check if your IP is blacklisted:
+#### Blocklists (DNSBL self-check, #250)
 
-```bash
-# Check major blacklists
-# Visit: https://mxtoolbox.com/blacklists.aspx
-# Enter: YOUR_SERVER_IP
-```
+BunMail checks its own sending IPs (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`) about a minute after boot, then every 24 hours, on three blocklists:
+
+| Zone | Lists | Look up and delist |
+|---|---|---|
+| `zen.spamhaus.org` (Spamhaus ZEN) | IPv4 and IPv6 | [check.spamhaus.org](https://check.spamhaus.org/) |
+| `b.barracudacentral.org` (Barracuda BRBL) | IPv4 only | [barracudacentral.org/rbl/removal-request](https://www.barracudacentral.org/rbl/removal-request) |
+| `bl.spamcop.net` (SpamCop) | IPv4 only | [spamcop.net/bl.shtml](https://www.spamcop.net/bl.shtml) |
+
+IPv6 addresses are only looked up on ZEN: the other two zones do not list IPv6. The result is on the dashboard home (**Blocklists** card, admins and the owner) and in the logs: a `warn` line `Sending IP listed on a DNSBL` when an address becomes listed, an `info` line when it is delisted, and one `DNSBL self-check completed` line per run (`job: "dnsbl-self-check"`). Only `127.0.0.2` to `127.0.0.11` count as listed. Spamhaus return codes are named: `127.0.0.2` SBL, `.3` CSS, `.4` to `.7` XBL, `.9` DROP, `.10` and `.11` PBL. A **PBL** listing is a policy listing, not abuse: the range's owner (usually the hosting provider) says it should not send mail directly. If this server is meant to send mail, remove the address at check.spamhaus.org. This check only reports: a listing never holds or refuses mail, and results are kept in memory per replica.
+
+**Public resolvers.** Spamhaus refuses queries sent through public resolvers (Google `8.8.8.8`, Cloudflare `1.1.1.1`, Quad9 and others) and answers `127.255.255.254` (or another `127.255.255.x` code) instead; the card then shows the zone as `unavailable`, never as listed. Barracuda may also ignore queries from resolvers it does not know. For a real answer, point the server at a local recursive resolver (for example Unbound on the host, and `dns:` in `docker-compose.override.yml` pointing the container at it), not at a forwarder to a public service. Lookups that fail or time out (5 s) show as `unknown`.
+
+**When listed:** find the cause first (a compromised account or API key, a bad list, an open relay on the same IP), stop it, then request removal at the zone's page above. SpamCop listings expire on their own about 24 hours after the reports stop. The next daily check (or a restart) shows the new state. For an overview of other blocklists, [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx) checks many at once.
 
 ### 6. Email Content Best Practices
 
@@ -601,7 +613,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 [ ] PTR (reverse DNS) set to mail.yourdomain.com
 [ ] Server hostname matches PTR
 [ ] MAIL_HOSTNAME in .env matches PTR
-[ ] IP not on any blacklists
+[ ] IP not on any blacklists (dashboard home, Blocklists card)
 [ ] Tested with mail-tester.com (aim for 8+/10)
 [ ] Feedback loops enrolled, FBL address routed to BunMail (docs/feedback-loops.md)
 ```

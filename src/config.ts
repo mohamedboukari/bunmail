@@ -474,6 +474,17 @@ export function readSuppressionsSharedHard(
 }
 
 /**
+ * Reads `SENDING_IP_DNSBL_CHECK` (#250): whether the daily DNSBL
+ * self-check of the sending IPs runs. Unset or blank: `true`. Only `true`
+ * or `false`; anything else refuses to boot.
+ */
+export function readSendingIpDnsblCheck(
+  raw: string | undefined = process.env["SENDING_IP_DNSBL_CHECK"],
+): boolean {
+  return optionalStrictBoolean("SENDING_IP_DNSBL_CHECK", true, raw);
+}
+
+/**
  * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
  * #217) is sent from. Trimmed and lower-cased; unset or empty means no
  * system sender, and the dashboard shows invitation links for the inviter
@@ -1030,6 +1041,17 @@ export const config = {
      * check is retried after one hour whatever this is.
      */
     intervalHours: readDomainReverifyIntervalHours(),
+  },
+
+  /** Daily DNSBL self-check of the sending IPs (#250). */
+  sendingIpDnsbl: {
+    /**
+     * Whether the check runs (`SENDING_IP_DNSBL_CHECK`, default true,
+     * strictly `true` or `false`): about a minute after boot, then every
+     * 24 hours, against Spamhaus ZEN, Barracuda and SpamCop. Information
+     * only: a listing never holds or refuses mail.
+     */
+    enabled: readSendingIpDnsblCheck(),
   },
 
   /** Audit log of security-relevant actions (#221). */
