@@ -1,13 +1,21 @@
-import { and, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
+import { emails } from "../models/email.schema.ts";
 import { idempotencyKeys } from "../models/idempotency-key.schema.ts";
-import type { DbExecutor, JsonObject, SendEmailInput, Tx } from "../types/email.types.ts";
+import type {
+  DbExecutor,
+  JsonObject,
+  JsonValue,
+  SendEmailInput,
+  Tx,
+} from "../types/email.types.ts";
 
 /**
  * Storage side of idempotency keys on the send API (#188): request
- * hashing, the claiming upsert, completion and the expiry purge. The
+ * hashing, the claiming upsert, completion, the content-free snapshot
+ * and its replay content, and the expiry purge. The
  * send flow that ties them to the email insert is `createEmailIdempotent`
  * in `email.service.ts`.
  *
@@ -56,14 +64,90 @@ export function hashSendRequest(input: SendEmailInput): string {
 
 /**
  * The JSON a response body serializes to (dates become ISO strings), as
- * stored in `response_body` and returned on the first request, so the
- * first response and every replay are the same JSON value (jsonb may
- * store the members in another order).
+ * returned on the first request and, without its content fields
+ * (`withoutContent`), stored in `response_body`.
  */
 export function toJsonObject(body: object): JsonObject {
   /** `JSON.parse` is untyped; the input is an object, so the output is one. */
   const json: JsonObject = JSON.parse(JSON.stringify(body));
   return json;
+}
+
+/**
+ * The members of a send response's `data` that carry message content
+ * (the serialized names of `subject`, `html`, `text_content` and
+ * `headers`). They are never stored in `response_body`: a replay fills
+ * them from the live email row, or answers `null` once the email is
+ * trashed or purged, so a permanent delete really removes the content.
+ */
+const CONTENT_FIELDS = ["subject", "html", "text", "headers"] as const;
+
+/** Message content of an email, under the serialized field names. */
+export type ReplayContent = Record<(typeof CONTENT_FIELDS)[number], JsonValue>;
+
+/** `body.data` when it is a JSON object, else undefined. */
+function dataOf(body: JsonObject): JsonObject | undefined {
+  const data = body["data"];
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return undefined;
+  return data;
+}
+
+/**
+ * The response body as stored for a key: `data` without the message
+ * content fields. Everything else (ids, addresses, status, timestamps,
+ * warnings) is kept for the replay.
+ */
+export function withoutContent(body: JsonObject): JsonObject {
+  const data = dataOf(body);
+  if (!data) return body;
+  const kept: JsonObject = {};
+  for (const [name, value] of Object.entries(data)) {
+    if (!(CONTENT_FIELDS as readonly string[]).includes(name)) kept[name] = value;
+  }
+  return { ...body, data: kept };
+}
+
+/**
+ * A stored body with the content fields filled from `content`, or set to
+ * `null` when the email is gone, so a replay always has the same shape as
+ * the first response.
+ */
+export function withContent(body: JsonObject, content: ReplayContent | null): JsonObject {
+  const data = dataOf(body);
+  if (!data) return body;
+  const filled: JsonObject = { ...data };
+  for (const name of CONTENT_FIELDS) filled[name] = content ? content[name] : null;
+  return { ...body, data: filled };
+}
+
+/**
+ * The message content of the email a key created, for a replay: one read
+ * by primary key, and only while the email still exists, is not in trash
+ * and belongs to `apiKeyId`. Null otherwise.
+ */
+export async function findReplayContent(
+  executor: DbExecutor,
+  emailId: string | null,
+  apiKeyId: string,
+): Promise<ReplayContent | null> {
+  if (emailId === null) return null;
+  const [row] = await executor
+    .select({
+      subject: emails.subject,
+      html: emails.html,
+      text: emails.textContent,
+      headers: emails.headers,
+    })
+    .from(emails)
+    .where(
+      and(
+        eq(emails.id, emailId),
+        eq(emails.apiKeyId, apiKeyId),
+        isNull(emails.deletedAt),
+      ),
+    );
+  if (!row) return null;
+  return { subject: row.subject, html: row.html, text: row.text, headers: row.headers };
 }
 
 /**
@@ -134,9 +218,9 @@ export async function claimIdempotencyKey(
 }
 
 /**
- * Completes a claimed row with the email it created and the response,
- * inside the claiming transaction, so the row is never committed without
- * them.
+ * Completes a claimed row with the email it created and the response
+ * (already stripped of message content by the caller), inside the
+ * claiming transaction, so the row is never committed without them.
  */
 export async function completeIdempotencyKey(
   tx: Tx,

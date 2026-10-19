@@ -147,7 +147,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 - **Lifetime:** a key is remembered for `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, 1 to 168) from its first use; after that it is reusable and a request with it sends again. The purge worker deletes expired keys.
 - **Failed requests store nothing:** a send refused for any reason (validation, suppression, unauthorized sender, rate limit, unregistered domain, a server error) leaves no trace, so retrying with the same key after fixing the cause sends the email.
 - **Concurrent duplicates:** parallel requests with the same key create exactly one email; one gets the fresh response, the others wait for it to commit and get the replay. None fails with a 500.
-- **Replays keep working after the email is gone:** the stored response is a snapshot, so a retry within the TTL replays it even after the email was trashed and purged. It reflects the email as it was queued, not its delivery status now; read that with `GET /api/v1/emails/:id`.
+- **Replays keep working after the email is gone:** the stored response is a snapshot of the email as it was queued (not its delivery status now; read that with `GET /api/v1/emails/:id`). It holds no message content: a replay fills `subject`, `html`, `text` and `headers` from the email while it exists and is not in trash; after the email is trashed or purged, the replay returns the original ids and status with those four fields `null`.
 - **Rate limit:** a replay is still a request and counts toward the per-key rate limit.
 - **REST only:** the SMTP submission server has no idempotency keys.
 

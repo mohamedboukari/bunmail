@@ -633,7 +633,7 @@ Retention: `TOMBSTONE_RETENTION_DAYS` (default 90): the existing 6h trash purge 
 | request_hash    | text           | NOT NULL: SHA-256 hex of the canonical JSON body |
 | email_id        | varchar(36)    | nullable, FK → emails.id `ON DELETE SET NULL`, indexed |
 | response_status | integer        | nullable (only inside the creating transaction) |
-| response_body   | jsonb          | nullable: the first response, replayed as is  |
+| response_body   | jsonb          | nullable: the first response without message content (subject, html, text, headers are filled from the live email on replay, or null) |
 | created_at      | timestamptz    | NOT NULL, default `now()`                     |
 | expires_at      | timestamptz    | NOT NULL, indexed (purge)                     |
 

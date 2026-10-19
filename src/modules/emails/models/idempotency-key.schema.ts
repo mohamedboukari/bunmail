@@ -65,9 +65,11 @@ export const idempotencyKeys = pgTable(
     responseStatus: integer("response_status"),
 
     /**
-     * Body of the first response, replayed verbatim: the serialized email
-     * and its warnings, never a secret. Null only inside the creating
-     * transaction.
+     * Body of the first response without message content: the serialized
+     * email minus `subject`, `html`, `text` and `headers`, plus its
+     * warnings. A replay fills those four from the live email, or answers
+     * them `null` once it is trashed or purged. Null only inside the
+     * creating transaction.
      */
     responseBody: jsonb<JsonObject | null>("response_body"),
 

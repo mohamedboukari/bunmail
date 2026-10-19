@@ -17,8 +17,11 @@ import {
   claimIdempotencyKey,
   completeIdempotencyKey,
   findIdempotencyRecord,
+  findReplayContent,
   hashSendRequest,
   toJsonObject,
+  withContent,
+  withoutContent,
   type IdempotencyRecord,
 } from "./idempotency.service.ts";
 import {
@@ -93,8 +96,10 @@ export async function createEmail(
  *    transaction every query runs on the transaction's own connection,
  *    so the waiting requests can never starve the one they wait for.
  *
- * The response body is stored and returned as the same JSON, so a replay
- * is identical to the first response even after the email was purged.
+ * The response body is stored without message content (subject, html,
+ * text, custom headers): a replay fills those from the live email, or
+ * answers them `null` once it is trashed or purged, so deleting an email
+ * removes its content everywhere.
  */
 export async function createEmailIdempotent(
   input: SendEmailInput,
@@ -112,7 +117,7 @@ export async function createEmailIdempotent(
   const live = await findIdempotencyRecord(db, apiKeyId, idempotencyKey, {
     liveOnly: true,
   });
-  if (live) return replayIdempotentSend(live, requestHash, apiKeyId);
+  if (live) return replayIdempotentSend(db, live, requestHash, apiKeyId);
 
   const prepared = await prepareEmail(input, apiKeyId, "api");
 
@@ -133,10 +138,11 @@ export async function createEmailIdempotent(
         const created = await insertPreparedEmail(tx, prepared);
         const response = buildResponse(created);
         const body = toJsonObject(response.body);
+        /** Stored without message content (see `withoutContent`). */
         await completeIdempotencyKey(tx, claimedId, {
           emailId: created.email.id,
           status: response.status,
-          body,
+          body: withoutContent(body),
         });
         logger.debug("Idempotency key stored", { apiKeyId, emailId: created.email.id });
         return { status: response.status, body, replayed: false };
@@ -145,7 +151,7 @@ export async function createEmailIdempotent(
       const winner = await findIdempotencyRecord(tx, apiKeyId, idempotencyKey, {
         liveOnly: false,
       });
-      if (winner) return replayIdempotentSend(winner, requestHash, apiKeyId);
+      if (winner) return replayIdempotentSend(tx, winner, requestHash, apiKeyId);
     }
 
     logger.error("Idempotency key could not be claimed or read", { apiKeyId });
@@ -156,12 +162,16 @@ export async function createEmailIdempotent(
 /**
  * The answer for a key that already has a committed row: the stored
  * response when the body matches, `IdempotencyKeyReusedError` when not.
+ * The stored body holds no message content; it is filled from the live
+ * email (one read by its primary key, scoped to `apiKeyId`, excluding
+ * trash), or set to `null` once the email is trashed or purged.
  */
-function replayIdempotentSend(
+async function replayIdempotentSend(
+  executor: DbExecutor,
   record: IdempotencyRecord,
   requestHash: string,
   apiKeyId: string,
-): IdempotentSendResult {
+): Promise<IdempotentSendResult> {
   if (record.requestHash !== requestHash) {
     logger.warn("Send refused: idempotency key reused with a different body", {
       apiKeyId,
@@ -177,11 +187,17 @@ function replayIdempotentSend(
     });
     throw new Error("Idempotency key row has no stored response");
   }
+  const content = await findReplayContent(executor, record.emailId, apiKeyId);
   logger.info("Send replayed from idempotency key", {
     apiKeyId,
     emailId: record.emailId,
+    contentAvailable: content !== null,
   });
-  return { status: record.responseStatus, body: record.responseBody, replayed: true };
+  return {
+    status: record.responseStatus,
+    body: withContent(record.responseBody, content),
+    replayed: true,
+  };
 }
 
 /** A send that passed every check, ready to insert. */

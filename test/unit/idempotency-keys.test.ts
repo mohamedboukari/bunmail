@@ -11,6 +11,8 @@ import {
   canonicalJson,
   hashSendRequest,
   toJsonObject,
+  withContent,
+  withoutContent,
 } from "../../src/modules/emails/services/idempotency.service.ts";
 
 /**
@@ -88,6 +90,51 @@ describe("toJsonObject", () => {
     expect(toJsonObject({ data: { createdAt, sentAt: null } })).toEqual({
       data: { createdAt: "2026-10-19T00:00:00.000Z", sentAt: null },
     });
+  });
+});
+
+describe("withoutContent / withContent", () => {
+  const body = {
+    success: true,
+    data: {
+      id: "msg_1",
+      to: "user@example.org",
+      status: "queued",
+      subject: "Hi",
+      html: "<p>x</p>",
+      text: "x",
+      headers: { "X-A": "1" },
+    },
+    warnings: ["spf_unverified"],
+  };
+
+  test("strips exactly the content fields from data", () => {
+    expect(withoutContent(body)).toEqual({
+      success: true,
+      data: { id: "msg_1", to: "user@example.org", status: "queued" },
+      warnings: ["spf_unverified"],
+    });
+  });
+
+  test("fills them back, or sets them null when the email is gone", () => {
+    const stored = withoutContent(body);
+    expect(
+      withContent(stored, {
+        subject: "Hi",
+        html: "<p>x</p>",
+        text: "x",
+        headers: { "X-A": "1" },
+      }),
+    ).toEqual(body);
+    expect(withContent(stored, null)).toEqual({
+      ...body,
+      data: { ...body.data, subject: null, html: null, text: null, headers: null },
+    });
+  });
+
+  test("leaves a body without a data object alone", () => {
+    expect(withoutContent({ success: true })).toEqual({ success: true });
+    expect(withContent({ data: null }, null)).toEqual({ data: null });
   });
 });
 

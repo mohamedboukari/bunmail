@@ -8,7 +8,9 @@
  * not matter, keys are scoped to the API key, parallel duplicates create
  * exactly one email without a 500, a refused send stores nothing, an
  * expired key is reusable, the purge deletes only expired rows, invalid
- * header values are a 422, and a purged email still replays.
+ * header values are a 422, and the stored snapshot holds no message
+ * content: a replay fills it from the live email of the same key, or
+ * answers it `null` once the email is trashed or purged.
  *
  * The REST app mirrors the VALIDATION, suppression and
  * `EmailSendRejectedError` branches of the global `onError` in
@@ -21,6 +23,7 @@ import { emailsPlugin } from "../../src/modules/emails/emails.plugin.ts";
 import { EmailSendRejectedError } from "../../src/modules/emails/errors.ts";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
 import { idempotencyKeys } from "../../src/modules/emails/models/idempotency-key.schema.ts";
+import { findReplayContent } from "../../src/modules/emails/services/idempotency.service.ts";
 import { runIdempotencyKeySweep } from "../../src/modules/trash/services/purge.service.ts";
 import { config } from "../../src/config.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
@@ -51,7 +54,16 @@ const app = new Elysia()
 
 interface SendBody {
   success: boolean;
-  data?: { id: string; status: string; createdAt: string };
+  data?: {
+    id: string;
+    status: string;
+    createdAt: string;
+    to: string;
+    subject: string | null;
+    html: string | null;
+    text: string | null;
+    headers: Record<string, string> | null;
+  };
   warnings?: string[];
   error?: string;
   code?: string;
@@ -209,10 +221,87 @@ describe("a retry with the same key", () => {
     expect(await emailCounts()).toEqual({ total: 1, queued: 1 });
     expect(await keyCount()).toBe(1);
   });
+});
 
-  test("still replays the snapshot after the email was purged", async () => {
+describe("message content in the snapshot", () => {
+  /** A send with every content field set. */
+  const contentBody = sendBody({
+    subject: "Your invoice",
+    html: "<p>Invoice <b>#1042</b></p>",
+    text: "Invoice #1042",
+    headers: { "X-Entity-Ref-ID": "inv-1042" },
+  });
+
+  /** The stored `response_body` of `apiKeyId`'s only key. */
+  async function storedBody(apiKeyId: string): Promise<Record<string, unknown>> {
+    const [row] = await db
+      .select({ body: idempotencyKeys.responseBody })
+      .from(idempotencyKeys)
+      .where(eq(idempotencyKeys.apiKeyId, apiKeyId));
+    if (!row?.body) throw new Error("no stored response body");
+    return row.body;
+  }
+
+  test("is never stored: no subject, html, text or headers", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
-    const first = await send(rawKey, "purged-later");
+    const first = await send(rawKey, "no-content", contentBody);
+    expect(first.status).toBe(200);
+    /** The first response itself is unchanged and carries the content. */
+    expect(first.body.data!.html).toBe("<p>Invoice <b>#1042</b></p>");
+
+    const stored = await storedBody(apiKeyId);
+    const data = stored["data"];
+    if (data === null || typeof data !== "object") throw new Error("no data");
+    for (const field of ["subject", "html", "text", "headers"]) {
+      expect(Object.keys(data)).not.toContain(field);
+    }
+    /** Ids, addresses, status and warnings stay. */
+    expect(data).toMatchObject({
+      id: first.body.data!.id,
+      to: "user@example.org",
+      status: "queued",
+    });
+    expect(stored["warnings"]).toEqual(["domain_unregistered"]);
+    /** No content anywhere in the row, nested or not. */
+    const raw = JSON.stringify(stored);
+    expect(raw).not.toContain("Invoice");
+    expect(raw).not.toContain("inv-1042");
+  });
+
+  test("a replay while the email exists returns the full original content", async () => {
+    const { rawKey } = await seed.apiKey();
+    const first = await send(rawKey, "with-content", contentBody);
+
+    const retry = await send(rawKey, "with-content", contentBody);
+    expect(retry.replayed).toBe("true");
+    expect(retry.body).toEqual(first.body);
+    expect(retry.body.data!.subject).toBe("Your invoice");
+    expect(retry.body.data!.text).toBe("Invoice #1042");
+    expect(retry.body.data!.headers).toEqual({ "X-Entity-Ref-ID": "inv-1042" });
+  });
+
+  test("a replay after a soft delete answers the content null, and restore brings it back", async () => {
+    const { rawKey } = await seed.apiKey();
+    const first = await send(rawKey, "trashed", contentBody);
+    const emailId = first.body.data!.id;
+    await db.update(emails).set({ deletedAt: new Date() }).where(eq(emails.id, emailId));
+
+    const retry = await send(rawKey, "trashed", contentBody);
+    expect(retry.status).toBe(200);
+    expect(retry.replayed).toBe("true");
+    expect(retry.body).toEqual({
+      ...first.body,
+      data: { ...first.body.data!, subject: null, html: null, text: null, headers: null },
+    });
+
+    await db.update(emails).set({ deletedAt: null }).where(eq(emails.id, emailId));
+    const restored = await send(rawKey, "trashed", contentBody);
+    expect(restored.body).toEqual(first.body);
+  });
+
+  test("a replay after the email was purged keeps ids and status, content null", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+    const first = await send(rawKey, "purged-later", contentBody);
     await db.delete(emails).where(eq(emails.id, first.body.data!.id));
 
     const [row] = await db
@@ -221,11 +310,37 @@ describe("a retry with the same key", () => {
       .where(eq(idempotencyKeys.apiKeyId, apiKeyId));
     expect(row!.emailId).toBeNull();
 
-    const retry = await send(rawKey, "purged-later");
+    const retry = await send(rawKey, "purged-later", contentBody);
     expect(retry.status).toBe(200);
     expect(retry.replayed).toBe("true");
-    expect(retry.body).toEqual(first.body);
+    expect(retry.body).toEqual({
+      ...first.body,
+      data: { ...first.body.data!, subject: null, html: null, text: null, headers: null },
+    });
+    expect(retry.body.data!.id).toBe(first.body.data!.id);
+    expect(retry.body.data!.status).toBe("queued");
     expect((await emailCounts()).total).toBe(0);
+  });
+
+  test("another API key can never get the content filled in", async () => {
+    const a = await seed.apiKey({ name: "a" });
+    const b = await seed.apiKey({ name: "b" });
+    const fromA = await send(a.rawKey, "shared", contentBody);
+    const emailId = fromA.body.data!.id;
+
+    /** The rehydration read is scoped to the key that owns the email. */
+    expect(await findReplayContent(db, emailId, b.id)).toBeNull();
+    expect(await findReplayContent(db, emailId, a.id)).toEqual({
+      subject: "Your invoice",
+      html: "<p>Invoice <b>#1042</b></p>",
+      text: "Invoice #1042",
+      headers: { "X-Entity-Ref-ID": "inv-1042" },
+    });
+
+    /** Over HTTP, B's same key and body is its own fresh send, never A's email. */
+    const fromB = await send(b.rawKey, "shared", contentBody);
+    expect(fromB.replayed).toBeNull();
+    expect(fromB.body.data!.id).not.toBe(emailId);
   });
 });
 

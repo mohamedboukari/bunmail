@@ -57,7 +57,7 @@ One row per (API key, `Idempotency-Key`) used on `POST /api/v1/emails/send` with
 | `request_hash`    | text         | NOT NULL                             | SHA-256 hex of the canonical JSON of the validated body (object keys sorted) |
 | `email_id`        | varchar(36)  | nullable, FK → emails (SET NULL)     | The email the first request created; null once that email is purged |
 | `response_status` | integer      | nullable                             | HTTP status of the first response (null only inside the creating transaction) |
-| `response_body`   | jsonb        | nullable                             | Body of the first response, replayed as is (null only inside the creating transaction) |
+| `response_body`   | jsonb        | nullable                             | Body of the first response without message content (no `subject`, `html`, `text`, `headers`); null only inside the creating transaction |
 | `created_at`      | timestamptz  | NOT NULL, default now                | First use of the key |
 | `expires_at`      | timestamptz  | NOT NULL                             | `created_at` plus the TTL; the key is reusable after it |
 
@@ -168,14 +168,16 @@ When an email is created, the sender's domain (from `from` address) is looked up
 1. Hash the validated body: SHA-256 of its canonical JSON (object keys sorted at every depth), so the same JSON with members in another order matches.
 2. A live row for `(api_key_id, key)` (`expires_at > now()`) answers at once: replay when the hash matches, `IdempotencyKeyReusedError` when not. This runs before the send is checked, so a replay returns the original result even if, for example, the recipient was suppressed since.
 3. Otherwise run every send check (`prepareEmail`: custom headers, suppression, key and allowed senders, template, subject, body, sender domain) outside any transaction. A refused send stores nothing, so the client can fix the cause and retry with the same key.
-4. In one transaction: claim the key first (`INSERT ... ON CONFLICT (api_key_id, key) DO UPDATE ... WHERE expires_at <= now() RETURNING id`, which inserts it or takes over an expired row), insert the email, then fill `email_id`, `response_status` and `response_body` on the claimed row. A committed row is therefore always complete: there is no in-progress state.
+4. In one transaction: claim the key first (`INSERT ... ON CONFLICT (api_key_id, key) DO UPDATE ... WHERE expires_at <= now() RETURNING id`, which inserts it or takes over an expired row), insert the email, then fill `email_id`, `response_status` and `response_body` (the response without message content) on the claimed row. A committed row is therefore always complete: there is no in-progress state.
 5. If the claim returns nothing, a live row exists and is committed (the unique index made this transaction wait until the other one committed; had it rolled back, the claim would have succeeded). Read it and replay or refuse as in step 2.
 
 Concurrent requests with the same key create exactly one email: one claims, the others wait on the unique index (or on the expired row's lock) and replay once it commits. Inside the transaction every query runs on the transaction's connection, so waiting requests holding pool connections cannot starve the one they wait for.
 
 **What is not idempotent:** SMTP submission (no natural header; REST only), and the per-key rate limit (a replay is a request and counts). `reserveAccepted` (#190) only applies to SMTP submission, so replays reserve no quota.
 
-**Retention:** the purge worker deletes expired rows in batches (`purgeExpiredIdempotencyKeys`, 5000 rows per batch, every 6 hours with the trash purge). Correctness never depends on it: an expired row is treated as absent and taken over in place. The snapshot holds the serialized email, message content included, for up to the TTL, even after the email itself is permanently deleted.
+**Retention:** the purge worker deletes expired rows in batches (`purgeExpiredIdempotencyKeys`, 5000 rows per batch, every 6 hours with the trash purge). Correctness never depends on it: an expired row is treated as absent and taken over in place.
+
+**No message content in the snapshot:** `response_body` is the first response with `subject`, `html`, `text` and `headers` removed from `data` (`withoutContent`); ids, addresses, status, timestamps and warnings stay, so the storage overhead is small. A replay fills the four fields back (`findReplayContent`: one read by the email's primary key, scoped to the same API key, `deleted_at IS NULL`), or sets them `null` once the email is trashed or purged. The replay keeps the response shape either way, and deleting an email removes its content everywhere.
 
 ## Feedback-ID and Auto-Submitted (#250)
 
@@ -227,7 +229,7 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `createEmailIdempotent(input, apiKeyId, idempotencyKey, buildResponse): Promise<IdempotentSendResult>`
-`createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
+`createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key, without message content, in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
 
 #### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
 Retrieves a non-trashed email scoped to the requesting API key.
@@ -269,6 +271,9 @@ The stored row, or undefined; with `liveOnly` an expired row counts as absent.
 
 #### `claimIdempotencyKey(tx, claim): Promise<string | null>` / `completeIdempotencyKey(tx, id, outcome)`
 Claim inserts the row or takes over an expired one (null when a live row exists); complete stores the email id and the response.
+
+#### `withoutContent(body)` / `withContent(body, content)` / `findReplayContent(executor, emailId, apiKeyId)`
+Strip `subject`, `html`, `text` and `headers` from a response's `data` before it is stored; fill them back on a replay from the live email (scoped to the API key, not trashed), or with `null` when it is gone.
 
 #### `purgeExpiredIdempotencyKeys(batchSize?): Promise<number>`
 Deletes expired rows in batches; run by the purge worker (`runIdempotencyKeySweep`).
