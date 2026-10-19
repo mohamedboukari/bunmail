@@ -100,6 +100,7 @@ bunmail/
 │   │   ├── log-context.ts                ← Request/job/SMTP-session correlation IDs on AsyncLocalStorage (#284)
 │   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
 │   │   ├── db-error.ts                   ← A failed write's log text: SQLSTATE only for drizzle query errors (#184)
+│   │   ├── mx-throttle.ts                ← Outbound session semaphore, keyed by provider bucket (#91, #250)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
 │   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
@@ -111,6 +112,9 @@ bunmail/
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
 │   │   │   │   ├── mx-route.ts           ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
+│   │   │   │   ├── mx-address.ts         ← Checked addresses of an MX host, in the MAIL_IP_FAMILY order (#250)
+│   │   │   │   ├── provider-bucket.ts    ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
+│   │   │   │   ├── rate-budget.ts        ← MAIL_MX_RATE_PER_MIN token bucket per provider bucket, in memory (#250)
 │   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
 │   │   │   │   ├── mta-sts.ts            ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
@@ -1129,6 +1133,8 @@ Both maps reset on server restart and are per-replica (single-instance only; opt
 ## Email Delivery
 
 BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX hosts itself on every attempt (#250): sorted by preference with ties shuffled, the domain's own A/AAAA records when it has no MX (implicit MX), a terminal failure for NXDOMAIN, a null MX or no records at all, and a retry for any temporary DNS error. It refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to a checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS, TLS 1.2 at least, certificates not verified). A recipient domain that publishes an MTA-STS policy (RFC 8461, #250) in enforce mode gets only the MX hosts the policy names, with STARTTLS required and the certificate verified for the MX name; a TLS failure or no matching host is retried, never bounced. The policy is fetched over HTTPS from `mta-sts.<domain>`, pinned to an address that passed the same private-address check, and cached in memory per domain and policy `id` until `max_age` (per replica). Each entry records the mode it ran under (`mtaSts`). See [docs/emails.md](docs/emails.md#mta-sts-250). It fails over to the next address or host (at most 5 hosts, 2 addresses each, one shared session deadline) only on a connection-level failure or a `421`; any other reply decides the attempt. When the MX accepts some recipients of a transaction and refuses others at `RCPT TO`, each refused recipient gets its own entry: retried for a 4xx, failed and suppressed for a 5xx. See [docs/emails.md](docs/emails.md#mx-resolution-and-failover-250). Each delivery-state entry records whether its latest session used STARTTLS or plaintext (`tls`, read from Nodemailer's connection events, #250); the API returns it in `deliveryState`, and the email detail page badges a plaintext delivery. See [docs/emails.md](docs/emails.md#tls-record-250).
+
+Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Google, Yahoo or Apple MX host counts as one bucket per provider, any other MX as its registrable domain, with `MAIL_MX_CONCURRENCY` sessions at once per bucket (default 1). The optional `MAIL_MX_RATE_PER_MIN` adds a token bucket of messages per minute per bucket; a message over it is deferred (the email back to `queued` until a token is due, no attempt counted, no error, no webhook), and the other recipient domains of the email go ahead. MX hosts are reached over IPv4 when they have an IPv4 address (`MAIL_IP_FAMILY=4`, the default) or over IPv6 first (`6`). Both limits are in memory, per replica. There is no source-address setting (Bun ignores `localAddress`), and no connection reuse across sessions. See [docs/emails.md](docs/emails.md#throttle-provider-buckets-and-rate-budget-250).
 
 **What this means:**
 - The server's IP reputation directly affects deliverability

@@ -25,6 +25,7 @@ import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { parseSmtpError, type ParsedSmtpError } from "../../../utils/smtp-error.ts";
 import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
+import { deferralDelayMs } from "./rate-budget.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { domainNameIs } from "../../domains/services/domain.service.ts";
@@ -791,7 +792,12 @@ async function sendClaimedEmail(
       },
       returnPath: signReturnPath ? { emailId } : undefined,
     });
-    sent = { deliveryState: result.deliveryState, messageId, priorStatuses };
+    sent = {
+      deliveryState: result.deliveryState,
+      messageId,
+      priorStatuses,
+      deferred: result.deferred,
+    };
   } catch (error) {
     /**
      * `sendMail` only throws for fundamental input errors now (no
@@ -859,6 +865,8 @@ interface SentAttempt {
   messageId: string;
   /** Each MX group's status before this attempt. */
   priorStatuses: Map<string, DeliveryGroup["status"]>;
+  /** Entries the rate budget kept from this attempt (#250), see `SendMailResult`. */
+  deferred?: { keys: string[]; waitMs: number };
 }
 
 /** A webhook event raised by a row's outcome, enqueued with it (#184). */
@@ -1105,11 +1113,22 @@ async function recordSendOutcome(
   }
   if (!saved) return;
 
+  if (outcome.kind === "deferred") {
+    /** The mailer logged the bucket at `info`, once a minute; one line per email is noise. */
+    logger.debug("Email deferred by the MX rate budget", {
+      emailId,
+      deferredGroups: outcome.deferredGroups,
+      retryInMs: outcome.delayMs,
+    });
+    return;
+  }
   if (outcome.kind === "retry") {
     logger.warn("Email send had retry groups, requeued", {
       emailId,
       attempt,
       retryInSeconds: outcome.retrySeconds,
+      /** Of those, the ones the rate budget held back (#250), not failures. */
+      deferredGroups: outcome.deferredGroups,
     });
     return;
   }
@@ -1126,11 +1145,23 @@ async function recordSendOutcome(
 
 /** The row update and events an attempt's delivery state leads to. */
 type RowOutcome =
+  /**
+   * Nothing was attempted: every pending entry was held back by the rate
+   * budget (#250). Back to `queued` without counting the attempt, no event.
+   */
+  | {
+      kind: "deferred";
+      values: PgUpdateSetSource<typeof emails>;
+      events: OutcomeEvent[];
+      delayMs: number;
+      deferredGroups: number;
+    }
   | {
       kind: "retry";
       values: PgUpdateSetSource<typeof emails>;
       events: OutcomeEvent[];
       retrySeconds: number;
+      deferredGroups: number;
     }
   | {
       kind: "terminal";
@@ -1140,11 +1171,28 @@ type RowOutcome =
       finalState: DeliveryState;
     };
 
+/** `last_error` of an entry the rate budget kept from the end of the retry window (#250). */
+const RATE_BUDGET_EXHAUSTED =
+  "Not sent within the retry window: provider rate budget (MAIL_MX_RATE_PER_MIN)";
+
+/** `NOW() + <ms> milliseconds`, in database time; `ms` is a whole number we computed. */
+function nowPlusMs(ms: number) {
+  return sql`NOW() + interval ${sql.raw(`'${Math.max(0, Math.round(ms))} milliseconds'`)}`;
+}
+
 /**
- * Decides the row-level outcome from the aggregate group state. Pure.
+ * Decides the row-level outcome from the aggregate group state. Pure,
+ * apart from the jitter of a deferral.
  *
+ * - every pending entry deferred by the rate budget (#250) and nothing
+ *   else attempted → `deferred`: back to `queued` once a token is due
+ *   (plus jitter), with the claim's `attempts` increment undone, no
+ *   `last_error`, no event. The retry window still counts from
+ *   `created_at`: a deferral past it ends the email like a retry would.
  * - any group still `retry` AND the email is young enough → schedule
- *   the next pass after the backoff (#180)
+ *   the next pass after the backoff (#180). Entries deferred alongside
+ *   attempted ones wait for the later of the backoff and their token: a
+ *   deferral never shortens another entry's backoff.
  * - else (all terminal, or too old to retry) → terminal row status:
  *   - any group `sent` → row `sent`
  *   - else any failed-due-to-hard-5xx → row `bounced`
@@ -1170,9 +1218,59 @@ function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
     },
   };
 
-  const retryDelayMs = anyRetry
+  /** Entries the rate budget held back (#250): still `retry`, not attempted. */
+  const deferredKeys = new Set(sent.deferred?.keys ?? []);
+  const realRetry = groups.some(
+    ([key, g]) => g.status === "retry" && !deferredKeys.has(key),
+  );
+  /** Whether this attempt did anything: an entry tried, or newly terminal. */
+  const attempted =
+    realRetry ||
+    groups.some(
+      ([key, g]) =>
+        (g.status === "sent" || g.status === "failed") &&
+        priorStatuses.get(key) !== g.status,
+    );
+
+  /** `undefined`: no entry needs it; `null`: the retry window is over. */
+  const backoffMs = realRetry
     ? nextRetryDelayMs(email.attempts, email.ageMs, retryMaxAgeMs())
-    : null;
+    : undefined;
+  const deferMs =
+    sent.deferred && deferredKeys.size > 0
+      ? deferralDelayMs(sent.deferred.waitMs)
+      : undefined;
+  const delayMs =
+    backoffMs === null || (backoffMs === undefined && deferMs === undefined)
+      ? null
+      : Math.max(backoffMs ?? 0, deferMs ?? 0);
+  const retryDelayMs =
+    anyRetry && delayMs !== null && email.ageMs + delayMs <= retryMaxAgeMs()
+      ? delayMs
+      : null;
+
+  if (retryDelayMs !== null && !attempted) {
+    /**
+     * A pure deferral: nothing was sent or tried. The claim incremented
+     * `attempts`; it is set back, so a deferral never counts as an attempt
+     * (nor moves the backoff schedule). The claim's fencing check matched
+     * the incremented value before this write, so the release is still
+     * fenced. `last_error` is left as it was: a deferral is not a failure.
+     */
+    return {
+      kind: "deferred",
+      delayMs: retryDelayMs,
+      deferredGroups: deferredKeys.size,
+      values: {
+        status: "queued",
+        nextAttemptAt: nowPlusMs(retryDelayMs),
+        attempts: email.attempts - 1,
+        messageId,
+        deliveryState,
+      },
+      events: [],
+    };
+  }
 
   if (retryDelayMs !== null) {
     /** At least one group transient-failed; row goes back to `queued`
@@ -1183,13 +1281,14 @@ function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
     return {
       kind: "retry",
       retrySeconds,
+      deferredGroups: deferredKeys.size,
       values: {
         status: "queued",
-        nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
+        nextAttemptAt: nowPlusMs(retryDelayMs),
         messageId,
         deliveryState,
         sentAt: firstDeliveredAt(deliveryState),
-        lastError: summariseRetries(deliveryState),
+        lastError: summariseRetries(deliveryState, deferredKeys),
       },
       events: anySent && !anySentBefore(priorStatuses) ? [sentEvent] : [],
     };
@@ -1200,7 +1299,10 @@ function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
    *  the persisted state has no ambiguous statuses left. */
   const finalState: DeliveryState = { ...deliveryState };
   for (const [mx, g] of Object.entries(finalState)) {
-    if (g.status === "retry") finalState[mx] = { ...g, status: "failed" };
+    if (g.status !== "retry") continue;
+    finalState[mx] = deferredKeys.has(mx)
+      ? { ...g, status: "failed", lastError: g.lastError ?? RATE_BUDGET_EXHAUSTED }
+      : { ...g, status: "failed" };
   }
 
   const finalGroups = Object.values(finalState);
@@ -1383,11 +1485,14 @@ function failureOf(group: DeliveryGroup): ParsedSmtpError | undefined {
  * operators reading the DB can see "outlook retrying after 421" at a
  * glance without dumping the full `delivery_state` JSON.
  */
-function summariseRetries(state: DeliveryState): string {
+function summariseRetries(state: DeliveryState, deferred: Set<string>): string {
   const retrying = Object.entries(state).filter(([, g]) => g.status === "retry");
   if (retrying.length === 0) return "";
   return `Retrying ${retrying.length} group(s): ${retrying
-    .map(([mx, g]) => `${mx} (${g.recipients.length} rcpt): ${g.lastError ?? "?"}`)
+    .map(
+      ([mx, g]) =>
+        `${mx} (${g.recipients.length} rcpt): ${deferred.has(mx) ? "deferred by the provider rate budget" : (g.lastError ?? "?")}`,
+    )
     .join(" | ")}`;
 }
 

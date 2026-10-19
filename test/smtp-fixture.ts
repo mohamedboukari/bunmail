@@ -15,7 +15,8 @@ export type FixtureMode =
   | "mute-tls"
   | "stall-data"
   | "busy"
-  | "rcpt-codes";
+  | "rcpt-codes"
+  | "slow";
 
 /** A running fixture server and what it reported on stdout. */
 export interface FixtureServer {
@@ -28,6 +29,8 @@ export interface FixtureServer {
   closed: () => number;
   /** TCP connections open on the server now. */
   open: () => number;
+  /** The most messages the server was receiving at once (start of DATA to its reply). */
+  peak: () => number;
   /** Resolves once no connection is open, or rejects after `withinMs`. */
   waitForNoneOpen: (withinMs: number) => Promise<void>;
   stop: () => void;
@@ -52,6 +55,7 @@ export async function startFixtureServer(
   let connections = 0;
   let closed = 0;
   let open = 0;
+  let peak = 0;
   let resolvePort: (port: number) => void = () => undefined;
   const port = new Promise<number>((resolve) => {
     resolvePort = resolve;
@@ -72,7 +76,9 @@ export async function startFixtureServer(
         const connection: unknown = Reflect.get(line, "connection");
         const closedCount: unknown = Reflect.get(line, "closed");
         const openCount: unknown = Reflect.get(line, "open");
+        const peakCount: unknown = Reflect.get(line, "peak");
         if (typeof openCount === "number") open = openCount;
+        if (typeof peakCount === "number") peak = peakCount;
         if (typeof reported === "number") resolvePort(reported);
         if (typeof message === "number") messages = message;
         if (typeof connection === "number") connections = connection;
@@ -86,6 +92,7 @@ export async function startFixtureServer(
     connections: () => connections,
     closed: () => closed,
     open: () => open,
+    peak: () => peak,
     waitForNoneOpen: async (withinMs) => {
       /** Every connection the server accepted is gone (counters update in the background). */
       const allClosed = (): boolean => open === 0 && closed >= connections;
