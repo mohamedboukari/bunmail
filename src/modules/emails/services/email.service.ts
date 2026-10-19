@@ -14,10 +14,19 @@ import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { checkSenderDomain } from "./sender-domain.service.ts";
 import { validateCustomHeaders } from "./custom-headers.ts";
 import {
+  claimIdempotencyKey,
+  completeIdempotencyKey,
+  findIdempotencyRecord,
+  hashSendRequest,
+  toJsonObject,
+  type IdempotencyRecord,
+} from "./idempotency.service.ts";
+import {
   InvalidCustomHeaderError,
   SubjectRequiredError,
   TemplateNotFoundError,
   BodyRequiredError,
+  IdempotencyKeyReusedError,
 } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -30,6 +39,9 @@ import type {
   EmailSource,
   CreatedEmail,
   SendWarning,
+  DbExecutor,
+  SendResponse,
+  IdempotentSendResult,
 } from "../types/email.types.ts";
 
 /**
@@ -53,6 +65,147 @@ export async function createEmail(
    *  submission server passes `"smtp"`. */
   source: EmailSource = "api",
 ): Promise<CreatedEmail> {
+  const prepared = await prepareEmail(input, apiKeyId, source);
+  return insertPreparedEmail(db, prepared);
+}
+
+/**
+ * Creates an email like `createEmail` (REST, `source = "api"`), under an
+ * `Idempotency-Key` (#188). The first request with a key creates the
+ * email and stores `buildResponse`'s result for the key; a retry with the
+ * same key and the same body (compared as canonical JSON, so key order
+ * does not matter) creates nothing and gets that stored response back,
+ * `replayed: true`. The same key with another body throws
+ * `IdempotencyKeyReusedError`. Keys are scoped to the API key and live
+ * `IDEMPOTENCY_KEY_TTL_HOURS`; an expired key is reusable.
+ *
+ * Flow:
+ * 1. A live row for the key answers at once (replay or refusal), before
+ *    the send is checked: a replay returns the original result even if,
+ *    say, the recipient was suppressed since.
+ * 2. Otherwise the send is checked (`prepareEmail`) outside any
+ *    transaction, so a refused send stores nothing and holds no
+ *    connection or lock while it reads.
+ * 3. One transaction claims the key first (`claimIdempotencyKey`), then
+ *    inserts the email and completes the key row with the response. A
+ *    concurrent request with the same key waits on the unique index
+ *    until this one commits, then replays the committed row. Inside the
+ *    transaction every query runs on the transaction's own connection,
+ *    so the waiting requests can never starve the one they wait for.
+ *
+ * The response body is stored and returned as the same JSON, so a replay
+ * is identical to the first response even after the email was purged.
+ */
+export async function createEmailIdempotent(
+  input: SendEmailInput,
+  apiKeyId: string,
+  idempotencyKey: string,
+  buildResponse: (created: CreatedEmail) => SendResponse,
+): Promise<IdempotentSendResult> {
+  const requestHash = hashSendRequest(input);
+  /** Never the key itself: its length is enough to correlate while debugging. */
+  logger.debug("Send with idempotency key", {
+    apiKeyId,
+    idempotencyKeyLength: idempotencyKey.length,
+  });
+
+  const live = await findIdempotencyRecord(db, apiKeyId, idempotencyKey, {
+    liveOnly: true,
+  });
+  if (live) return replayIdempotentSend(live, requestHash, apiKeyId);
+
+  const prepared = await prepareEmail(input, apiKeyId, "api");
+
+  return db.transaction(async (tx): Promise<IdempotentSendResult> => {
+    /**
+     * Two rounds at most: a claim can only lose to a committed live row,
+     * which the read below then finds. The second round covers that row
+     * vanishing in between (deleted with its API key, or purged at the
+     * instant it expired).
+     */
+    for (let round = 0; round < 2; round += 1) {
+      const claimedId = await claimIdempotencyKey(tx, {
+        apiKeyId,
+        key: idempotencyKey,
+        requestHash,
+      });
+      if (claimedId !== null) {
+        const created = await insertPreparedEmail(tx, prepared);
+        const response = buildResponse(created);
+        const body = toJsonObject(response.body);
+        await completeIdempotencyKey(tx, claimedId, {
+          emailId: created.email.id,
+          status: response.status,
+          body,
+        });
+        logger.debug("Idempotency key stored", { apiKeyId, emailId: created.email.id });
+        return { status: response.status, body, replayed: false };
+      }
+
+      const winner = await findIdempotencyRecord(tx, apiKeyId, idempotencyKey, {
+        liveOnly: false,
+      });
+      if (winner) return replayIdempotentSend(winner, requestHash, apiKeyId);
+    }
+
+    logger.error("Idempotency key could not be claimed or read", { apiKeyId });
+    throw new Error("Idempotency key could not be claimed");
+  });
+}
+
+/**
+ * The answer for a key that already has a committed row: the stored
+ * response when the body matches, `IdempotencyKeyReusedError` when not.
+ */
+function replayIdempotentSend(
+  record: IdempotencyRecord,
+  requestHash: string,
+  apiKeyId: string,
+): IdempotentSendResult {
+  if (record.requestHash !== requestHash) {
+    logger.warn("Send refused: idempotency key reused with a different body", {
+      apiKeyId,
+      emailId: record.emailId,
+    });
+    throw new IdempotencyKeyReusedError();
+  }
+  /** A committed row is completed in the transaction that created it. */
+  if (record.responseStatus === null || record.responseBody === null) {
+    logger.error("Idempotency key row has no stored response", {
+      apiKeyId,
+      emailId: record.emailId,
+    });
+    throw new Error("Idempotency key row has no stored response");
+  }
+  logger.info("Send replayed from idempotency key", {
+    apiKeyId,
+    emailId: record.emailId,
+  });
+  return { status: record.responseStatus, body: record.responseBody, replayed: true };
+}
+
+/** A send that passed every check, ready to insert. */
+interface PreparedEmail {
+  /** The `emails` row to insert. */
+  values: typeof emails.$inferInsert & { id: string };
+  /** The sender-domain warnings (#245). */
+  warnings: SendWarning[];
+  /** The sender domain, for the warnings log line. */
+  senderDomain: string | undefined;
+}
+
+/**
+ * Every check `createEmail` runs before it inserts (custom headers,
+ * suppression, API key and allowed senders, template, subject, body,
+ * sender domain), returning the row to insert. Throws the same errors
+ * `createEmail` documents. Reads through the shared pool and writes
+ * nothing.
+ */
+async function prepareEmail(
+  input: SendEmailInput,
+  apiKeyId: string,
+  source: EmailSource,
+): Promise<PreparedEmail> {
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
 
@@ -198,9 +351,8 @@ export async function createEmail(
     ({ domainId, warnings } = await checkSenderDomain(senderDomain, { id, apiKeyId }));
   }
 
-  const [email] = await db
-    .insert(emails)
-    .values({
+  return {
+    values: {
       id,
       apiKeyId,
       domainId,
@@ -214,8 +366,23 @@ export async function createEmail(
       html: htmlContent,
       textContent,
       source,
-    })
-    .returning();
+    },
+    warnings,
+    senderDomain,
+  };
+}
+
+/**
+ * Inserts a prepared send with status `queued`, through `executor` (the
+ * pool, or the idempotent send's transaction), and logs it.
+ */
+async function insertPreparedEmail(
+  executor: DbExecutor,
+  prepared: PreparedEmail,
+): Promise<CreatedEmail> {
+  const { values, warnings, senderDomain } = prepared;
+  const { id, apiKeyId, source, domainId, headers } = values;
+  const [email] = await executor.insert(emails).values(values).returning();
 
   logger.debug("Email created and queued", {
     id,

@@ -109,8 +109,31 @@ const mockTrashedEmail = {
 const createEmailMock = mock((_input: unknown, _apiKeyId: string) =>
   Promise.resolve({ email: mockEmail, warnings: ["spf_unverified"] }),
 );
+/**
+ * The idempotent send (#188): replays when the key is "replay-me", so
+ * the route's handling of both outcomes can be checked.
+ */
+const createEmailIdempotentMock = mock(
+  (
+    _input: unknown,
+    _apiKeyId: string,
+    idempotencyKey: string,
+    buildResponse: (created: { email: typeof mockEmail; warnings: string[] }) => {
+      status: number;
+      body: object;
+    },
+  ) => {
+    const response = buildResponse({ email: mockEmail, warnings: [] });
+    return Promise.resolve({
+      status: response.status,
+      body: response.body,
+      replayed: idempotencyKey === "replay-me",
+    });
+  },
+);
 void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   createEmail: createEmailMock,
+  createEmailIdempotent: createEmailIdempotentMock,
   listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   listAllEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   getEmailById: mock((id: string) =>
@@ -214,6 +237,56 @@ describe("Emails API E2E", () => {
       );
 
       expect(response.status).toBe(422);
+    });
+
+    describe("with an Idempotency-Key (#188)", () => {
+      /** POSTs a valid send with the given `Idempotency-Key`. */
+      function sendWithKey(idempotencyKey: string): Promise<Response> {
+        return app.handle(
+          new Request("http://localhost/api/v1/emails/send", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer test_key",
+              "idempotency-key": idempotencyKey,
+            },
+            body: JSON.stringify({
+              from: "hello@example.com",
+              to: "user@test.com",
+              subject: "Test",
+              text: "hi",
+            }),
+          }),
+        );
+      }
+
+      test("a first request answers without the replay header", async () => {
+        createEmailMock.mockClear();
+        createEmailIdempotentMock.mockClear();
+        const response = await sendWithKey("first-time");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("idempotent-replayed")).toBeNull();
+        const body = await readJson<EmailResponse>(response);
+        expect(body.data.id).toBe("msg_test123");
+        expect(createEmailMock).not.toHaveBeenCalled();
+        expect(createEmailIdempotentMock).toHaveBeenCalledTimes(1);
+        expect(createEmailIdempotentMock.mock.calls[0]![2]).toBe("first-time");
+      });
+
+      test("a replay carries Idempotent-Replayed: true", async () => {
+        const response = await sendWithKey("replay-me");
+        expect(response.status).toBe(200);
+        expect(response.headers.get("idempotent-replayed")).toBe("true");
+        const body = await readJson<EmailResponse>(response);
+        expect(body.data.id).toBe("msg_test123");
+      });
+
+      test("an invalid key is a 422 and reaches no service", async () => {
+        createEmailIdempotentMock.mockClear();
+        const response = await sendWithKey("has a space");
+        expect(response.status).toBe(422);
+        expect(createEmailIdempotentMock).not.toHaveBeenCalled();
+      });
     });
 
     test("returns 422 when html body exceeds the 5MB cap", async () => {

@@ -18,7 +18,8 @@ type IdPrefix =
   | "utk" // one-time token: owner setup, invite, password reset (#214)
   | "udv" // browser an account signed in from (#282)
   | "rcv" // TOTP recovery code (#220)
-  | "aud"; // audit log event (#221)
+  | "aud" // audit log event (#221)
+  | "idk"; // idempotency key on the send API (#188)
 
 /**
  * Generates a prefixed unique ID.

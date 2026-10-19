@@ -1,5 +1,6 @@
 import type { emails } from "../models/email.schema.ts";
 import type { InferSelectModel } from "drizzle-orm";
+import type { db } from "../../../db/index.ts";
 
 /** All possible statuses an email can be in during its lifecycle */
 export const EMAIL_STATUSES = ["queued", "sending", "sent", "failed", "bounced"] as const;
@@ -64,6 +65,42 @@ export interface CreatedEmail {
   email: Email;
   /** Empty when the sender domain is registered and fully verified. */
   warnings: SendWarning[];
+}
+
+/** The transaction handle `db.transaction` passes to its callback. */
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Where an emails-module write runs: the shared pool or an open transaction. */
+export type DbExecutor = typeof db | Tx;
+
+/** A JSON value, as stored in a `jsonb` column and sent in a response. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+
+/** A JSON object. */
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
+/**
+ * A send response before it is stored and returned (#188): the HTTP
+ * status and the body the route would answer with.
+ */
+export interface SendResponse {
+  status: number;
+  body: object;
+}
+
+/**
+ * What `createEmailIdempotent` returns (#188): the response to send, as
+ * stored for the key, and whether it is a replay of an earlier request.
+ */
+export interface IdempotentSendResult {
+  /** HTTP status of the (first) response. */
+  status: number;
+  /** Body of the (first) response, as JSON. */
+  body: JsonObject;
+  /** `true` when an earlier request with the same key created the email. */
+  replayed: boolean;
 }
 
 /**

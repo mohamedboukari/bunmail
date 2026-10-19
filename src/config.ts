@@ -414,6 +414,30 @@ export function readWebhookDeliveryRetentionDays(
   );
 }
 
+/** Default and bounds of `IDEMPOTENCY_KEY_TTL_HOURS` (#188), in hours. */
+export const DEFAULT_IDEMPOTENCY_KEY_TTL_HOURS = 24;
+export const MIN_IDEMPOTENCY_KEY_TTL_HOURS = 1;
+export const MAX_IDEMPOTENCY_KEY_TTL_HOURS = 168;
+
+/**
+ * Reads `IDEMPOTENCY_KEY_TTL_HOURS`, how long an `Idempotency-Key` on the
+ * send API is remembered (#188): a retry with the same key inside this
+ * window replays the first response, after it the key is reusable. Unset
+ * or blank: 24. Anything other than a whole number of hours from 1 to 168
+ * refuses to boot.
+ */
+export function readIdempotencyKeyTtlHours(
+  raw: string | undefined = process.env["IDEMPOTENCY_KEY_TTL_HOURS"],
+): number {
+  return optionalBoundedInt(
+    "IDEMPOTENCY_KEY_TTL_HOURS",
+    DEFAULT_IDEMPOTENCY_KEY_TTL_HOURS,
+    MIN_IDEMPOTENCY_KEY_TTL_HOURS,
+    MAX_IDEMPOTENCY_KEY_TTL_HOURS,
+    raw,
+  );
+}
+
 /**
  * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
  * #217) is sent from. Trimmed and lower-cased; unset or empty means no
@@ -941,6 +965,17 @@ export const config = {
      * history silently.
      */
     retentionDays: readAuditLogRetentionDays(),
+  },
+
+  /** Idempotency keys on `POST /api/v1/emails/send` (#188). */
+  idempotency: {
+    /**
+     * Hours a key is remembered (`IDEMPOTENCY_KEY_TTL_HOURS`, default 24, a
+     * whole number from 1 to 168). Within it a retry with the same key and
+     * body replays the first response; after it the key is reusable, and
+     * the purge worker deletes the expired row.
+     */
+    keyTtlHours: readIdempotencyKeyTtlHours(),
   },
 
   /**

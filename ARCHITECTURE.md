@@ -207,7 +207,7 @@ bunmail/
 │   │   │       └── stats.serialization.ts
 │   │   ├── trash/
 │   │   │   └── services/
-│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216, audit log retention, #221)
+│   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216, audit log retention, #221, expired idempotency keys, #188)
 │   │   ├── audit/                        ← Audit log of security-relevant actions (#221), no REST plugin
 │   │   │   ├── models/audit-event.schema.ts ← audit_events pgTable (append-only, no FKs)
 │   │   │   ├── services/                 ← audit.service.ts (record / list / purge), audit-context.service.ts (actor, IP, user agent of a request)
@@ -511,7 +511,7 @@ Both `emails` and `inbound_emails` use a `deleted_at` soft-delete marker. Settin
 
 `TRASH_RETENTION_DAYS` is configurable via env (default `7`). The purge runs once on boot to catch anything that aged out while the server was offline.
 
-The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself. It also deletes sign-in devices not seen for 400 days (`runDeviceSweep` → `purgeStaleUserDevices`, #282, logged as `Stale sign-in device sweep completed`), and audit events older than `AUDIT_LOG_RETENTION_DAYS` (default 365, #221: `runAuditRetention` → `purgeOldAuditEvents`, in batches of 5000, logged as `Audit log retention sweep completed` and recorded in the audit log itself as `audit_log.purged`).
+The same loop also deletes expired dashboard sessions (`runSessionSweep` → `purgeExpiredSessions`, #216: `DELETE FROM sessions WHERE expires_at < now()`, logged as `Expired session sweep completed`). Housekeeping only: the session guard enforces expiry itself. It also deletes sign-in devices not seen for 400 days (`runDeviceSweep` → `purgeStaleUserDevices`, #282, logged as `Stale sign-in device sweep completed`), audit events older than `AUDIT_LOG_RETENTION_DAYS` (default 365, #221: `runAuditRetention` → `purgeOldAuditEvents`, in batches of 5000, logged as `Audit log retention sweep completed` and recorded in the audit log itself as `audit_log.purged`), and idempotency keys past `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, #188: `runIdempotencyKeySweep` → `purgeExpiredIdempotencyKeys`, in batches of 5000, logged as `Expired idempotency key sweep completed`). Housekeeping only: the send API treats an expired key as absent.
 
 ---
 
@@ -620,6 +620,24 @@ Post-purge audit trail. Every hard-delete of an `emails` row first writes a snap
 Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list).
 
 Retention: `TOMBSTONE_RETENTION_DAYS` (default 90): the existing 6h trash purge loop also runs `runTombstoneRetention` on the same cadence.
+
+### `idempotency_keys` (#188)
+
+`Idempotency-Key` header values seen on `POST /api/v1/emails/send` (migration `0030`), one row per (API key, key) for `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, 1 to 168). A table rather than a column on `emails`: a unique index on `emails` cannot express the TTL, and keys must not follow emails through trash and purge. See [docs/emails.md](docs/emails.md#idempotency-keys).
+
+| Column          | Type           | Constraints                                   |
+|-----------------|----------------|-----------------------------------------------|
+| id              | varchar(36)    | PK (`idk_…`)                                  |
+| api_key_id      | varchar(36)    | NOT NULL, FK → api_keys.id `ON DELETE CASCADE` |
+| key             | text           | NOT NULL: the header value                    |
+| request_hash    | text           | NOT NULL: SHA-256 hex of the canonical JSON body |
+| email_id        | varchar(36)    | nullable, FK → emails.id `ON DELETE SET NULL`, indexed |
+| response_status | integer        | nullable (only inside the creating transaction) |
+| response_body   | jsonb          | nullable: the first response, replayed as is  |
+| created_at      | timestamptz    | NOT NULL, default `now()`                     |
+| expires_at      | timestamptz    | NOT NULL, indexed (purge)                     |
+
+Unique index `(api_key_id, key)`: the send claims the key with `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE expires_at <= now()` in the transaction that inserts the email, so concurrent duplicates wait on it and replay the committed row (no in-progress state).
 
 ### `webhook_deliveries` (#30)
 
@@ -819,7 +837,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 | Method | Path                                | Description                                | Auth |
 |--------|-------------------------------------|--------------------------------------------|------|
-| POST   | /api/v1/emails/send                 | Send an email                              | Yes  |
+| POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188) | Yes  |
 | GET    | /api/v1/emails                      | List sent emails (excludes trash)          | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
 | GET    | /api/v1/emails/:id                  | Get email by ID                            | Yes  |
@@ -1123,7 +1141,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `IDEMPOTENCY_KEY_TTL_HOURS` (#188, 1 to 168, default 24) sets how long an `Idempotency-Key` on the send API is remembered; anything else refuses to boot. Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 

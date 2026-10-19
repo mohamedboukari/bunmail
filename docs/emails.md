@@ -45,6 +45,24 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_due_per_key` (`(api_key_id, next_attempt_at, created_at)` WHERE `status = 'queued' AND deleted_at IS NULL`) fair queue claim of each key's due rows (#258, replaces `idx_emails_due` of #180)
 - `idx_emails_lease` (`(lease_until)` WHERE `status = 'sending'`) reclaim of expired leases (#180)
 
+**Table:** `idempotency_keys` (#188)
+
+One row per (API key, `Idempotency-Key`) used on `POST /api/v1/emails/send` within `IDEMPOTENCY_KEY_TTL_HOURS`. See [Idempotency Keys](#idempotency-keys).
+
+| Column            | Type         | Constraints                          | Description |
+|-------------------|--------------|--------------------------------------|-------------|
+| `id`              | varchar(36)  | PK                                   | Prefixed ID (`idk_<24 hex>`) |
+| `api_key_id`      | varchar(36)  | NOT NULL, FK → api_keys (CASCADE)    | The key the idempotency key belongs to |
+| `key`             | text         | NOT NULL                             | The `Idempotency-Key` header value (1 to 255 printable ASCII characters) |
+| `request_hash`    | text         | NOT NULL                             | SHA-256 hex of the canonical JSON of the validated body (object keys sorted) |
+| `email_id`        | varchar(36)  | nullable, FK → emails (SET NULL)     | The email the first request created; null once that email is purged |
+| `response_status` | integer      | nullable                             | HTTP status of the first response (null only inside the creating transaction) |
+| `response_body`   | jsonb        | nullable                             | Body of the first response, replayed as is (null only inside the creating transaction) |
+| `created_at`      | timestamptz  | NOT NULL, default now                | First use of the key |
+| `expires_at`      | timestamptz  | NOT NULL                             | `created_at` plus the TTL; the key is reusable after it |
+
+Indexes: `idempotency_keys_api_key_key_unique` (unique `(api_key_id, key)`, the claim target), `idempotency_keys_expires_at_idx` (the purge), `idempotency_keys_email_id_idx` (backs the `email_id` foreign key on email deletes).
+
 ## Module Layout
 
 ```
@@ -52,12 +70,14 @@ src/modules/emails/
 ├── emails.plugin.ts                ← Routes: send, list, get, trash/restore/permanent/empty
 ├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
-│   └── email.schema.ts             ← Drizzle pgTable + indexes
+│   ├── email.schema.ts             ← Drizzle pgTable + indexes
+│   └── idempotency-key.schema.ts   ← Idempotency keys of the send API (#188)
 ├── dtos/
-│   ├── send-email.dto.ts           ← Send email validation (direct + template)
+│   ├── send-email.dto.ts           ← Send email validation (direct + template), Idempotency-Key header
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
+│   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
@@ -67,7 +87,7 @@ src/modules/emails/
 ├── serializations/
 │   └── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
 └── types/
-    └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters, SendWarning, CreatedEmail
+    └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
 ```
 
 ## Sending Modes
@@ -137,6 +157,26 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - **SMTP submission** relays `In-Reply-To`, `References` and `X-*` from the submitted message through the same rules, dropping (not refusing) any that fail: see [smtp-submission.md](smtp-submission.md).
 - **Logs** carry header names, counts and the rule broken, never values.
 
+## Idempotency Keys
+
+`POST /api/v1/emails/send` takes an optional `Idempotency-Key` header (#188): a retry with the same key and body within `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, 1 to 168) creates nothing and answers with the first response plus `Idempotent-Replayed: true`; the same key with another body is `422 IDEMPOTENCY_KEY_REUSED`. Client-facing rules are in [api.md](api.md#post-apiv1emailssend).
+
+**Why a table and not a column on `emails`:** the issue proposed an `idempotency_key` column with a unique index on `(api_key_id, idempotency_key)`. That index cannot express the TTL (an expired key must become reusable while its email stays), and a key would follow its email through trash and purge. A separate table keeps the key's lifetime independent of the email's, and stores the response snapshot a replay needs after the email is gone.
+
+**Flow** (`createEmailIdempotent` in `email.service.ts`, storage in `idempotency.service.ts`):
+
+1. Hash the validated body: SHA-256 of its canonical JSON (object keys sorted at every depth), so the same JSON with members in another order matches.
+2. A live row for `(api_key_id, key)` (`expires_at > now()`) answers at once: replay when the hash matches, `IdempotencyKeyReusedError` when not. This runs before the send is checked, so a replay returns the original result even if, for example, the recipient was suppressed since.
+3. Otherwise run every send check (`prepareEmail`: custom headers, suppression, key and allowed senders, template, subject, body, sender domain) outside any transaction. A refused send stores nothing, so the client can fix the cause and retry with the same key.
+4. In one transaction: claim the key first (`INSERT ... ON CONFLICT (api_key_id, key) DO UPDATE ... WHERE expires_at <= now() RETURNING id`, which inserts it or takes over an expired row), insert the email, then fill `email_id`, `response_status` and `response_body` on the claimed row. A committed row is therefore always complete: there is no in-progress state.
+5. If the claim returns nothing, a live row exists and is committed (the unique index made this transaction wait until the other one committed; had it rolled back, the claim would have succeeded). Read it and replay or refuse as in step 2.
+
+Concurrent requests with the same key create exactly one email: one claims, the others wait on the unique index (or on the expired row's lock) and replay once it commits. Inside the transaction every query runs on the transaction's connection, so waiting requests holding pool connections cannot starve the one they wait for.
+
+**What is not idempotent:** SMTP submission (no natural header; REST only), and the per-key rate limit (a replay is a request and counts). `reserveAccepted` (#190) only applies to SMTP submission, so replays reserve no quota.
+
+**Retention:** the purge worker deletes expired rows in batches (`purgeExpiredIdempotencyKeys`, 5000 rows per batch, every 6 hours with the trash purge). Correctness never depends on it: an expired row is treated as absent and taken over in place. The snapshot holds the serialized email, message content included, for up to the TTL, even after the email itself is permanently deleted.
+
 ## Feedback-ID and Auto-Submitted (#250)
 
 - **`Feedback-ID`** on every queued email: `<source>:<key>:<sender domain>:bunmail`, where `source` is `api` or `smtp` and `key` is 12 hex characters of a hash (`Bun.hash`) of the sending API key id (stable per tenant, no internal identifier exposed). Gmail's feedback loop aggregates complaints by it; it is deliberately low-cardinality (no per-message id). It is DKIM-signed. BunMail's own mail uses `system:system:<domain>:bunmail`.
@@ -186,6 +226,9 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
 Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
+#### `createEmailIdempotent(input, apiKeyId, idempotencyKey, buildResponse): Promise<IdempotentSendResult>`
+`createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
+
 #### `getEmailById(id, apiKeyId): Promise<Email | undefined>`
 Retrieves a non-trashed email scoped to the requesting API key.
 
@@ -215,6 +258,20 @@ Permanently deletes every trashed email for the key. Returns count.
 **Trash (unscoped: dashboard only)**
 
 `trashEmailUnscoped`, `trashEmailsUnscoped`, `listTrashedEmailsUnscoped`, `getTrashedEmailByIdUnscoped`, `restoreEmailUnscoped`, `permanentDeleteEmailUnscoped`, `emptyEmailsTrashUnscoped`: same semantics, no API-key filter.
+
+### idempotency.service.ts
+
+#### `hashSendRequest(input): string` / `canonicalJson(value): string`
+SHA-256 hex of the canonical JSON of a send body (object keys sorted, `undefined` dropped).
+
+#### `findIdempotencyRecord(executor, apiKeyId, key, { liveOnly })`
+The stored row, or undefined; with `liveOnly` an expired row counts as absent.
+
+#### `claimIdempotencyKey(tx, claim): Promise<string | null>` / `completeIdempotencyKey(tx, id, outcome)`
+Claim inserts the row or takes over an expired one (null when a live row exists); complete stores the email id and the response.
+
+#### `purgeExpiredIdempotencyKeys(batchSize?): Promise<number>`
+Deletes expired rows in batches; run by the purge worker (`runIdempotencyKeySweep`).
 
 ### sender-domain.service.ts
 

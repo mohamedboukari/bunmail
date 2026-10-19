@@ -73,3 +73,28 @@ export const sendEmailDto = t.Object({
     ),
   ),
 });
+
+/**
+ * Valid `Idempotency-Key` header values (#188): 1 to 255 printable ASCII
+ * characters (0x21 to 0x7E), so no spaces and no control characters. A
+ * repeated header arrives joined with ", " and fails the pattern.
+ */
+const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,255}$";
+
+/**
+ * Request headers of POST /api/v1/emails/send that are validated: the
+ * optional `Idempotency-Key` (#188, draft-ietf-httpapi-idempotency-key-header).
+ * Elysia lower-cases header names; other headers pass through unchecked.
+ */
+export const sendEmailHeadersDto = t.Object(
+  {
+    "idempotency-key": t.Optional(
+      t.String({
+        pattern: IDEMPOTENCY_KEY_PATTERN,
+        description:
+          "Makes the send safe to retry: a repeat with the same key and body within IDEMPOTENCY_KEY_TTL_HOURS (default 24) creates nothing and returns the first response with `Idempotent-Replayed: true`; the same key with another body is refused with 422 IDEMPOTENCY_KEY_REUSED. 1 to 255 printable ASCII characters, no spaces. Scoped to the API key.",
+      }),
+    ),
+  },
+  { additionalProperties: true },
+);
