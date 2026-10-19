@@ -58,7 +58,7 @@ src/modules/inbound/
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
-│   ├── notify-throttle.ts           ← Per-recipient notification budget, 5 per 10 min (#250)
+│   ├── notify-throttle.ts           ← Notification budgets: 5 per address, 30 per domain, per 10 min (#250)
 │   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
 │   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
@@ -170,6 +170,8 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 
 Unsubscribe requests, mail to return paths, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
+The `info` line logged for a stored message (`Inbound email received and stored`) carries its id, the redacted sender and recipient and the size in bytes, never the subject or body text (#250); only the subject's length is logged, at `debug`.
+
 ## Inbound Notifications (#106)
 
 A domain can opt in to email notifications by setting its `notify_email`
@@ -215,21 +217,28 @@ message is itself automatic: `Auto-Submitted` with any value other than
 `X-Autorespond` header, or a null return path (`MAIL FROM:<>`). The message
 is still stored and still fires `email.received`.
 
-### Throttle per recipient address (#250)
+### Notification budgets (#250)
 
-Each recipient address gets at most **5 notifications per 10 minutes**
-(fixed window, code constants in `notify-throttle.ts`). Later mail in the
-window is stored as usual but not notified individually; the first one
-skipped logs `Inbound notifications throttled for this address` at `info`
-(once per window per address). The next notification for that address, in
-a later window, adds "And N more emails since <time>". There is no timer
-that reports a count on its own: when no more mail arrives for the address,
-the count is dropped after a day (the dashboard still lists every message).
+Two fixed-window budgets apply (code constants in `notify-throttle.ts`), and
+a notification needs both:
 
-The budget lives in memory: it is **per replica** (two replicas allow up to
-twice the budget) and resets on restart. It is keyed by the exact recipient
-address, so a domain that accepts any local part gives each address its own
-budget; the SMTP per-IP connection rate limit is the cap across addresses.
+- each recipient address gets at most **5 notifications per 10 minutes**;
+- each recipient domain gets at most **30 notifications per 10 minutes**,
+  whatever the addresses, so a domain that accepts any local part cannot be
+  flooded through many addresses with a budget each.
+
+Later mail is stored as usual but not notified individually. The first
+message skipped in a window logs `Inbound notifications throttled for this
+address` or `Inbound notifications throttled for this domain` at `info`
+(once per window per address or per domain). A skipped message is counted
+against its address either way, and the next notification for that address
+adds "And N more emails since <time>". A message skipped by one budget does
+not use up the other. There is no timer that reports a count on its own:
+when no more mail arrives for the address, the count is dropped after a day
+(the dashboard still lists every message).
+
+The budgets live in memory: they are **per replica** (two replicas allow up
+to twice the budgets) and reset on restart.
 
 > **Limitations.** The inbound path does **not** verify SPF/DKIM/DMARC on
 > received mail today, so the sender address in a notification is whatever
@@ -275,9 +284,10 @@ bounded prefix only.
 ### notify-throttle.ts (#250)
 
 `NotifyThrottle.check(recipient, now)` decides whether a message is
-notified (and returns the count skipped in an earlier window to report);
-`prune(now)` runs from the receiver's existing 5-minute sweep. Built on the
-fixed-window `checkRateLimit` of `src/middleware/rate-limit-core.ts`.
+notified under both budgets (and returns the count skipped earlier for that
+address, to report), or which budget is spent; `prune(now)` runs from the
+receiver's existing 5-minute sweep. Built on the fixed-window
+`checkRateLimit` of `src/middleware/rate-limit-core.ts`.
 
 ### threading.ts (#192, pure)
 

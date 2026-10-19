@@ -1,22 +1,25 @@
 /**
  * Inbound notifications on the real inbound SMTP receiver and a real
  * Postgres (#250): the neutral subject, no inbound content, no
- * notification for automatic mail, and the per-recipient throttle. The
+ * notification for automatic mail, the per-address and per-domain
+ * budgets, and no inbound subject in the receiver's logs. The
  * mailer, the clock and the throttle are injected into the receiver, so
  * nothing leaves the machine.
  */
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll, beforeEach, spyOn } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.service.ts";
 import type { InboundNotifyDeps } from "../../src/modules/inbound/services/inbound-notify.service.ts";
 import {
+  NOTIFY_DOMAIN_THROTTLE_MAX,
   NOTIFY_THROTTLE_WINDOW_MS,
   NotifyThrottle,
 } from "../../src/modules/inbound/services/notify-throttle.ts";
 import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
 import { inboundEmails } from "../../src/modules/inbound/models/inbound-email.schema.ts";
 import { config } from "../../src/config.ts";
+import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, domains } from "./_helpers.ts";
 
 /** Isolated port, distinct from the other SMTP test files. */
@@ -26,6 +29,8 @@ const DOMAIN = "inbox.example.com";
 const NOTIFY_TO = "owner@elsewhere.example.org";
 const ALICE = `alice@${DOMAIN}`;
 const BOB = `bob@${DOMAIN}`;
+/** A second notify-enabled domain, with budgets of its own. */
+const OTHER_DOMAIN = "other.example.com";
 
 /** Fixed clock, moved by the throttle test. */
 const T0 = Date.parse("2026-10-19T12:00:00Z");
@@ -79,8 +84,10 @@ afterAll(() => {
 
 beforeEach(async () => {
   await truncateAll();
-  const { id } = await seed.domain({ name: DOMAIN });
-  await db.update(domains).set({ notifyEmail: NOTIFY_TO }).where(eq(domains.id, id));
+  for (const name of [DOMAIN, OTHER_DOMAIN]) {
+    const { id } = await seed.domain({ name });
+    await db.update(domains).set({ notifyEmail: NOTIFY_TO }).where(eq(domains.id, id));
+  }
   calls.length = 0;
   clock = T0;
   deps.throttle = new NotifyThrottle();
@@ -119,7 +126,7 @@ async function deliver(raw: string, to: string, from = "mallory@sender.example.n
  * fire-and-forget after the SMTP ack).
  */
 async function settle(count: number): Promise<void> {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 10_000;
   while (calls.length < count && Date.now() < deadline) await Bun.sleep(20);
   await Bun.sleep(250);
 }
@@ -208,5 +215,70 @@ describe("per-recipient throttle", () => {
     expect(calls[6]?.text).toContain(
       `And 2 more emails since ${new Date(T0).toUTCString()}, not notified separately`,
     );
+  });
+});
+
+describe("per-domain budget", () => {
+  test("31 addresses on one domain notify 30 times; another domain is unaffected", async () => {
+    const address = (i: number): string => `user${i}@${DOMAIN}`;
+    for (let i = 0; i <= NOTIFY_DOMAIN_THROTTLE_MAX; i++) {
+      await deliver(message(address(i)), address(i));
+    }
+    await settle(NOTIFY_DOMAIN_THROTTLE_MAX);
+    expect(calls).toHaveLength(NOTIFY_DOMAIN_THROTTLE_MAX);
+    expect(await storedCount()).toBe(NOTIFY_DOMAIN_THROTTLE_MAX + 1);
+
+    const other = `someone@${OTHER_DOMAIN}`;
+    await deliver(message(other), other);
+    await settle(NOTIFY_DOMAIN_THROTTLE_MAX + 1);
+    expect(calls).toHaveLength(NOTIFY_DOMAIN_THROTTLE_MAX + 1);
+    expect(calls.at(-1)?.subject).toBe(`New email for ${other}`);
+
+    /** The skipped address hears about it on its next notification. */
+    clock = T0 + NOTIFY_THROTTLE_WINDOW_MS + 1000;
+    const skipped = address(NOTIFY_DOMAIN_THROTTLE_MAX);
+    await deliver(message(skipped), skipped);
+    await settle(NOTIFY_DOMAIN_THROTTLE_MAX + 2);
+    expect(calls.at(-1)?.subject).toBe(`New email for ${skipped}`);
+    expect(calls.at(-1)?.text).toContain(
+      `And 1 more email since ${new Date(T0).toUTCString()}, not notified separately`,
+    );
+  }, 60_000);
+});
+
+describe("receiver logs", () => {
+  test("no inbound subject or body text in any log line", async () => {
+    const levels = ["debug", "info", "warn", "error"] as const;
+    const lines: { message: string; context: unknown }[] = [];
+    const spies = levels.map((level) =>
+      spyOn(logger, level).mockImplementation((text: string, context?: unknown) => {
+        lines.push({ message: text, context });
+      }),
+    );
+    try {
+      await deliver(message(ALICE), ALICE);
+      await settle(1);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+
+    const stored = lines.find((l) => l.message === "Inbound email received and stored");
+    if (!stored) throw new Error("expected the stored line");
+    expect(stored.context).not.toHaveProperty("subject");
+    expect(stored.context).toHaveProperty("id");
+    expect(stored.context).toHaveProperty("bytes");
+    const subjectLine = lines.find((l) => l.message === "Inbound email subject");
+    expect(subjectLine?.context).toMatchObject({
+      subjectLength: "Verify your account https://evil.example/login".length,
+    });
+    const all = JSON.stringify(lines).toLowerCase();
+    for (const fragment of [
+      "verify your account",
+      "evil.example",
+      "phish.example",
+      "click",
+    ]) {
+      expect(all).not.toContain(fragment);
+    }
   });
 });

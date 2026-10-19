@@ -187,7 +187,7 @@ bunmail/
 │   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
 │   │   │   │   ├── inbound-notify.service.ts ← "New email for <address>" notifications: plain text, no inbound content by default, automatic mail skipped (#106, #250)
-│   │   │   │   ├── notify-throttle.ts    ← Per-recipient notification budget, 5 per 10 min, in memory (#250)
+│   │   │   │   ├── notify-throttle.ts    ← Notification budgets: 5 per address, 30 per domain, per 10 min, in memory (#250)
 │   │   │   │   └── inbound.service.ts    ← Reads + trash/restore/permanent
 │   │   │   ├── models/
 │   │   │   │   └── inbound-email.schema.ts ← inbound_emails pgTable

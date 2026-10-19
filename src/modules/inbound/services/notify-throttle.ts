@@ -5,21 +5,28 @@ import {
 } from "../../../middleware/rate-limit-core.ts";
 
 /**
- * Per-recipient throttle for inbound notifications (#250).
+ * Throttle for inbound notifications (#250).
  *
- * A flood of inbound mail to one address must not become a flood of
- * notifications signed by the operator's domain. At most
- * {@link NOTIFY_THROTTLE_MAX} notifications go out per recipient address
- * per {@link NOTIFY_THROTTLE_WINDOW_MS}; later mail in that window is
- * counted instead, and the first notification of a later window reports
- * the count ("and N more since <time>").
+ * A flood of inbound mail must not become a flood of notifications
+ * signed by the operator's domain. Two fixed-window budgets apply, and a
+ * notification needs both:
+ * - per recipient address: {@link NOTIFY_THROTTLE_MAX} per window;
+ * - per recipient domain: {@link NOTIFY_DOMAIN_THROTTLE_MAX} per window,
+ *   so a domain that accepts any local part cannot be flooded through
+ *   many addresses, each with a budget of its own.
+ * A message over either budget is counted against its address instead,
+ * and the next notification for that address reports the count ("and N
+ * more since <time>").
  *
- * In memory, so the budget is per replica, like the other limiters; the
+ * In memory, so the budgets are per replica, like the other limiters; the
  * window logic is the HTTP limiter's ({@link checkRateLimit}).
  */
 
 /** Notifications per recipient address per window. */
 export const NOTIFY_THROTTLE_MAX = 5;
+
+/** Notifications per recipient domain per window. */
+export const NOTIFY_DOMAIN_THROTTLE_MAX = 30;
 
 /** Length of a throttle window: 10 minutes. */
 export const NOTIFY_THROTTLE_WINDOW_MS = 10 * 60 * 1000;
@@ -42,39 +49,81 @@ export interface SkippedNotifications {
 export type NotifyThrottleDecision =
   | {
       notify: true;
-      /** Messages skipped in an earlier window, to mention; `null` when none. */
+      /** Messages skipped earlier for this address, to mention; `null` when none. */
       skipped: SkippedNotifications | null;
     }
   | {
       notify: false;
-      /** True for the first skipped message of the window (log once). */
+      /** Which budget is spent. */
+      limitedBy: "address" | "domain";
+      /** True for the first message that budget skipped in its window (log once). */
       firstInWindow: boolean;
     };
 
-/** The per-recipient notification budget, one instance per process. */
+/** Whether `key`'s current window has already used all `max` slots. */
+function isSpent(
+  map: Map<string, RateLimitEntry>,
+  key: string,
+  now: number,
+  max: number,
+): boolean {
+  const entry = map.get(key);
+  return (
+    entry !== undefined &&
+    now - entry.windowStart < NOTIFY_THROTTLE_WINDOW_MS &&
+    entry.count >= max
+  );
+}
+
+/** The notification budgets, one instance per process. */
 export class NotifyThrottle {
-  /** Fixed window per recipient: count and start. */
-  private readonly windows = new Map<string, RateLimitEntry>();
-  /** Skipped messages per recipient, until a notification reports them. */
+  /** Fixed window per recipient address: count and start. */
+  private readonly addresses = new Map<string, RateLimitEntry>();
+  /** Fixed window per recipient domain: count and start. */
+  private readonly domains = new Map<string, RateLimitEntry>();
+  /** Skipped messages per recipient address, until a notification reports them. */
   private readonly skipped = new Map<string, SkippedNotifications>();
 
   /**
    * Records one message for `recipient` and decides whether it is
-   * notified. Addresses compare case-insensitively.
+   * notified. Addresses and domains compare case-insensitively. A message
+   * skipped by one budget does not use up the other: the address budget
+   * is checked first without touching the domain's, and a message the
+   * domain budget skips is not counted against the address's.
    */
   check(recipient: string, now: number): NotifyThrottleDecision {
     const key = recipient.toLowerCase();
-    const decision = checkRateLimit(this.windows, key, now, {
+    const domain = key.slice(key.lastIndexOf("@") + 1);
+    const addressOptions = {
       max: NOTIFY_THROTTLE_MAX,
       windowMs: NOTIFY_THROTTLE_WINDOW_MS,
-    });
-    if (decision.limited) {
-      const pending = this.skipped.get(key);
-      if (pending) pending.count += 1;
-      else this.skipped.set(key, { count: 1, since: now });
-      return { notify: false, firstInWindow: decision.count === NOTIFY_THROTTLE_MAX + 1 };
+    };
+
+    if (isSpent(this.addresses, key, now, NOTIFY_THROTTLE_MAX)) {
+      const decision = checkRateLimit(this.addresses, key, now, addressOptions);
+      this.recordSkipped(key, now);
+      return {
+        notify: false,
+        limitedBy: "address",
+        firstInWindow: decision.limited && decision.count === NOTIFY_THROTTLE_MAX + 1,
+      };
     }
-    /** A fixed window only lets mail through again once a new one starts. */
+
+    const domainDecision = checkRateLimit(this.domains, domain, now, {
+      max: NOTIFY_DOMAIN_THROTTLE_MAX,
+      windowMs: NOTIFY_THROTTLE_WINDOW_MS,
+    });
+    if (domainDecision.limited) {
+      this.recordSkipped(key, now);
+      return {
+        notify: false,
+        limitedBy: "domain",
+        firstInWindow: domainDecision.count === NOTIFY_DOMAIN_THROTTLE_MAX + 1,
+      };
+    }
+
+    /** Not spent (checked above), so this only takes a slot. */
+    checkRateLimit(this.addresses, key, now, addressOptions);
     const pending = this.skipped.get(key) ?? null;
     this.skipped.delete(key);
     return { notify: true, skipped: pending };
@@ -82,9 +131,17 @@ export class NotifyThrottle {
 
   /** Drops expired windows and counts too old to report. */
   prune(now: number): void {
-    pruneExpiredEntries(this.windows, now, NOTIFY_THROTTLE_WINDOW_MS);
+    pruneExpiredEntries(this.addresses, now, NOTIFY_THROTTLE_WINDOW_MS);
+    pruneExpiredEntries(this.domains, now, NOTIFY_THROTTLE_WINDOW_MS);
     for (const [key, pending] of this.skipped) {
       if (now - pending.since >= SKIPPED_RETENTION_MS) this.skipped.delete(key);
     }
+  }
+
+  /** Counts one skipped message against `key`. */
+  private recordSkipped(key: string, now: number): void {
+    const pending = this.skipped.get(key);
+    if (pending) pending.count += 1;
+    else this.skipped.set(key, { count: 1, since: now });
   }
 }

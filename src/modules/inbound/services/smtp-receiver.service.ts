@@ -621,11 +621,20 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                   ...threading,
                 });
 
+                /**
+                 * No subject or body: they are message content (#250). The
+                 * subject's length is enough to tell messages apart while
+                 * investigating.
+                 */
                 logger.info("Inbound email received and stored", {
                   id,
                   from: redactEmail(from),
                   to: redactEmail(to),
-                  subject: parsed.subject,
+                  bytes: rawBytes.length,
+                });
+                logger.debug("Inbound email subject", {
+                  id,
+                  subjectLength: parsed.subject?.length ?? 0,
                 });
 
                 /** Fire webhook event asynchronously (fire-and-forget) */

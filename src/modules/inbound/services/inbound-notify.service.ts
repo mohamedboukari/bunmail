@@ -10,6 +10,7 @@ import {
 import { resolveDomainDkim } from "../../domains/services/domain-dkim.service.ts";
 import type { Domain } from "../../domains/types/domain.types.ts";
 import {
+  NOTIFY_DOMAIN_THROTTLE_MAX,
   NOTIFY_THROTTLE_MAX,
   NOTIFY_THROTTLE_WINDOW_MS,
   NotifyThrottle,
@@ -40,7 +41,8 @@ import type { RawHeaderLine } from "./threading.ts";
  * preview to the body, plain text only, every link replaced. Automatic
  * inbound mail (auto-replies, bulk and list mail, a null return path) is
  * not notified, and each recipient address gets at most
- * {@link NOTIFY_THROTTLE_MAX} notifications per 10 minutes.
+ * {@link NOTIFY_THROTTLE_MAX} notifications per 10 minutes, each recipient
+ * domain at most {@link NOTIFY_DOMAIN_THROTTLE_MAX}.
  *
  * The receiver calls {@link notifyInboundReceived} fire-and-forget after
  * the inbound row is persisted, so a slow notification never delays the
@@ -160,7 +162,7 @@ export function buildInboundNotification(
       "",
       `And ${n} more ${n === 1 ? "email" : "emails"} since ${new Date(
         input.skipped.since,
-      ).toUTCString()}, not notified separately (at most ${NOTIFY_THROTTLE_MAX} notifications per address every 10 minutes).`,
+      ).toUTCString()}, not notified separately (at most ${NOTIFY_THROTTLE_MAX} notifications per address and ${NOTIFY_DOMAIN_THROTTLE_MAX} per domain every 10 minutes).`,
     );
   }
   if (input.detailUrl) {
@@ -228,7 +230,7 @@ export interface InboundNotifyDeps {
   send: typeof sendMail;
   /** The current time (ms). */
   now: () => number;
-  /** The per-recipient budget (#250). */
+  /** The per-address and per-domain budgets (#250). */
   throttle: NotifyThrottle;
 }
 
@@ -371,13 +373,13 @@ async function sendDomainNotification(
     return;
   }
   /**
-   * Per-recipient budget (#250): past it, the message is counted and the
-   * next notification for this address, in a later window, reports it.
+   * Per-address and per-domain budgets (#250): past either, the message is
+   * counted and the next notification for this address reports it.
    */
   const now = deps.now();
   const decision = deps.throttle.check(recipientAddress, now);
   if (!decision.notify) {
-    if (decision.firstInWindow) {
+    if (decision.firstInWindow && decision.limitedBy === "address") {
       logger.info("Inbound notifications throttled for this address", {
         inboundId: input.inboundId,
         to: redactEmail(recipientAddress),
@@ -385,10 +387,18 @@ async function sendDomainNotification(
         max: NOTIFY_THROTTLE_MAX,
         windowMinutes: NOTIFY_THROTTLE_WINDOW_MS / 60_000,
       });
+    } else if (decision.firstInWindow) {
+      logger.info("Inbound notifications throttled for this domain", {
+        inboundId: input.inboundId,
+        domain: domain.name,
+        max: NOTIFY_DOMAIN_THROTTLE_MAX,
+        windowMinutes: NOTIFY_THROTTLE_WINDOW_MS / 60_000,
+      });
     } else {
       logger.debug("Inbound notify skipped: throttled", {
         inboundId: input.inboundId,
         domain: domain.name,
+        limitedBy: decision.limitedBy,
       });
     }
     return;
