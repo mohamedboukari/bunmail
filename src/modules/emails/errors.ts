@@ -122,3 +122,22 @@ export class InvalidCustomHeaderError extends EmailSendRejectedError {
     this.header = header;
   }
 }
+
+/**
+ * An `Idempotency-Key` (#188) the calling API key already used, within
+ * `IDEMPOTENCY_KEY_TTL_HOURS`, on a request with a different body. A
+ * retry must repeat the original request exactly; nothing is sent. The
+ * message never echoes the key or the body. REST only: SMTP submission
+ * has no idempotency keys.
+ */
+export class IdempotencyKeyReusedError extends EmailSendRejectedError {
+  override readonly name = "IdempotencyKeyReusedError";
+  readonly status = 422;
+  readonly code = "IDEMPOTENCY_KEY_REUSED";
+
+  constructor() {
+    super(
+      "This Idempotency-Key was already used with a different request body. Use a new key for a new request.",
+    );
+  }
+}

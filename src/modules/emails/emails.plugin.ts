@@ -1,5 +1,5 @@
 import { Elysia, t } from "elysia";
-import { sendEmailDto } from "./dtos/send-email.dto.ts";
+import { sendEmailDto, sendEmailHeadersDto } from "./dtos/send-email.dto.ts";
 import { listEmailsDto } from "./dtos/list-emails.dto.ts";
 import { serializeEmail } from "./serializations/email.serialization.ts";
 import { serializeEmailTombstone } from "./serializations/email-tombstone.serialization.ts";
@@ -14,7 +14,8 @@ import { redactEmail } from "../../utils/redact.ts";
  * Emails plugin: registers all email-related routes under /api/v1/emails.
  *
  * Routes:
- * - POST /send                  → Queue a new email for delivery
+ * - POST /send                  → Queue a new email for delivery (optional
+ *                                 `Idempotency-Key` header, #188)
  * - GET  /                      → List emails (excludes trashed)
  * - GET  /trash                 → List trashed emails
  * - GET  /:id                   → Get a single email by ID (excludes trashed)
@@ -50,8 +51,28 @@ export const emailsPlugin = new Elysia({
    */
   .post(
     "/send",
-    async ({ body, apiKeyId }) => {
+    async ({ body, apiKeyId, headers, set }) => {
       logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
+
+      /**
+       * With an `Idempotency-Key` (#188) the response comes from the key's
+       * stored snapshot: the first request stores it, a retry replays it.
+       */
+      const idempotencyKey = headers["idempotency-key"];
+      if (idempotencyKey !== undefined) {
+        const result = await emailService.createEmailIdempotent(
+          body,
+          apiKeyId,
+          idempotencyKey,
+          ({ email, warnings }) => ({
+            status: 200,
+            body: { success: true, data: serializeEmail(email), warnings },
+          }),
+        );
+        set.status = result.status;
+        if (result.replayed) set.headers["idempotent-replayed"] = "true";
+        return result.body;
+      }
 
       /** Create the email record: it starts in "queued" status */
       const { email, warnings } = await emailService.createEmail(body, apiKeyId);
@@ -64,11 +85,12 @@ export const emailsPlugin = new Elysia({
     },
     {
       body: sendEmailDto,
+      headers: sendEmailHeadersDto,
       detail: {
         tags: ["Emails"],
         summary: "Send an email",
         description:
-          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are).",
+          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are). An optional `Idempotency-Key` header makes the request safe to retry: a repeat with the same key and body returns the first response with `Idempotent-Replayed: true` instead of sending again.",
         security: [{ bearerAuth: [] }],
       },
     },

@@ -56,6 +56,7 @@ export async function truncateAll(): Promise<void> {
       user_credentials,
       users,
       suppressions,
+      idempotency_keys,
       emails,
       email_tombstones,
       webhooks,

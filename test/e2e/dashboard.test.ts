@@ -115,6 +115,11 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   getEmailById: mock(() => Promise.resolve(undefined)),
   createEmail: mock(() => Promise.resolve({ email: {}, warnings: [] })),
+  /** Not used by the dashboard; listed so the module keeps the export when
+   *  `emails-api.test.ts` re-mocks it in the same process (#188). */
+  createEmailIdempotent: mock(() =>
+    Promise.resolve({ status: 200, body: {}, replayed: false }),
+  ),
   /** Trash: included so this mock can leak into other e2e tests
    *  without stripping fields they depend on. */
   trashEmail: mock(() => Promise.resolve(undefined)),

@@ -12,6 +12,7 @@ import {
   purgeOldAuditEvents,
   recordAuditEvent,
 } from "../../audit/services/audit.service.ts";
+import { purgeExpiredIdempotencyKeys } from "../../emails/services/idempotency.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
@@ -136,9 +137,25 @@ export async function runAuditRetention(): Promise<{ deleted: number }> {
 }
 
 /**
+ * Deletes idempotency keys (#188) past `IDEMPOTENCY_KEY_TTL_HOURS`, in
+ * batches. Housekeeping only: the send API already treats an expired key
+ * as absent.
+ */
+export async function runIdempotencyKeySweep(): Promise<{ deleted: number }> {
+  const deleted = await purgeExpiredIdempotencyKeys();
+  if (deleted > 0) {
+    logger.info("Expired idempotency key sweep completed", {
+      deleted,
+      ttlHours: config.idempotency.keyTtlHours,
+    });
+  }
+  return { deleted };
+}
+
+/**
  * One purge cycle (trash, tombstone retention, expired sessions, stale
- * sign-in devices, audit log retention) in its own log context (#284), so
- * every line it writes carries `job: "purge"`.
+ * sign-in devices, audit log retention, expired idempotency keys) in its
+ * own log context (#284), so every line it writes carries `job: "purge"`.
  */
 function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
   return runWithLogContext({ job: "purge" }, () =>
@@ -148,6 +165,7 @@ function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
       runSessionSweep(),
       runDeviceSweep(),
       runAuditRetention(),
+      runIdempotencyKeySweep(),
     ]),
   );
 }

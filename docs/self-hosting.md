@@ -82,6 +82,9 @@ LOG_LEVEL=info
 TRASH_RETENTION_DAYS=7
 # Optional: days audit log entries are kept (#221), 30 to 3650, default 365
 # AUDIT_LOG_RETENTION_DAYS=365
+# Optional: hours an Idempotency-Key on the send API is remembered (#188),
+# 1 to 168, default 24
+# IDEMPOTENCY_KEY_TTL_HOURS=24
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -135,6 +138,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h.
 
 > `QUEUE_BATCH_SIZE` / `QUEUE_POLL_INTERVAL_MS` / `QUEUE_MAX_CONCURRENT_SENDS`: send queue throughput (#176). Every `QUEUE_POLL_INTERVAL_MS` (default `2000`, 250 to 60000, with +/-10% jitter) the queue claims up to `QUEUE_BATCH_SIZE` due emails (default `5`, 1 to 100), but never more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS` (default `10`, 1 to 500), the cap on sends in flight per process. A slow receiver holds its slot instead of making the queue open more connections; sends waiting for a busy MX (`MAIL_MX_CONCURRENCY`) hold theirs too. Raise the cap for high volume to many different domains; mind your IP reputation. Any other value refuses to boot. Each batch is shared across API keys round-robin (#258), so one key's backlog cannot delay another key's mail.
+
+> `IDEMPOTENCY_KEY_TTL_HOURS` (#188): how long an `Idempotency-Key` sent on `POST /api/v1/emails/send` is remembered (default `24`, 1 to 168). Within it, a retry with the same key and body returns the first response (with `Idempotent-Replayed: true`) instead of sending again; after it, the key is reusable. Each key keeps a snapshot of its first response for this long, without message content (no subject, body or custom headers: ids, addresses, status and warnings only), so the storage overhead is small; a replay after the email is trashed or purged returns the original ids and status with the content fields `null`. The purge worker deletes expired keys every 6 hours. Anything else refuses to boot.
 
 > `WEBHOOKS_MAX_PER_API_KEY` / `WEBHOOK_DELIVERY_RETENTION_DAYS` (#258): per-key webhook limits. A key may have at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (default `10`, 1 to 100); one more is refused with `422 WEBHOOK_LIMIT_REACHED`, and webhooks already over a lowered cap are kept. Finished webhook deliveries (`delivered` and `failed`) are deleted by the hourly cleanup once their last change is older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default `30`, 1 to 365); `failed` rows used to be kept forever, so raise it if you rely on them for forensics. Pending deliveries are never deleted. Any other value refuses to boot. Replays are limited to 5 per delivery per hour (not configurable; in memory, per replica).
 
