@@ -1,4 +1,5 @@
 import type { CustomHeaderProblem } from "./services/custom-headers.ts";
+import type { FromNameProblem } from "./services/from-name.ts";
 
 /**
  * Rejections `email.service.createEmail` raises for a send it refuses on
@@ -139,5 +140,53 @@ export class IdempotencyKeyReusedError extends EmailSendRejectedError {
     super(
       "This Idempotency-Key was already used with a different request body. Use a new key for a new request.",
     );
+  }
+}
+
+/**
+ * `fromName` (#250) breaks a rule of `services/from-name.ts`: empty, too
+ * long, or holding a control, bidi-control or address character. Answered
+ * like a request validation failure (`422 VALIDATION_ERROR`, with the
+ * field in `details`), because that is what it is; the check sits in
+ * `createEmail` so every ingress shares it. The message names the field,
+ * never the value. SMTP submission does not raise it: it drops the name.
+ */
+export class InvalidFromNameError extends EmailSendRejectedError {
+  override readonly name = "InvalidFromNameError";
+  readonly status = 422;
+  readonly code = "VALIDATION_ERROR";
+  /** The refused field. */
+  readonly field = "fromName";
+  /** Which rule the name broke. */
+  readonly problem: FromNameProblem;
+
+  constructor(problem: FromNameProblem, message: string) {
+    super(message);
+    this.problem = problem;
+  }
+}
+
+/**
+ * `category: "marketing"` (#250) on a send that cannot carry the
+ * per-recipient one-click unsubscribe link (#249): it has more than one
+ * recipient (cc or bcc included), or `APP_BASE_URL` is not an https URL
+ * without a query. Bulk senders must offer working one-click unsubscribe
+ * (Gmail, Yahoo), so such mail is refused instead of sent without it.
+ * Nothing is queued.
+ */
+export class MarketingRequiresOneClickError extends EmailSendRejectedError {
+  override readonly name = "MarketingRequiresOneClickError";
+  readonly status = 422;
+  readonly code = "MARKETING_REQUIRES_ONE_CLICK";
+  /** Why the link cannot be carried. */
+  readonly reason: "recipients" | "app_base_url";
+
+  constructor(reason: "recipients" | "app_base_url") {
+    super(
+      reason === "recipients"
+        ? "Marketing email must have exactly one recipient (no cc or bcc) so it can carry a per-recipient one-click unsubscribe link."
+        : "Marketing email needs APP_BASE_URL to be an https URL without a query, so it can carry a one-click unsubscribe link.",
+    );
+    this.reason = reason;
   }
 }

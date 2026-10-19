@@ -12,6 +12,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `api_key_id`    | varchar(36)    | NOT NULL, FK → api_keys | Which API key queued this email              |
 | `domain_id`     | varchar(36)    | nullable, FK → domains  | Sender domain (auto-linked for DKIM signing) |
 | `from_address`  | varchar(255)   | NOT NULL                | Sender email address                        |
+| `from_name`     | varchar(100)   | nullable                | Sender display name (#250), sent as `From: "<name>" <from_address>`. 1 to 100 characters, no control, bidi-control or `@ < > "` character. See [From display name](#from-display-name-250). |
 | `to_address`    | varchar(255)   | NOT NULL                | Recipient email address                     |
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
 | `bcc`           | text           | nullable                | Comma-separated BCC recipients              |
@@ -22,6 +23,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `text_content`  | text           | nullable                | Plain text body                             |
 | `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`. `sent` rows can later transition to `bounced` when a DSN comes back (#24). |
 | `source`        | varchar(10)    | NOT NULL, default `api` | Ingress channel: `api` (REST `POST /api/v1/emails/send`) or `smtp` (SMTP submission server, #120). Existing rows backfill to `api` (#137). |
+| `category`      | varchar(20)    | nullable                | `transactional` or `marketing`, as set on the send (#250); null keeps the default `List-Unsubscribe` behaviour. See [Category](#category-250). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
@@ -81,6 +83,9 @@ src/modules/emails/
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
+│   ├── from-name.ts                ← Pure display-name rules shared by REST and SMTP submission (#250)
+│   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
+│   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones
@@ -94,7 +99,7 @@ src/modules/emails/
 │   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
 │   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
-    └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
+    └── email.types.ts               ← Email, SendEmailInput, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
 ```
 
 ## Sending Modes
@@ -124,6 +129,36 @@ Provide `templateId` and `variables`: subject/body are rendered from the templat
   "variables": { "name": "Alice" }
 }
 ```
+
+A template without a text body keeps the send's inline `text`, if any (#250); a template text body replaces it.
+
+## From display name (#250)
+
+`fromName` on the send (or the display name of a submitted `From:` header, see [smtp-submission.md](smtp-submission.md#what-gets-relayed)) is stored in `from_name` and sent with Nodemailer's `from: { name, address }`, which quotes the name and RFC 2047-encodes it when it is not ASCII. `from_address` stays the bare address for everything else: the allowed-senders check (#126), the DKIM domain and the envelope sender (`MAIL FROM`, or the signed return path, #236).
+
+The rules (`services/from-name.ts`) keep a name a plain label that cannot pose as an address: 1 to 100 characters (code points) after trimming; no control character (C0, DEL, C1, so CR, LF, NUL and tab), no Unicode line or paragraph separator, no bidi embedding, override or isolate control (U+202A to U+202E, U+2066 to U+2069), and none of `@`, `<`, `>`, `"`. REST refuses a name that breaks one with `422 VALIDATION_ERROR` (`details[].path` `/fromName`); SMTP submission drops it with a `warn` naming the field and the rule, and still accepts the mail. Log lines never carry the value.
+
+## Body composition (#250)
+
+The mailer composes the body once per send attempt (`composeMessageBody`, `services/message-body.ts`), the same for every SMTP transaction. Nothing is written back: `html` and `text_content` keep what the caller sent, and so do API responses.
+
+- **HTML document wrapper.** HTML with no `<html>` element (`/<html[\s>]/i`) is a fragment, which some clients and filters treat as careless or generated mail. It is sent wrapped in `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>...</body></html>`. A full document is sent unchanged.
+- **Text alternative.** An email with HTML and no text (none, or only whitespace, after the template is rendered) gets a `text/plain` part derived from the HTML, so it goes out as `multipart/alternative`. The caller's text, when there is any, is always sent as is. HTML with no text in it (only images) gets no text part.
+- **The converter** (`htmlToText`, `services/html-to-text.ts`) is in-repo and bounded: one left-to-right pass with no regular expression built from the input, over at most the first 1 MB of HTML, so its cost is linear whatever the nesting. It drops `<script>`, `<style>`, `<head>`, `<title>`, `<template>` (with their content), comments and declarations; an element or tag left open drops the rest. `<br>`, `</p>`, `</div>`, `</tr>` and `</h1>` to `</h6>` end a line (paragraphs and headings leave a blank line), `<li>` starts a line with `- `, table cells are separated by a space. `<a href="x">t</a>` is written `t (x)` only for `http:`, `https:` and `mailto:` targets. Common named entities and numeric ones are decoded (invalid code points become U+FFFD, controls are dropped). Whitespace collapses as a browser would, and the output is capped at 256 KB.
+
+## Category (#250)
+
+`category` on the send, or `X-BunMail-Category` on SMTP submission, stored in `emails.category`:
+
+| Category | `List-Unsubscribe` | Accepted when |
+|---|---|---|
+| unset (`NULL`) | as in [List-Unsubscribe](#list-unsubscribe) | always |
+| `transactional` | none, and no `List-Unsubscribe-Post` | always |
+| `marketing` | the per-recipient one-click link (#249) | exactly one recipient (no cc, no bcc) and an `https://` `APP_BASE_URL` without a query; otherwise refused with `422 MARKETING_REQUIRES_ONE_CLICK` (SMTP `550`) before anything is queued |
+
+Gmail and Yahoo require bulk senders to offer working one-click unsubscribe; refusing a `marketing` send that could not carry it is safer than sending it without. The check is `oneClickBlocker` (`services/list-unsubscribe.ts`), the same conditions under which the token is minted. Should `APP_BASE_URL` change before a queued marketing email is sent, it goes out with the static header and a `warn` (`Marketing email sent without a one-click unsubscribe link`).
+
+BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer.service.ts` also refuses it for any `autoSubmitted` message).
 
 ## Domain Linking
 
@@ -174,7 +209,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 
 1. Hash the validated body: SHA-256 of its canonical JSON (object keys sorted at every depth), so the same JSON with members in another order matches.
 2. A live row for `(api_key_id, key)` (`expires_at > now()`) answers at once: replay when the hash matches, `IdempotencyKeyReusedError` when not. This runs before the send is checked, so a replay returns the original result even if, for example, the recipient was suppressed since.
-3. Otherwise run every send check (`prepareEmail`: custom headers, suppression, key and allowed senders, template, subject, body, sender domain) outside any transaction. A refused send stores nothing, so the client can fix the cause and retry with the same key.
+3. Otherwise run every send check (`prepareEmail`: custom headers, display name, marketing one-click, suppression, key and allowed senders, template, subject, body, sender domain) outside any transaction. A refused send stores nothing, so the client can fix the cause and retry with the same key.
 4. In one transaction: claim the key first (`INSERT ... ON CONFLICT (api_key_id, key) DO UPDATE ... WHERE expires_at <= now() RETURNING id`, which inserts it or takes over an expired row), insert the email, then fill `email_id`, `response_status` and `response_body` (the response without message content) on the claimed row. A committed row is therefore always complete: there is no in-progress state.
 5. If the claim returns nothing, a live row exists and is committed (the unique index made this transaction wait until the other one committed; had it rolled back, the claim would have succeeded). Read it and replay or refuse as in step 2.
 
@@ -184,7 +219,7 @@ Concurrent requests with the same key create exactly one email: one claims, the 
 
 **Retention:** the purge worker deletes expired rows in batches (`purgeExpiredIdempotencyKeys`, 5000 rows per batch, every 6 hours with the trash purge). Correctness never depends on it: an expired row is treated as absent and taken over in place.
 
-**No message content in the snapshot:** `response_body` is the first response with `subject`, `html`, `text` and `headers` removed from `data` (`withoutContent`); ids, addresses, status, timestamps and warnings stay, so the storage overhead is small. A replay fills the four fields back (`findReplayContent`: one read by the email's primary key, scoped to the same API key, `deleted_at IS NULL`), or sets them `null` once the email is trashed or purged. The replay keeps the response shape either way, and deleting an email removes its content everywhere.
+**No message content in the snapshot:** `response_body` is the first response with `subject`, `html`, `text` and `headers` removed from `data` (`withoutContent`); ids, addresses, status, timestamps and warnings stay, and so do `fromName` and `category` (#250: a sender label and a send kind, not message content), so the storage overhead is small. A replay fills the four fields back (`findReplayContent`: one read by the email's primary key, scoped to the same API key, `deleted_at IS NULL`), or sets them `null` once the email is trashed or purged. The replay keeps the response shape either way, and deleting an email removes its content everywhere.
 
 ## Feedback-ID and Auto-Submitted (#250)
 
@@ -194,7 +229,7 @@ Concurrent requests with the same key create exactly one email: one claims, the 
 
 ## List-Unsubscribe
 
-Every outbound message carries an RFC 2369 `List-Unsubscribe` header, built per email by `listUnsubscribeOptions` (`services/list-unsubscribe.ts`) on every send attempt.
+Every outbound message carries an RFC 2369 `List-Unsubscribe` header, except `transactional` mail and BunMail's own mail (see [Category](#category-250)), built per email by `listUnsubscribeOptions` (`services/list-unsubscribe.ts`) on every send attempt.
 
 **Per-recipient one-click (#249).** When the email has exactly one recipient (one `to` address, **no cc and no bcc**) and `APP_BASE_URL` is an `https://` URL, the header names that recipient with a token (see [suppressions.md](suppressions.md#one-click-unsubscribe)):
 
@@ -233,7 +268,7 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 **Reads (live)**
 
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
-Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) and `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `createEmailIdempotent(input, apiKeyId, idempotencyKey, buildResponse): Promise<IdempotentSendResult>`
 `createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key, without message content, in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
@@ -295,10 +330,12 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
+`fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). The body is composed once per call, see [Body composition](#body-composition-250).
+
 Each transaction's outcome records `tls` and `updatedAt` on its delivery-state entry (#250, see [TLS record](#tls-record-250)). The SMTP session to each MX runs in `runMxSession` (`mx-transport.ts`), see [One session per MX](#one-session-per-mx-250).
 
 #### `buildMailOptions(args): Mail.Options`
-Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe`, DKIM). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
+Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe` unless `carriesListUnsubscribe` says no, DKIM). The body is used as given (`sendMail` composes it first). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
 
 ### custom-headers.ts
 
@@ -318,6 +355,24 @@ The `List-Unsubscribe` inputs for one email (see [List-Unsubscribe](#list-unsubs
 
 #### `oneClickBaseUrl(appBaseUrl): string | null`
 `APP_BASE_URL` without a trailing slash when it is an `https://` URL with no query or fragment, else `null`.
+
+#### `oneClickBlocker(email, appBaseUrl?): "recipients" | "app_base_url" | null`
+What keeps an email from carrying the per-recipient one-click link (#250): more than one recipient, or an `APP_BASE_URL` that cannot carry it. `null` when nothing does. Used to refuse a `marketing` send.
+
+### from-name.ts
+
+#### `checkFromName(raw): { ok: true, name } | { ok: false, problem }`
+Applies the display-name rules (#250) and returns the trimmed name, or `empty`, `too_long` or `forbidden_character`. `describeFromNameProblem(problem)` gives the caller-facing message, which names the field only.
+
+### message-body.ts
+
+#### `composeMessageBody(html, text): { html, text, wrapped, textDerived }`
+The body a message is sent with (#250): HTML wrapped when it is a fragment (`wrapHtmlDocument`), text derived when there is none. Pure.
+
+### html-to-text.ts
+
+#### `htmlToText(html): string`
+The bounded, linear converter behind the text alternative (#250); see [Body composition](#body-composition-250). Pure.
 
 ### queue.service.ts
 

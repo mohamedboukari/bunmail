@@ -12,6 +12,7 @@ import type {
 import type { Domain } from "../../src/modules/domains/types/domain.types.ts";
 import { UserStoreError } from "../../src/modules/users/errors.ts";
 import { logger } from "../../src/utils/logger.ts";
+import { buildMailOptions } from "../../src/modules/emails/services/mailer.service.ts";
 
 /**
  * The invitation email (#217): the pure builder (escaping, exactly one
@@ -174,6 +175,37 @@ describe("sendInviteEmail", () => {
     expect(call?.dkim).toEqual(DKIM);
     expect(call?.messageId).toMatch(/^<[0-9a-f]{32}@mail\.example\.com>$/);
     expect(call?.text).toContain(URL_);
+  });
+
+  test("is transactional automatic mail: never List-Unsubscribe (#250)", async () => {
+    const { deps: d, sent } = deps();
+    await sendInviteEmail(INPUT, d);
+    const call = sent[0];
+    if (!call) throw new Error("expected a send");
+    expect(call.category).toBe("transactional");
+    expect(call.autoSubmitted).toBe(true);
+    const options = buildMailOptions({
+      recipients: [call.to],
+      from: call.from,
+      headerTo: call.to,
+      headerCc: null,
+      replyTo: null,
+      subject: call.subject,
+      html: call.html ?? null,
+      text: call.text ?? null,
+      messageId: call.messageId,
+      headers: {},
+      unsubscribe: call.unsubscribe,
+      category: call.category,
+      autoSubmitted: call.autoSubmitted,
+    });
+    const extra = options.headers;
+    const names =
+      extra && !Array.isArray(extra) && typeof extra === "object"
+        ? Object.keys(extra).map((n) => n.toLowerCase())
+        : [];
+    expect(names).not.toContain("list-unsubscribe");
+    expect(names).not.toContain("list-unsubscribe-post");
   });
 
   test("no SYSTEM_MAIL_FROM: not_configured, nothing sent", async () => {

@@ -16,7 +16,10 @@ import {
   NOTIFY_THROTTLE_WINDOW_MS,
   NotifyThrottle,
 } from "../../src/modules/inbound/services/notify-throttle.ts";
-import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
+import {
+  buildMailOptions,
+  type sendMail,
+} from "../../src/modules/emails/services/mailer.service.ts";
 import { inboundEmails } from "../../src/modules/inbound/models/inbound-email.schema.ts";
 import { config } from "../../src/config.ts";
 import { logger } from "../../src/utils/logger.ts";
@@ -160,6 +163,30 @@ describe("inbound notification content", () => {
     }
     /** Still marked as automatic mail (#250). */
     expect(call.autoSubmitted).toBe(true);
+    /** BunMail's own mail never carries List-Unsubscribe (#250). */
+    expect(call.category).toBe("transactional");
+    const rendered = buildMailOptions({
+      recipients: [call.to],
+      from: call.from,
+      headerTo: call.to,
+      headerCc: null,
+      replyTo: null,
+      subject: call.subject,
+      html: null,
+      text: call.text ?? null,
+      messageId: call.messageId,
+      headers: {},
+      unsubscribe: call.unsubscribe,
+      category: call.category,
+      autoSubmitted: call.autoSubmitted,
+    });
+    const extra = rendered.headers;
+    const names =
+      extra && !Array.isArray(extra) && typeof extra === "object"
+        ? Object.keys(extra).map((n) => n.toLowerCase())
+        : [];
+    expect(names).not.toContain("list-unsubscribe");
+    expect(names).not.toContain("list-unsubscribe-post");
   });
 
   test("with INBOUND_NOTIFY_PREVIEW the body previews the message, links removed", async () => {

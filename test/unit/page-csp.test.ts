@@ -44,6 +44,8 @@ const email = {
   textContent: null,
   status: "sent" as const,
   source: "api",
+  fromName: null,
+  category: null,
   attempts: 1,
   nextAttemptAt: now,
   lockedBy: null,

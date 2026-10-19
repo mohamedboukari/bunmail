@@ -20,7 +20,12 @@ import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { EmailSendRejectedError } from "../../emails/errors.ts";
 import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
-import { buildSubmissionInput, selectRelayHeaders } from "../message-mapper.ts";
+import {
+  buildSubmissionInput,
+  selectRelayHeaders,
+  submissionCategory,
+  submissionFromName,
+} from "../message-mapper.ts";
 import { SubmissionRejectedError } from "../errors.ts";
 import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
 import {
@@ -524,9 +529,32 @@ export function start(portOverride?: number): void {
                   });
                 }
 
+                /**
+                 * `X-BunMail-Category` (#250): consumed here, never relayed; a
+                 * value other than transactional or marketing is refused (550).
+                 */
+                const category = submissionCategory(parsed.headerLines);
+
+                /**
+                 * Display name of the `From:` header (#250), through the send
+                 * API's rules. One that fails is dropped, not refused; the log
+                 * names the field and the rule, never the value.
+                 */
+                const fromMailbox = parsed.from?.value?.[0];
+                const submittedName = fromMailbox?.address
+                  ? submissionFromName(fromMailbox.name)
+                  : {};
+                if (submittedName.problem) {
+                  logger.warn("SMTP submission dropped the From display name", {
+                    apiKeyId,
+                    field: "fromName",
+                    problem: submittedName.problem,
+                  });
+                }
+
                 /** Delegate all shaping (sender resolution, BCC merge, To fallback). */
                 const input: SendEmailInput = buildSubmissionInput({
-                  fromHeader: parsed.from?.value?.[0]?.address,
+                  fromHeader: fromMailbox?.address,
                   envelopeFrom,
                   toHeader: extractAddresses(parsed.to),
                   ccHeader: extractAddresses(parsed.cc),
@@ -538,6 +566,8 @@ export function start(portOverride?: number): void {
                   html: typeof parsed.html === "string" ? parsed.html : undefined,
                   text: typeof parsed.text === "string" ? parsed.text : undefined,
                   headers: relayed.headers,
+                  fromName: submittedName.fromName,
+                  category,
                 });
 
                 /**

@@ -24,6 +24,8 @@ describe("serializeEmail", () => {
     textContent: "Hello",
     status: "sent",
     source: "api",
+    fromName: null,
+    category: null,
     attempts: 1,
     nextAttemptAt: new Date("2024-01-01"),
     lockedBy: null,
@@ -40,6 +42,19 @@ describe("serializeEmail", () => {
   test("maps fromAddress to from", () => {
     const result = serializeEmail(email);
     expect(result.from).toBe("hello@example.com");
+  });
+
+  test("exposes fromName and category (#250), null when unset or unknown", () => {
+    expect(serializeEmail(email).fromName).toBeNull();
+    expect(serializeEmail(email).category).toBeNull();
+    const labelled = serializeEmail({
+      ...email,
+      fromName: "Acme",
+      category: "marketing",
+    });
+    expect(labelled.fromName).toBe("Acme");
+    expect(labelled.category).toBe("marketing");
+    expect(serializeEmail({ ...email, category: "bogus" }).category).toBeNull();
   });
 
   test("maps toAddress to to", () => {

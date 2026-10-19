@@ -143,6 +143,15 @@ export const emails = pgTable(
     /** Sender email address (e.g. "hello@example.com") */
     fromAddress: varchar("from_address", { length: 255 }).notNull(),
 
+    /**
+     * Sender display name (#250), e.g. "Acme Support": sent as
+     * `From: "Acme Support" <fromAddress>`. Null when none. 1 to 100
+     * characters, with no control or bidi-control character and none of
+     * `@ < > "` (see `services/from-name.ts`), so it cannot pose as an
+     * address.
+     */
+    fromName: varchar("from_name", { length: 100 }),
+
     /** Recipient email address */
     toAddress: varchar("to_address", { length: 255 }).notNull(),
 
@@ -195,6 +204,14 @@ export const emails = pgTable(
      * is newer than every pre-existing row, so backfilled rows are all API.
      */
     source: varchar("source", { length: 10 }).notNull().default("api"),
+
+    /**
+     * `transactional` or `marketing` (#250), set by the caller. Null keeps
+     * the default behaviour. `transactional` mail carries no
+     * `List-Unsubscribe`; `marketing` mail was accepted only because it can
+     * carry the per-recipient one-click link (#249). See `EmailCategory`.
+     */
+    category: varchar("category", { length: 20 }),
 
     /** Number of send attempts so far (retries stop when the email is
      *  older than `MAIL_RETRY_MAX_AGE_HOURS`, not after a fixed count) */

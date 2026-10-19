@@ -57,6 +57,8 @@ Templates use Mustache-style `{{variableName}}` syntax. When sending an email wi
 
 The subject, HTML, and text bodies are all rendered with the provided variables. Unmatched `{{variables}}` are left as-is, and only the object's own keys are used (`{{constructor}}` stays as written).
 
+**Text part (#250).** A template without a text body keeps the send's inline `text`, if one was given. When the email still has HTML and no text, the mailer derives a `text/plain` alternative from the rendered HTML at send time, and wraps an HTML fragment in a minimal document (neither is stored; see [emails.md](emails.md#body-composition-250)). A template's own text body is always sent as rendered.
+
 **Escaping (#250).** In the HTML body, `{{name}}` is HTML-escaped (`&`, `<`, `>`, `"`, `'`), so a value such as a user-supplied display name cannot inject markup (a fake link, a form) into mail signed for your domain. To insert HTML on purpose, use triple braces: `{{{name}}}` inserts the value as is. Subjects and text bodies are not HTML: both forms insert the value as is there.
 
 Limits: a template's `html` and `text` are at most 5 MB each, and it declares at most 100 variable names (`^\w+$`, up to 100 characters). A send passes at most 100 variables with values up to 100 KB. Variables multiply a template's size, so rendering is bounded too: it stops with `422 TEMPLATE_OUTPUT_TOO_LARGE` as soon as a body would pass 5 MB or the subject 500 characters, before the oversized string is built.

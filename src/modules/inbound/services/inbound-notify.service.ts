@@ -429,9 +429,10 @@ async function sendDomainNotification(
       text: content.text,
       messageId,
       dkim,
-      /** BunMail's own automatic mail: no auto-replies to it (#250). */
+      /** BunMail's own automatic mail: no auto-replies, no `List-Unsubscribe` (#250). */
       feedback: { source: "system", apiKeyId: null },
       autoSubmitted: true,
+      category: "transactional",
     });
     /** sendMail doesn't throw on a dead recipient MX: it reports per-group
      *  outcomes. Only claim "sent" when a group actually landed. */

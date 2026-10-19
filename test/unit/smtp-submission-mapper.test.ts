@@ -3,7 +3,12 @@ import {
   dedupeJoin,
   buildSubmissionInput,
   selectRelayHeaders,
+  submissionCategory,
+  submissionFromName,
 } from "../../src/modules/smtp-submission/message-mapper.ts";
+import { SubmissionRejectedError } from "../../src/modules/smtp-submission/errors.ts";
+import type { FromNameProblem } from "../../src/modules/emails/services/from-name.ts";
+import type { EmailCategory } from "../../src/modules/emails/types/email.types.ts";
 
 /**
  * Unit tests for the SMTP submission message mapper (#120).
@@ -271,5 +276,76 @@ describe("selectRelayHeaders (#177)", () => {
       headers: { "X-Foo": "bar" },
     });
     expect(input.headers).toEqual({ "X-Foo": "bar" });
+  });
+});
+
+describe("submissionFromName (#250)", () => {
+  test("a valid display name is kept, trimmed", () => {
+    expect(submissionFromName("  Acme Support ")).toEqual({ fromName: "Acme Support" });
+    expect(submissionFromName("Zo\u00eb")).toEqual({ fromName: "Zo\u00eb" });
+  });
+
+  test("none or blank: no name and nothing to report", () => {
+    expect(submissionFromName(undefined)).toEqual({});
+    expect(submissionFromName("   ")).toEqual({});
+  });
+
+  test.each<[string, FromNameProblem]>([
+    ["support@paypal.com", "forbidden_character"],
+    ["\u202eevil", "forbidden_character"],
+    ["a".repeat(101), "too_long"],
+  ])("an invalid name %p is dropped with its problem", (raw, problem) => {
+    expect(submissionFromName(raw)).toEqual({ problem });
+  });
+});
+
+describe("submissionCategory (#250)", () => {
+  const header = (raw: string) => ({
+    key: raw.slice(0, raw.indexOf(":")).toLowerCase(),
+    line: raw,
+  });
+
+  test("absent: none", () => {
+    expect(submissionCategory([header("Subject: hi")])).toBeUndefined();
+  });
+
+  test.each<[string, EmailCategory]>([
+    ["X-BunMail-Category: transactional", "transactional"],
+    ["X-BunMail-Category: marketing", "marketing"],
+    ["x-bunmail-category:  Marketing ", "marketing"],
+    ["X-BunMail-Category:\r\n transactional", "transactional"],
+  ])("%p", (raw, expected) => {
+    expect(submissionCategory([header(raw)])).toBe(expected);
+  });
+
+  test.each([
+    [["X-BunMail-Category: newsletter"]],
+    [["X-BunMail-Category: "]],
+    [["X-BunMail-Category: marketing", "X-BunMail-Category: marketing"]],
+  ])("refused: %p", (raws) => {
+    expect(() => submissionCategory(raws.map(header))).toThrow(SubmissionRejectedError);
+  });
+
+  test("the header is consumed: never relayed and not reported as dropped", () => {
+    const { headers, dropped } = selectRelayHeaders([
+      header("X-BunMail-Category: marketing"),
+      header("X-Trace: 1"),
+    ]);
+    expect(headers).toEqual({ "X-Trace": "1" });
+    expect(dropped).toEqual([]);
+  });
+
+  test("buildSubmissionInput carries fromName and category through", () => {
+    const input = buildSubmissionInput({
+      fromHeader: "hello@example.com",
+      toHeader: ["user@example.org"],
+      ccHeader: [],
+      envelopeRecipients: ["user@example.org"],
+      text: "x",
+      fromName: "Acme",
+      category: "transactional",
+    });
+    expect(input.fromName).toBe("Acme");
+    expect(input.category).toBe("transactional");
   });
 });
