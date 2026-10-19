@@ -1,6 +1,6 @@
 # BunMail: Threat Model
 
-> Last reviewed: 2026-10-18
+> Last reviewed: 2026-10-19
 
 A self-hosted email service has a different threat surface than a SaaS one: there is no provider firewall in front of you, and you own the IP reputation, the database, the keys, and the abuse-response. This document walks the assets, the attackers we model against, the controls already in place, and the responsibilities that **stay with the operator**.
 
@@ -98,7 +98,7 @@ The trust boundaries are: **public internet ↔ host** and **app process ↔ dat
 
 Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver.service.ts`):
 
-1. **Per-IP connection rate limiting**: sliding window, 10 connections / 60 s by default.
+1. **Per-IP connection rate limiting**: fixed window, 10 connections / 60 s by default.
 2. **DNSBL check**: Spamhaus ZEN by default. Listed IPs get SMTP 554 before they can issue `MAIL FROM`.
 3. **Recipient domain validation**: RCPT TO is rejected with SMTP 550 unless the recipient's domain is registered in BunMail's `domains` table. This is the primary anti-relay control.
 4. **Envelope + stream hardening** (#18):
@@ -118,7 +118,7 @@ The submission server (`src/modules/smtp-submission/services/smtp-submission.ser
 
 1. **AUTH is the anti-relay control.** `AUTH` is mandatory (`authOptional: false`); the password is treated as a BunMail API key (SHA-256 hashed → `findByHash`, must be active). Unauthenticated clients can't send at all, so, unlike the inbound receiver, recipient domains are intentionally *not* restricted.
 2. **Per-IP failed-AUTH throttle.** Because the password is an API key, failed AUTHs are counted per IP (default 10 / 900 s) and locked out with SMTP `454` before the key is checked: blunts online key brute-forcing. Failures expire only with their window; a success does not clear them (#190), so one valid key cannot reset the count between guesses at others. The counter is per replica (#185).
-3. **Per-IP connection rate limiting**: sliding window (default 30 / 60 s).
+3. **Per-IP connection rate limiting**: fixed window (default 30 / 60 s).
 4. **Envelope hardening**: 10 MB `SIZE` cap (SMTP 552 on overflow) and a 50-recipient-per-transaction cap (SMTP 452). Delivery is the envelope only: `To`/`Cc` header addresses that were not sent in `RCPT TO` are dropped, so a long `To:` header cannot fan one submission out past the cap or the daily quota.
 5. **Reuses the outbound gates.** Submitted messages go through `createEmail`, so the per-API-key **suppression** gate (with the shared hard suppressions of `SUPPRESSIONS_SHARED_HARD`, #250) and the production **registered-sender-domain** requirement apply exactly as they do for REST sends (rejections surface as SMTP `550`).
 6. **Header relay is an allowlist (#177).** Only `In-Reply-To`, `References` and `X-*` are copied from the submitted message, through the custom-header rules below (`X-BunMail-*` is reserved); a header that fails is dropped with a `warn` naming it, never its value. `Received`, `Content-*`, `List-Unsubscribe`, `DKIM-Signature` and the rest are rebuilt by BunMail, never copied.
@@ -161,7 +161,7 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 ### HTTP API hygiene
 
 - **Per-API-key rate limiting** (`src/middleware/rate-limit.ts`): fixed window, 100 requests / 60 s by default (`API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`). Covered by an integration test that sends requests through a real plugin; the e2e suites stub this middleware, which is how a missing `.as("scoped")` once left it inactive on every route.
-- **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed logins of every kind **per client IP** (sliding window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit, before any database or argon2id work; a successful login gives back only its own attempt, so earlier failures stay until the window ends and an account of one's own cannot be used to reset the count between guesses at another (#256). IPv6 clients are counted per `/64`, IPv4-mapped addresses as their IPv4 (#256). Together with argon2id and the 15-character owner password minimum, this is what stops online guessing. There is deliberately no per-account lockout (anyone could lock the owner out); see §6. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`: the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
+- **Dashboard login brute-force protection** (#109, `src/middleware/login-rate-limit.ts`): `POST /dashboard/login` counts failed logins of every kind **per client IP** (fixed window, 5 failures / 15 min by default) and returns HTTP 429 with `Retry-After` once the limit is hit, before any database or argon2id work; a successful login gives back only its own attempt, so earlier failures stay until the window ends and an account of one's own cannot be used to reset the count between guesses at another (#256). IPv6 clients are counted per `/64`, IPv4-mapped addresses as their IPv4 (#256). Together with argon2id and the 15-character owner password minimum, this is what stops online guessing. There is deliberately no per-account lockout (anyone could lock the owner out); see §6. The client IP is resolved by counting `DASHBOARD_TRUSTED_PROXY_HOPS` entries from the **right** of `X-Forwarded-For`: the leftmost entry is attacker-controlled and never trusted (default `0` ignores the header and uses the raw socket IP).
 - **Cleanup interval** (#22): the in-memory rate-limit maps (per-API-key and per-IP login) are pruned every 5 minutes so distinct keys / IPs can't grow them unbounded.
 - **CORS:** none configured by default: the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.
 

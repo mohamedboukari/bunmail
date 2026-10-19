@@ -4,7 +4,7 @@
 
 ---
 
-> ⚠️ **Historical planning document.** This is the original scope/plan from before the project was built. Kept for reference. For the **current** state of the project, read these instead:
+> ⚠️ **Historical planning document: see [ARCHITECTURE.md](ARCHITECTURE.md) and [CHANGELOG.md](CHANGELOG.md) for the current state.** This is the original scope/plan from before the project was built, kept for reference. The checklists below are ticked where the item shipped (as of 2026-10-19), and struck through where it was not built. For the **current** state of the project, read these instead:
 >
 > - [README.md](README.md): current features, endpoints, getting started
 > - [ARCHITECTURE.md](ARCHITECTURE.md): current architecture, schema, request flow
@@ -64,7 +64,7 @@ One `docker compose up` and you have your own email infrastructure. No API keys,
 - **Dashboard**: web UI to manage everything
 - **Multi-domain** support
 - **Webhooks**, get notified on bounce/delivery
-- **Attachments** support
+- ~~**Attachments** support~~ (not implemented: the send API has no attachments field, and SMTP submission refuses messages with attachments)
 - **Rate limiting** to protect your IP reputation
 
 ---
@@ -118,6 +118,8 @@ Authorization: Bearer <API_KEY>
   "attachments": []
 }
 ```
+
+> Shipped as `POST /api/v1/emails/send`, without `attachments` (not implemented).
 
 ### Response
 
@@ -202,35 +204,35 @@ bunmail/
 
 ## MVP Features (v1)
 
-- [ ] REST API to send emails (`POST /api/v1/send`)
-- [ ] Direct SMTP sending via Nodemailer (no provider)
-- [ ] DKIM signing
-- [ ] SPF/DMARC DNS verification helper
-- [ ] Email queue with retries (3 attempts)
-- [ ] Send logs with status (queued, sent, delivered, bounced, failed)
-- [ ] API key authentication
-- [ ] Rate limiting
-- [ ] Basic dashboard (send logs, stats)
-- [ ] Domain management + DNS setup wizard
-- [ ] Docker deployment
-- [ ] README with setup guide
+- [x] REST API to send emails (shipped as `POST /api/v1/emails/send`)
+- [x] Direct SMTP sending via Nodemailer (no provider)
+- [x] DKIM signing
+- [x] SPF/DMARC DNS verification helper
+- [x] Email queue with retries (shipped as retries with backoff for up to `MAIL_RETRY_MAX_AGE_HOURS`, #180)
+- [x] Send logs with status (shipped statuses: `queued`, `sending`, `sent`, `failed`, `bounced`; no `delivered`)
+- [x] API key authentication
+- [x] Rate limiting
+- [x] Basic dashboard (send logs, stats)
+- [x] Domain management + DNS setup (the records to publish, per domain)
+- [x] Docker deployment
+- [x] README with setup guide
 
 ---
 
 ## Growth Features (v2+)
 
-- [ ] Incoming email (receive emails via SMTP server)
-- [ ] Email templates engine with variables
-- [ ] Webhooks (bounce, delivery, open, click)
-- [ ] Open tracking & click tracking
-- [ ] Multiple API keys with permissions
-- [ ] Team access / multi-user
-- [ ] Analytics dashboard (charts, trends)
-- [ ] SDK packages (`npm i bunmail`)
-- [ ] CLI tool (`bunx bunmail init`)
-- [ ] Scheduled emails (send later)
-- [ ] Email preview / test mode
-- [ ] Suppression list (unsubscribes, bounces)
+- [x] Incoming email (receive emails via SMTP server)
+- [x] Email templates engine with variables
+- [x] Webhooks (bounce, delivery; no open or click events)
+- [ ] ~~Open tracking & click tracking~~ (not implemented)
+- [x] Multiple API keys with permissions (admin and restricted keys, allowed senders)
+- [x] Team access / multi-user (invite-only dashboard accounts with roles)
+- [ ] ~~Analytics dashboard (charts, trends)~~ (not implemented: stat cards only)
+- [ ] ~~SDK packages (`npm i bunmail`)~~ (not implemented)
+- [ ] ~~CLI tool (`bunx bunmail init`)~~ (not implemented)
+- [ ] ~~Scheduled emails (send later)~~ (not implemented)
+- [ ] ~~Email preview / test mode~~ (not implemented)
+- [x] Suppression list (unsubscribes, bounces)
 
 ---
 

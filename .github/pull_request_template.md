@@ -21,6 +21,12 @@
 - [ ] Formatting passes (`bun run format:check`)
 - [ ] Tested on Docker (`docker compose up`), if applicable
 
+## Docs
+
+- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] Affected docs updated (`README.md`, `ARCHITECTURE.md`, `docs/api.md`, `docs/<module>.md`, `THREAT_MODEL.md`, `SECURITY.md`): endpoints, schema tables, module layout, webhook events, status enums
+- [ ] New or changed env vars listed in `.env.example`, `docs/self-hosting.md` and the `ARCHITECTURE.md` Deployment section, with default and bounds
+
 ## Related Issues
 
 <!-- Link any related issues: Fixes #123, Closes #456 -->

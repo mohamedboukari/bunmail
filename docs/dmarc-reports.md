@@ -8,16 +8,39 @@ This module turns that XML stream into a usable view.
 
 ## Inbound branching
 
-The DMARC handler sits in [`smtp-receiver`](../src/modules/inbound/services/smtp-receiver.service.ts) **after the bounce branch** and **before the generic inbound storage**:
+The DMARC handler sits in [`smtp-receiver`](../src/modules/inbound/services/smtp-receiver.service.ts) **after the unsubscribe, return-path, feedback-loop and bounce branches** and **before the generic inbound storage**:
 
 ```
 Inbound message
-  ├── Looks like a bounce?                → bounce-handler            (#24)
-  ├── Looks like a DMARC aggregate report? → dmarc-handler            (#41) ← this module
+  ├── To unsub+<token>@<domain>?           → unsubscribe               (#249)
+  ├── To a signed return path (b+...)?     → bounce-handler, DSNs only (#24, #236)
+  ├── An ARF feedback report?              → feedback-handler          (#191)
+  ├── Any other DSN?                       → dropped (no return path)  (#236)
+  ├── Looks like a DMARC aggregate report? → dmarc-handler             (#41) ← this module
   └── Otherwise                            → inbound_emails (generic)
 ```
 
 A successfully parsed-and-stored DMARC report **short-circuits** the generic inbound insert: there's no point keeping the raw report wrapped as a generic inbound row, the parsed shape is what operators actually want.
+
+## Module Layout
+
+```
+src/modules/dmarc-reports/
+├── dmarc-reports.plugin.ts         ← REST: GET /, GET /:id
+├── services/
+│   ├── dmarc-parser.service.ts     ← Pure detection heuristic + gzip / zip / XML parser
+│   ├── dmarc-handler.service.ts    ← Persist a parsed report (ON CONFLICT dedup)
+│   └── dmarc-reports.service.ts    ← Read queries: list, get, domains
+├── dtos/
+│   └── list-dmarc-reports.dto.ts   ← GET / pagination + domain filter
+├── models/
+│   ├── dmarc-report.schema.ts      ← dmarc_reports pgTable
+│   └── dmarc-record.schema.ts      ← dmarc_records pgTable (FK CASCADE)
+├── serializations/
+│   └── dmarc-report.serialization.ts ← Response mappers
+└── types/
+    └── dmarc-report.types.ts       ← Parsed report types
+```
 
 ## Detection heuristic
 

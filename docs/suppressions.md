@@ -8,7 +8,7 @@ The list exists because **repeated sends to bouncing addresses are the fastest w
 
 Suppressions are **per `api_key_id`**, not global. Different API keys often represent different customer environments (transactional / marketing / dev), so one key's bounces should never gate another's sends. Mirrors what SES, SendGrid, and Resend do.
 
-A consequence: revoking a key cascades to its suppression list (`ON DELETE CASCADE`). If you rotate a key and want its suppressions to carry over, copy them to the new key first via the API.
+Revoking a key (`DELETE /api/v1/api-keys/:id`) only disables it, so its suppression list stays in place; the rows go only if the key's row itself is deleted (`ON DELETE CASCADE`). A new key starts with an empty list: if you rotate a key and want its suppressions to carry over, copy them to the new key via the API.
 
 ### Shared hard suppressions (`SUPPRESSIONS_SHARED_HARD`, #250)
 
@@ -25,6 +25,27 @@ The cross-key lookup is served by the partial index `suppressions_shared_hard_em
 
 Known limit: a complaint's `source_email_id` is set to `NULL` when its email is purged from the trash, and the row then stops being shared (it still blocks its own key).
 
+## Module Layout
+
+```
+src/modules/suppressions/
+├── suppressions.plugin.ts          ← REST: POST /, GET /, GET /:id, DELETE /:id
+├── errors.ts                       ← SuppressedRecipientError (422 RECIPIENT_SUPPRESSED)
+├── services/
+│   ├── suppression.service.ts      ← Send gate (isSuppressed), CRUD, addFromBounce / addFromUnsubscribe / addFromComplaint
+│   ├── unsubscribe-token.ts        ← Per-recipient unsubscribe token: HMAC mint, parse, verify (#249)
+│   └── unsubscribe.service.ts      ← Verify a token against its email, suppress, fire email.unsubscribed (#249)
+├── dtos/
+│   ├── create-suppression.dto.ts   ← POST body validation
+│   └── list-suppressions.dto.ts    ← GET / pagination + email filter
+├── models/
+│   └── suppression.schema.ts       ← Drizzle pgTable definition
+├── serializations/
+│   └── suppression.serialization.ts ← Response mapper
+└── types/
+    └── suppression.types.ts        ← Suppression, SUPPRESSION_REASONS, BOUNCE_TYPES
+```
+
 ## Lookup behaviour
 
 The gate normalises the recipient address before the lookup: `Alice@Example.COM` and `alice@example.com` resolve to the same suppression. RFC 5321 says the local part is technically case-sensitive, but every real receiver folds case, and matching that behaviour at the gate avoids surprise bypasses.
@@ -39,7 +60,7 @@ Expired rows stay in the table: they're not auto-purged today. If you need clean
 
 | Value | When |
 |---|---|
-| `bounce` | Auto-set by the bounce module (#24) when a Delivery Status Notification arrives at the inbound SMTP. The DSN parser calls `addFromBounce()` and persists `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. See [docs/bounces.md](bounces.md). |
+| `bounce` | Auto-set through `addFromBounce()`, with `bounce_type` + `diagnostic_code` from the SMTP enhanced status code: by the queue on an inline hard `5xx` at send time (#68), and on a `4.2.2` still failing when the retry window ends (soft, 24 h, #250); and by the bounce module (#24) when a Delivery Status Notification arrives at a signed return path (#236). See [docs/bounces.md](bounces.md). |
 | `complaint` | Set by feedback-loop processing (#191): a mailbox provider sent an ARF report saying the recipient marked an email as spam. Permanent; `source_email_id` is the email complained about. The strongest reason: see [Complaints](#complaints-feedback-loops). Can also be set manually. |
 | `manual` | Operator/customer added the address themselves (e.g. "I know this address bounces, just block it"). |
 | `unsubscribe` | Set by the one-click unsubscribe flow (#249): a recipient used the per-recipient `List-Unsubscribe` link or mailto. Permanent; `source_email_id` is the email whose link was used. See [One-click unsubscribe](#one-click-unsubscribe). Can also be set manually. |
@@ -200,5 +221,5 @@ The manual upsert behind `POST /api/v1/suppressions`. Returns the written row, o
 ## Out of scope (separate tickets)
 
 - Bulk import (CSV upload)
-- Dashboard UI for managing suppressions
+- Adding suppressions from the dashboard: `/dashboard/suppressions` (#89) lists and removes them; adds go through `POST /api/v1/suppressions`
 - Auto-purge of expired rows

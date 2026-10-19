@@ -30,9 +30,11 @@ src/modules/webhooks/
 │   ├── list-webhooks.dto.ts         ← GET / pagination (default limit 100)
 │   └── list-deliveries.dto.ts       ← GET /:id/deliveries pagination + status
 ├── models/
-│   └── webhook.schema.ts            ← Drizzle pgTable definition
+│   ├── webhook.schema.ts            ← Drizzle pgTable definition
+│   └── webhook-delivery.schema.ts   ← webhook_deliveries pgTable (#30)
 ├── serializations/
-│   └── webhook.serialization.ts     ← Strips signing secret from responses
+│   ├── webhook.serialization.ts     ← Strips signing secret from responses
+│   └── webhook-delivery.serialization.ts ← Delivery list and detail responses (#30)
 └── types/
     └── webhook.types.ts             ← Webhook, CreateWebhookInput, WebhookEventType
 ```
@@ -362,7 +364,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 
 | | |
 |---|---|
-| **Retry schedule** | 1m → 5m → 15m → 1h → 6h (5 attempts total over ~7h) |
+| **Retry schedule** | Waits of 1m → 5m → 15m → 1h between attempts (5 attempts total over about 80 minutes) |
 | **Timeout** | 10 seconds per request |
 | **Transactional enqueue** | `enqueueEvent` INSERTs the rows in the transaction of the state change (#184, see [Transactional outbox](#transactional-outbox-184)); the actual POST happens on the worker tick |
 | **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
@@ -371,7 +373,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
 | **Connection** | Sent to the address the SSRF guard validated for this attempt (see [URL requirements](#url-requirements--ssrf-guard-128)), one fresh connection per attempt; `Host`, SNI and the certificate check use the configured host name |
 | **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
-| **Signing** | Re-computed per attempt with a fresh timestamp so a 6-hour-old retry still passes the consumer's freshness window |
+| **Signing** | Re-computed per attempt with a fresh timestamp so a retry an hour later still passes the consumer's freshness window |
 
 ### Delivery row lifecycle
 
