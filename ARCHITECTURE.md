@@ -52,7 +52,7 @@
 |------------------|-------------------------------------|
 | Runtime          | Bun                                 |
 | Backend          | Elysia                              |
-| SMTP Sending     | Nodemailer, one transport per recipient MX on port 25, no relay |
+| SMTP Sending     | Nodemailer, one transport per recipient MX on port 25, failover across MX hosts, no relay |
 | Email Auth       | DKIM signing (AES-256-GCM at rest), SPF/DMARC DNS checks |
 | Database         | PostgreSQL                          |
 | ORM              | Drizzle ORM (`drizzle-orm/bun-sql`) |
@@ -110,6 +110,7 @@ bunmail/
 │   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
+│   │   │   │   ├── mx-route.ts           ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
@@ -560,7 +561,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | locked_by     | varchar(64)    | nullable: worker holding a `sending` row (#180) |
 | lease_until   | timestamptz    | nullable: claim expiry while `sending` (#180) |
 | last_error    | text           | nullable                        |
-| delivery_state | jsonb         | nullable: per-MX (or per-recipient, #236) outcomes with attempts, failure class, `tls` and `updatedAt` (#97, #250) |
+| delivery_state | jsonb         | nullable: per-recipient-domain (or per-recipient, #236/#250) outcomes with attempts, failure class, MX host, `tls` and `updatedAt` (#97, #250); keyed by MX on rows from before #250 |
 | message_id    | varchar(255)   | nullable (SMTP Message-ID)      |
 | sent_at       | timestamp      | nullable                        |
 | created_at    | timestamp      | NOT NULL, default `now()`       |
@@ -1105,7 +1106,7 @@ Both maps reset on server restart and are per-replica (single-instance only; opt
 
 ## Email Delivery
 
-BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX host itself, refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to the checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS, TLS 1.2 at least, certificates not verified). Each delivery-state entry records whether its latest session used STARTTLS or plaintext (`tls`, read from Nodemailer's connection events, #250); the API returns it in `deliveryState`, and the email detail page badges a plaintext delivery. See [docs/emails.md](docs/emails.md#tls-record-250).
+BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX hosts itself on every attempt (#250): sorted by preference with ties shuffled, the domain's own A/AAAA records when it has no MX (implicit MX), a terminal failure for NXDOMAIN, a null MX or no records at all, and a retry for any temporary DNS error. It refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to a checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS, TLS 1.2 at least, certificates not verified). It fails over to the next address or host (at most 5 hosts, 2 addresses each, one shared session deadline) only on a connection-level failure or a `421`; any other reply decides the attempt. When the MX accepts some recipients of a transaction and refuses others at `RCPT TO`, each refused recipient gets its own entry: retried for a 4xx, failed and suppressed for a 5xx. See [docs/emails.md](docs/emails.md#mx-resolution-and-failover-250). Each delivery-state entry records whether its latest session used STARTTLS or plaintext (`tls`, read from Nodemailer's connection events, #250); the API returns it in `deliveryState`, and the email detail page badges a plaintext delivery. See [docs/emails.md](docs/emails.md#tls-record-250).
 
 **What this means:**
 - The server's IP reputation directly affects deliverability
@@ -1118,7 +1119,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - Decrypted in memory on each send and handed to nodemailer's signer. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
-- **Inline 5xx** during the SMTP transaction → classified per MX group ([`parseSmtpError`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue.service.ts](src/modules/emails/services/queue.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
+- **Inline 5xx** during the SMTP transaction → classified per group, or per refused recipient when the MX accepted others (#250) ([`classifySendFailure`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue.service.ts](src/modules/emails/services/queue.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24). Only a DSN delivered to a verified **signed return path** counts (#236): with `SMTP_ENABLED=true` and the sender domain's MX naming `MAIL_HOSTNAME` (cached per domain; other domains keep the From address as envelope sender), each recipient is sent in its own SMTP transaction with envelope sender `b+<email id hex>.<recipient index>.<MAC>@<sender domain>` (HMAC under a key derived from `DKIM_ENCRYPTION_KEY`), the receiver refuses (`550`) a `b+` address that does not verify, and the DSN then applies to exactly that email and recipient, whatever its body says. A DSN to any other address (the Message-ID link of before #236) has no effect; non-DSN mail to a return path (auto-replies) is dropped. Same sender domain as before, so SPF and DMARC alignment are unchanged. See [docs/bounces.md](docs/bounces.md#signed-return-paths-236).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
 - A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).

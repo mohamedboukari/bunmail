@@ -48,10 +48,18 @@ export interface DeliveryGroup {
   /** Per-message-id is canonical across the row, but kept here for symmetry. */
   messageId?: string;
   /**
-   * Destination MX when the entry's key is not the MX itself. With signed
-   * return paths (#236) a group of several recipients is split into one
-   * entry per recipient, keyed `<mx host>#<recipient index>`; absent on
-   * entries keyed by their MX.
+   * Recipient domain of the entry (#250). Set on entries written since:
+   * they are keyed by the domain (`<domain>#<recipient index>` once split
+   * per recipient, by signed return paths #236 or by a partial `RCPT TO`
+   * rejection), and the domain's MX set is resolved again on every
+   * attempt. Absent on older entries, which are keyed by their MX.
+   */
+  domain?: string;
+  /**
+   * MX host of the entry's latest outcome: the host that accepted or
+   * answered, or the last one tried (#250). Absent while no host was
+   * reached (a DNS failure, or no host could be connected to). On entries
+   * from before `domain` existed, the MX when the key is not the MX itself.
    */
   mxHost?: string;
   /**
@@ -74,9 +82,10 @@ export interface DeliveryGroup {
 export type DeliveryTls = "starttls" | "plaintext";
 
 /**
- * Shape of `emails.delivery_state`: a map keyed by destination MX
- * hostname (or `<mx host>#<recipient index>` for a per-recipient entry,
- * #236, see {@link DeliveryGroup.mxHost}). Nullable on the column because legacy rows (created
+ * Shape of `emails.delivery_state`: a map keyed by recipient domain (or
+ * `<domain>#<recipient index>` for a per-recipient entry, #236/#250, see
+ * {@link DeliveryGroup.domain}); entries written before #250 are keyed by
+ * destination MX hostname. Nullable on the column because legacy rows (created
  * before the Phase-2 migration shipped, or rows where `sendMail` has
  * not yet been called) carry `null` and are treated as "no prior
  * state" by the mailer.

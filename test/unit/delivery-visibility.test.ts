@@ -102,6 +102,30 @@ describe("serializeDeliveryState", () => {
     ]);
   });
 
+  test("an entry keyed by its domain (#250) shows its MX host, or null before one was reached", () => {
+    const entries = serializeDeliveryState({
+      "example.com": {
+        status: "sent",
+        recipients: ["erin@example.com"],
+        attempts: 1,
+        domain: "example.com",
+        mxHost: "mx2.example.com",
+      },
+      "flaky.example": {
+        status: "retry",
+        recipients: ["frank@flaky.example"],
+        attempts: 1,
+        domain: "flaky.example",
+        lastError: "flaky.example: MX lookup failed temporarily (ESERVFAIL); will retry",
+      },
+    });
+    expect(entries.map((e) => [e.mx, e.recipients[0], e.status])).toEqual([
+      ["mx2.example.com", "erin@example.com", "sent"],
+      [null, "frank@flaky.example", "retry"],
+    ]);
+    expect(JSON.stringify(entries)).not.toContain("domain");
+  });
+
   test("never exposes internal keys or fields", () => {
     const json = JSON.stringify(serializeDeliveryState(STATE));
     expect(json).not.toContain("#0");

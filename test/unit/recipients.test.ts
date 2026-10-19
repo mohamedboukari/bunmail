@@ -3,8 +3,7 @@ import {
   MAX_ADDRESS_LENGTH,
   isEmailAddress,
   parseRecipients,
-  groupByMx,
-  type MxResolver,
+  groupByDomain,
 } from "../../src/utils/recipients.ts";
 
 /**
@@ -95,90 +94,29 @@ describe("parseRecipients", () => {
   });
 });
 
-describe("groupByMx", () => {
-  /**
-   * Trivial resolver that maps domain → fixed MX string. Each test
-   * builds its own to model the topology it cares about.
-   */
-  function makeResolver(map: Record<string, string | Error>): MxResolver {
-    return async (domain: string) => {
-      const v = map[domain];
-      if (v instanceof Error) throw v;
-      if (!v) throw new Error(`No MX for ${domain}`);
-      return v;
-    };
-  }
-
-  test("buckets recipients by their domain's MX", async () => {
+describe("groupByDomain (#250)", () => {
+  test("buckets recipients by their domain, in first-seen order", () => {
     const recipients = parseRecipients(
-      "a@gmail.com, b@gmail.com, c@outlook.com",
+      "a@gmail.com, c@outlook.com, b@GMAIL.com",
       null,
       null,
     );
-    const resolver = makeResolver({
-      "gmail.com": "smtp.gmail.com",
-      "outlook.com": "smtp.outlook.com",
-    });
-    const { groups, failures } = await groupByMx(recipients, resolver);
-    expect(failures).toEqual([]);
-    expect(groups.size).toBe(2);
-    expect(groups.get("smtp.gmail.com")!.map((r) => r.address)).toEqual([
+    const groups = groupByDomain(recipients);
+    expect([...groups.keys()]).toEqual(["gmail.com", "outlook.com"]);
+    expect(groups.get("gmail.com")!.map((r) => r.address)).toEqual([
       "a@gmail.com",
-      "b@gmail.com",
+      "b@GMAIL.com",
     ]);
-    expect(groups.get("smtp.outlook.com")!.map((r) => r.address)).toEqual([
-      "c@outlook.com",
-    ]);
+    expect(groups.get("outlook.com")!.map((r) => r.address)).toEqual(["c@outlook.com"]);
   });
 
-  test("merges recipients on different domains sharing the same MX", async () => {
-    const recipients = parseRecipients("a@hello.com, b@world.com", null, null);
-    const resolver = makeResolver({
-      "hello.com": "shared-mx.example.net",
-      "world.com": "shared-mx.example.net",
-    });
-    const { groups, failures } = await groupByMx(recipients, resolver);
-    expect(failures).toEqual([]);
-    expect(groups.size).toBe(1);
-    expect(groups.get("shared-mx.example.net")!.map((r) => r.address)).toEqual([
-      "a@hello.com",
-      "b@world.com",
-    ]);
+  test("keeps domains apart even when they would share an MX", () => {
+    const groups = groupByDomain(parseRecipients("a@hello.com, b@world.com", null, null));
+    expect(groups.size).toBe(2);
   });
 
-  test("reports DNS failures separately without aborting other groups", async () => {
-    const recipients = parseRecipients("good@valid.com, bad@nomx.example", null, null);
-    const resolver = makeResolver({
-      "valid.com": "mx.valid.com",
-      "nomx.example": new Error("No MX records found for domain: nomx.example"),
-    });
-    const { groups, failures } = await groupByMx(recipients, resolver);
-
-    expect(groups.size).toBe(1);
-    expect(groups.get("mx.valid.com")!.map((r) => r.address)).toEqual(["good@valid.com"]);
-
-    expect(failures).toHaveLength(1);
-    expect(failures[0]!.domain).toBe("nomx.example");
-    expect(failures[0]!.recipients.map((r) => r.address)).toEqual(["bad@nomx.example"]);
-    expect(failures[0]!.error).toMatch(/No MX records/);
-  });
-
-  test("issues exactly one resolution per unique domain", async () => {
-    /** 4 recipients across only 2 domains → 2 resolver calls, not 4. */
-    const recipients = parseRecipients("a@x.com, b@x.com", "c@y.com, d@y.com", null);
-    let callCount = 0;
-    const resolver: MxResolver = async (d) => {
-      callCount++;
-      return `mx.${d}`;
-    };
-    await groupByMx(recipients, resolver);
-    expect(callCount).toBe(2);
-  });
-
-  test("returns empty groups + empty failures for an empty input", async () => {
-    const { groups, failures } = await groupByMx([], async () => "mx.unused");
-    expect(groups.size).toBe(0);
-    expect(failures).toEqual([]);
+  test("returns no groups for an empty input", () => {
+    expect(groupByDomain([]).size).toBe(0);
   });
 });
 

@@ -82,6 +82,8 @@ src/modules/emails/
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
+│   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
+│   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones
 │   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
@@ -361,7 +363,7 @@ queued ──→ sending ──→ failed ✗ (still failing when MAIL_RETRY_MAX
 | `sending` | Mid-SMTP-transaction |
 | `sent` | SMTP transaction succeeded; recipient's MX accepted |
 | `bounced` | The recipient is permanently unreachable. Set either when an inline 5xx came back during the SMTP transaction (#68) **or** when a DSN arrived later (#24). Auto-suppression fires in both cases. |
-| `failed` | All retries exhausted on a transient (4xx) or infrastructure error. We never confirmed whether the recipient is reachable. |
+| `failed` | All retries exhausted on a transient (4xx) or infrastructure error, or the recipient domain cannot receive mail (it does not exist, publishes a null MX, or has neither MX nor address records, #250). We never confirmed whether the recipient is reachable. |
 
 See [docs/bounces.md](bounces.md) for both bounce paths.
 
@@ -370,20 +372,36 @@ See [docs/bounces.md](bounces.md) for both bounce paths.
 Each `emails` row can address recipients across multiple domains (`to` + `cc` + `bcc`). On send, the mailer service:
 
 1. Parses all three fields into a flat recipient list (kind preserved; `to` > `cc` > `bcc` precedence on dedup).
-2. Resolves the MX for each unique domain: one DNS query per domain, issued in parallel.
-3. **Groups recipients by destination MX**. Two domains that share an MX (CNAME aliases, shared receiving infrastructure) merge into one group: fewer SMTP connections.
+2. **Groups recipients by domain** (#250): one group, and one delivery-state entry, per recipient domain.
+3. On every attempt, resolves the MX set of each pending domain, once per domain, in parallel (see [MX resolution and failover](#mx-resolution-and-failover-250)). Domains that resolve to the same hosts in the same order share a session, one transaction each.
 4. Generates one canonical `Message-ID:` for the whole email so all recipients see the same identifier (bounce/complaint feedback loops join on this).
-5. For each MX group, opens one SMTP session and submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only.
+5. For each group, submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only, to the first MX host that takes it.
 
-The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their MX group's envelope, never in the rendered headers.
+The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their group's envelope, never in the rendered headers.
+
+### MX resolution and failover (#250)
+
+Each attempt resolves each pending recipient domain again (`resolveMxRoute` in `mx-route.ts`); nothing is cached across attempts, so a temporary DNS failure is never carried over:
+
+| DNS answer | Outcome |
+|---|---|
+| MX records | Hosts sorted by preference, hosts of equal preference in random order (RFC 5321 5.1). |
+| Null MX (`MX 0 .`, RFC 7505, or any empty exchange) | `failed`, `<domain>: domain does not accept mail (null MX)`. |
+| No MX records (`ENODATA` or an empty answer) | The **implicit MX**: the domain's own A/AAAA records, as one host of preference 0 (RFC 5321 5.1). With no address records either: `failed`, `<domain>: domain has no MX or address records`. |
+| NXDOMAIN (`ENOTFOUND`) | `failed`, `<domain>: domain does not exist`. Bun reports a name without MX records as `ENOTFOUND` too (Node says `ENODATA`), so the A/AAAA records are checked first: a name that does not exist has none, and one that exists without MX records gets its implicit MX. |
+| Any other resolver error (`ESERVFAIL`, `ETIMEOUT`, `ECONNREFUSED`, `EAI_AGAIN`, ...), or no answer within 15 s | `retry` on the normal backoff, resolved again on the next attempt. |
+
+A DNS outcome carries no SMTP reply, so it never suppresses a recipient and never counts as a bounce.
+
+**Failover** (`deliverWithFailover`): the hosts are tried in order, and each host's addresses in order, at most **5 hosts** and **2 addresses per host** per attempt. Every address, an implicit MX's included, goes through the MX address check below (a host with any non-public address is skipped), and a host with an IPv4 address is reached over IPv4 only. A transaction moves to the next address or host only after a **connection-level failure** (refused, timed out, reset, a STARTTLS stall, no greeting: no SMTP reply at all) or a **`421`** (greeting or reply). Any other reply from a server that answered (a 4xx or 5xx to `MAIL FROM`, `RCPT TO` or `DATA`) decides the attempt and is classified as below, so a `550` from the primary is never retried on a backup. All sessions of one attempt share the 20-minute session deadline (counted while sessions run, not while waiting for an MX lock). The MX lock is taken per session, keyed by the host connected to, and released before the next host is tried. Each skipped host or address is logged at `debug` with the reason; the entry's outcome is logged as before, with the host it ended on (`mxHost`). When no host could be used, the entry keeps the last failure and is retried.
 
 ### One transaction per recipient with signed return paths (#236)
 
-With `SMTP_ENABLED=true` and the sender domain's MX pointing at this server (`MAIL_HOSTNAME` in its MX set; other domains keep the From address), the envelope sender (`MAIL FROM`) is not the From address but each recipient's signed return path, `b+<id>.<index>.<MAC>@<sender domain>`, so a DSN is bound to exactly one email and recipient (see [bounces.md](bounces.md#signed-return-paths-236)). The envelope sender belongs to a whole SMTP transaction, so step 5 changes: each recipient is its own transaction, with only that recipient in `RCPT TO` and its own return path in `MAIL FROM`, and a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection, `maxRequeues: 0` so a dropped connection is reported, not silently resent) and hold the MX's throttle slot once; the 20-minute session deadline covers all of them. The message itself (headers, DKIM signature, custom headers, `List-Unsubscribe`, `Feedback-ID`) is the same in each. A single-recipient email is one transaction, as before. With `SMTP_ENABLED=false` nothing changes: one transaction per MX, envelope sender = From.
+With `SMTP_ENABLED=true` and the sender domain's MX pointing at this server (`MAIL_HOSTNAME` in its MX set; other domains keep the From address), the envelope sender (`MAIL FROM`) is not the From address but each recipient's signed return path, `b+<id>.<index>.<MAC>@<sender domain>`, so a DSN is bound to exactly one email and recipient (see [bounces.md](bounces.md#signed-return-paths-236)). The envelope sender belongs to a whole SMTP transaction, so step 5 changes: each recipient is its own transaction, with only that recipient in `RCPT TO` and its own return path in `MAIL FROM`, and a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection, `maxRequeues: 0` so a dropped connection is reported, not silently resent) and hold the MX's throttle slot once; the 20-minute session deadline covers all of them. The message itself (headers, DKIM signature, custom headers, `List-Unsubscribe`, `Feedback-ID`) is the same in each. A single-recipient email is one transaction, as before. With `SMTP_ENABLED=false` nothing changes: one transaction per recipient domain, envelope sender = From.
 
 ### One session per MX (#250)
 
-Every MX gets one SMTP session (`runMxSession` in `mx-transport.ts`), run under that MX's throttle slot:
+Every address tried gets one SMTP session (`runMxSession` in `mx-transport.ts`), run under its MX's throttle slot:
 
 - **One pooled connection** (`pool: true`, `maxConnections: 1`, `maxRequeues: 0`), also for a single transaction, so there is one code path. The transactions of the session (one per recipient with signed return paths, else one) go over it in turn, each after `RSET`.
 - **BunMail opens the socket.** Nodemailer's `getSocket` hook connects to the checked MX address (60 s connect timeout) and BunMail keeps the socket.
@@ -392,39 +410,47 @@ Every MX gets one SMTP session (`runMxSession` in `mx-transport.ts`), run under 
 
 ### Per-group delivery state (`emails.delivery_state`, #97)
 
-Every multi-MX send writes a per-group outcome map into `emails.delivery_state` (JSONB, nullable). Each entry is keyed by destination MX hostname and records:
+Every send writes a per-group outcome map into `emails.delivery_state` (JSONB, nullable). Each entry is keyed by recipient domain (#250; entries written before are keyed by destination MX hostname) and records:
 
 ```jsonc
 {
-  "smtp.gmail.com": {
+  "gmail.com": {
     "status": "sent",
     "recipients": ["alice@gmail.com"],
     "attempts": 1,
+    "domain": "gmail.com",
+    "mxHost": "gmail-smtp-in.l.google.com",
     "deliveredAt": "2026-05-25T00:00:00.000Z",
-    "messageId": "<abc@mail.bunmail.xyz>",
+    "messageId": "<abc@mail.example.com>",
     "tls": "starttls",
     "updatedAt": "2026-05-25T00:00:00.000Z"
   },
-  "smtp-mail.outlook.com": {
+  "outlook.com": {
     "status": "retry",
     "recipients": ["bob@outlook.com"],
     "attempts": 1,
-    "lastError": "421 4.4.5 too many connections",
+    "domain": "outlook.com",
+    "mxHost": "outlook-com.olc.protection.outlook.com",
+    "lastError": "450 4.7.500 Server busy",
     "failureKind": "soft",
-    "failureCode": "4.4.5",
+    "failureCode": "4.7.500",
     "tls": "plaintext",
     "updatedAt": "2026-05-25T00:00:01.000Z"
   }
 }
 ```
 
+`domain` is the entry's recipient domain, resolved again on every attempt; `mxHost` is the MX host of the latest outcome (the one that accepted or answered, or the last one tried), absent while no host was reached.
+
 **Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: a hard 5xx that auto-suppressed the recipients, a sender policy block, or the email got too old to retry with this group still pending). A group refused for sender reasons (5.7.x, blocklist, authentication) has `"blocked": true` and its recipients are not suppressed (#246). A failure is classified from the SMTP reply only (#250): Nodemailer's `responseCode`/`response`, or a line that starts with a reply code; a connection, DNS or TLS error has no reply and stays `retry`, so an IP address, port or host name in its message is never read as a status code. The classification is stored on the group (`failureKind`: `hard`, `policy` or `soft`; `failureCode`), and the queue reads it instead of re-parsing `lastError`.
 
 **Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
 
-**Per-recipient entries (#236):** with signed return paths, a pending group of several recipients is split into one entry per recipient, keyed `<mx host>#<recipient index>` with the MX in `mxHost` (for example `"smtp.gmail.com#2": { "mxHost": "smtp.gmail.com", "recipients": ["carol@gmail.com"], ... }`). Each keeps its own status, attempts, classification and retries, so one recipient's `550` or `451` does not decide the others'. Single-recipient groups keep their MX as key. A row that is retried after `SMTP_ENABLED` changes is handled either way: a multi-recipient group is split when return paths are on, and a per-recipient entry still goes to its `mxHost` when they are off.
+**Per-recipient entries (#236):** with signed return paths, a pending group of several recipients is split into one entry per recipient, keyed `<domain>#<recipient index>` (for example `"gmail.com#2": { "recipients": ["carol@gmail.com"], ... }`). Each keeps its own status, attempts, classification and retries, so one recipient's `550` or `451` does not decide the others'. Single-recipient groups keep their domain as key. A row that is retried after `SMTP_ENABLED` changes is handled either way: a multi-recipient group is split when return paths are on, and a per-recipient entry is still routed by its domain when they are off.
 
-**Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately: no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
+**Per-recipient `RCPT TO` outcomes (#250):** without return paths, one transaction carries all of a group's recipients, and the MX may accept some and refuse others at `RCPT TO`. The group is then split: the accepted recipients stay on the entry as `sent`; each refused recipient gets its own entry, keyed `<group key>#<recipient index>`, with its own reply's `failureKind`, `failureCode` and `lastError`: `retry` for a 4xx (only those recipients go out on the next attempt), `failed` for a 5xx, through the same inline hard-bounce path as a whole-group 5xx (suppression, never weakening a permanent one, #191, and `email.bounced` through the outbox, #184; a 5.7.x sender block is `blocked` and suppresses nobody). When every recipient is refused, the transaction fails as a whole, as before.
+
+**DNS outcomes (#250):** a domain that cannot receive mail (see [MX resolution and failover](#mx-resolution-and-failover-250)) is `failed` under its own key; a temporary DNS failure is `retry`. Rows from before #250 may still hold a synthetic `<dns:<domain>>` entry (already `failed`, never retried), and pending entries keyed by an MX are routed by their recipients' domains (a group of several domains is split, keyed `<old key>|<domain>`).
 
 **`updatedAt`** (#250): when the entry's latest outcome happened (an attempt, a DNS failure, or recipients suppressed before a retry). Absent on entries written before #250.
 
@@ -441,7 +467,7 @@ A transaction is `starttls` only when both happened: under Bun the TLS callback 
 
 ### Exposed in the API and on the detail page (#250)
 
-`deliveryState` on every email response (see [api.md](api.md#post-apiv1emailssend)) is built from this column by `serializeDeliveryState`: one entry per stored key, with `mx` (`mxHost`, or the key; `null` for a `<dns:...>` entry), `recipients`, `status`, `attempts`, `failureKind`, `failureCode`, `lastError`, `tls` and `updatedAt` (falling back to `deliveredAt`), sorted by `mx` then first recipient. The internal key, `mxHost`, `blocked`, `messageId` and `deliveredAt` are not exposed. The dashboard's email detail page renders the same entries as the **Delivery by MX** table.
+`deliveryState` on every email response (see [api.md](api.md#post-apiv1emailssend)) is built from this column by `serializeDeliveryState`: one entry per stored key, with `mx` (`mxHost`; `null` while no MX host was reached; on older entries keyed by their MX, `mxHost` or the key, and `null` for a `<dns:...>` entry), `recipients`, `status`, `attempts`, `failureKind`, `failureCode`, `lastError`, `tls` and `updatedAt` (falling back to `deliveredAt`), sorted by `mx` then first recipient. The internal key, `domain`, `mxHost`, `blocked`, `messageId` and `deliveredAt` are not exposed. The dashboard's email detail page renders the same entries as the **Delivery by MX** table.
 
 ### Aggregate status semantics
 
@@ -468,7 +494,7 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 - **Re-checks on retry:** each pass checks that the sending API key is still active; a key revoked in the meantime fails the email without sending. Each retry pass also re-checks the suppression list (#262): a recipient suppressed since the email was accepted (bounce or complaint from another email, unsubscribe, manual entry) is dropped from its group, and a group left with nobody becomes `failed` (`All recipients were suppressed before this retry`), so it is never sent. `sentAt` is the time the first MX group was delivered, set as soon as one is, even while other groups are still retrying.
 - **Atomic claim:** Each cycle's `queued → sending` transition is one statement guarded by Postgres `FOR UPDATE SKIP LOCKED` (#20). Concurrent workers always see disjoint claims: running multiple BunMail instances against the same DB will not double-send.
 - **Fair claim (#258):** each batch is shared across API keys round-robin, so one key's backlog cannot delay another key's mail. For every API key a `LATERAL` subquery takes its first `n` due rows in due order (`next_attempt_at`, then `created_at`) through `idx_emails_due_per_key`, locking them `SKIP LOCKED`; rows with an expired lease are added (at most `n`). The candidates are ranked within their key, and the batch takes the lowest ranks first, oldest first within a rank: with keys A (500 due), B (3) and C (1) and a batch of 5, the claim takes A1, B1, C1, A2, B2. A single key keeps plain FIFO order. The cost is one short index probe per key whatever the backlog (0.4 ms with 50,000 due rows from one key). The lock sits in the per-key subqueries (Postgres refuses `FOR UPDATE` next to a window function), which keeps concurrent workers' claims disjoint; candidates locked but not taken are released when the statement ends.
-- **MX address check:** each MX host is resolved by the mailer itself and refused if any address is not publicly routable (`mx-address.ts`, same ranges as the webhook SSRF guard), or if the domain publishes a null MX. The transport connects to the checked address (IPv4 preferred) with the MX name as TLS SNI, so a DNS answer cannot change between check and connect. A refused MX is a normal failed attempt for that group (retried, then `failed`); nothing is suppressed. `MAIL_ALLOW_PRIVATE_MX=true` allows private MX hosts for deliberate internal delivery.
+- **MX address check:** each MX host, and the domain itself for an implicit MX (#250), is resolved by the mailer itself and refused if any address is not publicly routable (`mx-address.ts`, same ranges as the webhook SSRF guard). The transport connects to a checked address (IPv4 preferred) with the MX name as TLS SNI, so a DNS answer cannot change between check and connect. A refused host is skipped for the next one (#250); when none is left, it is a normal failed attempt for that group (retried, then `failed`); nothing is suppressed. A null MX fails the group at once (#250). `MAIL_ALLOW_PRIVATE_MX=true` allows private MX hosts for deliberate internal delivery.
 - **Per-MX throttle (#91):** SMTP sessions are throttled per destination MX via a module-level semaphore (`src/utils/mx-throttle.ts`). Default is **one parallel session per MX** (configurable via `MAIL_MX_CONCURRENCY`). Sends to different MXs run in parallel; sends to the same MX serialize. The semaphore holds across poll cycles, so back-to-back batches that share a destination can't pile up either. This is what stops strict receivers (Outlook, Yahoo) from `421`ing parallel sessions from the same source IP. Operators with established IP reputation can raise the cap to 2-3; values above 3 are rarely worth it.
 - **Crash recovery:** lease expiry (see Leases above); nothing runs at startup
 - **DKIM:** Automatically signs with domain's RSA key when available

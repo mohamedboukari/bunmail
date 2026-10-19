@@ -8,14 +8,17 @@ import type {
 /**
  * One delivery-state entry in API responses and on the email detail page
  * (#250): where a set of recipients was sent and what happened there.
- * Built only from the stored state; the entry's internal key (`<mx>#<n>`
- * for a per-recipient entry, `<dns:domain>` for a DNS failure), `mxHost`,
+ * Built only from the stored state; the entry's internal key (the
+ * recipient domain, `<domain>#<n>` for a per-recipient entry, or on older
+ * rows the MX and `<dns:domain>` for a DNS failure), `domain`, `mxHost`,
  * `blocked` and `messageId` are not exposed.
  */
 export interface SerializedDeliveryGroup {
   /**
-   * Destination MX host. `null` when the recipient domain's MX could not
-   * be resolved (the recipients were never attempted).
+   * MX host of the latest outcome (#250): the one that accepted or
+   * answered, or the last one tried. `null` while no MX host was reached
+   * (the recipient domain did not resolve, or no host could be connected
+   * to).
    */
   mx: string | null;
   /** The recipients of this entry: one with signed return paths (#236), else the MX's group. */
@@ -39,7 +42,7 @@ export interface SerializedDeliveryGroup {
   updatedAt: string | null;
 }
 
-/** Prefix of the synthetic key of a DNS-failed entry (see `buildInitialState`). */
+/** Prefix of the synthetic key of a DNS-failed entry on rows from before #250. */
 const DNS_FAILURE_KEY = "<dns:";
 
 /**
@@ -58,7 +61,7 @@ export function serializeDeliveryState(
 
 function serializeGroup(key: string, group: DeliveryGroup): SerializedDeliveryGroup {
   return {
-    mx: key.startsWith(DNS_FAILURE_KEY) ? null : (group.mxHost ?? key),
+    mx: mxOf(key, group),
     recipients: [...group.recipients],
     status: group.status,
     attempts: group.attempts,
@@ -68,6 +71,16 @@ function serializeGroup(key: string, group: DeliveryGroup): SerializedDeliveryGr
     tls: group.tls ?? null,
     updatedAt: group.updatedAt ?? group.deliveredAt ?? null,
   };
+}
+
+/**
+ * The entry's MX host: `mxHost` for an entry keyed by its domain (#250),
+ * `null` until an attempt reached a host; on older entries keyed by their
+ * MX, `mxHost` or the key, and `null` for a `<dns:...>` entry.
+ */
+function mxOf(key: string, group: DeliveryGroup): string | null {
+  if (group.domain !== undefined) return group.mxHost ?? null;
+  return key.startsWith(DNS_FAILURE_KEY) ? null : (group.mxHost ?? key);
 }
 
 /** MX first (unresolved last), then the first recipient. */

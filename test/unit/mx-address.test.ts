@@ -1,7 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   BlockedMxError,
-  resolveMxAddress,
+  resolveMxAddresses,
 } from "../../src/modules/emails/services/mx-address.ts";
 
 /**
@@ -29,11 +29,29 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
   }
 }
 
-describe("resolveMxAddress", () => {
+describe("resolveMxAddresses", () => {
   test("returns a public address", async () => {
     expect(
-      await resolveMxAddress("mx.example.org", strict(answers("203.0.113.10"))),
-    ).toBe("203.0.113.10");
+      await resolveMxAddresses("mx.example.org", strict(answers("203.0.113.10"))),
+    ).toEqual(["203.0.113.10"]);
+  });
+
+  test("returns every address of the preferred family, in DNS order, once each", async () => {
+    expect(
+      await resolveMxAddresses(
+        "mx.example.org",
+        strict(answers("203.0.113.11", "2001:db8::25", "203.0.113.10", "203.0.113.11")),
+      ),
+    ).toEqual(["203.0.113.11", "203.0.113.10"]);
+  });
+
+  test("uses IPv6 only for a host without any IPv4 address", async () => {
+    expect(
+      await resolveMxAddresses(
+        "mx.example.org",
+        strict(answers("2001:db8::25", "2001:db8::26")),
+      ),
+    ).toEqual(["2001:db8::25", "2001:db8::26"]);
   });
 
   test.each([
@@ -47,14 +65,14 @@ describe("resolveMxAddress", () => {
     ["IPv4-mapped metadata, hex groups", "::ffff:a9fe:a9fe"],
   ])("refuses %s", async (_label, address) => {
     expect(
-      await rejectionOf(resolveMxAddress("mx.example.org", strict(answers(address)))),
+      await rejectionOf(resolveMxAddresses("mx.example.org", strict(answers(address)))),
     ).toBeInstanceOf(BlockedMxError);
   });
 
   test("refuses when any one of several addresses is private", async () => {
     expect(
       await rejectionOf(
-        resolveMxAddress("mx.example.org", strict(answers("203.0.113.10", "10.0.0.5"))),
+        resolveMxAddresses("mx.example.org", strict(answers("203.0.113.10", "10.0.0.5"))),
       ),
     ).toBeInstanceOf(BlockedMxError);
   });
@@ -64,19 +82,19 @@ describe("resolveMxAddress", () => {
       throw new Error("lookup must not be called");
     };
     expect(
-      await rejectionOf(resolveMxAddress("127.0.0.1", { allowPrivate: false, lookup })),
+      await rejectionOf(resolveMxAddresses("127.0.0.1", { allowPrivate: false, lookup })),
     ).toBeInstanceOf(BlockedMxError);
-    expect(await resolveMxAddress("203.0.113.10", { allowPrivate: false, lookup })).toBe(
-      "203.0.113.10",
-    );
+    expect(
+      await resolveMxAddresses("203.0.113.10", { allowPrivate: false, lookup }),
+    ).toEqual(["203.0.113.10"]);
   });
 
   test("refuses a null MX instead of falling back to a default host", async () => {
     expect(
-      await rejectionOf(resolveMxAddress("", strict(answers("203.0.113.10")))),
+      await rejectionOf(resolveMxAddresses("", strict(answers("203.0.113.10")))),
     ).toEqual(expect.objectContaining({ message: expect.stringContaining("null MX") }));
     expect(
-      await rejectionOf(resolveMxAddress(".", strict(answers("203.0.113.10")))),
+      await rejectionOf(resolveMxAddresses(".", strict(answers("203.0.113.10")))),
     ).toEqual(expect.objectContaining({ message: expect.stringContaining("null MX") }));
   });
 
@@ -85,34 +103,36 @@ describe("resolveMxAddress", () => {
       throw new Error("ENOTFOUND");
     };
     expect(
-      await rejectionOf(resolveMxAddress("mx.example.org", strict(failing))),
+      await rejectionOf(resolveMxAddresses("mx.example.org", strict(failing))),
     ).toBeInstanceOf(BlockedMxError);
     expect(
-      await rejectionOf(resolveMxAddress("mx.example.org", strict(answers()))),
+      await rejectionOf(resolveMxAddresses("mx.example.org", strict(answers()))),
     ).toBeInstanceOf(BlockedMxError);
   });
 
   test("prefers IPv4 over IPv6", async () => {
     expect(
-      await resolveMxAddress(
+      await resolveMxAddresses(
         "mx.example.org",
         strict(answers("2001:db8::25", "203.0.113.10")),
       ),
-    ).toBe("203.0.113.10");
+    ).toEqual(["203.0.113.10"]);
   });
 
   test("MAIL_ALLOW_PRIVATE_MX allows private addresses", async () => {
     expect(
-      await resolveMxAddress("mail.internal", {
+      await resolveMxAddresses("mail.internal", {
         allowPrivate: true,
         lookup: answers("10.0.0.5"),
       }),
-    ).toBe("10.0.0.5");
+    ).toEqual(["10.0.0.5"]);
   });
 
   test("the error message does not include the resolved address", async () => {
     expect(
-      await rejectionOf(resolveMxAddress("mx.example.org", strict(answers("10.9.8.7")))),
+      await rejectionOf(
+        resolveMxAddresses("mx.example.org", strict(answers("10.9.8.7"))),
+      ),
     ).toEqual(
       expect.objectContaining({
         message: expect.stringMatching(/^(?!.*10\.9\.8\.7).*non-public/),
