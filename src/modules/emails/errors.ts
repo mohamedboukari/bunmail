@@ -1,6 +1,7 @@
 import type { CustomHeaderProblem } from "./services/custom-headers.ts";
 import type { FromNameProblem } from "./services/from-name.ts";
 import type { TagProblem } from "./services/tags.ts";
+import type { AttachmentProblem } from "./services/attachments.ts";
 
 /**
  * Rejections `email.service.createEmail` raises for a send it refuses on
@@ -217,19 +218,86 @@ export class MarketingRequiresOneClickError extends EmailSendRejectedError {
 }
 
 /**
- * A REST send whose body has an `attachments` property, whatever its
- * value (an empty array included). Attachments are not supported yet, and
- * the body schema ignores unknown fields, so without this check they were
- * accepted and silently dropped (#250): a recipient missing an attachment
- * is worse than a clear refusal. Nothing is queued. SMTP submission
- * refuses a message with attachments the same way, with SMTP `550`.
+ * An attachment (#181) breaks an input rule of `services/attachments.ts`:
+ * its filename, its `contentId`, or content that is not strict base64.
+ * Answered like a request validation failure (`422 VALIDATION_ERROR`,
+ * `path` in `details`), as `InvalidTagError` is. The message and the path
+ * name the attachment by its index, never by its name or content. SMTP
+ * submission answers it with `550`.
  */
-export class AttachmentsNotSupportedError extends EmailSendRejectedError {
-  override readonly name = "AttachmentsNotSupportedError";
+export class InvalidAttachmentError extends EmailSendRejectedError {
+  override readonly name = "InvalidAttachmentError";
   readonly status = 422;
-  readonly code = "ATTACHMENTS_NOT_SUPPORTED";
+  readonly code = "VALIDATION_ERROR";
+  /** Which rule the attachment broke. */
+  readonly problem: AttachmentProblem;
+  /** JSON pointer of the refused input, e.g. `/attachments/2/filename`. */
+  readonly path: string;
 
-  constructor() {
-    super("Attachments are not supported: send the email without them.");
+  constructor(problem: AttachmentProblem, path: string, message: string) {
+    super(message);
+    this.problem = problem;
+    this.path = path;
+  }
+}
+
+/**
+ * More than `MAX_ATTACHMENTS` (10) attachments (#181). Nothing is queued.
+ * SMTP submission answers it with `550`.
+ */
+export class TooManyAttachmentsError extends EmailSendRejectedError {
+  override readonly name = "TooManyAttachmentsError";
+  readonly status = 422;
+  readonly code = "TOO_MANY_ATTACHMENTS";
+  /** The limit. */
+  readonly max: number;
+
+  constructor(max: number) {
+    super(`At most ${max} attachments per email.`);
+    this.max = max;
+  }
+}
+
+/**
+ * The attachments, decoded, are larger together than
+ * `ATTACHMENTS_MAX_TOTAL_MB` (#181), which is also the most one file may
+ * have. Nothing is queued. SMTP submission answers it with `552`.
+ */
+export class AttachmentsTooLargeError extends EmailSendRejectedError {
+  override readonly name = "AttachmentsTooLargeError";
+  readonly status = 422;
+  readonly code = "ATTACHMENTS_TOO_LARGE";
+  /** The limit, in bytes. */
+  readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super(
+      `Attachments must total at most ${maxBytes / 1_000_000} MB once decoded. For larger files, upload them to your own storage and send a link.`,
+    );
+    this.maxBytes = maxBytes;
+  }
+}
+
+/**
+ * An attachment (#181) that is an executable, a script or an installer,
+ * by its extension or by its sniffed content. The message names the
+ * attachment by its index, never by its name or content. Nothing is
+ * queued. SMTP submission answers it with `550`.
+ */
+export class AttachmentTypeNotAllowedError extends EmailSendRejectedError {
+  override readonly name = "AttachmentTypeNotAllowedError";
+  readonly status = 422;
+  readonly code = "ATTACHMENT_TYPE_NOT_ALLOWED";
+  /** 0-based index of the refused attachment. */
+  readonly index: number;
+  /** What refused it: the filename's extension or the file's content. */
+  readonly reason: "extension" | "content";
+
+  constructor(index: number, reason: "extension" | "content") {
+    super(
+      `Attachment ${index} is not allowed: executable, script and installer files are refused (${reason === "extension" ? "by its extension" : "by its content"}).`,
+    );
+    this.index = index;
+    this.reason = reason;
   }
 }

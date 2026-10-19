@@ -64,7 +64,7 @@ One `docker compose up` and you have your own email infrastructure. No API keys,
 - **Dashboard**: web UI to manage everything
 - **Multi-domain** support
 - **Webhooks**, get notified on bounce/delivery
-- ~~**Attachments** support~~ (not implemented: the send API has no attachments field, and SMTP submission refuses messages with attachments)
+- **Attachments** support (shipped in #181: `attachments` on the send API and SMTP submission, up to 10 files and `ATTACHMENTS_MAX_TOTAL_MB`, executables refused, files kept until the email reaches a final state)
 - **Rate limiting** to protect your IP reputation
 
 ---
@@ -119,7 +119,7 @@ Authorization: Bearer <API_KEY>
 }
 ```
 
-> Shipped as `POST /api/v1/emails/send`, without `attachments` (not implemented).
+> Shipped as `POST /api/v1/emails/send`; `attachments` shipped in #181 as `[{ filename, content (base64), contentType?, contentId? }]`.
 
 ### Response
 

@@ -20,6 +20,7 @@ type IdPrefix =
   | "rcv" // TOTP recovery code (#220)
   | "aud" // audit log event (#221)
   | "idk" // idempotency key on the send API (#188)
+  | "att" // attachment of an outbound email (#181)
   | "drv" // one run of the domain DNS re-verification loop (#250)
   | "dbl"; // one run of the DNSBL self-check of the sending IPs (#250)
 

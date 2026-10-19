@@ -276,16 +276,21 @@ describe("Dashboard page render smoke tests", () => {
   });
 
   test("EmailDetailPage", () => {
-    expect(typeof EmailDetailPage({ email, isTrashed: false })).toBe("string");
-    expect(typeof EmailDetailPage({ email, isTrashed: true })).toBe("string");
+    expect(typeof EmailDetailPage({ email, isTrashed: false, attachments: [] })).toBe(
+      "string",
+    );
+    expect(typeof EmailDetailPage({ email, isTrashed: true, attachments: [] })).toBe(
+      "string",
+    );
   });
 
   test("EmailDetailPage shows Reply-To only when set, escaped (#169)", async () => {
-    const without = await EmailDetailPage({ email, isTrashed: false });
+    const without = await EmailDetailPage({ email, isTrashed: false, attachments: [] });
     expect(without).not.toContain("Reply-To");
     const withReplyTo = await EmailDetailPage({
       email: { ...email, replyTo: "support@example.com, <b>x</b>" },
       isTrashed: false,
+      attachments: [],
     });
     expect(withReplyTo).toContain("Reply-To");
     expect(withReplyTo).toContain("support@example.com");

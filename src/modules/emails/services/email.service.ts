@@ -41,8 +41,18 @@ import {
   InvalidFromNameError,
   InvalidTagError,
   MarketingRequiresOneClickError,
-  AttachmentsNotSupportedError,
+  EmailSendRejectedError,
+  InvalidAttachmentError,
+  AttachmentTypeNotAllowedError,
 } from "../errors.ts";
+import { prepareAttachments, type PreparedAttachment } from "./attachments.ts";
+import {
+  attachmentStorage,
+  listAttachmentMeta,
+  type AttachmentMeta,
+  type LoadedAttachment,
+} from "./attachment-storage.ts";
+import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -81,7 +91,10 @@ export async function createEmail(
   source: EmailSource = "api",
 ): Promise<CreatedEmail> {
   const prepared = await prepareEmail(input, apiKeyId, source);
-  return insertPreparedEmail(db, prepared);
+  /** With attachments, the email row and its files commit together (#181). */
+  return prepared.attachments.length > 0
+    ? db.transaction((tx) => insertPreparedEmail(tx, prepared))
+    : insertPreparedEmail(db, prepared);
 }
 
 /**
@@ -111,7 +124,9 @@ export async function createEmail(
  * The response body is stored without message content (subject, html,
  * text, custom headers): a replay fills those from the live email, or
  * answers them `null` once it is trashed or purged, so deleting an email
- * removes its content everywhere.
+ * removes its content everywhere. Attachments (#181) are stored with the
+ * email in the same transaction; the snapshot keeps only their metadata,
+ * as the first response gave it, never the bytes.
  */
 export async function createEmailIdempotent(
   input: SendEmailInput,
@@ -220,17 +235,19 @@ interface PreparedEmail {
   warnings: SendWarning[];
   /** The sender domain, for the warnings log line. */
   senderDomain: string | undefined;
+  /** The attachments that passed every rule (#181), in order; empty when none. */
+  attachments: PreparedAttachment[];
 }
 
 /**
  * Every check `createEmail` runs before it inserts (custom headers,
- * display name, marketing one-click, suppression, API key and allowed
- * senders, template, subject, body, sender domain), returning the row to
- * insert. The text alternative and the HTML document wrapper (#250) are
- * not made here: the mailer adds them per send, so the row keeps what the
- * caller sent. Throws the same errors
- * `createEmail` documents. Reads through the shared pool and writes
- * nothing.
+ * display name, tags, marketing one-click, attachments, suppression, API
+ * key and allowed senders, template, subject, body, sender domain),
+ * returning the row and the attachments to insert. The text alternative
+ * and the HTML document wrapper (#250) are not made here: the mailer adds
+ * them per send, so the row keeps what the caller sent. Throws the same
+ * errors `createEmail` documents. Reads through the shared pool and
+ * writes nothing.
  */
 async function prepareEmail(
   input: SendEmailInput,
@@ -245,21 +262,11 @@ async function prepareEmail(
     from: redactEmail(input.from),
     to: redactEmail(input.to),
     apiKeyId,
+    attachmentCount: input.attachments?.length ?? 0,
   });
 
   /**
-   * Attachments are not supported (#250): a body that carries the
-   * property at all, whatever its value, is refused before anything else
-   * rather than queued without them. Pure input validation, no database
-   * work. The log line names no file and holds no content.
-   */
-  if (input.attachments !== undefined) {
-    logger.warn("Send blocked: attachments not supported", { id, apiKeyId, source });
-    throw new AttachmentsNotSupportedError();
-  }
-
-  /**
-   * Custom headers (#177), checked next: it is pure input validation,
+   * Custom headers (#177), checked first: it is pure input validation,
    * so a refused header costs no database work. Shared by every ingress
    * (REST, dashboard, SMTP submission) because they all call this
    * function. The log line names the header and the rule, never the value.
@@ -350,6 +357,40 @@ async function prepareEmail(
         reason: blocker,
       });
       throw new MarketingRequiresOneClickError(blocker);
+    }
+  }
+
+  /**
+   * Attachments (#181), the last input rules before any database work:
+   * count, total size, filename, `contentId`, strict base64, and blocked
+   * executable types by extension and by sniffed content. They apply to
+   * template sends too. The log line holds the rule and the index, never
+   * a filename (it may carry personal data) or any content.
+   */
+  let attachments: PreparedAttachment[] = [];
+  if (input.attachments && input.attachments.length > 0) {
+    try {
+      attachments = await prepareAttachments(
+        input.attachments,
+        config.attachments.maxTotalBytes,
+      );
+    } catch (error) {
+      if (error instanceof EmailSendRejectedError) {
+        logger.warn("Send blocked: attachment refused", {
+          id,
+          apiKeyId,
+          source,
+          code: error.code,
+          count: input.attachments.length,
+          ...(error instanceof InvalidAttachmentError
+            ? { path: error.path, problem: error.problem }
+            : {}),
+          ...(error instanceof AttachmentTypeNotAllowedError
+            ? { index: error.index, reason: error.reason }
+            : {}),
+        });
+      }
+      throw error;
     }
   }
 
@@ -496,20 +537,23 @@ async function prepareEmail(
     },
     warnings,
     senderDomain,
+    attachments,
   };
 }
 
 /**
  * Inserts a prepared send with status `queued`, through `executor` (the
- * pool, or the idempotent send's transaction), and logs it.
+ * pool, or a transaction: the idempotent send's, or the one `createEmail`
+ * opens for attachments), with its attachments (#181), and logs it.
  */
 async function insertPreparedEmail(
   executor: DbExecutor,
   prepared: PreparedEmail,
 ): Promise<CreatedEmail> {
-  const { values, warnings, senderDomain } = prepared;
+  const { values, warnings, senderDomain, attachments } = prepared;
   const { id, apiKeyId, source, domainId, headers, tags } = values;
   const [email] = await executor.insert(emails).values(values).returning();
+  await attachmentStorage.saveAttachments(executor, id, attachments);
 
   logger.debug("Email created and queued", {
     id,
@@ -518,6 +562,9 @@ async function insertPreparedEmail(
     customHeaders: headers ? Object.keys(headers) : [],
     /** Keys only: tag values may hold customer ids (#189). */
     tagKeys: tags ? Object.keys(tags) : [],
+    /** Count and size only: filenames may carry personal data (#181). */
+    attachmentCount: attachments.length,
+    attachmentBytes: attachments.reduce((sum, a) => sum + a.sizeBytes, 0),
   });
 
   /**
@@ -535,7 +582,43 @@ async function insertPreparedEmail(
     });
   }
 
-  return { email: email!, warnings };
+  return {
+    email: email!,
+    warnings,
+    attachments: attachments.map((a) => ({
+      position: a.position,
+      filename: a.filename,
+      contentType: a.contentType,
+      sizeBytes: a.sizeBytes,
+      contentId: a.contentId,
+      available: true,
+    })),
+  };
+}
+
+/**
+ * Attachment metadata of these emails (#181), by email id, for
+ * serializing them: one query, never reading the bytes. An email without
+ * attachments is absent from the map.
+ */
+export async function attachmentsFor(
+  emailIds: readonly string[],
+): Promise<Map<string, AttachmentMeta[]>> {
+  return listAttachmentMeta(db, emailIds);
+}
+
+/**
+ * One attachment of an email, with its bytes (`null` once dropped), for
+ * the dashboard download (#181); undefined when the email has no
+ * attachment at that position. Unscoped, like the dashboard's email page;
+ * an email in trash still has its attachments.
+ */
+export async function findAttachmentForDownload(
+  emailId: string,
+  position: number,
+): Promise<LoadedAttachment | undefined> {
+  const [found] = await attachmentStorage.loadAttachments(db, emailId, position);
+  return found;
 }
 
 /**

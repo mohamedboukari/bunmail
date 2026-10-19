@@ -51,6 +51,27 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_message_id` (`(message_id)`) Message-ID lookups: linking an inbound reply to the email it answers (#192), and the bounce and complaint joins
 - `idx_emails_tags` (GIN on `tags` with `jsonb_path_ops`) the tag filter's `tags @> jsonb_build_object(key, value)` containment (#189)
 
+**Table:** `email_attachments` (#181)
+
+One row per attachment of an email, in the order the send listed them. See [Attachments](#attachments-181).
+
+| Column         | Type         | Constraints                        | Description |
+|----------------|--------------|------------------------------------|-------------|
+| `id`           | varchar(36)  | PK                                 | Prefixed ID (`att_<24 hex>`) |
+| `email_id`     | varchar(36)  | NOT NULL, FK → emails (CASCADE)    | The email the file belongs to; its rows go with it |
+| `position`     | integer      | NOT NULL                           | 0-based index in the send's `attachments` list |
+| `filename`     | varchar(255) | NOT NULL                           | Checked filename (trimmed, 1 to 255 characters) |
+| `content_type` | varchar(255) | NOT NULL                           | Type it is sent with, derived from the bytes, never the declared one |
+| `size_bytes`   | integer      | NOT NULL                           | Decoded size |
+| `content_id`   | varchar(128) | nullable                           | Content-ID of an inline image (without brackets); null for a plain attachment |
+| `sha256`       | varchar(64)  | NOT NULL                           | Hex SHA-256 of the content, for dedup and debugging; not a security control |
+| `content`      | bytea        | nullable                           | The raw bytes (not base64); `NULL` once the email reached a final state |
+| `created_at`   | timestamp    | NOT NULL, default now              | When it was stored |
+
+Indexes: `uq_email_attachments_email_position` (unique `(email_id, position)`; also serves every read by email and the FK cascade).
+
+**Column added to `email_tombstones`** (#181): `attachments` (jsonb, nullable), each file's `filename`, `contentType` and `size`, never the bytes; null when the email had none.
+
 **Table:** `idempotency_keys` (#188)
 
 One row per (API key, `Idempotency-Key`) used on `POST /api/v1/emails/send` within `IDEMPOTENCY_KEY_TTL_HOURS`. See [Idempotency Keys](#idempotency-keys).
@@ -63,7 +84,7 @@ One row per (API key, `Idempotency-Key`) used on `POST /api/v1/emails/send` with
 | `request_hash`    | text         | NOT NULL                             | SHA-256 hex of the canonical JSON of the validated body (object keys sorted) |
 | `email_id`        | varchar(36)  | nullable, FK → emails (SET NULL)     | The email the first request created; null once that email is purged |
 | `response_status` | integer      | nullable                             | HTTP status of the first response (null only inside the creating transaction) |
-| `response_body`   | jsonb        | nullable                             | Body of the first response without message content (no `subject`, `html`, `text`, `headers`); null only inside the creating transaction |
+| `response_body`   | jsonb        | nullable                             | Body of the first response without message content (no `subject`, `html`, `text`, `headers`); attachment metadata only, never a file (#181); null only inside the creating transaction |
 | `created_at`      | timestamptz  | NOT NULL, default now                | First use of the key |
 | `expires_at`      | timestamptz  | NOT NULL                             | `created_at` plus the TTL; the key is reusable after it |
 
@@ -77,6 +98,7 @@ src/modules/emails/
 ├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
 │   ├── email.schema.ts             ← Drizzle pgTable + indexes
+│   ├── email-attachment.schema.ts  ← Attachment rows, bytes until the final state (#181)
 │   ├── email-tombstone.schema.ts   ← Post-purge audit snapshots (#34)
 │   └── idempotency-key.schema.ts   ← Idempotency keys of the send API (#188)
 ├── dtos/
@@ -90,6 +112,8 @@ src/modules/emails/
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── from-name.ts                ← Pure display-name rules shared by REST and SMTP submission (#250)
 │   ├── tags.ts                     ← Pure tag and tag-filter rules shared by REST, SMTP submission and the dashboard (#189)
+│   ├── attachments.ts              ← Attachment rules: filename, Content-ID, strict base64, limits, blocked types, derived type (#181)
+│   ├── attachment-storage.ts       ← Storage interface for attachment bytes (Postgres today) and the metadata reads (#181)
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
 │   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing
@@ -144,7 +168,7 @@ A template without a text body keeps the send's inline `text`, if any (#250); a 
 
 A message needs a body: with neither `html` nor `text` (after trimming, inline or from the template) the send is refused with `422 BODY_REQUIRED` (SMTP `550`, #250).
 
-**Attachments are not supported.** A REST send whose body has an `attachments` property, whatever its value (an empty array included), is refused with `422 ATTACHMENTS_NOT_SUPPORTED` before anything is queued (#250); the body schema ignores other unknown fields, so `attachments` used to be accepted and silently dropped. The check is the first one in `createEmail`. SMTP submission refuses a message with an attachment (`550`, #250) instead of delivering it without (see [smtp-submission.md](smtp-submission.md#what-gets-relayed)).
+**Attachments** are supported, on REST and template sends and SMTP submission alike (#181): see [Attachments](#attachments-181).
 
 ## From display name (#250)
 
@@ -186,6 +210,23 @@ BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound no
 
 **Logging:** tag keys only (`tagKeys` on `Email created and queued` at `debug` and on the list lines, the key on a refusal), never values: tags may hold customer or tenant ids.
 
+## Attachments (#181)
+
+A send may carry up to 10 files, `[{ filename, content, contentType?, contentId? }]` (base64 `content` on REST, the parsed parts on SMTP submission). The rules live in `services/attachments.ts`, applied by `createEmail` after the other input rules and before any database work, so they hold on every ingress:
+
+- **Limits:** at most 10 (`TooManyAttachmentsError`, `422 TOO_MANY_ATTACHMENTS`); at most `ATTACHMENTS_MAX_TOTAL_MB` (default 5, 1 to 18, MB of 1,000,000 bytes) decoded in total, which is also the per-file limit (`AttachmentsTooLargeError`, `422 ATTACHMENTS_TOO_LARGE`, SMTP `552`). The total is checked from the base64 length before anything is decoded, then exactly.
+- **Input rules** (`InvalidAttachmentError`, `422 VALIDATION_ERROR` at `/attachments/<i>/<field>`): the filename (1 to 255 characters after trimming; no control, line-separator or bidi-control character, no lone surrogate, no `/` or `\`, not only dots), the `contentId` (`^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+)?$`, 1 to 128 characters), and strict base64 (decoded, then re-encoded: only the canonical padded standard encoding is accepted).
+- **Blocked files** (`AttachmentTypeNotAllowedError`, `422 ATTACHMENT_TYPE_NOT_ALLOWED` with `index`): the last extension (case-insensitive, trailing dots and spaces ignored) is one of `BLOCKED_EXTENSIONS`, or `file-type` recognises the bytes as an executable, script container or installer (`BLOCKED_SNIFFED_TYPES`: PE, ELF, Mach-O, Java class and jar, cab, apk, deb, rpm, crx, xpi, lnk, macOS alias, reg, chm, swf, wasm, dmg, iso; plus Windows Installer files, which are compound files told apart from Office documents by their root class id). A sniff that throws refuses the file. Archives and macro-enabled Office files are allowed (see `THREAT_MODEL.md`).
+- **Content-Type:** never the declared one. The sniffed type when the bytes are recognised, else a text type for `txt`, `log`, `csv`, `tsv`, `md`, `ics`, `vcf`, `json`, `xml`, else `application/octet-stream`.
+
+**Storage.** The files go into `email_attachments` in the same transaction as the email row (`createEmail` opens one when there are attachments; the idempotent send's transaction otherwise), as raw `bytea`, through the `AttachmentStorage` interface (`services/attachment-storage.ts`: `saveAttachments`, `loadAttachments`, `dropAttachmentBytes`) so an object store can be added later; only the Postgres implementation exists. The metadata reads (`listAttachmentMeta`, used for every response, the dashboard page and tombstones) select the metadata columns and `content IS NOT NULL`, never `content`; the email list, detail and queue claim read `emails` only.
+
+**Delivery.** The queue loads the bytes for each attempt (`loadOutboundAttachments`) and passes them to `sendMail`; every transaction and every retry carries the same files. `buildMailOptions` gives each one to Nodemailer as inline content with its derived type: with a `contentId` it is an inline part (`cid`) in the `multipart/related` node beside the HTML, whose `cid:` references are left as they are; without one, `Content-Disposition: attachment`. Nodemailer never reads a file or a URL for a message (`disableFileAccess`, `disableUrlAccess`). DKIM signs the whole message, attachments included. An attachment whose bytes are missing while the email is still being sent fails the email (`email.failed`) instead of sending it without the file.
+
+**Retention.** The bytes are kept only while the email can still be sent. The outcome write that moves an email to `sent`, `failed` or `bounced` (`releaseRow` in `queue.service.ts`, inside the outcome transaction of #184, the degraded save included, and the revoked-key and unreadable-DKIM-key paths) also sets `content = NULL` for its attachments; the metadata stays, and responses report `available: false`. A temporary failure keeps them for the retry. The trash purge and every hard delete drop them through the storage interface before the FK cascade removes the rows. Tombstones keep `filename`, `contentType` and `size` only; the idempotency snapshot keeps the response's attachment metadata, never the bytes, and a replay returns that stored metadata.
+
+**Logs** carry attachment counts, sizes, indexes and positions, never a filename (it may carry personal data) or any content.
+
 ## Domain Linking
 
 When an email is created, the sender's domain (from `from` address) is looked up in the `domains` table (`checkSenderDomain` in `sender-domain.service.ts`, #245):
@@ -203,7 +244,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - An unregistered domain is rejected in every environment.
 - SPF and DMARC never block: they only warn.
 
-**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 BODY_REQUIRED` when neither gives an `html` or `text` body (#250), `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)), `422 ATTACHMENTS_NOT_SUPPORTED` when a REST body has an `attachments` property (#250). Messages never echo submitted content other than the sender domain name or a valid custom header name.
+**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 BODY_REQUIRED` when neither gives an `html` or `text` body (#250), `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)); for attachments (#181), `422 TOO_MANY_ATTACHMENTS`, `422 ATTACHMENTS_TOO_LARGE` (SMTP `552`), `422 ATTACHMENT_TYPE_NOT_ALLOWED` (with the attachment's `index`) and `422 VALIDATION_ERROR` at `/attachments/<i>/<field>` (see [Attachments](#attachments-181)). Messages never echo submitted content other than the sender domain name or a valid custom header name.
 
 ## Custom Headers
 
@@ -294,7 +335,10 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 **Reads (live)**
 
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
-Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)) and `tags` (`InvalidTagError`, see [Tags](#tags-189)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+Creates an email record with status `queued` and returns `{ email, warnings, attachments }` (the stored attachments' metadata, #181). Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)), `tags` (`InvalidTagError`, see [Tags](#tags-189)) and `attachments` (stored in the email's transaction, see [Attachments](#attachments-181)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+
+#### `attachmentsFor(emailIds): Promise<Map<emailId, AttachmentMeta[]>>` / `findAttachmentForDownload(emailId, position)`
+Attachment metadata of a page of emails in one query, never the bytes (#181); and one attachment with its bytes (`null` once dropped) for the dashboard download.
 
 #### `createEmailIdempotent(input, apiKeyId, idempotencyKey, buildResponse): Promise<IdempotentSendResult>`
 `createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key, without message content, in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
@@ -359,12 +403,12 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
-`fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). The body is composed once per call, see [Body composition](#body-composition-250).
+`fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). `attachments` (#181), loaded by the queue, go on every transaction and retry (see [Attachments](#attachments-181)). The body is composed once per call, see [Body composition](#body-composition-250).
 
 Each transaction's outcome records `tls` and `updatedAt` on its delivery-state entry (#250, see [TLS record](#tls-record-250)). The SMTP session to each MX runs in `runMxSession` (`mx-transport.ts`), see [One session per MX](#one-session-per-mx-250).
 
 #### `buildMailOptions(args): Mail.Options`
-Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe` unless `carriesListUnsubscribe` says no, DKIM). The body is used as given (`sendMail` composes it first). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
+Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, attachments with their derived types and inline `cid`, `List-Unsubscribe` unless `carriesListUnsubscribe` says no, DKIM; never file or URL access). The body is used as given (`sendMail` composes it first). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
 
 ### custom-headers.ts
 
@@ -677,7 +721,7 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 
 ## Tombstones (#34)
 
-Hard-deleting an email: whether by the periodic trash purge sweep, the per-row `DELETE /:id/permanent` API, or the bulk `POST /trash/empty`: writes a snapshot to the `email_tombstones` table **before** it actually deletes the row. Tombstones preserve only **identifiers**: `id`, `apiKeyId`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`. Body / html / text are deliberately dropped: purging the body is the whole point of trash retention; the tombstone is forensic-only.
+Hard-deleting an email: whether by the periodic trash purge sweep, the per-row `DELETE /:id/permanent` API, or the bulk `POST /trash/empty`: writes a snapshot to the `email_tombstones` table **before** it actually deletes the row. Tombstones preserve only **identifiers**: `id`, `apiKeyId`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`, and `attachments` (each file's `filename`, `contentType` and `size`, #181). Body / html / text and the attachment bytes are deliberately dropped: purging the body is the whole point of trash retention; the tombstone is forensic-only.
 
 ### Why
 

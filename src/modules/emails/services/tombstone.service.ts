@@ -22,7 +22,8 @@
  *
  * Tombstones do NOT preserve body / html / text: the whole point is
  * to drop sensitive payload past the trash retention window. Only
- * identifiers stay.
+ * identifiers stay, plus each attachment's filename, type and size
+ * (#181), never its bytes.
  */
 
 import { and, desc, eq, lt, sql, type SQL } from "drizzle-orm";
@@ -33,6 +34,7 @@ import {
   type EmailTombstone,
 } from "../models/email-tombstone.schema.ts";
 import { logger } from "../../../utils/logger.ts";
+import { attachmentStorage, listAttachmentMeta } from "./attachment-storage.ts";
 
 /**
  * Atomically writes tombstones for the email rows matching `where`,
@@ -71,6 +73,10 @@ export async function deleteEmailsWithTombstones(
 
     if (rows.length === 0) return [];
 
+    /** Attachment metadata for the tombstones (#181), never the bytes. */
+    const ids = rows.map((r) => r.id);
+    const attachments = await listAttachmentMeta(tx, ids);
+
     /** Bulk insert tombstones. The id matches the original email's id
      *  by design: operators look up post-purge by the same id. */
     await tx.insert(emailTombstones).values(
@@ -84,8 +90,21 @@ export async function deleteEmailsWithTombstones(
         status: r.status,
         sentAt: r.sentAt,
         deletedAt: r.deletedAt,
+        attachments:
+          attachments.get(r.id)?.map((a) => ({
+            filename: a.filename,
+            contentType: a.contentType,
+            size: a.sizeBytes,
+          })) ?? null,
       })),
     );
+
+    /**
+     * Attachment bytes go through the storage (#181): the FK cascade
+     * removes the rows with the emails, but a store outside Postgres
+     * would only learn of the delete here.
+     */
+    await attachmentStorage.dropAttachmentBytes(tx, ids);
 
     /** And the actual hard-delete. */
     const deleted = await tx.delete(emails).where(where).returning({ id: emails.id });

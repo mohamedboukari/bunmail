@@ -454,6 +454,65 @@ export function readWebhooksMaxPerApiKey(
   );
 }
 
+/**
+ * Default and bounds of `ATTACHMENTS_MAX_TOTAL_MB` (#181), in MB of
+ * 1,000,000 bytes. 18 MB of attachments encode to about 24.6 MB of MIME
+ * (base64 plus line breaks), which keeps the message under the 25 MB most
+ * receivers accept.
+ */
+export const DEFAULT_ATTACHMENTS_MAX_TOTAL_MB = 5;
+export const MIN_ATTACHMENTS_MAX_TOTAL_MB = 1;
+export const MAX_ATTACHMENTS_MAX_TOTAL_MB = 18;
+
+/** One MB as `ATTACHMENTS_MAX_TOTAL_MB` counts it. */
+export const BYTES_PER_MB = 1_000_000;
+
+/**
+ * Reads `ATTACHMENTS_MAX_TOTAL_MB`, the most attachment bytes (decoded)
+ * one email may carry, which is also the most one file may have (#181).
+ * Unset or blank: 5. Anything other than a whole number from 1 to 18
+ * refuses to boot.
+ */
+export function readAttachmentsMaxTotalMb(
+  raw: string | undefined = process.env["ATTACHMENTS_MAX_TOTAL_MB"],
+): number {
+  return optionalBoundedInt(
+    "ATTACHMENTS_MAX_TOTAL_MB",
+    DEFAULT_ATTACHMENTS_MAX_TOTAL_MB,
+    MIN_ATTACHMENTS_MAX_TOTAL_MB,
+    MAX_ATTACHMENTS_MAX_TOTAL_MB,
+    raw,
+  );
+}
+
+/**
+ * The largest REST body without attachments: 5 MB of html plus 5 MB of
+ * text (the send DTO's caps), with room for the other fields.
+ */
+const BASE_REQUEST_BODY_BYTES = 12 * 1024 * 1024;
+
+/** JSON room for up to 10 attachment objects: names, types, ids, quotes. */
+const ATTACHMENT_JSON_OVERHEAD_BYTES = 64 * 1024;
+
+/** Length of the standard (padded) base64 of `bytes` bytes. */
+export function base64Length(bytes: number): number {
+  return 4 * Math.ceil(bytes / 3);
+}
+
+/**
+ * The HTTP body limit for an attachment budget (#181): the largest body
+ * without attachments, plus the base64 of the whole budget, plus the JSON
+ * around it. Bun refuses a larger body with 413 before reading or parsing
+ * it. About 19.3 MB with the default 5 MB, 36.6 MB at 18.
+ */
+export function maxRequestBodyBytesFor(attachmentsMaxTotalBytes: number): number {
+  return (
+    BASE_REQUEST_BODY_BYTES +
+    base64Length(attachmentsMaxTotalBytes) +
+    ATTACHMENT_JSON_OVERHEAD_BYTES
+  );
+}
+
 /** Default and bounds of `WEBHOOK_DELIVERY_RETENTION_DAYS` (#258), in days. */
 export const DEFAULT_WEBHOOK_DELIVERY_RETENTION_DAYS = 30;
 export const MIN_WEBHOOK_DELIVERY_RETENTION_DAYS = 1;
@@ -703,9 +762,23 @@ export const config = {
      * Largest request body accepted, in bytes. Bun rejects anything larger
      * with 413 before reading it; its default is 128 MB, and request bodies
      * are parsed before authentication runs. The largest legitimate body
-     * is a send or template with 5 MB of html plus 5 MB of text.
+     * is a send with 5 MB of html, 5 MB of text and the base64 of the
+     * whole attachment budget (`ATTACHMENTS_MAX_TOTAL_MB`, #181), see
+     * {@link maxRequestBodyBytesFor}.
      */
-    maxRequestBodyBytes: 12 * 1024 * 1024,
+    maxRequestBodyBytes: maxRequestBodyBytesFor(
+      readAttachmentsMaxTotalMb() * BYTES_PER_MB,
+    ),
+  },
+
+  /** Attachments on sends (#181), REST and SMTP submission. */
+  attachments: {
+    /**
+     * Most attachment bytes (decoded) one email may carry, which is also
+     * the most one file may have (`ATTACHMENTS_MAX_TOTAL_MB`, default 5,
+     * a whole number from 1 to 18 MB of 1,000,000 bytes).
+     */
+    maxTotalBytes: readAttachmentsMaxTotalMb() * BYTES_PER_MB,
   },
 
   /**

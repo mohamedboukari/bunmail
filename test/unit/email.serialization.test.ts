@@ -41,50 +41,53 @@ describe("serializeEmail", () => {
   };
 
   test("maps fromAddress to from", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect(result.from).toBe("hello@example.com");
   });
 
   test("exposes fromName and category (#250), null when unset or unknown", () => {
-    expect(serializeEmail(email).fromName).toBeNull();
-    expect(serializeEmail(email).category).toBeNull();
-    const labelled = serializeEmail({
-      ...email,
-      fromName: "Acme",
-      category: "marketing",
-    });
+    expect(serializeEmail(email, []).fromName).toBeNull();
+    expect(serializeEmail(email, []).category).toBeNull();
+    const labelled = serializeEmail(
+      {
+        ...email,
+        fromName: "Acme",
+        category: "marketing",
+      },
+      [],
+    );
     expect(labelled.fromName).toBe("Acme");
     expect(labelled.category).toBe("marketing");
-    expect(serializeEmail({ ...email, category: "bogus" }).category).toBeNull();
+    expect(serializeEmail({ ...email, category: "bogus" }, []).category).toBeNull();
   });
 
   test("maps toAddress to to", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect(result.to).toBe("user@test.com");
   });
 
   test("maps textContent to text", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect(result.text).toBe("Hello");
   });
 
   test("strips apiKeyId from output", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect("apiKeyId" in result).toBe(false);
   });
 
   test("strips domainId from output", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect("domainId" in result).toBe(false);
   });
 
   test("strips updatedAt from output", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect("updatedAt" in result).toBe(false);
   });
 
   test("includes all expected public fields", () => {
-    const result = serializeEmail(email);
+    const result = serializeEmail(email, []);
     expect(result.id).toBe("msg_abc123");
     expect(result.status).toBe("sent");
     expect(result.source).toBe("api");
@@ -96,19 +99,60 @@ describe("serializeEmail", () => {
   });
 
   test("exposes replyTo when set (#169)", () => {
-    const result = serializeEmail({ ...email, replyTo: "support@example.com" });
+    const result = serializeEmail({ ...email, replyTo: "support@example.com" }, []);
     expect(result.replyTo).toBe("support@example.com");
   });
 
   test("exposes custom headers, null when none (#177)", () => {
-    expect(serializeEmail(email).headers).toBeNull();
-    const result = serializeEmail({ ...email, headers: { "X-Correlation-Id": "abc" } });
+    expect(serializeEmail(email, []).headers).toBeNull();
+    const result = serializeEmail(
+      { ...email, headers: { "X-Correlation-Id": "abc" } },
+      [],
+    );
     expect(result.headers).toEqual({ "X-Correlation-Id": "abc" });
   });
 
   test("exposes tags, null when none (#189)", () => {
-    expect(serializeEmail(email).tags).toBeNull();
-    const result = serializeEmail({ ...email, tags: { flow: "reset" } });
+    expect(serializeEmail(email, []).tags).toBeNull();
+    const result = serializeEmail({ ...email, tags: { flow: "reset" } }, []);
     expect(result.tags).toEqual({ flow: "reset" });
+  });
+
+  test("attachments (#181): metadata only, in order, never the bytes", () => {
+    expect(serializeEmail(email, []).attachments).toEqual([]);
+    const result = serializeEmail(email, [
+      {
+        position: 0,
+        filename: "invoice.pdf",
+        contentType: "application/pdf",
+        sizeBytes: 1234,
+        contentId: null,
+        available: true,
+      },
+      {
+        position: 1,
+        filename: "logo.png",
+        contentType: "image/png",
+        sizeBytes: 99,
+        contentId: "logo",
+        available: false,
+      },
+    ]);
+    expect(result.attachments).toEqual([
+      {
+        filename: "invoice.pdf",
+        contentType: "application/pdf",
+        size: 1234,
+        contentId: null,
+        available: true,
+      },
+      {
+        filename: "logo.png",
+        contentType: "image/png",
+        size: 99,
+        contentId: "logo",
+        available: false,
+      },
+    ]);
   });
 });

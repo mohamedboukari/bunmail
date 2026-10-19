@@ -1,7 +1,10 @@
 import { Elysia, t } from "elysia";
 import { sendEmailDto, sendEmailHeadersDto } from "./dtos/send-email.dto.ts";
 import { listEmailsDto } from "./dtos/list-emails.dto.ts";
-import { serializeEmail } from "./serializations/email.serialization.ts";
+import {
+  serializeEmail,
+  type SerializedEmail,
+} from "./serializations/email.serialization.ts";
 import { serializeEmailTombstone } from "./serializations/email-tombstone.serialization.ts";
 import * as emailService from "./services/email.service.ts";
 import * as tombstoneService from "./services/tombstone.service.ts";
@@ -9,6 +12,22 @@ import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
+import type { Email } from "./types/email.types.ts";
+
+/**
+ * Serializes emails with their attachment metadata (#181), read in one
+ * query for the whole page and never with the bytes.
+ */
+async function serializeEmails(rows: Email[]): Promise<SerializedEmail[]> {
+  const attachments = await emailService.attachmentsFor(rows.map((row) => row.id));
+  return rows.map((row) => serializeEmail(row, attachments.get(row.id) ?? []));
+}
+
+/** One email with its attachment metadata (#181). */
+async function serializeOneEmail(row: Email): Promise<SerializedEmail> {
+  const attachments = await emailService.attachmentsFor([row.id]);
+  return serializeEmail(row, attachments.get(row.id) ?? []);
+}
 
 /**
  * Emails plugin: registers all email-related routes under /api/v1/emails.
@@ -64,9 +83,9 @@ export const emailsPlugin = new Elysia({
           body,
           apiKeyId,
           idempotencyKey,
-          ({ email, warnings }) => ({
+          ({ email, warnings, attachments }) => ({
             status: 200,
-            body: { success: true, data: serializeEmail(email), warnings },
+            body: { success: true, data: serializeEmail(email, attachments), warnings },
           }),
         );
         set.status = result.status;
@@ -75,11 +94,14 @@ export const emailsPlugin = new Elysia({
       }
 
       /** Create the email record: it starts in "queued" status */
-      const { email, warnings } = await emailService.createEmail(body, apiKeyId);
+      const { email, warnings, attachments } = await emailService.createEmail(
+        body,
+        apiKeyId,
+      );
 
       return {
         success: true,
-        data: serializeEmail(email),
+        data: serializeEmail(email, attachments),
         warnings,
       };
     },
@@ -90,7 +112,7 @@ export const emailsPlugin = new Elysia({
         tags: ["Emails"],
         summary: "Send an email",
         description:
-          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are). An optional `Idempotency-Key` header makes the request safe to retry: a repeat with the same key and body returns the first response with `Idempotent-Replayed: true` instead of sending again.",
+          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are). An optional `Idempotency-Key` header makes the request safe to retry: a repeat with the same key and body returns the first response with `Idempotent-Replayed: true` instead of sending again. Optional `attachments` (at most 10, at most ATTACHMENTS_MAX_TOTAL_MB decoded in total) are stored until the email reaches a final state; executables, scripts and installers are refused.",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -127,7 +149,7 @@ export const emailsPlugin = new Elysia({
 
       return {
         success: true,
-        data: data.map(serializeEmail),
+        data: await serializeEmails(data),
         pagination: {
           page: query.page ?? 1,
           limit: query.limit ?? 20,
@@ -166,7 +188,7 @@ export const emailsPlugin = new Elysia({
 
       return {
         success: true,
-        data: data.map(serializeEmail),
+        data: await serializeEmails(data),
         pagination: {
           page: query.page ?? 1,
           limit: query.limit ?? 20,
@@ -280,7 +302,7 @@ export const emailsPlugin = new Elysia({
 
       return {
         success: true,
-        data: serializeEmail(email),
+        data: await serializeOneEmail(email),
       };
     },
     {
@@ -314,7 +336,7 @@ export const emailsPlugin = new Elysia({
         return { success: false, error: "Email not found" };
       }
 
-      return { success: true, data: serializeEmail(email) };
+      return { success: true, data: await serializeOneEmail(email) };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -379,7 +401,7 @@ export const emailsPlugin = new Elysia({
         return { success: false, error: "Trashed email not found" };
       }
 
-      return { success: true, data: serializeEmail(email) };
+      return { success: true, data: await serializeOneEmail(email) };
     },
     {
       params: t.Object({ id: t.String() }),

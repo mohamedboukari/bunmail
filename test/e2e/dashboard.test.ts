@@ -122,7 +122,10 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   checkTagFilters: mock(() => []),
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   getEmailById: mock(() => Promise.resolve(undefined)),
-  createEmail: mock(() => Promise.resolve({ email: {}, warnings: [] })),
+  createEmail: mock(() => Promise.resolve({ email: {}, warnings: [], attachments: [] })),
+  /** Attachment metadata (#181), and the download lookup: none here. */
+  attachmentsFor: mock(() => Promise.resolve(new Map())),
+  findAttachmentForDownload: mock(() => Promise.resolve(undefined)),
   /** Not used by the dashboard; listed so the module keeps the export when
    *  `emails-api.test.ts` re-mocks it in the same process (#188). */
   createEmailIdempotent: mock(() =>

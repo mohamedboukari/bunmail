@@ -131,6 +131,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /dashboard/emails/tombstones": { access: "member" },
   "GET /dashboard/emails/trash": { access: "member" },
   "GET /dashboard/emails/:id": { access: "member" },
+  /** Same guard as the email page (#181). */
+  "GET /dashboard/emails/:id/attachments/:position": { access: "member" },
   "POST /dashboard/emails/:id/trash": { access: "admin" },
   "POST /dashboard/emails/:id/restore": { access: "member" },
   "POST /dashboard/emails/:id/permanent": { access: "admin" },

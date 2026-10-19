@@ -8,7 +8,8 @@ import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { sendMail } from "./mailer.service.ts";
-import type { DkimOptions } from "./mailer.service.ts";
+import type { DkimOptions, OutboundAttachment } from "./mailer.service.ts";
+import { attachmentStorage } from "./attachment-storage.ts";
 import { listUnsubscribeOptions, oneClickBlocker } from "./list-unsubscribe.ts";
 import { isEmailCategory } from "../types/email.types.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
@@ -488,10 +489,18 @@ export async function releaseOwnLeases(): Promise<void> {
   }
 }
 
+/** The statuses an email never leaves through the queue: no attempt follows. */
+const FINAL_STATUSES: ReadonlySet<unknown> = new Set(["sent", "failed", "bounced"]);
+
 /**
  * Writes a row's outcome and releases its lease, only if this claim still
  * holds it. If the lease was lost (the row was reclaimed), the update is
  * skipped and logged rather than overwriting the newer claim's state.
+ *
+ * An outcome with a final status (`sent`, `failed`, `bounced`) also drops
+ * the email's attachment bytes (#181), keeping their metadata, through the
+ * same executor: in the outcome transaction, the bytes go exactly when the
+ * status is saved. No later attempt needs them.
  *
  * @param executor The transaction that also enqueues the outcome's events (#184).
  * @returns Whether the claim still held the row and the outcome was saved.
@@ -499,7 +508,7 @@ export async function releaseOwnLeases(): Promise<void> {
 async function releaseRow(
   claim: Claim,
   values: PgUpdateSetSource<typeof emails>,
-  executor: DbExecutor = db,
+  executor: DbExecutor,
 ): Promise<boolean> {
   const updated = await executor
     .update(emails)
@@ -511,6 +520,17 @@ async function releaseRow(
       emailId: claim.emailId,
     });
     return false;
+  }
+  if (FINAL_STATUSES.has(values.status)) {
+    const dropped = await attachmentStorage.dropAttachmentBytes(executor, [
+      claim.emailId,
+    ]);
+    if (dropped > 0) {
+      logger.debug("Attachment bytes dropped at the final state", {
+        emailId: claim.emailId,
+        dropped,
+      });
+    }
   }
   return true;
 }
@@ -656,10 +676,14 @@ async function sendClaimedEmail(
    */
   const key = await findApiKeyById(email.apiKeyId);
   if (!key?.isActive) {
-    await releaseRow(claim, {
-      status: "failed",
-      lastError: "API key revoked before delivery",
-    });
+    /** A final status: the attachment bytes are dropped with it (#181). */
+    await db.transaction((tx) =>
+      releaseRow(
+        claim,
+        { status: "failed", lastError: "API key revoked before delivery" },
+        tx,
+      ),
+    );
     logger.warn("Email not sent: API key revoked", { emailId, apiKeyId: email.apiKeyId });
     return;
   }
@@ -766,6 +790,14 @@ async function sendClaimedEmail(
       email.fromAddress,
     );
 
+    /**
+     * Attachments (#181), loaded for this attempt only: the claim never
+     * reads them. Their bytes are kept until the email reaches a final
+     * state, so a missing one means a broken row; it is refused (the
+     * catch below marks the email failed) rather than sent without it.
+     */
+    const attachments = await loadOutboundAttachments(emailId);
+
     const result = await deps.sendMail({
       from: email.fromAddress,
       /** Display name (#250): `From:` header only. */
@@ -780,6 +812,8 @@ async function sendClaimedEmail(
       messageId,
       /** Custom headers (#177): the stored set, the same on every retry. */
       headers: email.headers,
+      /** Attachments (#181): the same on every transaction and retry. */
+      attachments,
       existingState,
       dkim,
       unsubscribe,
@@ -858,6 +892,32 @@ async function sendClaimedEmail(
       },
     );
   }
+}
+
+/**
+ * An email's attachments with their bytes, for the mailer (#181). Throws
+ * when one has lost its bytes while the email is still being sent, which
+ * only a broken row can cause: the send must not go out without it.
+ */
+async function loadOutboundAttachments(emailId: string): Promise<OutboundAttachment[]> {
+  const loaded = await attachmentStorage.loadAttachments(db, emailId);
+  const outbound: OutboundAttachment[] = [];
+  for (const attachment of loaded) {
+    if (attachment.content === null) {
+      logger.error("Attachment bytes missing on an email being sent", {
+        emailId,
+        position: attachment.position,
+      });
+      throw new Error(`Attachment ${attachment.position} is no longer stored`);
+    }
+    outbound.push({
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      contentId: attachment.contentId,
+      content: attachment.content,
+    });
+  }
+  return outbound;
 }
 
 /** What one SMTP attempt produced, for {@link recordSendOutcome}. */
@@ -1438,11 +1498,15 @@ async function holdForUnreadableDkimKey(
   const retryDelayMs = nextRetryDelayMs(claim.attempt, email.ageMs, retryMaxAgeMs());
   if (retryDelayMs !== null) {
     const retrySeconds = Math.round(retryDelayMs / 1000);
-    await releaseRow(claim, {
-      status: "queued",
-      nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
-      lastError,
-    });
+    await releaseRow(
+      claim,
+      {
+        status: "queued",
+        nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
+        lastError,
+      },
+      db,
+    );
     logger.error("Email held: DKIM key unreadable", {
       emailId: email.id,
       domain: domainName,

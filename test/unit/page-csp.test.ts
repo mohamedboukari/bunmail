@@ -98,7 +98,10 @@ const pages: Array<[string, () => string | Promise<string>]> = [
     "emails (bulk select, filters, confirm)",
     () => EmailsPage({ emails: [email], total: 1, page: 1, limit: 20 }),
   ],
-  ["email detail (HTML preview)", () => EmailDetailPage({ email, isTrashed: true })],
+  [
+    "email detail (HTML preview)",
+    () => EmailDetailPage({ email, isTrashed: true, attachments: [] }),
+  ],
   [
     "inbound trash (bulk select)",
     () =>

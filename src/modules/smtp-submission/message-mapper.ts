@@ -22,6 +22,7 @@ import {
 } from "../emails/services/custom-headers.ts";
 import { checkFromName, type FromNameProblem } from "../emails/services/from-name.ts";
 import { checkTags, describeTagProblem } from "../emails/services/tags.ts";
+import type { AttachmentInput } from "../emails/services/attachments.ts";
 
 /**
  * The header a submitting client sets the send category with (#250),
@@ -81,6 +82,34 @@ export interface SubmissionMessageParts {
   category?: EmailCategory;
   /** Tags from `X-BunMail-Tag`, from {@link submissionTags} (#189). */
   tags?: Record<string, string>;
+  /** Attachments of the message, from {@link submissionAttachments} (#181). */
+  attachments?: AttachmentInput[];
+}
+
+/** The parts of a mailparser attachment the relay reads (#181). */
+export interface ParsedAttachmentLike {
+  filename?: string;
+  content: Uint8Array;
+  /** Content-ID without angle brackets, when the part has one. */
+  cid?: string;
+}
+
+/**
+ * The attachments of a submitted message as send inputs (#181): the raw
+ * bytes, the filename (`attachment-<n>`, 1-based, when the part has none)
+ * and the Content-ID, which keeps an inline part inline. The declared
+ * Content-Type is not carried: the send rules derive it from the bytes.
+ * The rules themselves (count, size, filename, Content-ID, blocked types)
+ * are applied by `createEmail`, as for a REST send.
+ */
+export function submissionAttachments(
+  parsed: readonly ParsedAttachmentLike[],
+): AttachmentInput[] {
+  return parsed.map((part, index) => ({
+    filename: part.filename ?? `attachment-${index + 1}`,
+    content: part.content,
+    ...(part.cid === undefined ? {} : { contentId: part.cid }),
+  }));
 }
 
 /**
@@ -335,5 +364,6 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     fromName: parts.fromName,
     category: parts.category,
     tags: parts.tags,
+    attachments: parts.attachments,
   };
 }

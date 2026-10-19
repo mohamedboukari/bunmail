@@ -9,6 +9,7 @@
 export { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
 export { domains } from "../modules/domains/models/domain.schema.ts";
 export { emails } from "../modules/emails/models/email.schema.ts";
+export { emailAttachments } from "../modules/emails/models/email-attachment.schema.ts";
 export { emailTombstones } from "../modules/emails/models/email-tombstone.schema.ts";
 export { idempotencyKeys } from "../modules/emails/models/idempotency-key.schema.ts";
 export { webhooks } from "../modules/webhooks/models/webhook.schema.ts";

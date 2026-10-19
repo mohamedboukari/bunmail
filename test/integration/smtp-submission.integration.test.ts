@@ -22,6 +22,7 @@ import { eq } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
 import { config } from "../../src/config.ts";
+import { emailAttachments } from "../../src/modules/emails/models/email-attachment.schema.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 
 /** Isolated port for the test server (avoids the privileged 587 default). */
@@ -321,20 +322,21 @@ describe("SMTP submission: sender domain (#245)", () => {
 });
 
 describe("SMTP submission: message content (#250)", () => {
-  test("a message with an attachment is refused, nothing queued", async () => {
+  test("a message with an attachment is queued with it (#181)", async () => {
     const { rawKey } = await seed.apiKey();
-    const reply = await failureOf(
-      transport(rawKey).sendMail({
-        from: "hello@unregistered.test",
-        to: "user@example.org",
-        subject: "with attachment",
-        text: "see attached",
-        attachments: [{ filename: "a.txt", content: "attached" }],
-      }),
+    await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to: "user@example.org",
+      subject: "with attachment",
+      text: "see attached",
+      attachments: [{ filename: "a.txt", content: "attached" }],
+    });
+    const rows = await db.select().from(emails);
+    expect(rows).toHaveLength(1);
+    const files = await db.select().from(emailAttachments);
+    expect(files.map((f) => [f.emailId, f.filename, f.contentType, f.sizeBytes])).toEqual(
+      [[rows[0]!.id, "a.txt", "text/plain", 8]],
     );
-    expect(reply).toContain("550");
-    expect(reply).toContain("Attachments are not supported");
-    expect(await db.select().from(emails)).toHaveLength(0);
   });
 
   test("an 8-bit ISO-8859-1 body keeps its characters", async () => {

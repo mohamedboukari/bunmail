@@ -1,4 +1,16 @@
 import { pgTable, varchar, timestamp, index } from "drizzle-orm/pg-core";
+import { jsonb } from "../../../db/jsonb.ts";
+
+/**
+ * What a tombstone keeps of each attachment the email had (#181):
+ * metadata only, never the bytes.
+ */
+export interface TombstoneAttachment {
+  filename: string;
+  contentType: string;
+  /** Decoded size in bytes. */
+  size: number;
+}
 
 /**
  * Post-purge audit trail for hard-deleted emails (#34).
@@ -70,6 +82,13 @@ export const emailTombstones = pgTable(
     /** When the original was soft-deleted to trash (or null if it was
      *  hard-deleted directly without going through trash first). */
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+
+    /**
+     * The email's attachments (#181), metadata only (filename, type,
+     * size); null when it had none. The bytes were already dropped when
+     * the email reached its final state, and never reach a tombstone.
+     */
+    attachments: jsonb<TombstoneAttachment[] | null>("attachments"),
 
     /** When this tombstone was created: i.e. when the original was
      *  hard-deleted. The `TOMBSTONE_RETENTION_DAYS` retention window

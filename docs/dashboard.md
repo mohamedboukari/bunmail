@@ -275,10 +275,11 @@ per-replica.
 | GET /dashboard/account/password  | Change your own password; signs out every other session (any role, #279) |
 | GET /dashboard/account/sessions  | Your own live sessions: device, IP, approximate location, signed in, last active, this device marked; sign out one or all others (any role, #281) |
 | GET /dashboard/account/two-factor | Your own two-factor authentication: set up (QR code and key), recovery codes left, new recovery codes, turn off; recovery codes shown once (any role, #220) |
-| GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219) |
+| GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219). No attachments: use the REST API or SMTP submission for those (#181) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a **Tag** `key:value` text filter (#189; an invalid one lists nothing and shows why), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
-| GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed); its **Tags** (#189), each escaped and linking to the list filtered by it; a **Delivery by MX** table (#250): one row per destination MX, or per recipient when signed return paths split the group (labelled with the MX host), with status, attempts, TLS, the last error and when it happened, every value escaped; a **Sent without TLS** badge on a delivered plaintext row (**No TLS** when it failed or is retrying) |
+| GET /dashboard/emails/:id        | Single email detail + preview (Restore/Delete-forever if trashed); its **Tags** (#189), each escaped and linking to the list filtered by it; a **Delivery by MX** table (#250): one row per destination MX, or per recipient when signed return paths split the group (labelled with the MX host), with status, attempts, TLS, the last error and when it happened, every value escaped; a **Sent without TLS** badge on a delivered plaintext row (**No TLS** when it failed or is retrying); an **Attachments** table (#181): each file's name, type, size and inline `cid:`, escaped, with a download link while the bytes are stored ("No longer stored" once the email reached a final state) |
+| GET /dashboard/emails/:id/attachments/:position | Download one attachment (#181), with the email page's guard (`memberGuard`), for a live or trashed email. Always a forced download, whatever the file: `Content-Type: application/octet-stream`, `Content-Disposition: attachment; filename*=UTF-8''<RFC 5987 name>`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'`, `Cache-Control: no-store`. `410` with a page saying the file is no longer stored once the bytes were dropped; `404` for an unknown email or position. Logged with the size, never the filename |
 | GET /dashboard/emails/tombstones | Post-purge audit snapshots with a Message-ID search (#34)        |
 | GET /dashboard/api-keys          | API keys list + create form: every key with its creator and why it is disabled (admins, owner), or the member's own keys (#219) |
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
@@ -403,7 +404,8 @@ src/pages/
 │   ├── forbidden.tsx         ← 403 page for a role or session assurance too low (#222)
 │   ├── send-email.tsx        ← Compose & send email form
 │   ├── emails.tsx            ← Email table with filters
-│   ├── email-detail.tsx      ← Email detail view
+│   ├── email-detail.tsx      ← Email detail view, attachments table (#181)
+│   ├── attachment-gone.tsx   ← 410 page for an attachment no longer stored (#181)
 │   ├── api-keys.tsx          ← API keys management
 │   ├── domains.tsx           ← Domains management
 │   ├── domain-detail.tsx     ← Domain verification status
