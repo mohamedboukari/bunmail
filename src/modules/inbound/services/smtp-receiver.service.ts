@@ -5,7 +5,11 @@ import { inboundEmails } from "../models/inbound-email.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
-import { notifyInboundReceived } from "./inbound-notify.service.ts";
+import {
+  inboundNotifyDeps,
+  notifyInboundReceived,
+  type InboundNotifyDeps,
+} from "./inbound-notify.service.ts";
 import { isBlacklistedIp } from "./dnsbl.service.ts";
 import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
@@ -148,7 +152,11 @@ function smtpError(message: string, responseCode: number): Error {
   return Object.assign(new Error(message), { responseCode });
 }
 
-export function start(): void {
+/**
+ * Starts the receiver. `notifyDeps` are the inbound notification
+ * dependencies (mailer, clock, throttle), injectable for tests.
+ */
+export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void {
   const port = config.smtp.port;
   const { spamProtection } = config.smtp;
 
@@ -648,14 +656,22 @@ export function start(): void {
                  * `.catch` is a redundant belt.
                  */
                 if (config.inboundNotify.enabled) {
-                  void notifyInboundReceived({
-                    inboundId: id,
-                    from,
-                    /** Without the unsubscribe addresses handled above (#249). */
-                    recipients: otherRecipients,
-                    subject: parsed.subject ?? null,
-                    text: parsed.text ?? null,
-                  }).catch((err) => {
+                  void notifyInboundReceived(
+                    {
+                      inboundId: id,
+                      from,
+                      /** Without the unsubscribe addresses handled above (#249). */
+                      recipients: otherRecipients,
+                      subject: parsed.subject ?? null,
+                      text: parsed.text ?? null,
+                      /** For the automatic-mail check (#250). */
+                      headerLines: parsed.headerLines,
+                      returnPath:
+                        mailFrom && typeof mailFrom === "object" ? mailFrom.address : "",
+                      sizeBytes: rawBytes.length,
+                    },
+                    notifyDeps,
+                  ).catch((err) => {
                     logger.error("Inbound notification dispatch failed", {
                       id,
                       error: err instanceof Error ? err.message : String(err),
@@ -718,6 +734,8 @@ export function start(): void {
           rateLimitMap.delete(ip);
         }
       }
+      /** Same sweep for the inbound notification budget (#250). */
+      notifyDeps.throttle.prune(notifyDeps.now());
     },
     5 * 60 * 1000,
   );

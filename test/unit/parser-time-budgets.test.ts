@@ -179,6 +179,14 @@ describe("buildInboundNotification with 10 MB fields", () => {
       "10 MB of HTML-significant characters in the body",
       { text: "<&>".repeat(TEN_MB / 3), subject: "s", from: "a@example.org" },
     ],
+    [
+      "10 MB of links in the body and subject (#250)",
+      {
+        text: "https://x.example/ ".repeat(TEN_MB / 19),
+        subject: "www.x.example ".repeat(TEN_MB / 14),
+        from: "a@example.org",
+      },
+    ],
   ])(
     "%s",
     (_name, fields) => {
@@ -187,6 +195,11 @@ describe("buildInboundNotification with 10 MB fields", () => {
           buildInboundNotification({
             to: "inbox@example.org",
             detailUrl: null,
+            receivedAt: new Date(),
+            sizeBytes: TEN_MB,
+            /** The preview on: the most work the builder can do. */
+            preview: true,
+            skipped: null,
             ...fields,
           }),
         ),

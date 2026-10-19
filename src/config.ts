@@ -832,6 +832,15 @@ export const config = {
      * that domain's DKIM key. Default "notifications".
      */
     fromLocalPart: optionalEnv("INBOUND_NOTIFY_FROM_LOCAL", "notifications"),
+
+    /**
+     * Include the original subject and a short preview of the body in
+     * notifications (#250). Off by default: the notification is signed
+     * by the operator's domain, so it carries no inbound content unless
+     * asked. When on, the text stays plain and every `http://`,
+     * `https://` and `www.` link is replaced. Strict `true`/`false`.
+     */
+    preview: optionalStrictBoolean("INBOUND_NOTIFY_PREVIEW", false),
   },
 
   /**
