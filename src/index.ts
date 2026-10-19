@@ -35,6 +35,7 @@ import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submiss
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import * as domainReverify from "./modules/domains/services/domain-reverify.service.ts";
+import * as sendingIpDnsbl from "./modules/domains/services/sending-ip-dnsbl.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
 import {
   startLoginRateLimitCleanup,
@@ -565,6 +566,14 @@ webhookDeliveryWorker.start();
 domainReverify.start();
 
 /**
+ * Start the DNSBL self-check of the sending IPs (#250): about a minute
+ * after boot, then daily, against Spamhaus ZEN, Barracuda and SpamCop.
+ * Information only, shown on the dashboard home. Off with
+ * SENDING_IP_DNSBL_CHECK=false.
+ */
+sendingIpDnsbl.start();
+
+/**
  * Start the periodic sweep that drops expired entries from the HTTP
  * rate-limit map (prevents unbounded growth under many distinct keys).
  */
@@ -599,6 +608,7 @@ function finishShutdown() {
   trashPurge.stop();
   webhookDeliveryWorker.stop();
   domainReverify.stop();
+  sendingIpDnsbl.stop();
   stopRateLimitCleanup();
   stopLoginRateLimitCleanup();
   void app.stop();

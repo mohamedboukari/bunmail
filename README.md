@@ -267,9 +267,9 @@ See [docs/](docs/) for module-level documentation:
 For inbox placement on Gmail / Outlook / Yahoo, you need:
 
 1. **A clean sender domain**: older, no spam history.
-2. **A clean IP**: check at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists.aspx).
+2. **A clean IP**: BunMail checks its sending IPs daily on Spamhaus ZEN, Barracuda and SpamCop (dashboard home, **Blocklists** card); [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists.aspx) checks many more.
 3. **PTR (reverse DNS)** matching `MAIL_HOSTNAME` in `.env`.
-4. **SPF, DKIM, DMARC records**: BunMail's domain page lists what to publish per domain (with the A, PTR and optional MX records) and **Verify** checks SPF, DKIM and DMARC. The A and PTR records are checked at boot; your IP's reputation and blocklist status are not checked.
+4. **SPF, DKIM, DMARC records**: BunMail's domain page lists what to publish per domain (with the A, PTR and optional MX records) and **Verify** checks SPF, DKIM and DMARC. The A and PTR records are checked at boot and the sending IPs' blocklist status daily (#250); your IP's reputation is not checked.
 5. **Patience**: fresh domain + IP combos take 2 to 3 weeks of low-volume sending to build reputation.
 
 See [docs/self-hosting.md](docs/self-hosting.md#dns-records) for the exact DNS record values.

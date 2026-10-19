@@ -19,6 +19,7 @@ src/modules/domains/
 │   ├── dmarc-check.service.ts      ← DMARC discovery, org-domain fallback, strict tag parsing (#250)
 │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status, mail-flow summary (#250)
 │   ├── required-dns-records.ts     ← The DNS records to publish (`dnsRecords`, #250)
+│   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
 │   └── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
 ├── dtos/
 │   └── create-domain.dto.ts        ← POST body validation
@@ -248,6 +249,16 @@ The three checks without storing anything. Never rejects on a DNS error: that ch
 ### required-dns-records.ts
 
 - `getRequiredDnsRecords(domain, settings?)`: the table above. `pendingDkimDnsRecord(domain)` is the pending rotation's entry alone (or `null`). `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
+
+### sending-ip-dnsbl.service.ts (#250)
+
+The DNSBL self-check of the sending IPs (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, via `resolveSendingIps`) against Spamhaus ZEN, Barracuda and SpamCop. Information only: nothing gates on it. Results live in memory, per replica.
+
+- `start()` / `stop()`: the worker, first run 45 to 75 s after boot, then every 24 hours plus or minus 5% (no-op while `SENDING_IP_DNSBL_CHECK=false`).
+- `runDnsblSelfCheck(deps?, memory?)`: one run in its own log context (`job: "dnsbl-self-check"`), one `DNSBL self-check completed` line with the counts; `warn` when an address becomes listed on a zone, `info` when it is delisted, nothing while a state holds. `null` while disabled.
+- `checkAddress(ip, deps?, zones?)` / `checkSendingIpsDnsbl(deps?)`: the lookups. IPv4 as reversed octets, IPv6 as reversed nibbles and only on zones that list IPv6 (ZEN), an IPv4-mapped address as its IPv4; addresses that are not publicly routable are skipped. 5 s timeout per lookup.
+- `classifyAnswers(zone, answers)` / `classifyError(error)`: `127.0.0.2` to `127.0.0.11` listed (ZEN codes named: SBL, CSS, XBL, DROP, PBL; PBL marked as a policy listing), any `127.255.255.x` `unavailable` (query refused, typically a public resolver), NXDOMAIN or no record `not-listed`, any other answer, error or timeout `unknown`.
+- `getDnsblStatus()`: `{ enabled, snapshot }` for the dashboard home, no lookup. `setDnsblDeps(override | null)`: the DNS seam for tests.
 
 ## Serialization
 

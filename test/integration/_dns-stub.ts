@@ -1,5 +1,6 @@
 import { setDomainDnsDeps } from "../../src/modules/domains/services/domain-dns-status.service.ts";
 import { setMtaStsDeps } from "../../src/modules/emails/services/mta-sts.ts";
+import { setDnsblDeps } from "../../src/modules/domains/services/sending-ip-dnsbl.service.ts";
 
 /**
  * Hermetic DNS for the integration run (#250): the domains module's DNS
@@ -29,5 +30,17 @@ export function installHermeticMtaSts(): void {
     resolveTxt: notFound,
     lookup: notFound,
     fetch: () => Promise.reject(new Error("no real HTTPS in integration tests")),
+  });
+}
+
+/**
+ * No real DNS for the DNSBL self-check (#250): no sending IP is found and
+ * every zone answers NXDOMAIN. Installed by `_preload.ts`; the DNSBL
+ * tests install their own answers and put this back afterwards.
+ */
+export function installHermeticDnsbl(): void {
+  setDnsblDeps({
+    resolve4: notFound,
+    sendingIps: () => Promise.resolve({ ips: [], source: "MAIL_HOSTNAME" }),
   });
 }

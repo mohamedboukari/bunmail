@@ -2,6 +2,13 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { StatsCard } from "../components/stats-card.tsx";
 import type { DashboardStats } from "../../modules/emails/services/stats.service.ts";
 import type { ReverseDnsStatus } from "../../modules/domains/services/sending-ips.service.ts";
+import {
+  DNSBL_ZONES,
+  PUBLIC_RESOLVER_HINT,
+  type AddressCheck,
+  type DnsblStatus,
+  type ZoneCheck,
+} from "../../modules/domains/services/sending-ip-dnsbl.service.ts";
 import { TimeDisplay } from "../components/time-display.tsx";
 
 /**
@@ -22,19 +29,23 @@ export const BOUNCE_RATE_WARNING_THRESHOLD = 0.02;
  * the sidebar is shared by every role and does not know the viewer's.
  *
  * Admins and the owner also see the Server identity card (#248): the
- * sending IPs and whether their reverse DNS names `MAIL_HOSTNAME`.
+ * sending IPs and whether their reverse DNS names `MAIL_HOSTNAME`; and
+ * next to it the Blocklists card (#250): the latest DNSBL self-check.
  *
  * @param canInvite True when the viewer may open the Invitations page.
  * @param serverIdentity The cached reverse DNS result, for admins only.
+ * @param blocklists The latest DNSBL self-check, for admins only.
  */
 export function HomePage({
   stats,
   canInvite = false,
   serverIdentity,
+  blocklists,
 }: {
   stats: DashboardStats;
   canInvite?: boolean;
   serverIdentity?: { status: ReverseDnsStatus | null };
+  blocklists?: DnsblStatus;
 }) {
   /** Format the success rate as a percentage with one decimal: null = no data yet */
   const successRateDisplay =
@@ -166,8 +177,13 @@ export function HomePage({
         />
       </div>
 
-      {serverIdentity !== undefined && (
-        <ServerIdentityCard status={serverIdentity.status} />
+      {(serverIdentity !== undefined || blocklists !== undefined) && (
+        <div class="grid gap-x-4 lg:grid-cols-2">
+          {serverIdentity !== undefined && (
+            <ServerIdentityCard status={serverIdentity.status} />
+          )}
+          {blocklists !== undefined && <BlocklistsCard status={blocklists} />}
+        </div>
       )}
     </BaseLayout>
   );
@@ -180,7 +196,7 @@ export function HomePage({
  */
 function ServerIdentityCard({ status }: { status: ReverseDnsStatus | null }) {
   return (
-    <>
+    <section>
       <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3 mt-8">
         Server identity
       </h2>
@@ -231,6 +247,174 @@ function ServerIdentityCard({ status }: { status: ReverseDnsStatus | null }) {
           </>
         )}
       </div>
-    </>
+    </section>
+  );
+}
+
+/** Badge classes per result. */
+const BADGE = {
+  red: "text-xs font-medium px-2 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300",
+  amber:
+    "text-xs font-medium px-2 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300",
+  green:
+    "text-xs font-medium px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300",
+  gray: "text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+} as const;
+
+/** One zone's result for one address. */
+function ZoneRow({ check }: { check: ZoneCheck }) {
+  const { result } = check;
+  if (result.status === "listed") {
+    const policyOnly = result.codes.every((code) => code.policy);
+    return (
+      <li class="text-sm">
+        <div class="flex flex-wrap items-baseline gap-2">
+          <span class={policyOnly ? BADGE.amber : BADGE.red}>
+            {policyOnly ? "policy listing" : "listed"}
+          </span>
+          <span class="font-medium" safe>
+            {check.name}
+          </span>
+          <a
+            href={check.removalUrl}
+            rel="noopener noreferrer"
+            target="_blank"
+            class="text-xs underline text-gray-600 dark:text-gray-400"
+          >
+            Look up and request removal
+          </a>
+        </div>
+        <ul class="ml-4 mt-1 text-xs text-gray-600 dark:text-gray-400">
+          {result.codes.map((code) => (
+            <li>
+              <code safe>{code.code}</code>: <span safe>{code.meaning}</span>
+            </li>
+          ))}
+        </ul>
+        {policyOnly && (
+          <p class="ml-4 mt-1 text-xs text-gray-600 dark:text-gray-400">
+            Not a sign of abuse, but some receivers refuse mail sent directly from such a
+            range. If this server is meant to send mail, ask for the address to be removed
+            from the PBL.
+          </p>
+        )}
+      </li>
+    );
+  }
+  return (
+    <li class="text-sm flex flex-wrap items-baseline gap-2">
+      {result.status === "not-listed" ? (
+        <span class={BADGE.green}>not listed</span>
+      ) : result.status === "unavailable" ? (
+        <span class={BADGE.gray}>unavailable</span>
+      ) : (
+        <span class={BADGE.gray}>unknown</span>
+      )}
+      <span class="font-medium" safe>
+        {check.name}
+      </span>
+      {result.status === "unavailable" && (
+        <span class="text-xs text-gray-600 dark:text-gray-400">
+          the zone refused the query (<code safe>{result.code}</code>)
+        </span>
+      )}
+      {result.status === "unknown" && (
+        <span class="text-xs text-gray-600 dark:text-gray-400" safe>
+          {result.reason}
+        </span>
+      )}
+    </li>
+  );
+}
+
+/** One sending address and its results. */
+function AddressRow({ address }: { address: AddressCheck }) {
+  /** Zones that do not list this address family (IPv6 on IPv4-only zones). */
+  const notQueried = DNSBL_ZONES.filter(
+    (zone) => !address.zones.some((check) => check.zone === zone.zone),
+  ).map((zone) => zone.name);
+  return (
+    <li>
+      <code class="text-sm" safe>
+        {address.ip}
+      </code>
+      {address.skipped ? (
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          Not publicly routable: not checked.
+        </p>
+      ) : (
+        <>
+          <ul class="mt-1 space-y-1">
+            {address.zones.map((check) => (
+              <ZoneRow check={check} />
+            ))}
+          </ul>
+          {notQueried.length > 0 && (
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Not queried on <span safe>{notQueried.join(", ")}</span>: they do not list
+              IPv6 addresses.
+            </p>
+          )}
+        </>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Blocklists (#250): the latest DNSBL self-check of each sending IP on
+ * Spamhaus ZEN, Barracuda and SpamCop. Information only: a listing never
+ * holds or refuses mail.
+ */
+function BlocklistsCard({ status }: { status: DnsblStatus }) {
+  const { enabled, snapshot } = status;
+  const anyUnavailable =
+    snapshot?.addresses.some((address) =>
+      address.zones.some((check) => check.result.status === "unavailable"),
+    ) ?? false;
+  return (
+    <section>
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3 mt-8">
+        Blocklists
+      </h2>
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
+        {!enabled ? (
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            The DNSBL self-check is off (SENDING_IP_DNSBL_CHECK=false).
+          </p>
+        ) : snapshot === null ? (
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            Not checked yet: the first check runs about a minute after start, then daily.
+          </p>
+        ) : (
+          <>
+            <p class="text-sm mb-3">
+              Sending IPs checked on Spamhaus ZEN, Barracuda and SpamCop, last checked{" "}
+              <TimeDisplay value={snapshot.checkedAt} />.
+            </p>
+            {snapshot.addresses.length === 0 ? (
+              <p class="text-sm text-red-600 dark:text-red-400">
+                No sending IP found: set MAIL_PUBLIC_IP or give MAIL_HOSTNAME an A or AAAA
+                record.
+              </p>
+            ) : (
+              <ul class="space-y-3">
+                {snapshot.addresses.map((address) => (
+                  <AddressRow address={address} />
+                ))}
+              </ul>
+            )}
+            {anyUnavailable && (
+              <p class="text-xs text-amber-700 dark:text-amber-400 mt-3">
+                {PUBLIC_RESOLVER_HINT}.
+              </p>
+            )}
+          </>
+        )}
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
+          Information only: a listing never holds or refuses mail.
+        </p>
+      </div>
+    </section>
   );
 }

@@ -64,6 +64,8 @@ void mock.module("../../src/config.ts", () => ({
     invites: { expiryDays: 7 },
     /** Session locations off (#281): login looks nothing up. */
     geoip: { source: "off" },
+    /** Read by the home page's Blocklists card (#250): off, nothing is looked up. */
+    sendingIpDnsbl: { enabled: false },
     logLevel: "error",
     logRedactPii: false,
   },
