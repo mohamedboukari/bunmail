@@ -7,9 +7,10 @@ import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
  * The dashboard signs in with an account email and password (#216), and a
  * successful login grants read/write across every tenant's mail. Without
  * a throttle, an attacker can guess passwords at full request speed. This
- * module counts *failed* logins per client IP in a sliding window (every
+ * module counts *failed* logins per client IP in a fixed window (every
  * kind of failure: unknown email, no password, disabled account, wrong
- * password, over-long input) and lets the login handler reject further
+ * password, over-long input: the login counts each attempt before the
+ * password check, and a success gives back only its own, #256) and lets the login handler reject further
  * attempts with HTTP 429 once the limit is hit. The limit runs before any
  * database or argon2id work. Throttling is per IP only; there is no
  * per-account lockout, which would let anyone lock the owner out.
@@ -20,7 +21,7 @@ import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
  * `mock.module`: `config.ts` throws at import time and Bun's
  * `mock.module` leaks across test files.
  *
- * Mirrors the in-memory sliding-window pattern used by the SMTP receiver
+ * Mirrors the in-memory fixed-window pattern used by the SMTP receiver
  * (`src/modules/inbound/services/smtp-receiver.service.ts`) and the HTTP
  * per-API-key limiter (`src/middleware/rate-limit.ts`). State is
  * in-memory and resets on restart: acceptable for the single-instance

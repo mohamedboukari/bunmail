@@ -162,6 +162,24 @@ Original-Message-ID: <${originalMessageId}>
 ----bnd--`;
 }
 
+/** An RFC 3464 DSN reporting a sender-side policy block (#250). */
+function makePolicyDsn(recipient: string, status: string, diagnostic: string): string {
+  return `From: MAILER-DAEMON@receiver.example
+To: hello@example.com
+Subject: Delivery Status Notification (Failure)
+Content-Type: multipart/report; report-type=delivery-status; boundary="--bnd"
+
+----bnd
+Content-Type: message/delivery-status
+
+Final-Recipient: rfc822; ${recipient}
+Action: failed
+Status: ${status}
+Diagnostic-Code: smtp; ${diagnostic}
+
+----bnd--`;
+}
+
 describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () => {
   test("hard bounce: suppression created, email marked bounced, email.bounced webhook fired", async () => {
     /** Seed: an api key, an email row that was previously sent, and a
@@ -374,5 +392,136 @@ describe("inbound DSN for an email that is still being retried (#180)", () => {
       .from(suppressions)
       .where(eq(suppressions.apiKeyId, apiKeyId));
     expect(supps.map((s) => s.email)).toEqual([recipient]);
+  });
+});
+
+describe("inbound policy DSN: sender refused, recipient not suppressed (#250)", () => {
+  const cases = [
+    {
+      status: "5.7.1",
+      diagnostic: "550 5.7.1 Message rejected due to the sender's reputation",
+    },
+    {
+      status: "5.7.26",
+      diagnostic:
+        "550 5.7.26 Unauthenticated email from example.com is not accepted due to domain's DMARC policy",
+    },
+  ];
+
+  for (const { status, diagnostic } of cases) {
+    test(`${status}: no suppression, email failed with the reason, email.failed (blocked) and no email.bounced`, async () => {
+      const { id: apiKeyId } = await seed.apiKey();
+      const recipient = "innocent@example.org";
+      const { id: emailId } = await seed.email({
+        apiKeyId,
+        toAddress: recipient,
+        subject: "Welcome",
+        status: "sent",
+      });
+      await seed.webhook({
+        apiKeyId,
+        url: "https://93.184.216.34/hook",
+        events: ["email.bounced", "email.failed"],
+      });
+
+      const parsed = parseBounce(makePolicyDsn(recipient, status, diagnostic));
+      expect(parsed!.kind).toBe("policy");
+
+      const result = await handleParsedBounce(
+        parsed!,
+        await bindingFor(emailId, recipient),
+      );
+      expect(result.outcome).toBe("blocked");
+      expect(result.markedFailed).toBe(true);
+
+      expect(await db.select().from(suppressions)).toHaveLength(0);
+      const [row] = await db.select().from(emails).where(eq(emails.id, emailId));
+      expect(row?.status).toBe("failed");
+      expect(row?.lastError).toBe(
+        `Receiver refused the sender (DSN ${status}): ${diagnostic}`,
+      );
+
+      await deliverDue();
+      expect(captured.map((c) => c.headers["x-bunmail-event"])).toEqual(["email.failed"]);
+      const body = JSON.parse(captured[0]!.body);
+      expect(body.data).toEqual({
+        emailId,
+        from: "hello@example.com",
+        to: recipient,
+        subject: "Welcome",
+        error: `Receiver refused the sender (DSN ${status}): ${diagnostic}`,
+        blocked: true,
+      });
+    });
+  }
+
+  test("a repeated policy DSN changes nothing and fires nothing again", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const recipient = "innocent@example.org";
+    const { id: emailId } = await seed.email({
+      apiKeyId,
+      toAddress: recipient,
+      status: "sent",
+    });
+    await seed.webhook({
+      apiKeyId,
+      url: "https://93.184.216.34/hook",
+      events: ["email.failed"],
+    });
+    const parsed = parseBounce(makePolicyDsn(recipient, "5.7.1", "550 5.7.1 blocked"))!;
+    const binding = await bindingFor(emailId, recipient);
+
+    await handleParsedBounce(parsed, binding);
+    const again = await handleParsedBounce(parsed, binding);
+
+    expect(again.markedFailed).toBe(false);
+    await deliverDue();
+    expect(captured).toHaveLength(1);
+  });
+
+  test("a hard-bounced email stays bounced, and a permanent suppression stays as it was (#191)", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const recipient = "complained@example.org";
+    const { id: emailId } = await seed.email({
+      apiKeyId,
+      toAddress: recipient,
+      status: "bounced",
+    });
+    await seed.suppression({ apiKeyId, email: recipient, reason: "complaint" });
+    await seed.webhook({
+      apiKeyId,
+      url: "https://93.184.216.34/hook",
+      events: ["email.failed"],
+    });
+
+    const parsed = parseBounce(makePolicyDsn(recipient, "5.7.1", "550 5.7.1 blocked"))!;
+    const result = await handleParsedBounce(parsed, await bindingFor(emailId, recipient));
+    expect(result.markedFailed).toBe(false);
+
+    const [row] = await db.select().from(emails).where(eq(emails.id, emailId));
+    expect(row?.status).toBe("bounced");
+    const supps = await db.select().from(suppressions);
+    expect(supps.map((s) => [s.reason, s.bounceType, s.expiresAt])).toEqual([
+      ["complaint", null, null],
+    ]);
+    await deliverDue();
+    expect(captured).toHaveLength(0);
+  });
+
+  test("a 5.1.1 DSN for the same kind of email still hard-bounces", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const recipient = "gone@example.org";
+    const { id: emailId } = await seed.email({
+      apiKeyId,
+      toAddress: recipient,
+      status: "sent",
+    });
+
+    const parsed = parseBounce(makeHardBounceDsn("x@example.com", recipient))!;
+    const result = await handleParsedBounce(parsed, await bindingFor(emailId, recipient));
+    expect(result.bounceType).toBe("hard");
+    const [row] = await db.select().from(emails).where(eq(emails.id, emailId));
+    expect(row?.status).toBe("bounced");
+    expect(await db.select().from(suppressions)).toHaveLength(1);
   });
 });

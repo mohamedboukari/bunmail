@@ -141,7 +141,7 @@ A template without a text body keeps the send's inline `text`, if any (#250); a 
 
 A message needs a body: with neither `html` nor `text` (after trimming, inline or from the template) the send is refused with `422 BODY_REQUIRED` (SMTP `550`, #250).
 
-**Attachments are not supported.** The send API has no attachments field, and SMTP submission refuses a message with an attachment (`550`, #250) instead of delivering it without (see [smtp-submission.md](smtp-submission.md#what-gets-relayed)).
+**Attachments are not supported.** A REST send whose body has an `attachments` property, whatever its value (an empty array included), is refused with `422 ATTACHMENTS_NOT_SUPPORTED` before anything is queued (#250); the body schema ignores other unknown fields, so `attachments` used to be accepted and silently dropped. The check is the first one in `createEmail`. SMTP submission refuses a message with an attachment (`550`, #250) instead of delivering it without (see [smtp-submission.md](smtp-submission.md#what-gets-relayed)).
 
 ## From display name (#250)
 
@@ -188,7 +188,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - An unregistered domain is rejected in every environment.
 - SPF and DMARC never block: they only warn.
 
-**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 BODY_REQUIRED` when neither gives an `html` or `text` body (#250), `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)). Messages never echo submitted content other than the sender domain name or a valid custom header name.
+**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 BODY_REQUIRED` when neither gives an `html` or `text` body (#250), `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)), `422 ATTACHMENTS_NOT_SUPPORTED` when a REST body has an `attachments` property (#250). Messages never echo submitted content other than the sender domain name or a valid custom header name.
 
 ## Custom Headers
 

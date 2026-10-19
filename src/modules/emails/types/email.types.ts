@@ -76,6 +76,12 @@ export interface SendEmailInput {
   headers?: Record<string, string>;
   /** Transactional or marketing (#250); see {@link EmailCategory}. */
   category?: EmailCategory;
+  /**
+   * Attachments are not supported (#250): any value here, an empty array
+   * included, makes `createEmail` throw `AttachmentsNotSupportedError`
+   * instead of queuing the email without them. Only a REST body can set it.
+   */
+  attachments?: unknown;
 }
 
 /**

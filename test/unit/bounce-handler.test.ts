@@ -30,6 +30,7 @@ interface CallLog {
     expiresAt: Date | null | undefined;
   }>;
   markEmailBounced: string[];
+  markEmailBlocked: Array<{ emailId: string; lastError: string }>;
   events: Array<{ event: string; data: Record<string, unknown> }>;
   /** Every write, with the transaction it ran in (`null`: outside one). */
   writes: Array<{ write: string; txId: number | null }>;
@@ -43,6 +44,8 @@ function makeDeps(opts: {
   keptSuppressionId?: string;
   /** Make the outbox insert fail (#184). */
   enqueueFails?: boolean;
+  /** A policy DSN for an email that is not `sent` (left alone). */
+  emailNotSent?: boolean;
 }): {
   deps: BounceHandlerDeps<FakeTx>;
   calls: CallLog;
@@ -51,6 +54,7 @@ function makeDeps(opts: {
     isSuppressed: [],
     addFromBounce: [],
     markEmailBounced: [],
+    markEmailBlocked: [],
     events: [],
     writes: [],
     transactions: [],
@@ -95,6 +99,17 @@ function makeDeps(opts: {
       markEmailBounced: async (tx, emailId) => {
         calls.writes.push({ write: "markEmailBounced", txId: inTx(tx) });
         calls.markEmailBounced.push(emailId);
+      },
+      markEmailBlocked: async (tx, emailId, lastError) => {
+        calls.writes.push({ write: "markEmailBlocked", txId: inTx(tx) });
+        calls.markEmailBlocked.push({ emailId, lastError });
+        return opts.emailNotSent
+          ? null
+          : {
+              fromAddress: "hello@example.com",
+              toAddress: "user@example.com",
+              subject: "Welcome",
+            };
       },
       enqueueEvent: async (tx, event, data) => {
         calls.writes.push({ write: "enqueueEvent", txId: inTx(tx) });
@@ -291,5 +306,93 @@ describe("handleBounce: one transaction (#184)", () => {
     expect(String(error)).toContain("outbox insert failed");
     expect(calls.transactions).toEqual(["rolled back"]);
     expect(calls.events).toEqual([]);
+  });
+});
+
+const POLICY_BOUNCE: ParsedBounce = {
+  kind: "policy",
+  recipient: "user@example.com",
+  status: "5.7.1",
+  diagnostic: "550 5.7.1 Message rejected due to DMARC policy",
+  source: "rfc3464",
+};
+
+describe("handleBounce: policy DSN (#250)", () => {
+  test("no suppression, no email.bounced: marked failed and email.failed with blocked, in one transaction", async () => {
+    const { deps, calls } = makeDeps({});
+
+    const result = await handleBounce(POLICY_BOUNCE, BOUND, deps);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.markedFailed).toBe(true);
+    expect(result.bounceType).toBeUndefined();
+    expect(calls.isSuppressed).toEqual([]);
+    expect(calls.addFromBounce).toEqual([]);
+    expect(calls.markEmailBounced).toEqual([]);
+    expect(calls.markEmailBlocked).toEqual([
+      {
+        emailId: "msg_orig123",
+        lastError:
+          "Receiver refused the sender (DSN 5.7.1): 550 5.7.1 Message rejected due to DMARC policy",
+      },
+    ]);
+    /** The inline policy failure's `email.failed`, field for field (#246). */
+    expect(calls.events).toEqual([
+      {
+        event: "email.failed",
+        data: {
+          emailId: "msg_orig123",
+          from: "hello@example.com",
+          to: "user@example.com",
+          subject: "Welcome",
+          error:
+            "Receiver refused the sender (DSN 5.7.1): 550 5.7.1 Message rejected due to DMARC policy",
+          blocked: true,
+        },
+      },
+    ]);
+    expect(calls.writes).toEqual([
+      { write: "markEmailBlocked", txId: 1 },
+      { write: "enqueueEvent", txId: 1 },
+    ]);
+    expect(calls.transactions).toEqual(["committed"]);
+  });
+
+  test("an email that is not sent is left alone and fires nothing", async () => {
+    const { deps, calls } = makeDeps({ emailNotSent: true });
+
+    const result = await handleBounce(POLICY_BOUNCE, BOUND, deps);
+
+    expect(result.outcome).toBe("blocked");
+    expect(result.markedFailed).toBe(false);
+    expect(calls.addFromBounce).toEqual([]);
+    expect(calls.events).toEqual([]);
+  });
+
+  test("an existing soft suppression does not turn a policy DSN into a hard bounce", async () => {
+    const { deps, calls } = makeDeps({
+      existing: { id: "sup_existing", bounceType: "soft" },
+    });
+
+    const result = await handleBounce(POLICY_BOUNCE, BOUND, deps);
+
+    expect(result.outcome).toBe("blocked");
+    expect(calls.addFromBounce).toEqual([]);
+  });
+
+  test("the reason is capped: the diagnostic is free text", async () => {
+    const { deps, calls } = makeDeps({});
+
+    await handleBounce({ ...POLICY_BOUNCE, diagnostic: "x".repeat(5000) }, BOUND, deps);
+
+    expect(calls.markEmailBlocked[0]!.lastError).toHaveLength(1000);
+  });
+
+  test("an enqueue failure rolls it back and is thrown (#184)", async () => {
+    const { deps, calls } = makeDeps({ enqueueFails: true });
+
+    const error = await rejectionOf(handleBounce(POLICY_BOUNCE, BOUND, deps));
+    expect(String(error)).toContain("outbox insert failed");
+    expect(calls.transactions).toEqual(["rolled back"]);
   });
 });

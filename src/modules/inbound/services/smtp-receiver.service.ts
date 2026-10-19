@@ -84,7 +84,7 @@ const rateLimitMap = new Map<string, SmtpRateLimitEntry>();
  * Checks and increments the per-IP SMTP connection counter.
  * Returns true if the IP has exceeded the configured limit.
  *
- * Uses a sliding window identical to the HTTP rate limiter pattern
+ * Uses a fixed window identical to the HTTP rate limiter pattern
  * in src/middleware/rate-limit.ts.
  *
  * @param ip - The connecting client's IP address

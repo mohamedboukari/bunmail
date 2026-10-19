@@ -248,3 +248,68 @@ describe("parseBounce: bounded time on large inputs", () => {
     expect(timed(raw)).toBeLessThan(BUDGET_MS);
   });
 });
+
+/** An RFC 3464 DSN for `recipient` with the given status and diagnostic. */
+function dsnWith(status: string, diagnostic: string): string {
+  return `From: MAILER-DAEMON@receiver.example
+To: hello@yourdns.example
+Subject: Delivery Status Notification (Failure)
+Content-Type: multipart/report; report-type=delivery-status; boundary="--b"
+
+----b
+Content-Type: message/delivery-status
+
+Reporting-MTA: dns; receiver.example
+
+Final-Recipient: rfc822; user@example.com
+Action: failed
+Status: ${status}
+Diagnostic-Code: smtp; ${diagnostic}
+
+----b--
+`;
+}
+
+describe("parseBounce: classified like an inline reply (#250, #246)", () => {
+  test("5.7.1 is a policy refusal of the sender, not a hard bounce", () => {
+    const parsed = parseBounce(dsnWith("5.7.1", "550 5.7.1 Message rejected by policy"));
+    expect(parsed!.kind).toBe("policy");
+    expect(parsed!.status).toBe("5.7.1");
+  });
+
+  test("5.7.26 (DMARC failure) is a policy refusal", () => {
+    const parsed = parseBounce(
+      dsnWith(
+        "5.7.26",
+        "550 5.7.26 Unauthenticated email from example.com is not accepted due to domain's DMARC policy",
+      ),
+    );
+    expect(parsed!.kind).toBe("policy");
+    expect(parsed!.status).toBe("5.7.26");
+  });
+
+  test("a 5.x.x whose wording names a sender block is a policy refusal", () => {
+    const parsed = parseBounce(
+      dsnWith("5.0.0", "550 Your IP is listed on the Spamhaus blocklist"),
+    );
+    expect(parsed!.kind).toBe("policy");
+  });
+
+  test("5.1.1 is still a hard bounce", () => {
+    const parsed = parseBounce(dsnWith("5.1.1", "550 5.1.1 User unknown"));
+    expect(parsed!.kind).toBe("hard");
+  });
+
+  test("a 4.x.x is still a soft bounce, 4.7.x included", () => {
+    expect(parseBounce(dsnWith("4.2.2", "452 4.2.2 Mailbox full"))!.kind).toBe("soft");
+    expect(parseBounce(dsnWith("4.7.0", "421 4.7.0 Try again later"))!.kind).toBe("soft");
+  });
+
+  test("the fallback parser classifies the same way", () => {
+    const raw = QMAIL_FALLBACK_BOUNCE.replace(
+      "Sorry, no mailbox here by that name. (#5.1.1)",
+      "Remote host said: 550 5.7.1 rejected by DMARC policy",
+    );
+    expect(parseBounce(raw)!.kind).toBe("policy");
+  });
+});
