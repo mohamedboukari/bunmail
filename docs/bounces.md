@@ -55,7 +55,12 @@ The fallback only runs when the message has obvious bounce markers: sender is `M
 
 A DSN is unauthenticated mail, and the Message-ID in its body is visible to every recipient of the email. Linking bounces by Message-ID (as before #236) let one recipient forge a DSN for a co-recipient of the same email and get that address suppressed under the sender's key. So the link now comes from the address the DSN is delivered to, which BunMail signs.
 
-**When.** Only when inbound SMTP is enabled (`SMTP_ENABLED=true`), the only setup where a DSN can reach BunMail. Otherwise the envelope sender stays the From address, exactly as before.
+**When.** Signed return paths are used for domains whose MX points at this BunMail; other domains keep the From address as envelope sender. Precisely, both must hold, decided once per email at each send attempt (the same answer for all its recipients):
+
+- inbound SMTP is enabled (`SMTP_ENABLED=true`), the only setup where a DSN can reach BunMail;
+- the sender domain's MX set names this server's `MAIL_HOSTNAME` (case-insensitive, trailing dot ignored).
+
+A multi-domain install can send for a domain whose mail is hosted elsewhere (a Google Workspace mailbox, say). Such a domain keeps the From address as envelope sender: a `b+` address there would be rejected by its own mail host, losing DSNs that today at least reach a human, and receivers doing sender-verification callouts could refuse the mail. The MX answer is cached in memory per domain (an hour for a yes or a no, NXDOMAIN and "no MX" included; five minutes after a DNS error or a 5-second timeout; at most 10,000 domains). A DNS error falls back to the plain envelope (fail safe) and is logged at `warn` once per domain per five minutes. Pointing a domain's MX here (or away) takes effect within the hour; a retry decides again, and the delivery state copes with the change. With `SMTP_ENABLED=false` nothing changes.
 
 **The address.** Each recipient of an email gets its own envelope sender (`MAIL FROM`):
 
@@ -66,7 +71,7 @@ b+<24 hex of the email id>.<recipient index>.<MAC>@<sender domain>
 - **Recipient index**: the recipient's position in the email's recipients in a fixed order: `to`, then `cc`, then `bcc`, parsed and de-duplicated as the mailer does (`parseRecipients`, first occurrence wins). Decimal, no leading zero, at most 999999.
 - **MAC**: HMAC-SHA256 over `verp:v1:<email id>:<index>:<lowercased recipient>`, truncated to 96 bits (24 hex characters), under a key derived with HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` under its own label (`bunmail return path v1`, separate from the unsubscribe key). No new secret, nothing stored per address.
 - **Lowercase hex only**, so a receiving MTA that folds the case of the local part does not break it. The local part is at most 58 characters (RFC 5321 allows 64).
-- **Domain**: the domain of the From address, the same as the envelope sender before #236. SPF is still evaluated for that domain and DMARC alignment of the envelope sender is unchanged; the sender domain's MX must point at BunMail's inbound receiver for DSNs to arrive, as it already had to.
+- **Domain**: the domain of the From address, the same as the envelope sender before #236. SPF is still evaluated for that domain and DMARC alignment of the envelope sender is unchanged. Its MX points at this BunMail (see **When**), so DSNs arrive here.
 
 **One SMTP transaction per recipient.** The envelope sender belongs to the whole transaction, so with return paths each recipient is sent in its own transaction, with only that recipient in `RCPT TO`: a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection). Headers, DKIM signature, custom headers, `List-Unsubscribe` and `Feedback-ID` are the same in every transaction. Delivery outcomes, failure classification and retries are per recipient: the delivery state holds one entry per recipient, keyed `<mx host>#<recipient index>`. A single-recipient email is one transaction, as before.
 
@@ -79,7 +84,7 @@ b+<24 hex of the email id>.<recipient index>.<MAC>@<sender domain>
 
 **No Message-ID fallback.** A DSN sent to any other address (not a verified `b+` address) has no effect: it is logged at `warn`, acknowledged and dropped, as unlinkable bounces always were. That is what makes a DSN with a missing or invalid signature harmless.
 
-**Upgrade consequences.** Late DSNs for emails sent before the upgrade (or before `SMTP_ENABLED` was turned on) arrive at the plain sender address and are ignored; synchronous `5xx` rejections at send time still suppress, unchanged. Auto-replies sent to the return path are dropped, as at every major ESP.
+**Upgrade consequences.** Late DSNs for emails sent before the upgrade (or before `SMTP_ENABLED` was turned on, or before the domain's MX pointed here) arrive at the plain sender address and are ignored; synchronous `5xx` rejections at send time still suppress, unchanged. Auto-replies sent to the return path are dropped, as at every major ESP.
 
 **Rotation.** Rotating `DKIM_ENCRYPTION_KEY` invalidates every return path already sent: there is no previous-key mechanism for that key, so DSNs for mail sent before the rotation have no effect (SECURITY.md, Rotation).
 
@@ -177,7 +182,7 @@ The parser is fully unit-testable in [test/unit/bounce-parser.test.ts](../test/u
 
 The handler's orchestration is unit-testable via injected callbacks in [test/unit/bounce-handler.test.ts](../test/unit/bounce-handler.test.ts): hard, first soft, escalation on second soft, no double-escalation on already-hard, a DSN naming a co-recipient (only the bound recipient is affected), and a permanent suppression kept on file.
 
-Return paths: [test/unit/return-path.test.ts](../test/unit/return-path.test.ts) (round trip, every tamper, case folding, wrong recipient / index / email / domain / key, the 64-character bound, recipient order), the per-recipient transactions in [test/unit/mailer.service.test.ts](../test/unit/mailer.service.test.ts), and the real receiver in [test/integration/return-path.integration.test.ts](../test/integration/return-path.integration.test.ts).
+Return paths: [test/unit/return-path.test.ts](../test/unit/return-path.test.ts) (round trip, every tamper, case folding, wrong recipient / index / email / domain / key, the 64-character bound, recipient order), the MX rule and its cache in [test/unit/return-path-mx.test.ts](../test/unit/return-path-mx.test.ts), the per-recipient transactions in [test/unit/mailer.service.test.ts](../test/unit/mailer.service.test.ts), and the real receiver in [test/integration/return-path.integration.test.ts](../test/integration/return-path.integration.test.ts).
 
 ## Manual smoke test (when staging)
 

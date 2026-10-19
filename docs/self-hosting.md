@@ -504,7 +504,7 @@ dig MX yourdomain.com +short
 # Expected: 10 mail.yourdomain.com.
 ```
 
-With `SMTP_ENABLED=true`, this MX is also where bounces come back. The envelope sender of outbound mail is then a signed per-recipient return path on the sending domain, `b+<id>.<index>.<MAC>@yourdomain.com` (#236), instead of the From address, and only DSNs delivered to such an address are acted on. The requirement is unchanged (the sending domain's MX must reach BunMail's inbound receiver), and so are SPF and DMARC: the envelope sender's domain is still the sending domain. The `b+` local part is reserved on domains BunMail receives for. See [bounces.md](bounces.md#signed-return-paths-236).
+With `SMTP_ENABLED=true`, this MX is also where bounces come back. Signed return paths are used for domains whose MX points at this BunMail; other domains keep the From address as envelope sender (#236). For a domain whose MX names `MAIL_HOSTNAME`, the envelope sender of outbound mail is a signed per-recipient return path on that domain, `b+<id>.<index>.<MAC>@yourdomain.com`, instead of the From address, and only DSNs delivered to such an address are acted on. A domain whose mail is hosted elsewhere (Google Workspace, Microsoft 365) keeps the From address, so its DSNs still reach that mailbox; BunMail does not act on them. The MX answer is cached for an hour (five minutes after a DNS error, which falls back to the plain envelope). SPF and DMARC are unchanged: the envelope sender's domain is still the sending domain. The `b+` local part is reserved on domains BunMail receives for. See [bounces.md](bounces.md#signed-return-paths-236).
 
 ### 4. Server Hostname
 

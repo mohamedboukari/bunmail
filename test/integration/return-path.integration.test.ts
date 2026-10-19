@@ -3,8 +3,8 @@
  * receiver and a real Postgres: DSNs are delivered over SMTP to
  * `b+<id>.<index>.<MAC>@<sender domain>`, and the suppression rows, email
  * status, enqueued webhook deliveries and `inbound_emails` are checked.
- * The queue side (return paths only with inbound SMTP on) is checked with
- * an injected mailer.
+ * The queue side (return paths only with inbound SMTP on and the sender
+ * domain's MX pointing here) is checked with an injected mailer and DNS.
  */
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
 import { and, eq, sql } from "drizzle-orm";
@@ -12,6 +12,11 @@ import { createTransport } from "nodemailer";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.service.ts";
 import { mintReturnPath } from "../../src/modules/bounces/services/return-path.ts";
+import {
+  clearMxCache,
+  signedReturnPathEnabled,
+  type MxCheckDeps,
+} from "../../src/modules/bounces/services/return-path-mx.ts";
 import { mintUnsubscribeToken } from "../../src/modules/suppressions/services/unsubscribe-token.ts";
 import { runQueueCycle } from "../../src/modules/emails/services/queue.service.ts";
 import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
@@ -396,11 +401,27 @@ describe("the other reserved mailboxes still work", () => {
   });
 });
 
-describe("the queue asks for return paths only with inbound SMTP on", () => {
+describe("the queue signs return paths only with inbound SMTP on and the MX pointing here", () => {
+  /** DNS stub: acme.io's MX is `mx` (or the lookup fails with `error`). */
+  function dns(mx: string | { error: string }): MxCheckDeps {
+    return {
+      resolveMx: async () => {
+        if (typeof mx === "object")
+          throw Object.assign(new Error("dns"), { code: mx.error });
+        return [{ exchange: mx }];
+      },
+      now: () => Date.now(),
+      timeoutMs: 1000,
+    };
+  }
+
+  /** Runs one queue cycle on a fresh two-recipient email and returns the mailer's options. */
   async function mailerOptions(
     smtpEnabled: boolean,
-  ): Promise<Parameters<typeof sendMail>[0]> {
+    mx: string | { error: string },
+  ): Promise<{ call: Parameters<typeof sendMail>[0]; queuedId: string }> {
     Object.assign(config.smtp, { enabled: smtpEnabled });
+    clearMxCache();
     const queued = await seed.email({
       apiKeyId,
       fromAddress: "hello@acme.io",
@@ -417,22 +438,39 @@ describe("the queue asks for return paths only with inbound SMTP on", () => {
         },
       };
     };
-    await runQueueCycle({ sendMail: mailer });
+    await runQueueCycle({
+      sendMail: mailer,
+      signedReturnPath: (from) => signedReturnPathEnabled(from, dns(mx)),
+    });
     expect(calls).toHaveLength(1);
     const call = calls[0];
     if (!call) throw new Error("expected the queue to call the mailer");
     expect(call.cc).toBe(BOB);
-    if (smtpEnabled) expect(call.returnPath).toEqual({ emailId: queued.id });
-    return call;
+    return { call, queuedId: queued.id };
   }
 
-  test("SMTP_ENABLED=true: the mailer gets the email id for its return paths", async () => {
-    const call = await mailerOptions(true);
-    expect(call.returnPath?.emailId).toMatch(/^msg_[0-9a-f]{24}$/);
+  test("SMTP on and the sender domain's MX is this host: the mailer signs return paths", async () => {
+    const { call, queuedId } = await mailerOptions(
+      true,
+      `${config.mail.hostname.toUpperCase()}.`,
+    );
+    expect(call.returnPath).toEqual({ emailId: queuedId });
   });
 
-  test("SMTP_ENABLED=false: no return path, the envelope stays as before", async () => {
-    const call = await mailerOptions(false);
+  test("SMTP on but the sender domain's MX is elsewhere: plain envelope, one transaction per MX group", async () => {
+    const { call } = await mailerOptions(true, "aspmx.l.google.com");
+    /** No return path: the mailer keeps the From address as envelope sender
+     *  and sends each MX group as one transaction (mailer.service.test.ts). */
+    expect(call.returnPath).toBeUndefined();
+  });
+
+  test("SMTP on and the MX lookup fails: plain envelope (fail safe)", async () => {
+    const { call } = await mailerOptions(true, { error: "ESERVFAIL" });
+    expect(call.returnPath).toBeUndefined();
+  });
+
+  test("SMTP off: no return path even when the MX points here", async () => {
+    const { call } = await mailerOptions(false, config.mail.hostname);
     expect(call.returnPath).toBeUndefined();
   });
 
@@ -464,7 +502,7 @@ describe("the queue asks for return paths only with inbound SMTP on", () => {
         },
       },
     });
-    await runQueueCycle({ sendMail: mailer });
+    await runQueueCycle({ sendMail: mailer, signedReturnPath: async () => true });
 
     expect(await suppressed()).toEqual([BOB]);
     const [row] = await db

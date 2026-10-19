@@ -26,7 +26,7 @@ Replies thread in the recipient's mail client, and replies to BunMail's own mail
 
 ## Bounce branching
 
-With `SMTP_ENABLED=true`, outbound mail is sent with a signed per-recipient return path, `b+<id>.<index>.<MAC>@<sender domain>` (#236), so DSNs come back to that address. The receiver handles such recipients itself, independent of recipient domain validation (the `b+` local part is reserved):
+With `SMTP_ENABLED=true`, outbound mail from a domain whose MX points at this BunMail is sent with a signed per-recipient return path, `b+<id>.<index>.<MAC>@<sender domain>` (#236), so DSNs come back to that address. The receiver handles such recipients itself, independent of recipient domain validation (the `b+` local part is reserved):
 
 - **RCPT TO** `b+...@<domain>` (any case): accepted only when the address verifies against the email it names (the MAC over email id, recipient index and recipient, and the domain must be that email's sender domain). Invalid: refused with SMTP `550`, nothing stored. A database error answers `451`.
 - **DATA**, before every other branch: a DSN to a verified return path is routed to the bounce handler and applies to exactly the bound email and recipient, whatever its body says. Anything else sent there (auto-replies, vacation notices, ARF reports) is acknowledged and dropped. Either way the message is **not stored**, fires no `email.received` and no inbound notification; if it was also addressed to other mailboxes, only those continue below.
