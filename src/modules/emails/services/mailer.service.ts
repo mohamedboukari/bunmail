@@ -8,6 +8,8 @@ import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
 import { composeMessageBody } from "./message-body.ts";
+import { providerBucket } from "./provider-bucket.ts";
+import { mxRateBudget, type RateBudget } from "./rate-budget.ts";
 import {
   runMxSession,
   type RejectedRecipient,
@@ -16,6 +18,7 @@ import {
 import {
   deliverWithFailover,
   resolveMxRoute,
+  type MxAdmit,
   type MxRoute,
   type RoutedOutcome,
 } from "./mx-route.ts";
@@ -48,6 +51,13 @@ import type { EmailCategory } from "../types/email.types.ts";
 export interface SendMailResult {
   messageId: string;
   deliveryState: DeliveryState;
+  /**
+   * Entries not attempted because their provider bucket's rate budget
+   * (`MAIL_MX_RATE_PER_MIN`, #250) was spent: their keys, left unchanged in
+   * `deliveryState` (still `retry`), and the shortest wait until one of
+   * their buckets has a token again. Absent when nothing was deferred.
+   */
+  deferred?: { keys: string[]; waitMs: number };
 }
 
 /**
@@ -153,6 +163,13 @@ export interface UnsubscribeOptions {
  * its own SMTP transaction whose `MAIL FROM` is that recipient's signed
  * return path. The transactions of one MX share one connection. Outcomes,
  * failure classification and retries are then per recipient.
+ *
+ * **Throttle and rate budget (#250):** sessions are throttled per provider
+ * bucket (`provider-bucket.ts`), not per MX host name. With
+ * `MAIL_MX_RATE_PER_MIN`, an entry whose bucket has no token left is not
+ * attempted: it stays as it was (no attempt counted, no error), and the
+ * result's `deferred` lists it with the wait until a token is due. Entries
+ * of other buckets go ahead.
  *
  * **Partial `RCPT TO` rejections (#250):** when a transaction of several
  * recipients is accepted for some and refused for others, the accepted
@@ -383,6 +400,9 @@ export async function sendMail(options: {
     sessions.set(id, plan);
   }
 
+  /** Entries deferred by the rate budget, and the shortest wait among them. */
+  const deferredKeys: string[] = [];
+  let deferredWaitMs = Number.POSITIVE_INFINITY;
   for (const plan of sessions.values()) {
     const outcomes = await sendToMxHosts(plan, {
       from: options.from,
@@ -402,6 +422,12 @@ export async function sendMail(options: {
       category: options.category ?? null,
     });
     for (const outcome of outcomes) {
+      if (outcome.deferredMs !== undefined) {
+        /** Not attempted: the entry stays exactly as it was. */
+        deferredKeys.push(outcome.key);
+        deferredWaitMs = Math.min(deferredWaitMs, outcome.deferredMs);
+        continue;
+      }
       const domain = state[outcome.key]?.domain;
       const policy = domain === undefined ? null : (routes.get(domain)?.policy ?? null);
       if (
@@ -415,6 +441,18 @@ export async function sendMail(options: {
     }
   }
 
+  if (deferredKeys.length > 0) {
+    logger.debug("MX rate budget deferred entries", {
+      messageId: options.messageId,
+      deferred: deferredKeys.length,
+      waitMs: deferredWaitMs,
+    });
+    return {
+      messageId: options.messageId,
+      deliveryState: state,
+      deferred: { keys: deferredKeys, waitMs: deferredWaitMs },
+    };
+  }
   return { messageId: options.messageId, deliveryState: state };
 }
 
@@ -835,11 +873,13 @@ interface MxSessionPlan {
  * {@link deliverWithFailover} tries the hosts in order, each through the
  * address check (`resolveMxAddresses`: connect to a checked address, not
  * the name, whose DNS answer the recipient domain's owner controls; the
- * MX name still goes to TLS as SNI). Each session ({@link runMxSession}:
- * one pooled connection, TLS record, deadline, the connection closed
- * however it ends) runs under the per-MX throttle (#91) of the host it
- * connects to, released before the next host is tried. An enforced
- * MTA-STS plan (#250) requires verified TLS on every session.
+ * MX name still goes to TLS as SNI), in the `MAIL_IP_FAMILY` order (#250).
+ * Each session ({@link runMxSession}: one pooled connection, TLS record,
+ * deadline, the connection closed however it ends) runs under the throttle
+ * (#91) of the provider bucket of the host it connects to (#250), released
+ * before the next host is tried, and takes its rate tokens there
+ * ({@link admitFor}). An enforced MTA-STS plan (#250) requires verified TLS
+ * on every session.
  *
  * Never throws: every entry gets an outcome.
  */
@@ -859,7 +899,14 @@ async function sendToMxHosts(
         envelopeFrom: transaction.envelopeFrom,
       }),
     })),
-    lock: (mxHost, fn) => withMxLock(mxHost, config.mail.mxConcurrency, fn),
+    bucketOf: (mxHost) => {
+      const bucket = providerBucket(mxHost);
+      logger.debug("MX throttle bucket", { mxHost, bucket });
+      return bucket;
+    },
+    lock: (bucket, fn) => withMxLock(bucket, config.mail.mxConcurrency, fn),
+    admit: admitFor(mxRateBudget(config.mail.mxRatePerMin)),
+    ipFamily: config.mail.ipFamily,
     runSession: (session) =>
       runMxSession({
         ...session,
@@ -867,6 +914,27 @@ async function sendToMxHosts(
         ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
       }),
   });
+}
+
+/**
+ * The rate-budget check of a session (#250), or none without a budget:
+ * takes the bucket's tokens, and logs at `info`, once a minute per bucket,
+ * that the budget held messages back.
+ */
+function admitFor(budget: RateBudget | null): MxAdmit | undefined {
+  if (budget === null) return undefined;
+  return (bucket, count) => {
+    const grant = budget.take(bucket, count);
+    if (grant.granted < count && budget.shouldLog(bucket)) {
+      logger.info("MX rate budget reached: deferring", {
+        bucket,
+        ratePerMin: budget.ratePerMin,
+        deferred: count - grant.granted,
+        waitMs: grant.waitMs,
+      });
+    }
+    return grant;
+  };
 }
 
 /** Verified TLS for an enforce-mode session: the system trust store, or the test CA. */

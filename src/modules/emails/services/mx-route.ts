@@ -242,6 +242,12 @@ export function failsOver(error: unknown): boolean {
 export interface RoutedOutcome extends MxSessionOutcome {
   /** The MX host of the outcome; `null` when no host could be connected to. */
   mxHost: string | null;
+  /**
+   * Set when the transaction was not attempted because its provider
+   * bucket's rate budget was spent (#250): ms until the bucket's next
+   * token. No `error`: a deferral is not a failure.
+   */
+  deferredMs?: number;
 }
 
 /** One SMTP session to one address of an MX host, see `runMxSession`. */
@@ -253,14 +259,56 @@ export type SessionRunner = (session: {
   deadlineMs: number;
 }) => Promise<MxSessionOutcome[]>;
 
-/** The per-MX lock, see `withMxLock`: held around one session, never across hosts. */
-export type MxLock = <T>(mxHost: string, fn: () => Promise<T>) => Promise<T>;
+/**
+ * The per-bucket lock, see `withMxLock`: held around one session, never
+ * across hosts. Keyed by the provider bucket of the host (`bucketOf`).
+ */
+export type MxLock = <T>(bucket: string, fn: () => Promise<T>) => Promise<T>;
+
+/**
+ * The rate budget of a provider bucket (#250, `rate-budget.ts`): takes up
+ * to `count` tokens and says how many it got, and, short of `count`, how
+ * long until the next one.
+ */
+export type MxAdmit = (
+  bucket: string,
+  count: number,
+) => { granted: number; waitMs: number };
 
 /** The error of an attempt whose session time ran out before every host was tried. */
 function attemptDeadlineError(deadlineMs: number): Error {
   return new Error(
     `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
   );
+}
+
+/**
+ * Takes a rate token from `bucket` for every transaction not yet charged to
+ * it on this attempt (#250), in order. Returns the transactions left
+ * without one, with the wait until the bucket's next token; none without a
+ * budget.
+ */
+function admitTransactions(
+  transactions: MxSessionTransaction[],
+  bucket: string,
+  charged: Map<string, Set<string>>,
+  admit: MxAdmit | undefined,
+): Map<string, number> {
+  const deferred = new Map<string, number>();
+  if (admit === undefined) return deferred;
+  const uncharged = transactions.filter((t) => !charged.get(t.key)?.has(bucket));
+  if (uncharged.length === 0) return deferred;
+  const { granted, waitMs } = admit(bucket, uncharged.length);
+  uncharged.forEach((t, index) => {
+    if (index < granted) {
+      const buckets = charged.get(t.key) ?? new Set<string>();
+      buckets.add(bucket);
+      charged.set(t.key, buckets);
+    } else {
+      deferred.set(t.key, waitMs);
+    }
+  });
+  return deferred;
 }
 
 /** A failure's message for a debug line: no recipient address in it (#260). */
@@ -280,8 +328,16 @@ function reasonOf(error: unknown): string {
  *
  * All sessions of one attempt share one deadline (`deadlineMs`, counted
  * while sessions run, not while waiting for a lock). `lock` is taken per
- * session, keyed by the host connected to, so no lock is held while
- * another host is tried.
+ * session, keyed by the provider bucket of the host connected to
+ * (`bucketOf`, #250), so no lock is held while another host is tried.
+ *
+ * **Rate budget (#250):** with `admit`, each session first takes one token
+ * per transaction from its bucket's budget, inside the lock, just before
+ * connecting. A transaction already charged to that bucket on this attempt
+ * (it failed over from another address or host of the same bucket) is not
+ * charged again. A transaction without a token is not attempted and does
+ * not fail over: its outcome carries `deferredMs` and no error, and the
+ * queue defers its email. The others go ahead.
  *
  * Never throws: every transaction gets an outcome. One left without a
  * host carries the last failure (connection error, refused host, or the
@@ -295,13 +351,22 @@ export async function deliverWithFailover(args: {
   allowPrivate: boolean;
   runSession: SessionRunner;
   lock: MxLock;
+  /** The throttle key of an MX host (`providerBucket`); the host itself by default. */
+  bucketOf?: (mxHost: string) => string;
+  /** The rate budget (`MAIL_MX_RATE_PER_MIN`); none when absent. */
+  admit?: MxAdmit;
+  /** The preferred address family (`MAIL_IP_FAMILY`), 4 by default. */
+  ipFamily?: 4 | 6;
   deadlineMs?: number;
   routeDeps?: MxRouteDeps;
 }): Promise<RoutedOutcome[]> {
   const routeDeps = args.routeDeps ?? deps;
   const deadlineMs = args.deadlineMs ?? SMTP_SESSION_DEADLINE_MS;
+  const bucketOf = args.bucketOf ?? ((mxHost: string) => mxHost);
   let budgetMs = deadlineMs;
   const done = new Map<string, RoutedOutcome>();
+  /** The buckets each transaction already took a rate token from on this attempt. */
+  const charged = new Map<string, Set<string>>();
   /** Latest failure of each transaction still pending. */
   const lastFailure = new Map<string, RoutedOutcome>();
   let pending = args.transactions;
@@ -320,6 +385,7 @@ export async function deliverWithFailover(args: {
       addresses = await resolveMxAddresses(mxHost, {
         allowPrivate: args.allowPrivate,
         lookup: routeDeps.lookup,
+        family: args.ipFamily ?? 4,
       });
     } catch (error) {
       /** Never connected: no session, so nothing known about TLS. */
@@ -340,15 +406,22 @@ export async function deliverWithFailover(args: {
       });
     }
 
+    const bucket = bucketOf(mxHost);
     for (const address of addresses.slice(0, MAX_ADDRESSES_PER_HOST)) {
       if (pending.length === 0 || budgetMs <= 0) break;
-      const sessionTransactions = pending;
-      const outcomes = await args.lock(mxHost, async () => {
+      const candidates = pending;
+      const outcomes = await args.lock(bucket, async () => {
         /** The budget may have run out while this waited for the lock. */
         if (budgetMs <= 0) {
           const error = attemptDeadlineError(deadlineMs);
-          return sessionTransactions.map((t) => ({ key: t.key, error, tls: null }));
+          return candidates.map((t) => ({ key: t.key, error, tls: null }));
         }
+        const deferredMs = admitTransactions(candidates, bucket, charged, args.admit);
+        for (const [key, waitMs] of deferredMs) {
+          done.set(key, { key, tls: null, mxHost, deferredMs: waitMs });
+        }
+        const sessionTransactions = candidates.filter((t) => !deferredMs.has(t.key));
+        if (sessionTransactions.length === 0) return [];
         const startedAt = Date.now();
         try {
           return await args.runSession({

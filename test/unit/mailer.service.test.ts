@@ -27,7 +27,13 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 void mock.module("../../src/config.ts", () => ({
   config: {
-    mail: { hostname: "test.localhost", mxConcurrency: 1, publicIps: [] },
+    mail: {
+      hostname: "test.localhost",
+      mxConcurrency: 1,
+      mxRatePerMin: null,
+      ipFamily: 4,
+      publicIps: [],
+    },
     env: "test" as const,
     database: { url: "" },
     server: { port: 3000, host: "0.0.0.0" },

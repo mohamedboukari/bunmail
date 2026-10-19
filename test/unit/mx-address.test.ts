@@ -140,3 +140,42 @@ describe("resolveMxAddresses", () => {
     );
   });
 });
+
+/** `MAIL_IP_FAMILY` (#250): which family an MX host is reached over. */
+describe("resolveMxAddresses: address family", () => {
+  const mixed = answers("2001:db8::25", "203.0.113.10", "2001:db8::26", "203.0.113.11");
+  const v4Only = answers("203.0.113.10", "203.0.113.11");
+  const v6Only = answers("2001:db8::25", "2001:db8::26");
+
+  test.each([
+    [4, "mixed", mixed, ["203.0.113.10", "203.0.113.11"]],
+    [4, "IPv4-only", v4Only, ["203.0.113.10", "203.0.113.11"]],
+    [4, "IPv6-only", v6Only, ["2001:db8::25", "2001:db8::26"]],
+    [6, "mixed", mixed, ["2001:db8::25", "2001:db8::26"]],
+    [6, "IPv4-only", v4Only, ["203.0.113.10", "203.0.113.11"]],
+    [6, "IPv6-only", v6Only, ["2001:db8::25", "2001:db8::26"]],
+  ] as const)("family %p, %s host", async (family, _kind, lookup, expected) => {
+    expect(
+      await resolveMxAddresses("mx.example.org", { allowPrivate: false, lookup, family }),
+    ).toEqual([...expected]);
+  });
+
+  test("family 4 is the default", async () => {
+    expect(await resolveMxAddresses("mx.example.org", strict(mixed))).toEqual([
+      "203.0.113.10",
+      "203.0.113.11",
+    ]);
+  });
+
+  test("every address is checked, also those of the family not used", async () => {
+    expect(
+      await rejectionOf(
+        resolveMxAddresses("mx.example.org", {
+          allowPrivate: false,
+          lookup: answers("2001:db8::25", "10.0.0.5"),
+          family: 6,
+        }),
+      ),
+    ).toBeInstanceOf(BlockedMxError);
+  });
+});

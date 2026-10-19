@@ -1,5 +1,5 @@
 /**
- * Per-MX concurrency throttle for outbound SMTP delivery.
+ * Per-provider concurrency throttle for outbound SMTP delivery.
  *
  * Direct-to-MX delivery means BunMail is the sender's MTA, and strict
  * receivers (Outlook, Yahoo) will reject parallel sessions from the
@@ -7,11 +7,14 @@
  * hide this from their customers by pooling at the IP level; a
  * self-hosted MTA has to do its own throttling.
  *
- * The throttle is a counting semaphore keyed by MX hostname, kept in
- * module-level state. It holds **across poll cycles**: back-to-back
- * batches that both hit the same MX still serialize, which is the
- * whole point. Sends to different MXs use disjoint semaphores and
- * proceed in parallel. (#91)
+ * The throttle is a counting semaphore per key, kept in module-level
+ * state. The mailer keys it by the provider bucket of the MX host it
+ * connects to (#250, `provider-bucket.ts`: every Microsoft MX is one
+ * bucket, every Google MX another, any other MX its registrable domain),
+ * so two host names of one provider share the limit. It holds **across
+ * poll cycles**: back-to-back batches that both hit the same bucket still
+ * serialize, which is the whole point. Sends to different buckets use
+ * disjoint semaphores and proceed in parallel. (#91)
  *
  * Concurrency is set per-call by the mailer service (which reads
  * `config.mail.mxConcurrency`); this module stays config-agnostic so
@@ -26,15 +29,16 @@ interface MxLock {
 }
 
 /**
- * Module-level lock table. One entry per MX host currently in use.
+ * Module-level lock table. One entry per key (provider bucket) in use.
  * Entries are deleted when they drain to zero so the map can't grow
  * unbounded under churn (e.g. a long tail of unique receiver MXs).
  */
 const locks = new Map<string, MxLock>();
 
 /**
- * Runs `fn` while holding a slot on the per-MX semaphore. Awaits
- * acquisition when all `max` slots are already held; the wait is FIFO.
+ * Runs `fn` while holding a slot on the semaphore of `key` (a provider
+ * bucket). Awaits acquisition when all `max` slots are already held; the
+ * wait is FIFO.
  *
  * The lock is released in a `finally`, so a thrown error still wakes
  * the next waiter: a hung MX won't deadlock the queue forever, since
@@ -47,17 +51,17 @@ const locks = new Map<string, MxLock>();
  * callers, with no window where a slot is "free" but a waiter hasn't
  * grabbed it yet. The cleanup branch (`locks.delete`) only fires when
  * the entry has zero active and zero waiting, so a race with a fresh
- * acquire on the same host can't mistakenly drop a live lock.
+ * acquire on the same key can't mistakenly drop a live lock.
  */
 export async function withMxLock<T>(
-  mxHost: string,
+  key: string,
   max: number,
   fn: () => Promise<T>,
 ): Promise<T> {
-  let lock = locks.get(mxHost);
+  let lock = locks.get(key);
   if (!lock) {
     lock = { active: 0, queue: [] };
-    locks.set(mxHost, lock);
+    locks.set(key, lock);
   }
 
   if (lock.active < max) {
@@ -82,20 +86,20 @@ export async function withMxLock<T>(
       lock.active--;
     }
     if (lock.active === 0 && lock.queue.length === 0) {
-      locks.delete(mxHost);
+      locks.delete(key);
     }
   }
 }
 
 /**
- * Test-only inspection of the current lock state for a given MX.
- * Returns `undefined` when no callers are using that host (i.e. the
+ * Test-only inspection of the current lock state for a given key.
+ * Returns `undefined` when no callers are using that key (i.e. the
  * entry has been GC'd from the map).
  */
 export function _inspectLock(
-  mxHost: string,
+  key: string,
 ): { active: number; waiting: number } | undefined {
-  const lock = locks.get(mxHost);
+  const lock = locks.get(key);
   if (!lock) return undefined;
   return { active: lock.active, waiting: lock.queue.length };
 }

@@ -108,6 +108,47 @@ export function readPublicIps(
   return [...new Set(entries)];
 }
 
+/** Address families outbound SMTP may prefer (`MAIL_IP_FAMILY`, #250). */
+export type IpFamily = 4 | 6;
+
+/**
+ * Reads `MAIL_IP_FAMILY` (#250): the address family outbound SMTP prefers.
+ * `4` (the default): an MX host's IPv4 addresses when it has any, its IPv6
+ * ones only when it has none. `6`: the mirror. Unset or blank gives `4`;
+ * anything else refuses to boot. Exported for tests.
+ */
+export function readIpFamily(
+  raw: string | undefined = process.env["MAIL_IP_FAMILY"],
+): IpFamily {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed === "" || trimmed === "4") return 4;
+  if (trimmed === "6") return 6;
+  throw new Error(`[config] MAIL_IP_FAMILY must be "4" or "6", got "${raw}"`);
+}
+
+/** Bounds of `MAIL_MX_RATE_PER_MIN` (#250), in messages per minute. */
+export const MIN_MX_RATE_PER_MIN = 1;
+export const MAX_MX_RATE_PER_MIN = 100_000;
+
+/**
+ * Reads `MAIL_MX_RATE_PER_MIN` (#250): the most messages per minute sent
+ * to one provider bucket (see `provider-bucket.ts`), per replica. Unset or
+ * blank: `null`, no budget. Anything other than a whole number from 1 to
+ * 100000 refuses to boot. Exported for tests.
+ */
+export function readMxRatePerMin(
+  raw: string | undefined = process.env["MAIL_MX_RATE_PER_MIN"],
+): number | null {
+  if ((raw?.trim() ?? "") === "") return null;
+  return optionalBoundedInt(
+    "MAIL_MX_RATE_PER_MIN",
+    MIN_MX_RATE_PER_MIN,
+    MIN_MX_RATE_PER_MIN,
+    MAX_MX_RATE_PER_MIN,
+    raw,
+  );
+}
+
 /** Allowed log-level values, must match the logger implementation. */
 const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
@@ -698,14 +739,27 @@ export const config = {
     publicIps: readPublicIps(),
 
     /**
-     * Max parallel SMTP sessions per destination MX host. Direct-to-MX
+     * Max parallel SMTP sessions per provider bucket (#91, #250: every
+     * Microsoft, Google, Yahoo or Apple MX counts as one bucket, any other
+     * MX as its registrable domain, see `provider-bucket.ts`). Direct-to-MX
      * delivery means strict receivers (Outlook, Yahoo) reject parallel
      * sessions from the same source IP with `421 Too many concurrent
      * SMTP connections`. Default `1` is safe for new self-hosters with
      * cold IP reputation; operators with established reputation can
-     * raise it to 2-3. Sends to different MXs are unaffected. (#91)
+     * raise it to 2-3. Sends to different buckets are unaffected.
      */
     mxConcurrency: Math.max(1, parseInt(optionalEnv("MAIL_MX_CONCURRENCY", "1"), 10)),
+
+    /**
+     * Most messages per minute to one provider bucket (#250), a token
+     * bucket per provider bucket and per replica; `null` (unset): no
+     * budget. A send over it is deferred, not failed: back to `queued`
+     * until a token is free, without counting an attempt.
+     */
+    mxRatePerMin: readMxRatePerMin(),
+
+    /** Address family outbound SMTP prefers (`MAIL_IP_FAMILY`, #250): 4 or 6. */
+    ipFamily: readIpFamily(),
 
     /**
      * How long a temporarily failing email keeps being retried, in hours
@@ -722,8 +776,8 @@ export const config = {
      * more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS`, the cap
      * on sends in flight in this process. A slow receiver holds one slot
      * instead of making the queue open ever more connections. Sends that
-     * wait for a busy MX (`MAIL_MX_CONCURRENCY`) hold their slot while
-     * they wait.
+     * wait for a busy provider bucket (`MAIL_MX_CONCURRENCY`) hold their
+     * slot while they wait.
      */
     queueBatchSize: optionalBoundedInt("QUEUE_BATCH_SIZE", 5, 1, 100),
     queuePollIntervalMs: optionalBoundedInt("QUEUE_POLL_INTERVAL_MS", 2000, 250, 60_000),

@@ -433,3 +433,157 @@ describe("deliverWithFailover", () => {
     expect(outcomes[0]?.error).toBeInstanceOf(Error);
   });
 });
+
+/** Provider buckets and the rate budget in failover (#250). */
+describe("deliverWithFailover: buckets and rate budget", () => {
+  /** A budget stub granting `available` tokens per bucket in total, then none. */
+  function stubBudget(available: Record<string, number>, waitMs = 60_000) {
+    const asked: Array<[string, number]> = [];
+    const admit = (bucket: string, count: number) => {
+      asked.push([bucket, count]);
+      const left = available[bucket] ?? 0;
+      const granted = Math.min(left, count);
+      available[bucket] = left - granted;
+      return { granted, waitMs: granted < count ? waitMs : 0 };
+    };
+    return { admit, asked };
+  }
+
+  test("the lock is keyed by the host's bucket", async () => {
+    const taken: string[] = [];
+    await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "mx2.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      runSession: async ({ mxHost, transactions }) =>
+        transactions.map((t) =>
+          mxHost === "mx1.example.org"
+            ? { key: t.key, error: new Error("connect ECONNREFUSED"), tls: null }
+            : { key: t.key, tls: "starttls" },
+        ),
+      lock: recordingLock(taken),
+      bucketOf: () => "example.org",
+      routeDeps: stubDeps(),
+    });
+    expect(taken).toEqual(["example.org", "example.org"]);
+  });
+
+  test("transactions without a token are deferred, not attempted, and do not fail over", async () => {
+    const sessions: string[][] = [];
+    const { admit } = stubBudget({ google: 1 }, 42_000);
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "mx2.example.org"],
+      transactions: [transaction("t0"), transaction("t1"), transaction("t2")],
+      allowPrivate: false,
+      runSession: async ({ transactions }) => {
+        sessions.push(transactions.map((t) => t.key));
+        return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+      },
+      lock: recordingLock([]),
+      bucketOf: () => "google",
+      admit,
+      routeDeps: stubDeps(),
+    });
+    expect(sessions).toEqual([["t0"]]);
+    expect(outcomes).toEqual([
+      { key: "t0", tls: "starttls", mxHost: "mx1.example.org" },
+      { key: "t1", tls: null, mxHost: "mx1.example.org", deferredMs: 42_000 },
+      { key: "t2", tls: null, mxHost: "mx1.example.org", deferredMs: 42_000 },
+    ]);
+  });
+
+  test("no budget left at all: no session is opened", async () => {
+    let connected = false;
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      runSession: async ({ transactions }) => {
+        connected = true;
+        return transactions.map((t) => ({ key: t.key, tls: null }));
+      },
+      lock: recordingLock([]),
+      admit: stubBudget({}).admit,
+      routeDeps: stubDeps(),
+    });
+    expect(connected).toBe(false);
+    expect(outcomes[0]?.deferredMs).toBe(60_000);
+    expect(outcomes[0]?.error).toBeUndefined();
+  });
+
+  test("failover within one bucket charges each transaction once", async () => {
+    const { admit, asked } = stubBudget({ "example.org": 1 });
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "mx2.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      runSession: async ({ mxHost, transactions }) =>
+        transactions.map((t) =>
+          mxHost === "mx1.example.org"
+            ? { key: t.key, error: new Error("connect ECONNREFUSED"), tls: null }
+            : { key: t.key, tls: "starttls" },
+        ),
+      lock: recordingLock([]),
+      bucketOf: () => "example.org",
+      admit,
+      routeDeps: stubDeps(),
+    });
+    expect(asked).toEqual([["example.org", 1]]);
+    expect(outcomes[0]).toEqual({
+      key: "example.org",
+      tls: "starttls",
+      mxHost: "mx2.example.org",
+    });
+  });
+
+  test("failover into another bucket takes a token there", async () => {
+    const { admit, asked } = stubBudget({ "example.org": 1 });
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "backup.example.net"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      runSession: async ({ transactions }) =>
+        transactions.map((t) => ({
+          key: t.key,
+          error: new Error("connect ECONNREFUSED"),
+          tls: null,
+        })),
+      lock: recordingLock([]),
+      bucketOf: (host) => (host.endsWith("example.net") ? "example.net" : "example.org"),
+      admit,
+      routeDeps: stubDeps(),
+    });
+    /** Only one address per host here (the stub lookup), so two buckets, one ask each. */
+    expect(asked).toEqual([
+      ["example.org", 1],
+      ["example.net", 1],
+    ]);
+    expect(outcomes[0]?.deferredMs).toBe(60_000);
+    expect(outcomes[0]?.mxHost).toBe("backup.example.net");
+  });
+
+  test("the preferred family decides the address connected to", async () => {
+    const addresses: string[] = [];
+    await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      ipFamily: 6,
+      runSession: async ({ address, transactions }) => {
+        addresses.push(address);
+        return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+      },
+      lock: recordingLock([]),
+      routeDeps: stubDeps({
+        lookup: async () => [{ address: "203.0.113.10" }, { address: "2001:db8::25" }],
+      }),
+    });
+    expect(addresses).toEqual(["2001:db8::25"]);
+  });
+});

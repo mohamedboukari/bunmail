@@ -17,11 +17,14 @@
  *   rcpt-codes offers STARTTLS and answers RCPT TO by local part (#250):
  *              `soft...` gets `450 4.2.1`, `hard...` gets `550 5.1.1`,
  *              anything else is accepted
+ *   slow       does not offer STARTTLS, and answers the end of DATA after
+ *              300 ms, so overlapping sessions show in `peak` (#250)
  *
  * Prints `{"port":N}` on one line once listening, then counts on stdout
  * each accepted message and connection, the open connections whenever
- * that number changes, and the connections closed by either side
- * (`{"message":N}`, `{"connection":N}`, `{"open":N}`, `{"closed":N}`). Exits when stdin
+ * that number changes, the connections closed by either side, and the most
+ * messages ever in DATA at once (`{"message":N}`, `{"connection":N}`,
+ * `{"open":N}`, `{"closed":N}`, `{"peak":N}`). Exits when stdin
  * closes. The key and certificate are a test-only pair under
  * `test/fixtures/tls/`: `<certificate name>.key.pem` and `.cert.pem`,
  * `hook.example.test` (self-signed) by default. The MTA-STS tests (#250)
@@ -47,6 +50,9 @@ const tls11 = {
 let messages = 0;
 let connections = 0;
 let closed = 0;
+/** Messages between the start of DATA and its reply, now and at most. */
+let inData = 0;
+let peak = 0;
 
 /** Writes one counter line. */
 function report(line) {
@@ -123,7 +129,9 @@ function startSmtpServer() {
     cert,
     authOptional: true,
     logger: false,
-    ...(mode === "plaintext" ? { disabledCommands: ["STARTTLS"] } : {}),
+    ...(mode === "plaintext" || mode === "slow"
+      ? { disabledCommands: ["STARTTLS"] }
+      : {}),
     ...(mode === "tls11" ? tls11 : {}),
     onConnect(_session, callback) {
       connections += 1;
@@ -153,12 +161,23 @@ function startSmtpServer() {
       callback();
     },
     onData(stream, _session, callback) {
+      inData += 1;
+      if (inData > peak) {
+        peak = inData;
+        report({ peak });
+      }
       stream.on("data", () => undefined);
       stream.on("end", () => {
         messages += 1;
         report({ message: messages });
+        const reply = () => {
+          inData -= 1;
+          callback();
+        };
         /** stall-data: the message is in, the reply never comes. */
-        if (mode !== "stall-data") callback();
+        if (mode === "stall-data") return;
+        if (mode === "slow") setTimeout(reply, 300);
+        else reply();
       });
     },
   });
