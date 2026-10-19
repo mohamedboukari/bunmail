@@ -4,6 +4,10 @@ import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
+import {
+  serializeDeliveryState,
+  type SerializedDeliveryGroup,
+} from "../../modules/emails/serializations/delivery-state.serialization.ts";
 
 interface EmailDetailPageProps {
   email: Email;
@@ -130,6 +134,8 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
         </div>
       </div>
 
+      <DeliveryTable groups={serializeDeliveryState(email.deliveryState)} />
+
       {/* HTML preview */}
       {!!email.html && (
         <div class="mb-6">
@@ -177,4 +183,92 @@ function DetailField({ label, value }: { label: string; value: string }) {
       </p>
     </div>
   );
+}
+
+/**
+ * Per-MX delivery state (#250): one row per destination MX, or per
+ * recipient when signed return paths split the group (#236), labelled with
+ * the MX host. Every value is escaped: the MX name comes from the
+ * recipient domain's DNS and the error from the remote server. A session
+ * that ran without TLS gets a visible badge.
+ */
+function DeliveryTable({ groups }: { groups: SerializedDeliveryGroup[] }) {
+  if (groups.length === 0) return <></>;
+  return (
+    <div class="mb-6">
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+        Delivery by MX
+      </h2>
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+              <th class="px-4 py-2 font-medium">MX</th>
+              <th class="px-4 py-2 font-medium">Recipients</th>
+              <th class="px-4 py-2 font-medium">Status</th>
+              <th class="px-4 py-2 font-medium">Attempts</th>
+              <th class="px-4 py-2 font-medium">TLS</th>
+              <th class="px-4 py-2 font-medium">Last error</th>
+              <th class="px-4 py-2 font-medium">Updated</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((group) => (
+              <tr class="border-b last:border-b-0 border-gray-100 dark:border-gray-800 align-top">
+                <td class="px-4 py-2 break-all" safe>
+                  {group.mx ?? "No MX found"}
+                </td>
+                <td class="px-4 py-2 break-all" safe>
+                  {group.recipients.join(", ")}
+                </td>
+                <td class="px-4 py-2">
+                  <StatusBadge status={group.status} />
+                </td>
+                <td class="px-4 py-2" safe>
+                  {String(group.attempts)}
+                </td>
+                <td class="px-4 py-2">
+                  <TlsBadge group={group} />
+                </td>
+                <td class="px-4 py-2 break-all text-gray-700 dark:text-gray-300">
+                  {group.failureCode !== null && (
+                    <code class="mr-1" safe>
+                      {group.failureCode}
+                    </code>
+                  )}
+                  <span safe>{group.lastError ?? ""}</span>
+                </td>
+                <td class="px-4 py-2 whitespace-nowrap">
+                  <TimeDisplay value={isoDate(group.updatedAt)} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** The TLS cell: a warning badge for a plaintext session, else the recorded value. */
+function TlsBadge({ group }: { group: SerializedDeliveryGroup }) {
+  if (group.tls === "plaintext") {
+    return (
+      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+        {group.status === "sent" ? "Sent without TLS" : "No TLS"}
+      </span>
+    );
+  }
+  return (
+    <span class="text-gray-600 dark:text-gray-400">
+      {group.tls === "starttls" ? "STARTTLS" : "Unknown"}
+    </span>
+  );
+}
+
+/** A stored ISO timestamp as a Date, or null when absent or unreadable. */
+function isoDate(value: string | null): Date | null {
+  if (value === null) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 }

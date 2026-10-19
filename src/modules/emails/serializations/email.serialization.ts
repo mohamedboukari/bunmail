@@ -1,5 +1,9 @@
 import type { Email } from "../types/email.types.ts";
 import type { CustomHeaders } from "../models/email.schema.ts";
+import {
+  serializeDeliveryState,
+  type SerializedDeliveryGroup,
+} from "./delivery-state.serialization.ts";
 
 /**
  * Shape of an email in API responses.
@@ -32,6 +36,12 @@ export interface SerializedEmail {
   messageId: string | null;
   sentAt: Date | null;
   createdAt: Date;
+  /**
+   * Per-MX delivery state (#250): one entry per destination MX, or per
+   * recipient when signed return paths split the group (#236). Empty
+   * until the first attempt.
+   */
+  deliveryState: SerializedDeliveryGroup[];
 }
 
 /**
@@ -59,5 +69,6 @@ export function serializeEmail(email: Email): SerializedEmail {
     messageId: email.messageId,
     sentAt: email.sentAt,
     createdAt: email.createdAt,
+    deliveryState: serializeDeliveryState(email.deliveryState),
   };
 }

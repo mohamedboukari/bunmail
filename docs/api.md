@@ -127,7 +127,8 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
     "source": "api",
     "attempts": 0,
     "nextAttemptAt": "2026-03-15T12:00:00.000Z",
-    "createdAt": "2026-03-15T12:00:00.000Z"
+    "createdAt": "2026-03-15T12:00:00.000Z",
+    "deliveryState": []
   },
   "warnings": ["spf_unverified", "dmarc_unverified"]
 }
@@ -155,6 +156,47 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 
 The `source` field is the ingress channel the email arrived through: `api` (this REST endpoint) or `smtp` (the SMTP submission server, #120).
 
+**`deliveryState`** (#250) is on every email in a response: one entry per destination MX, or per recipient when signed return paths split the MX's group (#236). It is `[]` until the first delivery attempt (so on the send response, and on a replayed send, which returns the snapshot as queued). Entries are sorted by `mx`, then by first recipient.
+
+```json
+"deliveryState": [
+  {
+    "mx": "gmail-smtp-in.l.google.com",
+    "recipients": ["alice@gmail.com"],
+    "status": "sent",
+    "attempts": 1,
+    "failureKind": null,
+    "failureCode": null,
+    "lastError": null,
+    "tls": "starttls",
+    "updatedAt": "2026-03-15T12:00:03.120Z"
+  },
+  {
+    "mx": "mx.example.org",
+    "recipients": ["bob@example.org"],
+    "status": "retry",
+    "attempts": 2,
+    "failureKind": "soft",
+    "failureCode": "4.7.0",
+    "lastError": "421 4.7.0 Try again later",
+    "tls": "plaintext",
+    "updatedAt": "2026-03-15T12:05:10.004Z"
+  }
+]
+```
+
+| Field | Description |
+|-------|-------------|
+| `mx` | Destination MX host; `null` when the recipient domain's MX could not be resolved (never attempted). |
+| `recipients` | The addresses this entry delivers to. |
+| `status` | `sent` (accepted), `retry` (temporary failure, retried on the backoff) or `failed` (terminal). |
+| `attempts` | Attempts this entry has used. |
+| `failureKind` | How the last failure's SMTP reply was classified: `hard`, `policy` (the receiver refused the sender, #246) or `soft`; `null` when there was no SMTP reply (connection, DNS or TLS failure) or no failure. |
+| `failureCode` | The enhanced status code of that reply, e.g. `5.1.1`; `null` without one. |
+| `lastError` | The last failure's message, as stored (the same text the email's `lastError` summarises). |
+| `tls` | The latest SMTP session's encryption: `starttls`, `plaintext` (the MX did not offer STARTTLS, or refused it), or `null` (no session got ready, or an entry from before #250). STARTTLS is opportunistic and needs TLS 1.2 or later; certificates are not verified. |
+| `updatedAt` | When the latest outcome happened; `null` on entries from before #250 that were never delivered. |
+
 ---
 
 #### `GET /api/v1/emails`
@@ -174,7 +216,7 @@ List emails for the authenticated API key with pagination.
 
 #### `GET /api/v1/emails/:id`
 
-Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded: fetch them via `GET /api/v1/emails/trash`. The response includes `headers`, the custom headers set on the send (`null` when none, #177); list responses carry it too.
+Get a single email by ID. Scoped to the authenticated API key. Trashed emails are excluded: fetch them via `GET /api/v1/emails/trash`. The response includes `headers`, the custom headers set on the send (`null` when none, #177), and `deliveryState`, the per-MX delivery outcomes with their TLS record (#250, see above); list responses carry both too.
 
 ---
 

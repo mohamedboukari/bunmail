@@ -10,10 +10,16 @@ import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { resolveMxAddress } from "./mx-address.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
+import {
+  createTlsRecorder,
+  mxTransportOptions,
+  type TlsRecorder,
+} from "./mx-transport.ts";
 import type {
   CustomHeaders,
   DeliveryGroup,
   DeliveryState,
+  DeliveryTls,
 } from "../models/email.schema.ts";
 
 /**
@@ -268,22 +274,27 @@ export async function sendMail(options: {
       autoSubmitted: options.autoSubmitted === true,
     });
 
-    for (const { key, error: err } of outcomes) {
+    for (const { key, error: err, tls } of outcomes) {
       const group = state[key];
       if (!group) continue;
+      /** When this outcome happened, and the session's encryption (#250). */
+      const updatedAt = new Date().toISOString();
       if (err === undefined) {
         state[key] = {
           ...group,
           status: "sent",
           attempts: group.attempts + 1,
-          deliveredAt: new Date().toISOString(),
+          deliveredAt: updatedAt,
           messageId: options.messageId,
+          tls,
+          updatedAt,
         };
         logger.info("MX group delivered", {
           mxHost,
           group: key,
           recipientCount: group.recipients.length,
           messageId: options.messageId,
+          tls,
         });
         continue;
       }
@@ -307,6 +318,8 @@ export async function sendMail(options: {
         lastError: error,
         ...(parsed ? { failureKind: parsed.kind, failureCode: parsed.code } : {}),
         ...(parsed?.kind === "policy" ? { blocked: true } : {}),
+        tls,
+        updatedAt,
       };
       logger.warn("MX group send failed", {
         mxHost,
@@ -316,6 +329,7 @@ export async function sendMail(options: {
         /** The remote reply often quotes the recipient address (#260). */
         error: redactEmailsInText(error),
         messageId: options.messageId,
+        tls,
       });
     }
   }
@@ -362,6 +376,7 @@ async function buildInitialState(
       recipients: f.recipients.map((r) => r.address),
       attempts: 0,
       lastError: f.error,
+      updatedAt: new Date().toISOString(),
     };
   }
   return state;
@@ -627,42 +642,32 @@ type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
 interface TransactionOutcome {
   key: string;
   error?: unknown;
+  /** The session's encryption, see {@link TlsRecorder} (#250). */
+  tls: DeliveryTls | null;
 }
 
 /**
- * Builds the transport for one MX. Several transactions (one per recipient
- * with signed return paths, #236) share one pooled connection: a single
+ * Builds the transport for one MX (options in {@link mxTransportOptions},
+ * TLS 1.2 at least, #250). Several transactions (one per recipient with
+ * signed return paths, #236) share one pooled connection: a single
  * connection (`maxConnections: 1`), each message after the first sent on
  * it after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
  * resending a message whose connection dropped: that failure is reported,
- * and the queue's own retry policy decides.
+ * and the queue's own retry policy decides. The whole session is capped by
+ * {@link sendWithDeadline}.
  */
 function createMxTransport(
   address: string,
   mxHost: string,
   pooled: boolean,
+  recorder: TlsRecorder,
 ): ClosableTransport {
-  const options = {
-    host: address,
-    port: 25,
-    secure: false,
-    opportunisticTLS: true,
-    name: config.mail.hostname,
-    /**
-     * Setup timeouts are 60 s (#250): connecting and the greeting come
-     * before anything is sent, so a dead or tarpitting MX gives up its MX
-     * lock quickly. The socket inactivity timeout stays at nodemailer's
-     * 10 minutes: RFC 5321 4.5.3.2 has the client wait that long for the
-     * reply to the final `.` of DATA, and a shorter one risks a retry and
-     * a duplicate. The whole session is capped by {@link sendWithDeadline}.
-     */
-    connectionTimeout: SMTP_SETUP_TIMEOUT_MS,
-    greetingTimeout: SMTP_SETUP_TIMEOUT_MS,
-    tls: {
-      rejectUnauthorized: false,
-      servername: mxHost,
-    },
-  };
+  const options = mxTransportOptions({
+    address,
+    mxHost,
+    heloName: config.mail.hostname,
+    logger: recorder.logger,
+  });
   return pooled
     ? createTransport({ ...options, pool: true, maxConnections: 1, maxRequeues: 0 })
     : createTransport(options);
@@ -696,10 +701,13 @@ async function sendToMx(
       allowPrivate: config.mail.allowPrivateMx,
     });
   } catch (error) {
-    return transactions.map((t) => ({ key: t.key, error }));
+    /** Never connected: no session, so nothing known about TLS. */
+    return transactions.map((t) => ({ key: t.key, error, tls: null }));
   }
   const pooled = transactions.length > 1;
-  const transport = createMxTransport(address, mxHost, pooled);
+  /** Learns each transaction's encryption from nodemailer's own events (#250). */
+  const recorder = createTlsRecorder();
+  const transport = createMxTransport(address, mxHost, pooled, recorder);
 
   /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
   return withMxLock(mxHost, config.mail.mxConcurrency, async () => {
@@ -709,6 +717,7 @@ async function sendToMx(
     try {
       for (const transaction of transactions) {
         const remainingMs = deadlineAt - Date.now();
+        recorder.beginTransaction();
         try {
           if (remainingMs <= 0) throw sessionDeadlineError(SMTP_SESSION_DEADLINE_MS);
           await sendWithDeadline(
@@ -719,22 +728,21 @@ async function sendToMx(
               envelopeFrom: transaction.envelopeFrom,
             }),
             remainingMs,
+            recorder.stalled,
           );
-          outcomes.push({ key: transaction.key });
+          outcomes.push({ key: transaction.key, tls: recorder.result() });
         } catch (error) {
-          outcomes.push({ key: transaction.key, error });
+          outcomes.push({ key: transaction.key, error, tls: recorder.result() });
         }
       }
     } finally {
+      recorder.dispose();
       /** A pooled connection stays open until closed; a plain one closes itself. */
       if (pooled) transport.close();
     }
     return outcomes;
   });
 }
-
-/** Connect and greeting timeout for outbound SMTP (#250). */
-const SMTP_SETUP_TIMEOUT_MS = 60_000;
 
 /**
  * Longest one outbound SMTP session may take (#250). Every step has its
@@ -760,11 +768,14 @@ function sessionDeadlineError(deadlineMs: number): Error {
  * Sends with an overall deadline (#250): past `deadlineMs` the transport
  * is closed and the attempt fails with a plain error, which carries no
  * SMTP reply and is therefore retried later, not treated as a bounce.
+ * `abort` (a stalled STARTTLS upgrade, see `TlsRecorder.stalled`) ends the
+ * attempt the same way, earlier.
  */
 export async function sendWithDeadline(
   transport: ClosableTransport,
   options: Mail.Options,
   deadlineMs: number,
+  abort?: Promise<never>,
 ): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
@@ -773,8 +784,17 @@ export async function sendWithDeadline(
       reject(sessionDeadlineError(deadlineMs));
     }, deadlineMs);
   });
+  const racers: Array<Promise<unknown>> = [transport.sendMail(options), deadline];
+  if (abort) {
+    racers.push(
+      abort.catch((error: unknown) => {
+        transport.close();
+        throw error;
+      }),
+    );
+  }
   try {
-    await Promise.race([transport.sendMail(options), deadline]);
+    await Promise.race(racers);
   } finally {
     clearTimeout(timer);
   }

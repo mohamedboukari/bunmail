@@ -1201,7 +1201,12 @@ async function dropSuppressedRecipients(
     if (kept.length === group.recipients.length) continue;
     next[mxHost] =
       kept.length === 0
-        ? { ...group, status: "failed", lastError: SUPPRESSED_BEFORE_RETRY }
+        ? {
+            ...group,
+            status: "failed",
+            lastError: SUPPRESSED_BEFORE_RETRY,
+            updatedAt: new Date().toISOString(),
+          }
         : { ...group, recipients: kept };
   }
   if (dropped > 0) {

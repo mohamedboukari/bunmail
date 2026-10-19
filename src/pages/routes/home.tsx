@@ -5,6 +5,12 @@ import type { ReverseDnsStatus } from "../../modules/domains/services/sending-ip
 import { TimeDisplay } from "../components/time-display.tsx";
 
 /**
+ * Bounce rate above which the home page warns (#250): 2%, a common ceiling
+ * before mailbox providers start filtering a sender's mail.
+ */
+export const BOUNCE_RATE_WARNING_THRESHOLD = 0.02;
+
+/**
  * Dashboard home page: shows an overview grid of stat cards.
  *
  * Stats are grouped into three sections:
@@ -33,6 +39,9 @@ export function HomePage({
   /** Format the success rate as a percentage with one decimal: null = no data yet */
   const successRateDisplay =
     stats.successRate === null ? "n/a" : `${(stats.successRate * 100).toFixed(1)}%`;
+  /** Bounce rate (#250): 0 when nothing was sent or bounced yet. */
+  const bounceRateDisplay = `${(stats.bounceRate * 100).toFixed(1)}%`;
+  const bounceRateHigh = stats.bounceRate > BOUNCE_RATE_WARNING_THRESHOLD;
 
   return (
     <BaseLayout title="Dashboard" activeNav="home">
@@ -62,6 +71,11 @@ export function HomePage({
         <StatsCard label="Failed" value={stats.failedCount} accent="border-red-500" />
         <StatsCard label="Queued" value={stats.queuedCount} accent="border-amber-500" />
         <StatsCard
+          label="Bounced"
+          value={stats.bouncedCount}
+          accent="border-orange-500"
+        />
+        <StatsCard
           label="Sent (last 24h)"
           value={stats.sentLast24h}
           accent="border-emerald-400"
@@ -78,7 +92,19 @@ export function HomePage({
           value={0}
           displayValue={successRateDisplay}
           accent="border-emerald-600"
-          hint="sent ÷ (sent + failed)"
+          hint="sent ÷ (sent + failed + bounced)"
+        />
+        <StatsCard
+          label="Bounce Rate"
+          value={0}
+          displayValue={bounceRateDisplay}
+          accent={bounceRateHigh ? "border-red-600" : "border-orange-400"}
+          hint="bounced ÷ (sent + bounced)"
+          warning={
+            bounceRateHigh
+              ? `Above ${BOUNCE_RATE_WARNING_THRESHOLD * 100}%: remove bounced and stale addresses from your lists.`
+              : undefined
+          }
         />
         <StatsCard
           label="Trashed Emails"

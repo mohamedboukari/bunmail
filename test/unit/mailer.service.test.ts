@@ -79,9 +79,35 @@ void mock.module("dns/promises", () => ({
 /** How many transports were closed (pooled ones are closed by the mailer, #236). */
 let closedTransports = 0;
 
+/**
+ * What the fake session reports through the transport's `logger` (#250):
+ * the nodemailer events the TLS recorder reads. `none`: no session got
+ * ready (nothing logged).
+ */
+let sessionTls: "starttls" | "plaintext" | "none" = "none";
+
+/** Calls `cfg.logger.info(...)` like nodemailer does, when there is one. */
+function logToTransport(cfg: Record<string, unknown>, ...args: unknown[]): void {
+  const transportLogger = cfg.logger;
+  if (typeof transportLogger !== "object" || transportLogger === null) return;
+  const info: unknown = Reflect.get(transportLogger, "info");
+  if (typeof info === "function") Reflect.apply(info, transportLogger, args);
+}
+
 const createTransportMock = mock((cfg: Record<string, unknown>) => ({
   sendMail: mock(async (opts: Record<string, unknown>) => {
     captured.push({ transportConfig: cfg, mailOptions: opts });
+    if (sessionTls !== "none") {
+      logToTransport(cfg, { tnx: "network", sid: "s1" }, "%s established to %s:%s");
+      if (sessionTls === "starttls") {
+        logToTransport(
+          cfg,
+          { tnx: "smtp", sid: "s1" },
+          "Connection upgraded with STARTTLS",
+        );
+      }
+      logToTransport(cfg, { tnx: "send" }, "Sending message %s", "<id>");
+    }
     if (sendBehaviour) {
       const result = sendBehaviour(mxOf(cfg), opts);
       if (result instanceof Error) throw result;
@@ -117,6 +143,7 @@ beforeEach(() => {
   lookupResult = [{ address: MX_IP, family: 4 }];
   createTransportMock.mockClear();
   closedTransports = 0;
+  sessionTls = "none";
 });
 
 describe("sendMail: transport configuration", () => {
@@ -141,6 +168,80 @@ describe("sendMail: transport configuration", () => {
     expect(cfg.secure).toBe(false);
     expect(cfg.opportunisticTLS).toBe(true);
     expect(asRecord(cfg.tls).rejectUnauthorized).toBe(false);
+    /** TLS 1.2 at least, never required (#250); the logger feeds the TLS record. */
+    expect(asRecord(cfg.tls).minVersion).toBe("TLSv1.2");
+    expect(cfg.requireTLS).toBeUndefined();
+    expect(typeof asRecord(cfg.logger).info).toBe("function");
+  });
+});
+
+describe("sendMail: TLS record (#250)", () => {
+  test("a STARTTLS session is recorded on the group with the outcome time", async () => {
+    sessionTls = "starttls";
+    const before = Date.now();
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    const group = result.deliveryState["mx.example.org"];
+    expect(group?.status).toBe("sent");
+    expect(group?.tls).toBe("starttls");
+    expect(Date.parse(group?.updatedAt ?? "")).toBeGreaterThanOrEqual(before);
+  });
+
+  test("a plaintext session is recorded as plaintext", async () => {
+    sessionTls = "plaintext";
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(result.deliveryState["mx.example.org"]?.tls).toBe("plaintext");
+  });
+
+  test("a session that never got ready records no TLS, and the failure is retried", async () => {
+    sendBehaviour = () => new Error("connect ETIMEDOUT 203.0.113.10:25");
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    const group = result.deliveryState["mx.example.org"];
+    expect(group?.status).toBe("retry");
+    expect(group?.tls).toBeNull();
+    expect(group?.updatedAt).toBeString();
+  });
+
+  test("an SMTP rejection after a STARTTLS session keeps the session's TLS", async () => {
+    sessionTls = "starttls";
+    sendBehaviour = () => new Error("550 5.1.1 user unknown");
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    const group = result.deliveryState["mx.example.org"];
+    expect(group?.status).toBe("failed");
+    expect(group?.tls).toBe("starttls");
+  });
+
+  test("per-recipient entries (#236) each carry their session's TLS", async () => {
+    sessionTls = "plaintext";
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@example.org, bob@example.org",
+      subject: "test",
+      messageId: MID,
+      returnPath: { emailId: "msg_0123456789abcdef01234567" },
+    });
+    const entries = Object.values(result.deliveryState);
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) expect(entry.tls).toBe("plaintext");
   });
 });
 
