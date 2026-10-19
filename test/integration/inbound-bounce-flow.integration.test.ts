@@ -451,6 +451,8 @@ describe("inbound policy DSN: sender refused, recipient not suppressed (#250)", 
         subject: "Welcome",
         error: `Receiver refused the sender (DSN ${status}): ${diagnostic}`,
         blocked: true,
+        /** The email has no tags (#189). */
+        tags: null,
       });
     });
   }

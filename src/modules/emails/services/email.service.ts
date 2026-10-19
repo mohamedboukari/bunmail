@@ -14,6 +14,12 @@ import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { checkSenderDomain } from "./sender-domain.service.ts";
 import { validateCustomHeaders } from "./custom-headers.ts";
 import { checkFromName, describeFromNameProblem } from "./from-name.ts";
+import {
+  checkTags,
+  describeTagProblem,
+  parseTagFilters,
+  type TagFilter,
+} from "./tags.ts";
 import { oneClickBlocker } from "./list-unsubscribe.ts";
 import {
   claimIdempotencyKey,
@@ -33,6 +39,7 @@ import {
   BodyRequiredError,
   IdempotencyKeyReusedError,
   InvalidFromNameError,
+  InvalidTagError,
   MarketingRequiresOneClickError,
   AttachmentsNotSupportedError,
 } from "../errors.ts";
@@ -299,6 +306,32 @@ async function prepareEmail(
   }
 
   /**
+   * Tags (#189), pure input rules too. They apply to template sends as
+   * well: a template renders the content, the tags label the send. The
+   * log line names the key and the rule, never the value.
+   */
+  let tags: Record<string, string> | null = null;
+  if (input.tags && Object.keys(input.tags).length > 0) {
+    const checked = checkTags(Object.entries(input.tags));
+    if (!checked.ok) {
+      logger.warn("Send blocked: invalid tag", {
+        id,
+        apiKeyId,
+        source,
+        field: "tags",
+        tag: checked.key,
+        problem: checked.problem,
+      });
+      throw new InvalidTagError(
+        checked.problem,
+        checked.key === null ? "/tags" : `/tags/${checked.key}`,
+        describeTagProblem(checked, "tags"),
+      );
+    }
+    tags = checked.tags;
+  }
+
+  /**
    * Marketing mail must carry the per-recipient one-click link (#250,
    * #249): one recipient and an https `APP_BASE_URL`. Refused before any
    * database work, so nothing is queued without it.
@@ -459,6 +492,7 @@ async function prepareEmail(
       textContent,
       source,
       category: input.category ?? null,
+      tags,
     },
     warnings,
     senderDomain,
@@ -474,7 +508,7 @@ async function insertPreparedEmail(
   prepared: PreparedEmail,
 ): Promise<CreatedEmail> {
   const { values, warnings, senderDomain } = prepared;
-  const { id, apiKeyId, source, domainId, headers } = values;
+  const { id, apiKeyId, source, domainId, headers, tags } = values;
   const [email] = await executor.insert(emails).values(values).returning();
 
   logger.debug("Email created and queued", {
@@ -482,6 +516,8 @@ async function insertPreparedEmail(
     status: email!.status,
     domainId,
     customHeaders: headers ? Object.keys(headers) : [],
+    /** Keys only: tag values may hold customer ids (#189). */
+    tagKeys: tags ? Object.keys(tags) : [],
   });
 
   /**
@@ -534,6 +570,46 @@ export async function getEmailById(
 }
 
 /**
+ * One containment condition per tag filter (#189), so an email must carry
+ * them all (AND). The jsonb value is built in SQL from two text
+ * parameters: a stringified `::jsonb` parameter would be bound as a jsonb
+ * string by bun-sql and match nothing (#261). `@>` is what the GIN index
+ * `idx_emails_tags` (`jsonb_path_ops`) serves.
+ */
+function tagClauses(filters: TagFilter[] | undefined) {
+  return (filters ?? []).map(
+    ({ key, value }) =>
+      sql`${emails.tags} @> jsonb_build_object(${key}::text, ${value}::text)`,
+  );
+}
+
+/** List filters as logged: tag keys only, never values (#189). */
+function loggableFilters(filters: ListEmailsFilters) {
+  const { tags, ...rest } = filters;
+  return { ...rest, tagKeys: tags?.map((t) => t.key) };
+}
+
+/**
+ * Checks the raw `tag` filters of a list request (#189) and returns them,
+ * or logs the refusal (key and rule only) and throws `InvalidTagError`
+ * (`422 VALIDATION_ERROR`, path `/tag`).
+ */
+export function checkTagFilters(raws: readonly string[], apiKeyId: string): TagFilter[] {
+  const parsed = parseTagFilters(raws);
+  if (parsed.ok) return parsed.filters;
+  logger.warn("Email list refused: invalid tag filter", {
+    apiKeyId,
+    tag: parsed.key,
+    problem: parsed.problem,
+  });
+  throw new InvalidTagError(
+    parsed.problem,
+    "/tag",
+    describeTagProblem(parsed, "tag filter"),
+  );
+}
+
+/**
  * Lists emails for a given API key with pagination and optional status filter.
  *
  * Returns the matching emails (newest first) plus a total count for
@@ -550,7 +626,7 @@ export async function listEmails(
   /** Calculate how many rows to skip based on page number */
   const offset = (filters.page - 1) * filters.limit;
 
-  logger.debug("Listing emails", { apiKeyId, ...filters, offset });
+  logger.debug("Listing emails", { apiKeyId, ...loggableFilters(filters), offset });
 
   /**
    * Build the WHERE clause: always filter by API key + exclude trashed,
@@ -560,6 +636,7 @@ export async function listEmails(
   const clauses = [eq(emails.apiKeyId, apiKeyId), isNull(emails.deletedAt)];
   if (filters.status) clauses.push(eq(emails.status, filters.status));
   if (filters.source) clauses.push(eq(emails.source, filters.source));
+  clauses.push(...tagClauses(filters.tags));
   const conditions = and(...clauses);
 
   /** Run data query and count query in parallel for better performance */
@@ -599,7 +676,7 @@ export async function listAllEmails(
 ): Promise<{ data: Email[]; total: number }> {
   const offset = (filters.page - 1) * filters.limit;
 
-  logger.debug("Listing all emails (unscoped)", { ...filters, offset });
+  logger.debug("Listing all emails (unscoped)", { ...loggableFilters(filters), offset });
 
   /**
    * Build WHERE clause: exclude trashed; optionally filter by status,
@@ -609,6 +686,7 @@ export async function listAllEmails(
   if (filters.status) clauses.push(eq(emails.status, filters.status));
   if (filters.source) clauses.push(eq(emails.source, filters.source));
   if (filters.apiKeyId) clauses.push(eq(emails.apiKeyId, filters.apiKeyId));
+  clauses.push(...tagClauses(filters.tags));
   const conditions = and(...clauses);
 
   const [data, [countRow]] = await Promise.all([

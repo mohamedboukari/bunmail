@@ -102,6 +102,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `variables`  | object | No       | Key-value pairs for template rendering (max 100 entries, values max 100 KB; the rendered body is capped at 5 MB and the subject at 500 characters, else `422 TEMPLATE_OUTPUT_TOO_LARGE`) |
 | `headers`    | object | No       | Custom headers, name to value (#177), e.g. `{"X-Correlation-Id": "abc", "In-Reply-To": "<parent@example.com>"}`. Rules below. Returned as `headers` on email responses (`null` when unset). |
 | `category`   | string | No       | `transactional` or `marketing` (#250). Rules below. Returned as `category` on email responses (`null` when unset). |
+| `tags`       | object | No       | Labels, key to value (#189), e.g. `{"flow": "password-reset", "tenant": "t_42"}`, for filtering the list (`?tag=key:value`) and routing webhooks. Never sent to the recipient. Rules below. Returned as `tags` on email responses (`null` when unset). |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
@@ -118,6 +119,15 @@ Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 - `transactional`: sent without `List-Unsubscribe` and `List-Unsubscribe-Post`. For receipts, password resets, alerts.
 - `marketing`: must carry the per-recipient one-click unsubscribe link (#249), so it needs exactly one recipient (no `cc`, no `bcc`) and an `https://` `APP_BASE_URL` without a query. Otherwise `422 MARKETING_REQUIRES_ONE_CLICK`, and nothing is queued.
 - Unset: as before, `List-Unsubscribe` as the domain settings and the recipient count allow. Any other value is `422 VALIDATION_ERROR`.
+
+**Tags** (`tags`, #189):
+
+- **At most 10 tags.**
+- **Key:** 1 to 40 characters of `A-Z`, `a-z`, `0-9`, `_` and `-`. Keys are compared ignoring case: `Flow` and `flow` together are a duplicate and refused.
+- **Value:** a string of 1 to 256 characters after trimming (the trimmed value is stored), in any script. Refused: control characters (CR, LF, NUL and tab included), the Unicode line and paragraph separators, the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) and lone surrogates.
+- Template sends take tags too. `{}` is the same as no tags.
+
+A refused tag is `422 VALIDATION_ERROR` with `details[].path` `/tags/<key>` (or `/tags` when the key itself is invalid, or there are more than 10); the message names the key only when it is valid and never echoes the value, and nothing is queued. Tags may hold your own identifiers (a customer or tenant id): BunMail logs tag keys only, never values.
 
 **Custom headers** (`headers`, #177): application headers (`X-*`) and threading headers (`In-Reply-To`, `References`). Header injection is blocked, and BunMail's own headers cannot be overridden:
 
@@ -143,6 +153,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
     "status": "queued",
     "source": "api",
     "category": "transactional",
+    "tags": { "flow": "welcome" },
     "attempts": 0,
     "nextAttemptAt": "2026-03-15T12:00:00.000Z",
     "createdAt": "2026-03-15T12:00:00.000Z",
@@ -154,7 +165,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 
 `warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
 
-**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), `422 ATTACHMENTS_NOT_SUPPORTED` (the body has an `attachments` property, #250), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
+**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), `422 ATTACHMENTS_NOT_SUPPORTED` (the body has an `attachments` property, #250), `422 VALIDATION_ERROR` (also for an invalid `fromName` or tag, with the field or `/tags/<key>` in `details`), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
 **Idempotency keys** (#188). Send an optional `Idempotency-Key` request header (the convention of [draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/), as Stripe and Resend use it) to make a send safe to retry after a timeout or a 5xx:
 
@@ -166,7 +177,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 - **Lifetime:** a key is remembered for `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, 1 to 168) from its first use; after that it is reusable and a request with it sends again. The purge worker deletes expired keys.
 - **Failed requests store nothing:** a send refused for any reason (validation, suppression, unauthorized sender, rate limit, unregistered domain, a server error) leaves no trace, so retrying with the same key after fixing the cause sends the email.
 - **Concurrent duplicates:** parallel requests with the same key create exactly one email; one gets the fresh response, the others wait for it to commit and get the replay. None fails with a 500.
-- **Replays keep working after the email is gone:** the stored response is a snapshot of the email as it was queued (not its delivery status now; read that with `GET /api/v1/emails/:id`). It holds no message content: a replay fills `subject`, `html`, `text` and `headers` from the email while it exists and is not in trash; after the email is trashed or purged, the replay returns the original ids and status with those four fields `null`. `fromName` and `category` are kept in the snapshot: they label the send, they are not message content (#250).
+- **Replays keep working after the email is gone:** the stored response is a snapshot of the email as it was queued (not its delivery status now; read that with `GET /api/v1/emails/:id`). It holds no message content: a replay fills `subject`, `html`, `text` and `headers` from the email while it exists and is not in trash; after the email is trashed or purged, the replay returns the original ids and status with those four fields `null`. `fromName`, `category` (#250) and `tags` (#189) are kept in the snapshot: they label the send, they are not message content.
 - **Rate limit:** a replay is still a request and counts toward the per-key rate limit.
 - **REST only:** the SMTP submission server has no idempotency keys.
 
@@ -232,6 +243,9 @@ List emails for the authenticated API key with pagination.
 | `limit`  | number | 20      | Items per page (1-100)                       |
 | `status` | string | none    | Filter: `queued`, `sending`, `sent`, `failed`, `bounced` |
 | `source` | string | none    | Filter by ingress channel: `api` or `smtp` (#137) |
+| `tag`    | string | none    | Filter by tag, `key:value` (#189). Repeatable, at most 10: every tag must match |
+
+**Tag filter** (#189): `?tag=flow:password-reset` lists the emails carrying that tag; `?tag=flow:password-reset&tag=tenant:t_42` the ones carrying both (AND). The parameter is split on the **first** `:`, so a value may contain `:` (and `,`): `?tag=link:https://example.com:8443/a` matches the value `https://example.com:8443/a`. Matching is exact (no prefix or case folding). Key and value follow the send rules above; the value is trimmed. It composes with `status`, `source` and pagination (`pagination.total` counts the filtered set). A filter without `:`, with an invalid key or value, or more than 10 filters is `422 VALIDATION_ERROR` with `details[].path` `/tag`. The filter uses the GIN index `idx_emails_tags`. The trash list does not take it.
 
 ---
 

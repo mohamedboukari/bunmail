@@ -609,6 +609,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | status        | varchar(20)    | NOT NULL, default `'queued'`    |
 | source        | varchar(10)    | NOT NULL, default `'api'` (`api`\|`smtp`, #137) |
 | category      | varchar(20)    | nullable: `transactional` (no `List-Unsubscribe`) \| `marketing` (one-click required) (#250) |
+| tags          | jsonb          | nullable: caller labels, key to value, at most 10 (#189); filtered with `?tag=key:value`, carried by `email.*` webhooks |
 | attempts      | integer        | NOT NULL, default `0`           |
 | next_attempt_at | timestamptz  | NOT NULL, default `now()`: retry backoff (#180) |
 | locked_by     | varchar(64)    | nullable: worker holding a `sending` row (#180) |
@@ -621,7 +622,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | updated_at    | timestamp      | NOT NULL, default `now()`       |
 | deleted_at    | timestamp      | nullable (soft-delete marker)   |
 
-Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180), `(message_id)` (linking inbound replies, bounces and complaints to the email by Message-ID, #192).
+Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180), `(message_id)` (linking inbound replies, bounces and complaints to the email by Message-ID, #192), `idx_emails_tags` GIN on `tags` with `jsonb_path_ops` (the tag filter's containment, #189).
 
 `domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
@@ -930,7 +931,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | Method | Path                                | Description                                | Auth |
 |--------|-------------------------------------|--------------------------------------------|------|
 | POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188) | Yes  |
-| GET    | /api/v1/emails                      | List sent emails (excludes trash)          | Yes  |
+| GET    | /api/v1/emails                      | List sent emails (excludes trash); `status`, `source` and repeatable `tag=key:value` filters | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
 | GET    | /api/v1/emails/:id                  | Get email by ID, with its per-MX `deliveryState` (#250) | Yes  |
 | DELETE | /api/v1/emails/:id                  | Move email to trash                        | Yes  |

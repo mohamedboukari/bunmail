@@ -5,6 +5,7 @@ import {
   selectRelayHeaders,
   submissionCategory,
   submissionFromName,
+  submissionTags,
 } from "../../src/modules/smtp-submission/message-mapper.ts";
 import { SubmissionRejectedError } from "../../src/modules/smtp-submission/errors.ts";
 import type { FromNameProblem } from "../../src/modules/emails/services/from-name.ts";
@@ -347,5 +348,82 @@ describe("submissionCategory (#250)", () => {
     });
     expect(input.fromName).toBe("Acme");
     expect(input.category).toBe("transactional");
+  });
+});
+
+describe("submissionTags (#189)", () => {
+  /** A raw header line as mailparser gives it. */
+  const line = (name: string, value: string) => ({
+    key: name.toLowerCase(),
+    line: `${name}: ${value}`,
+  });
+
+  test("absent: none", () => {
+    expect(submissionTags([line("Subject", "hi")])).toBeUndefined();
+  });
+
+  test("one tag per header, name case-insensitive, split on the first =", () => {
+    expect(
+      submissionTags([
+        line("X-BunMail-Tag", "flow=reset"),
+        line("x-bunmail-tag", "query=a=b"),
+        line("X-BUNMAIL-TAG", " tenant = t_42 "),
+      ]),
+    ).toEqual({ flow: "reset", query: "a=b", tenant: "t_42" });
+  });
+
+  test("a folded header is unfolded", () => {
+    expect(
+      submissionTags([{ key: "x-bunmail-tag", line: "X-BunMail-Tag: flow=\r\n reset" }]),
+    ).toEqual({ flow: "reset" });
+  });
+
+  test("a header without = is refused", () => {
+    expect(() => submissionTags([line("X-BunMail-Tag", "flow")])).toThrow(
+      SubmissionRejectedError,
+    );
+  });
+
+  test("the same key twice (ignoring case) is refused", () => {
+    expect(() =>
+      submissionTags([line("X-BunMail-Tag", "flow=a"), line("X-BunMail-Tag", "Flow=b")]),
+    ).toThrow(/more than once/);
+  });
+
+  test("more than 10 tags is refused", () => {
+    const lines = Array.from({ length: 11 }, (_, i) => line("X-BunMail-Tag", `k${i}=v`));
+    expect(submissionTags(lines.slice(0, 10))).toBeDefined();
+    expect(() => submissionTags(lines)).toThrow(/at most 10/);
+  });
+
+  test("an invalid value is refused, naming the key but not the value", () => {
+    let message = "";
+    try {
+      submissionTags([line("X-BunMail-Tag", "flow=sec\u202eret")]);
+    } catch (error) {
+      if (error instanceof SubmissionRejectedError) message = error.message;
+    }
+    expect(message).toContain("flow");
+    expect(message).not.toContain("sec");
+  });
+
+  test("the header is consumed: never relayed, never reported as dropped", () => {
+    const { headers, dropped } = selectRelayHeaders([
+      line("X-BunMail-Tag", "flow=reset"),
+      line("X-Foo", "bar"),
+    ]);
+    expect(headers).toEqual({ "X-Foo": "bar" });
+    expect(dropped).toEqual([]);
+  });
+
+  test("buildSubmissionInput carries the tags", () => {
+    const input = buildSubmissionInput({
+      fromHeader: "a@example.com",
+      toHeader: ["b@example.org"],
+      ccHeader: [],
+      envelopeRecipients: ["b@example.org"],
+      tags: { flow: "reset" },
+    });
+    expect(input.tags).toEqual({ flow: "reset" });
   });
 });

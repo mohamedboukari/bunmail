@@ -195,6 +195,8 @@ export const seed = {
     subject?: string;
     status?: "queued" | "sending" | "sent" | "failed" | "bounced";
     messageId?: string | null;
+    /** Tags (#189); null (default) = none. */
+    tags?: Record<string, string> | null;
   }): Promise<{ id: string }> {
     const id = generateId("msg");
     await db.insert(emails).values({
@@ -210,6 +212,7 @@ export const seed = {
       textContent: "test",
       status: opts.status ?? "queued",
       messageId: opts.messageId ?? null,
+      tags: opts.tags ?? null,
     });
     return { id };
   },

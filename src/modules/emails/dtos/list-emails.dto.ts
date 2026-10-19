@@ -27,4 +27,17 @@ export const listEmailsDto = t.Object({
 
   /** Optional filter: only return emails from this ingress channel (#137) */
   source: t.Optional(t.Union([t.Literal("api"), t.Literal("smtp")])),
+
+  /**
+   * Optional tag filter (#189), `key:value`, repeatable (all must match).
+   * Declared for the OpenAPI document only: Elysia splits repeated and
+   * comma-separated values, so the route reads every `tag` from the raw
+   * query string instead and checks it with `parseTagFilters`.
+   */
+  tag: t.Optional(
+    t.String({
+      description:
+        "Only emails carrying this tag, as key:value (split on the first colon, so the value may contain colons). Repeat the parameter to require several tags (all must match), at most 10. An invalid filter is 422 VALIDATION_ERROR.",
+    }),
+  ),
 });

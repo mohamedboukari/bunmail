@@ -24,6 +24,7 @@ import {
   buildSubmissionInput,
   selectRelayHeaders,
   submissionCategory,
+  submissionTags,
   submissionFromName,
 } from "../message-mapper.ts";
 import { SubmissionRejectedError } from "../errors.ts";
@@ -536,6 +537,12 @@ export function start(portOverride?: number): void {
                 const category = submissionCategory(parsed.headerLines);
 
                 /**
+                 * `X-BunMail-Tag: key=value` (#189): consumed here, never
+                 * relayed; an invalid tag or more than 10 is refused (550).
+                 */
+                const tags = submissionTags(parsed.headerLines);
+
+                /**
                  * Display name of the `From:` header (#250), through the send
                  * API's rules. One that fails is dropped, not refused; the log
                  * names the field and the rule, never the value.
@@ -568,6 +575,7 @@ export function start(portOverride?: number): void {
                   headers: relayed.headers,
                   fromName: submittedName.fromName,
                   category,
+                  tags,
                 });
 
                 /**

@@ -91,6 +91,22 @@ export const sendEmailDto = t.Object({
   ),
 
   /**
+   * Labels (#189), key to value. Only the type and raw caps are checked
+   * here; the rules (at most 10, keys `^[A-Za-z0-9_-]{1,40}$` unique
+   * ignoring case, values of 1 to 256 characters after trimming with no
+   * control or bidi-control character) are applied by `createEmail`
+   * (`services/tags.ts`), which answers `422 VALIDATION_ERROR` naming
+   * the key, never the value.
+   */
+  tags: t.Optional(
+    t.Record(t.String({ maxLength: 100 }), t.String({ maxLength: 1024 }), {
+      maxProperties: 100,
+      description:
+        "Labels for filtering (GET /api/v1/emails?tag=key:value) and webhook routing, never sent to the recipient. At most 10; keys are 1 to 40 characters of A-Z a-z 0-9 _ - (unique ignoring case); values are 1 to 256 characters after trimming, without control or bidi-control characters (else 422 VALIDATION_ERROR).",
+    }),
+  ),
+
+  /**
    * Not supported (#250). Declared so the property reaches `createEmail`,
    * which refuses the send with `422 ATTACHMENTS_NOT_SUPPORTED` whatever
    * the value is (an empty array included), instead of queuing it without

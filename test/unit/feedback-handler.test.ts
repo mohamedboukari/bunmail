@@ -21,7 +21,12 @@ interface FakeTx {
 interface Calls {
   lookups: string[];
   complaints: Array<{ apiKeyId: string; email: string; emailId: string }>;
-  unsubscribes: Array<{ recipient: string; source: string; senderDomain: string }>;
+  unsubscribes: Array<{
+    recipient: string;
+    source: string;
+    senderDomain: string;
+    tags: Record<string, string> | null;
+  }>;
   events: Array<{ event: string; data: Record<string, unknown>; apiKeyId: string }>;
   dkimChecks: number;
   /** Every write, with the transaction it ran in (`null`: outside one). */
@@ -37,6 +42,7 @@ const EMAIL: LinkedEmail = {
   toAddress: "reader@example.org",
   cc: null,
   bcc: null,
+  tags: { flow: "reset" },
 };
 
 function makeDeps(opts: {
@@ -90,6 +96,7 @@ function makeDeps(opts: {
           recipient: target.recipient,
           source,
           senderDomain: target.senderDomain,
+          tags: target.tags,
         });
         return opts.unsubscribeCreated ?? true;
       },
@@ -166,6 +173,8 @@ describe("handleFeedbackReport", () => {
         feedbackType: "abuse",
         reporter: "Example-Feedback/1.0",
         arrivalDate: "2026-10-19T10:00:00.000Z",
+        /** The email's tags ride along (#189). */
+        tags: { flow: "reset" },
       },
     });
     expect(typeof calls.events[0]?.data["receivedAt"]).toBe("string");
@@ -272,7 +281,12 @@ describe("handleFeedbackReport", () => {
     );
     expect(result.outcome).toBe("unsubscribed");
     expect(calls.unsubscribes).toEqual([
-      { recipient: "reader@example.org", source: "fbl", senderDomain: "example.com" },
+      {
+        recipient: "reader@example.org",
+        source: "fbl",
+        senderDomain: "example.com",
+        tags: { flow: "reset" },
+      },
     ]);
     expect(calls.complaints).toHaveLength(0);
     expect(calls.events).toHaveLength(0);

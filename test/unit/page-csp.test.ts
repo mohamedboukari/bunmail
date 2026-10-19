@@ -46,6 +46,7 @@ const email = {
   source: "api",
   fromName: null,
   category: null,
+  tags: null,
   attempts: 1,
   nextAttemptAt: now,
   lockedBy: null,

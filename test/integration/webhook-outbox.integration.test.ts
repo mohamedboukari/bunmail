@@ -331,6 +331,7 @@ const CASES: Case[] = [
           apiKeyId: ctx.apiKeyId,
           recipient: RECIPIENT,
           senderDomain: "example.com",
+          tags: null,
         },
         "one_click",
       );

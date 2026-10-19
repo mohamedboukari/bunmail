@@ -21,12 +21,20 @@ import {
   type DroppedHeader,
 } from "../emails/services/custom-headers.ts";
 import { checkFromName, type FromNameProblem } from "../emails/services/from-name.ts";
+import { checkTags, describeTagProblem } from "../emails/services/tags.ts";
 
 /**
  * The header a submitting client sets the send category with (#250),
  * lowercase. Consumed by BunMail and never relayed.
  */
 export const CATEGORY_HEADER = "x-bunmail-category";
+
+/**
+ * The header a submitting client adds a tag with (#189), lowercase, as
+ * `X-BunMail-Tag: key=value`, once per tag. Consumed by BunMail and never
+ * relayed.
+ */
+const TAG_HEADER = "x-bunmail-tag";
 
 /**
  * De-duplicates a list of addresses (case-insensitive, first-occurrence
@@ -71,6 +79,8 @@ export interface SubmissionMessageParts {
   fromName?: string;
   /** Category from `X-BunMail-Category`, from {@link submissionCategory} (#250). */
   category?: EmailCategory;
+  /** Tags from `X-BunMail-Tag`, from {@link submissionTags} (#189). */
+  tags?: Record<string, string>;
 }
 
 /**
@@ -123,6 +133,42 @@ export function submissionCategory(
   return value;
 }
 
+/**
+ * The tags a submitted message asks for (#189): one `X-BunMail-Tag:
+ * key=value` header per tag (name case-insensitive, split on the first
+ * `=`, so a value may contain `=`), checked by the send API's rules
+ * (`emails/services/tags.ts`). Values are taken as written, without
+ * RFC 2047 decoding. A header without `=`, a tag that breaks a rule, the
+ * same key twice (ignoring case) or more than 10 tags is refused (the
+ * caller answers 550): mail filed under the wrong labels is worse than a
+ * clear rejection. The refusal names the key only when it is valid,
+ * never the value. Absent: none.
+ */
+export function submissionTags(
+  lines: readonly RawHeaderLine[],
+): Record<string, string> | undefined {
+  const entries: [string, string][] = [];
+  for (const { key, line } of lines) {
+    if (key.toLowerCase() !== TAG_HEADER) continue;
+    /** Unfolded as RFC 5322 says (as `X-BunMail-Category` is), then trimmed. */
+    const value = line
+      .slice(line.indexOf(":") + 1)
+      .replace(/\r?\n(?=[ \t])/g, "")
+      .trim();
+    const equals = value.indexOf("=");
+    if (equals < 0) {
+      throw new SubmissionRejectedError("X-BunMail-Tag must be key=value");
+    }
+    entries.push([value.slice(0, equals).trim(), value.slice(equals + 1)]);
+  }
+  if (entries.length === 0) return undefined;
+  const checked = checkTags(entries);
+  if (!checked.ok) {
+    throw new SubmissionRejectedError(describeTagProblem(checked, "X-BunMail-Tag"));
+  }
+  return checked.tags;
+}
+
 /** One raw header line of a parsed message (mailparser's `headerLines`). */
 interface RawHeaderLine {
   /** Header name, lowercase. */
@@ -164,8 +210,14 @@ export function selectRelayHeaders(lines: readonly RawHeaderLine[]): {
 } {
   const entries: [string, string][] = [];
   for (const { key, line } of lines) {
-    /** `X-BunMail-Category` is BunMail's own instruction (#250): consumed, never relayed. */
-    if (key.toLowerCase() === CATEGORY_HEADER) continue;
+    /**
+     * `X-BunMail-Category` (#250) and `X-BunMail-Tag` (#189) are BunMail's
+     * own instructions: consumed, never relayed, and not reported as
+     * dropped (a tag's value must not reach the log).
+     */
+    if (key.toLowerCase() === CATEGORY_HEADER || key.toLowerCase() === TAG_HEADER) {
+      continue;
+    }
     if (!isRelayCandidate(key.toLowerCase())) continue;
     const colon = line.indexOf(":");
     if (colon < 0) continue;
@@ -282,5 +334,6 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     headers: parts.headers,
     fromName: parts.fromName,
     category: parts.category,
+    tags: parts.tags,
   };
 }

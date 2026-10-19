@@ -114,10 +114,13 @@ Events are scoped to the API key that owns the webhook:
     "from": "hello@example.com",
     "to": "user@example.com",
     "subject": "Welcome!",
-    "messageId": "<abc@mx.gmail.com>"
+    "messageId": "<abc@mx.gmail.com>",
+    "tags": { "flow": "welcome" }
   }
 }
 ```
+
+**`tags`** (#189): every `email.*` event built from an email row (`email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
 
 `email.bounced`:
 

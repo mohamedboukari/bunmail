@@ -24,6 +24,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `status`        | varchar(20)    | NOT NULL, default queued | `queued` → `sending` → `sent` / `failed`. `sent` rows can later transition to `bounced` when a DSN comes back (#24). |
 | `source`        | varchar(10)    | NOT NULL, default `api` | Ingress channel: `api` (REST `POST /api/v1/emails/send`) or `smtp` (SMTP submission server, #120). Existing rows backfill to `api` (#137). |
 | `category`      | varchar(20)    | nullable                | `transactional` or `marketing`, as set on the send (#250); null keeps the default `List-Unsubscribe` behaviour. See [Category](#category-250). |
+| `tags`          | jsonb          | nullable                | Labels set on the send (#189), key to value, stored as a jsonb object; null when none. At most 10, keys `^[A-Za-z0-9_-]{1,40}$` unique ignoring case, values 1 to 256 characters. See [Tags](#tags-189). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
@@ -48,6 +49,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_due_per_key` (`(api_key_id, next_attempt_at, created_at)` WHERE `status = 'queued' AND deleted_at IS NULL`) fair queue claim of each key's due rows (#258, replaces `idx_emails_due` of #180)
 - `idx_emails_lease` (`(lease_until)` WHERE `status = 'sending'`) reclaim of expired leases (#180)
 - `idx_emails_message_id` (`(message_id)`) Message-ID lookups: linking an inbound reply to the email it answers (#192), and the bounce and complaint joins
+- `idx_emails_tags` (GIN on `tags` with `jsonb_path_ops`) the tag filter's `tags @> jsonb_build_object(key, value)` containment (#189)
 
 **Table:** `idempotency_keys` (#188)
 
@@ -87,6 +89,7 @@ src/modules/emails/
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── from-name.ts                ← Pure display-name rules shared by REST and SMTP submission (#250)
+│   ├── tags.ts                     ← Pure tag and tag-filter rules shared by REST, SMTP submission and the dashboard (#189)
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
 │   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing
@@ -170,6 +173,18 @@ The mailer composes the body once per send attempt (`composeMessageBody`, `servi
 Gmail and Yahoo require bulk senders to offer working one-click unsubscribe; refusing a `marketing` send that could not carry it is safer than sending it without. The check is `oneClickBlocker` (`services/list-unsubscribe.ts`), the same conditions under which the token is minted. Should `APP_BASE_URL` change before a queued marketing email is sent, it goes out with the static header and a `warn` (`Marketing email sent without a one-click unsubscribe link`).
 
 BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer.service.ts` also refuses it for any `autoSubmitted` message).
+
+## Tags (#189)
+
+`tags` on the send (REST and the dashboard's service call), or one `X-BunMail-Tag: key=value` header per tag on SMTP submission ([smtp-submission.md](smtp-submission.md#what-gets-relayed)), stored in `emails.tags`. They label the send for filtering and webhook routing ("what is the bounce rate on password resets?"); they are never sent to the recipient.
+
+**Rules** (`services/tags.ts`, applied by `createEmail` for every ingress and template sends included): at most 10; a key is 1 to 40 characters of `A-Z a-z 0-9 _ -`, unique ignoring case; a value is 1 to 256 characters (code points) after trimming, without control characters (C0, DEL, C1, so CR, LF, NUL and tab), the Unicode line and paragraph separators, the bidi controls (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or a lone surrogate. The trimmed values are stored; `{}` stores `NULL`. REST answers a refused tag with `422 VALIDATION_ERROR` (`InvalidTagError`, `details[].path` `/tags/<key>`, or `/tags` when the key is invalid or there are more than 10); SMTP submission with `550`. The message names a valid key, never a value.
+
+**Flow:** `createEmail` checks the tags with the other pure input rules, before any database work, and inserts them with the row; the serializer returns them as `tags`. The idempotency snapshot (#188) keeps them, since they are labels, not message content. The queue, bounce, complaint and unsubscribe paths copy `tags` into the `email.*` webhook payloads they build from the row ([webhooks.md](webhooks.md)).
+
+**Filter:** `GET /api/v1/emails?tag=key:value` (repeatable, at most 10, every tag must match) and the dashboard's tag input. `parseTagFilters` splits each on the first `:`, so a value may contain `:`, and checks key and value with the same rules (`checkTagFilters` in `email.service.ts` logs and throws `InvalidTagError`, path `/tag`). The REST route reads every `tag` from the raw query string, because Elysia's query parser splits array values on commas. Each filter becomes `emails.tags @> jsonb_build_object(${key}::text, ${value}::text)`, ANDed with the other filters, which the GIN index `idx_emails_tags` serves. The jsonb is built in SQL from text parameters: a stringified `::jsonb` parameter would be bound as a jsonb string by bun-sql and match nothing (#261, `src/db/jsonb.ts`).
+
+**Logging:** tag keys only (`tagKeys` on `Email created and queued` at `debug` and on the list lines, the key on a refusal), never values: tags may hold customer or tenant ids.
 
 ## Domain Linking
 
@@ -279,7 +294,7 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 **Reads (live)**
 
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
-Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) and `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+Creates an email record with status `queued` and returns `{ email, warnings }`. Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)) and `tags` (`InvalidTagError`, see [Tags](#tags-189)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `createEmailIdempotent(input, apiKeyId, idempotencyKey, buildResponse): Promise<IdempotentSendResult>`
 `createEmail` under an `Idempotency-Key` (#188, REST only). `buildResponse` turns the created email into the route's response (`{ status, body }`); it is stored with the key, without message content, in the same transaction. Returns `{ status, body, replayed }`; throws `IdempotencyKeyReusedError` for the same key with another body. See [Idempotency Keys](#idempotency-keys).
@@ -291,7 +306,10 @@ Retrieves a non-trashed email scoped to the requesting API key.
 Dashboard variant: no API-key scope. Excludes trashed.
 
 #### `listEmails(apiKeyId, filters): Promise<{ data, total }>` / `listAllEmails(filters)`
-Paginated listing with optional status filter. Trashed rows excluded.
+Paginated listing with optional status, source and tag filters (`filters.tags`, ANDed, #189); `listAllEmails` also takes the dashboard's `apiKeyId`. Trashed rows excluded.
+
+#### `checkTagFilters(raws, apiKeyId): TagFilter[]`
+Parses the raw `tag` query values of a list request (#189) with `parseTagFilters`; logs the refusal (key and rule) and throws `InvalidTagError` (path `/tag`) for a bad one.
 
 **Trash (scoped)**
 
@@ -374,6 +392,17 @@ What keeps an email from carrying the per-recipient one-click link (#250): more 
 
 #### `checkFromName(raw): { ok: true, name } | { ok: false, problem }`
 Applies the display-name rules (#250) and returns the trimmed name, or `empty`, `too_long` or `forbidden_character`. `describeFromNameProblem(problem)` gives the caller-facing message, which names the field only.
+
+### tags.ts
+
+#### `checkTags(entries): { ok: true, tags } | { ok: false, problem, key }`
+Applies the tag rules (#189) to `[key, value]` entries (so a repeated SMTP header is seen as a duplicate) and returns the tags with trimmed values, built with `Object.fromEntries`. `problem` is `too_many`, `invalid_key`, `duplicate_key`, `empty_value`, `value_too_long` or `forbidden_character`; `key` is `null` when the key itself is invalid.
+
+#### `parseTagFilters(raws): { ok: true, filters } | { ok: false, problem, key }`
+Parses `key:value` filters, split on the first `:` (`malformed` without one), each through the same rules, at most 10.
+
+#### `describeTagProblem(refusal, subject)`
+The caller-facing message: names a valid key, never the value.
 
 ### message-body.ts
 

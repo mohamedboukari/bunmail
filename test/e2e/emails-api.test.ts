@@ -135,6 +135,8 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   createEmail: createEmailMock,
   createEmailIdempotent: createEmailIdempotentMock,
   listEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
+  /** No `tag` filter in these requests (#189): the real parsing is unit-tested. */
+  checkTagFilters: mock(() => []),
   listAllEmails: mock(() => Promise.resolve({ data: [mockEmail], total: 1 })),
   getEmailById: mock((id: string) =>
     Promise.resolve(id === "msg_test123" ? mockEmail : undefined),

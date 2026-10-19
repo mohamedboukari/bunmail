@@ -10,7 +10,11 @@ import {
   UnauthorizedSenderError,
 } from "./modules/api-keys/errors.ts";
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
-import { EmailSendRejectedError, InvalidFromNameError } from "./modules/emails/errors.ts";
+import {
+  EmailSendRejectedError,
+  InvalidFromNameError,
+  InvalidTagError,
+} from "./modules/emails/errors.ts";
 import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
@@ -359,6 +363,17 @@ const app = new Elysia()
         error: "Request validation failed",
         code: error.code,
         details: [{ path: `/${error.field}`, message: error.message }],
+      };
+    }
+
+    /** An invalid tag or tag filter (#189): the same shape, naming the key only. */
+    if (error instanceof InvalidTagError) {
+      set.status = error.status;
+      return {
+        success: false,
+        error: "Request validation failed",
+        code: error.code,
+        details: [{ path: error.path, message: error.message }],
       };
     }
 

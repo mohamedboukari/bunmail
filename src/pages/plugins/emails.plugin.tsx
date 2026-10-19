@@ -4,6 +4,10 @@ import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
 import { isEmailStatus } from "../../modules/emails/types/email.types.ts";
 import { EmailSendRejectedError } from "../../modules/emails/errors.ts";
+import {
+  describeTagProblem,
+  parseTagFilters,
+} from "../../modules/emails/services/tags.ts";
 import { EmailsPage } from "../routes/emails.tsx";
 import { EmailTombstonesPage } from "../routes/email-tombstones.tsx";
 import { EmailsTrashPage } from "../routes/emails-trash.tsx";
@@ -188,20 +192,43 @@ export function emailPages(app: GuardedDashboard) {
           const source =
             query.source === "api" || query.source === "smtp" ? query.source : undefined;
           const apiKeyId = query.apiKeyId || undefined;
+          /**
+           * Tag filter (#189): one `key:value` from the text input. An
+           * invalid one lists nothing and says why, rather than silently
+           * listing everything. The log names the rule, never the value.
+           */
+          const tag = query.tag?.trim() || undefined;
+          const parsedTag = tag === undefined ? undefined : parseTagFilters([tag]);
+          if (parsedTag && !parsedTag.ok) {
+            logger.warn("Dashboard email list: invalid tag filter", {
+              userId: auth.user.id,
+              tag: parsedTag.key,
+              problem: parsedTag.problem,
+            });
+          }
 
           const [{ data, total }, keys] = await Promise.all([
-            emailService.listAllEmails({
-              page,
-              limit,
-              status,
-              source,
-              apiKeyId,
-            }),
+            parsedTag && !parsedTag.ok
+              ? { data: [], total: 0 }
+              : emailService.listAllEmails({
+                  page,
+                  limit,
+                  status,
+                  source,
+                  apiKeyId,
+                  tags: parsedTag?.filters,
+                }),
             /** Populate the API-key dropdown (#137): a member's own keys only (#219). */
             apiKeyService.listApiKeys(recordActorOf(auth)),
           ]);
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash =
+            parsedTag && !parsedTag.ok
+              ? {
+                  message: describeTagProblem(parsedTag, "Tag filter"),
+                  type: "error" as const,
+                }
+              : toFlash(query.flash, query.flashType);
 
           return (
             <EmailsPage
@@ -212,6 +239,7 @@ export function emailPages(app: GuardedDashboard) {
               status={status}
               source={source}
               apiKeyId={apiKeyId}
+              tag={tag}
               apiKeys={keys.map((k) => ({
                 id: k.id,
                 name: k.name,
@@ -229,6 +257,8 @@ export function emailPages(app: GuardedDashboard) {
             status: t.Optional(t.String()),
             source: t.Optional(t.String()),
             apiKeyId: t.Optional(t.String()),
+            /** Tag filter (#189), `key:value`. */
+            tag: t.Optional(t.String()),
             flash: t.Optional(t.String()),
             flashType: t.Optional(t.String()),
           }),

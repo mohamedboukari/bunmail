@@ -98,14 +98,31 @@ export const emailsPlugin = new Elysia({
 
   .get(
     "/",
-    async ({ query, apiKeyId }) => {
-      logger.info("GET /api/v1/emails", { apiKeyId, ...query });
+    async ({ query, apiKeyId, request }) => {
+      /**
+       * Every `tag` filter (#189), read from the raw query string: Elysia
+       * would split a value on its commas. Checked before anything else.
+       */
+      const tags = emailService.checkTagFilters(
+        new URL(request.url).searchParams.getAll("tag"),
+        apiKeyId,
+      );
+      /** Tag keys only: the values may hold customer ids. */
+      logger.info("GET /api/v1/emails", {
+        apiKeyId,
+        page: query.page,
+        limit: query.limit,
+        status: query.status,
+        source: query.source,
+        tagKeys: tags.map((tag) => tag.key),
+      });
 
       const { data, total } = await emailService.listEmails(apiKeyId, {
         page: query.page ?? 1,
         limit: query.limit ?? 20,
         status: query.status,
         source: query.source,
+        tags,
       });
 
       return {
@@ -124,7 +141,7 @@ export const emailsPlugin = new Elysia({
         tags: ["Emails"],
         summary: "List emails",
         description:
-          "Returns a paginated list of emails for the current API key. Supports optional status filter.",
+          "Returns a paginated list of emails for the current API key. Supports optional status, source and tag filters; `tag=key:value` may repeat, and every tag must match.",
         security: [{ bearerAuth: [] }],
       },
     },

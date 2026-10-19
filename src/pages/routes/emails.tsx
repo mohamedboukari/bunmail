@@ -24,6 +24,8 @@ interface EmailsPageProps {
   source?: string;
   /** Currently active API-key filter (undefined = "all keys") (#137) */
   apiKeyId?: string;
+  /** Currently active tag filter, `key:value` (undefined = none) (#189) */
+  tag?: string;
   /** API keys for the filter dropdown (operator/cross-key view) (#137) */
   apiKeys?: { id: string; name: string; keyPrefix: string }[];
   /** Optional flash message shown after redirect (e.g. "Email moved to trash") */
@@ -36,7 +38,7 @@ interface EmailsPageProps {
  * status tabs, the two dropdowns, and pagination composable.
  */
 function emailsUrl(
-  current: { status?: string; source?: string; apiKeyId?: string },
+  current: { status?: string; source?: string; apiKeyId?: string; tag?: string },
   override: { status?: string | null; source?: string | null; apiKeyId?: string | null },
 ): string {
   const merged = { ...current, ...override };
@@ -44,6 +46,7 @@ function emailsUrl(
   if (merged.status) params.set("status", merged.status);
   if (merged.source) params.set("source", merged.source);
   if (merged.apiKeyId) params.set("apiKeyId", merged.apiKeyId);
+  if (merged.tag) params.set("tag", merged.tag);
   const qs = params.toString();
   return qs ? `/dashboard/emails?${qs}` : "/dashboard/emails";
 }
@@ -77,6 +80,7 @@ export function EmailsPage({
   status,
   source,
   apiKeyId,
+  tag,
   apiKeys = [],
   flash,
 }: EmailsPageProps) {
@@ -91,7 +95,7 @@ export function EmailsPage({
   ];
 
   /** Current filter state: used to build filter-preserving links. */
-  const activeFilters = { status, source, apiKeyId };
+  const activeFilters = { status, source, apiKeyId, tag };
 
   return (
     <BaseLayout title="Emails" activeNav="emails">
@@ -184,6 +188,29 @@ export function EmailsPage({
               ))}
             </select>
           </label>
+
+          {/* Tag filter (#189): a GET form that keeps the other filters. */}
+          <form method="GET" action="/dashboard/emails" class="flex items-center gap-1.5">
+            {!!status && <input type="hidden" name="status" value={status} />}
+            {!!source && <input type="hidden" name="source" value={source} />}
+            {!!apiKeyId && <input type="hidden" name="apiKeyId" value={apiKeyId} />}
+            <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
+              Tag
+              <input
+                type="text"
+                name="tag"
+                value={tag ?? ""}
+                placeholder="key:value"
+                class="w-40 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-sm"
+              />
+            </label>
+            <button
+              type="submit"
+              class="px-2 py-1 text-sm font-medium rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              Filter
+            </button>
+          </form>
         </div>
       </div>
 
@@ -338,6 +365,7 @@ export function EmailsPage({
                 status ? `status=${encodeURIComponent(status)}` : "",
                 source ? `source=${encodeURIComponent(source)}` : "",
                 apiKeyId ? `apiKeyId=${encodeURIComponent(apiKeyId)}` : "",
+                tag ? `tag=${encodeURIComponent(tag)}` : "",
               ]
                 .filter(Boolean)
                 .join("&") || undefined

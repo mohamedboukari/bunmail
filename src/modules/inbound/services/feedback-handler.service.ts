@@ -20,7 +20,7 @@
 import { eq } from "drizzle-orm";
 import { dkimVerify } from "mailauth/lib/dkim/verify";
 import { db, type Tx } from "../../../db/index.ts";
-import { emails } from "../../emails/models/email.schema.ts";
+import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
 import { addFromComplaint } from "../../suppressions/services/suppression.service.ts";
 import {
   unsubscribe,
@@ -59,6 +59,8 @@ export interface LinkedEmail {
   toAddress: string;
   cc: string | null;
   bcc: string | null;
+  /** The email's tags (#189), carried by `email.complained`; null when none. */
+  tags: EmailTags | null;
 }
 
 /** DKIM verdict on the report itself, for the log line only. */
@@ -209,6 +211,7 @@ export async function handleFeedbackReport<T>(
         apiKeyId: original.apiKeyId,
         recipient,
         senderDomain: original.fromAddress.split("@")[1]?.trim().toLowerCase() ?? "",
+        tags: original.tags,
       },
       "fbl",
     );
@@ -230,6 +233,7 @@ export async function handleFeedbackReport<T>(
     reporter: reporterOf(report),
     arrivalDate: report.arrivalDate?.toISOString() ?? null,
     receivedAt: new Date().toISOString(),
+    tags: original.tags,
   };
 
   if (recipient === null) {
@@ -313,6 +317,7 @@ async function findEmailByMessageId(messageId: string): Promise<LinkedEmail | un
     toAddress: emails.toAddress,
     cc: emails.cc,
     bcc: emails.bcc,
+    tags: emails.tags,
   };
   for (const candidate of [`<${messageId}>`, messageId]) {
     const [row] = await db

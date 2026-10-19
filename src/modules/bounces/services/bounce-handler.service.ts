@@ -26,7 +26,7 @@
 
 import { and, eq, inArray } from "drizzle-orm";
 import { db, type Tx } from "../../../db/index.ts";
-import { emails } from "../../emails/models/email.schema.ts";
+import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
 import {
   addFromBounce,
   findActiveSuppression,
@@ -49,6 +49,8 @@ const MAX_POLICY_ERROR_LENGTH = 1000;
 export interface OriginalEmail {
   id: string;
   apiKeyId: string;
+  /** The email's tags (#189), carried by the events it raises; null when none. */
+  tags: EmailTags | null;
 }
 
 /**
@@ -85,6 +87,7 @@ export async function resolveReturnPath(
       toAddress: emails.toAddress,
       cc: emails.cc,
       bcc: emails.bcc,
+      tags: emails.tags,
     })
     .from(emails)
     .where(eq(emails.id, parsed.emailId))
@@ -100,7 +103,7 @@ export async function resolveReturnPath(
   const senderDomain = row.fromAddress.slice(row.fromAddress.lastIndexOf("@") + 1);
   if (senderDomain.trim().toLowerCase() !== parsed.domain) return null;
 
-  return { email: { id: row.id, apiKeyId: row.apiKeyId }, recipient };
+  return { email: { id: row.id, apiKeyId: row.apiKeyId, tags: row.tags }, recipient };
 }
 
 /**
@@ -231,6 +234,7 @@ async function handlePolicyBounce<T>(
           error: lastError,
           /** The receiver refused the sender (#246), not the recipient. */
           blocked: true,
+          tags: original.tags,
         },
         { apiKeyId: original.apiKeyId },
       );
@@ -347,6 +351,7 @@ export async function handleBounce<T>(
           status: parsed.status,
           diagnostic: parsed.diagnostic ?? null,
           suppressionId: filed.suppressionId,
+          tags: original.tags,
         },
         { apiKeyId: original.apiKeyId },
       );
