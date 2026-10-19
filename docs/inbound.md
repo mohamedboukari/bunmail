@@ -58,6 +58,7 @@ src/modules/inbound/
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
+│   ├── notify-throttle.ts           ← Notification budgets: 5 per address, 30 per domain, per 10 min (#250)
 │   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
 │   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
@@ -169,17 +170,20 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 
 Unsubscribe requests, mail to return paths, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
+The `info` line logged for a stored message (`Inbound email received and stored`) carries its id, the redacted sender and recipient and the size in bytes, never the subject or body text (#250); only the subject's length is logged, at `debug`.
+
 ## Inbound Notifications (#106)
 
 A domain can opt in to email notifications by setting its `notify_email`
 (per domain: from the dashboard's domain detail page, or the `notifyEmail`
 field on `POST /api/v1/domains`). When mail is received for that domain,
-BunMail sends a short "you have new mail" summary (sender, subject, a ~200-char
-preview, and a dashboard link when `APP_BASE_URL` is set) to the notify address.
+BunMail sends a short "you have new mail" email to the notify address.
 
 - The notification is sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<recipient
   domain>` (default `notifications@<domain>`) and DKIM-signed with that
-  domain's own key: same SPF/DKIM as outbound.
+  domain's own key: same SPF/DKIM as outbound. It carries
+  `Auto-Submitted: auto-generated` and `X-Auto-Response-Suppress: All`, so
+  auto-responders do not answer it (#250).
 - It is sent fire-and-forget after the inbound row is stored, so it never
   delays the SMTP acknowledgement.
 - **Loop guard:** mail whose sender domain is itself a registered BunMail
@@ -188,15 +192,62 @@ preview, and a dashboard link when `APP_BASE_URL` is set) to the notify address.
 - **Kill switch:** `INBOUND_NOTIFY_ENABLED=false` disables all inbound
   notifications regardless of per-domain settings.
 
-> **Limitations (v1).** The inbound path does **not** verify SPF/DKIM/DMARC
-> on received mail today, so a notification relays the (unauthenticated)
-> sender, subject, and body preview of whatever was accepted: treat the
-> notification's contents as untrusted, exactly like the inbox itself. The
-> HTML part is escaped (no script injection), and the From/Subject are set
-> via Nodemailer (no header injection). Notification volume is bounded only
-> by the SMTP per-IP connection rate limit: there is no per-`notify_email`
-> throttle/digest yet. Inbound sender authentication and a per-address rate
-> cap are tracked as follow-ups on #106.
+### What a notification contains (#250)
+
+Because the operator's own domain signs it, a notification does not relay
+the inbound message's content by default. Plain text only, no HTML part:
+
+- **Subject:** always `New email for <recipient address>`, never the
+  inbound subject.
+- **Body:** the recipient address, who it is from (the sender address, as
+  plain text), when it arrived, its size and, when `APP_BASE_URL` is set,
+  the link to view it in the dashboard.
+- **`INBOUND_NOTIFY_PREVIEW=true`** (default `false`, strict `true`/`false`)
+  adds the original subject and a preview of up to 200 characters to the
+  body, never to the subject line. Both are flattened to one line (CR/LF and
+  other control characters removed) and every `http://`, `https://` and
+  `www.` link is replaced by `[link removed]`. The same link removal applies
+  to the sender and recipient addresses shown.
+
+### Automatic mail is not notified (#250)
+
+No notification is sent, and a `debug` line is logged, when the inbound
+message is itself automatic: `Auto-Submitted` with any value other than
+`no` (RFC 3834), `Precedence: bulk`, `junk` or `list`, an `X-Autoreply` or
+`X-Autorespond` header, or a null return path (`MAIL FROM:<>`). The message
+is still stored and still fires `email.received`.
+
+### Notification budgets (#250)
+
+Two fixed-window budgets apply (code constants in `notify-throttle.ts`), and
+a notification needs both:
+
+- each recipient address gets at most **5 notifications per 10 minutes**;
+- each recipient domain gets at most **30 notifications per 10 minutes**,
+  whatever the addresses, so a domain that accepts any local part cannot be
+  flooded through many addresses with a budget each.
+
+Later mail is stored as usual but not notified individually. The first
+message skipped in a window logs `Inbound notifications throttled for this
+address` or `Inbound notifications throttled for this domain` at `info`
+(once per window per address or per domain). A skipped message is counted
+against its address either way, and the next notification for that address
+adds "And N more emails since <time>". A message skipped by one budget does
+not use up the other. There is no timer that reports a count on its own:
+when no more mail arrives for the address, the count is dropped after a day
+(the dashboard still lists every message).
+
+The budgets live in memory: they are **per replica** (two replicas allow up
+to twice the budgets) and reset on restart.
+
+> **Limitations.** The inbound path does **not** verify SPF/DKIM/DMARC on
+> received mail today, so the sender address in a notification is whatever
+> the (unauthenticated) message claimed: treat it as untrusted, exactly like
+> the inbox itself. It is shown as plain text, links removed, but a mail
+> client may still turn an address or a bare domain name into a link. With
+> `INBOUND_NOTIFY_PREVIEW=true` the same holds for the subject and preview:
+> only `http://`, `https://` and `www.` links are removed, not bare domain
+> names. Inbound sender authentication is tracked as a follow-up on #106.
 
 See [docs/domains.md](domains.md#inbound-notifications-106) for the field and endpoints.
 
@@ -204,11 +255,39 @@ See [docs/domains.md](domains.md#inbound-notifications-106) for the field and en
 
 ### smtp-receiver.service.ts
 
-#### `start(): void`
-Starts the SMTP server on the configured port.
+#### `start(notifyDeps?): void`
+Starts the SMTP server on the configured port. `notifyDeps` (mailer, clock,
+notification throttle) default to the production ones; tests inject their own.
 
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
+
+### inbound-notify.service.ts (#106, #250)
+
+#### `notifyInboundReceived(input, deps?): Promise<void>`
+Sends the notification for every accepted recipient domain with a
+`notify_email`, after the automatic-mail check, the loop guard and the
+per-recipient throttle. Never throws.
+
+#### `buildInboundNotification(input): { subject, text }`
+Pure. Composes the plain-text notification described above.
+
+#### `automaticInboundReason(headerLines, returnPath): reason | null`
+Pure. Why a message counts as automatic (`null_return_path`,
+`auto_submitted`, `precedence`, `autoreply_header`), or `null`.
+
+#### `plainTextLine(value, maxChars): string`
+Pure. One line of untrusted text: control and bidi characters removed,
+links replaced by `[link removed]`, cut to `maxChars` code points. Reads a
+bounded prefix only.
+
+### notify-throttle.ts (#250)
+
+`NotifyThrottle.check(recipient, now)` decides whether a message is
+notified under both budgets (and returns the count skipped earlier for that
+address, to report), or which budget is spent; `prune(now)` runs from the
+receiver's existing 5-minute sweep. Built on the fixed-window
+`checkRateLimit` of `src/middleware/rate-limit-core.ts`.
 
 ### threading.ts (#192, pure)
 

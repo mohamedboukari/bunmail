@@ -127,9 +127,12 @@ inbound-notification address at create time (see below).
 
 Each domain can carry a `notify_email`. When BunMail's inbound SMTP receiver
 accepts a message for a recipient on that domain, it sends a short "you have
-new mail" summary email (sender, subject, preview, and, when `APP_BASE_URL`
-is configured: a dashboard link) to the notify address. The notification is
-sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default
+new mail" email (`New email for <recipient address>`: sender, arrival time,
+size and, when `APP_BASE_URL` is configured, a dashboard link; no subject or
+preview of the message unless `INBOUND_NOTIFY_PREVIEW=true`, #250) to the
+notify address. Automatic mail is not notified, each address gets at most
+5 notifications per 10 minutes and the domain at most 30 (see [inbound.md](inbound.md#what-a-notification-contains-250)).
+The notification is sent **from** `<INBOUND_NOTIFY_FROM_LOCAL>@<domain>` (default
 `notifications@<domain>`) and DKIM-signed with the domain's own key, so it
 passes the same SPF/DKIM you already set up for outbound.
 
