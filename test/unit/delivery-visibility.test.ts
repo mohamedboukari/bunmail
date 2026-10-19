@@ -64,6 +64,7 @@ describe("serializeDeliveryState", () => {
         failureCode: null,
         lastError: "421 4.7.0 Try again later",
         tls: null,
+        mtaSts: null,
         updatedAt: null,
       },
       {
@@ -75,6 +76,7 @@ describe("serializeDeliveryState", () => {
         failureCode: "5.1.1",
         lastError: "550 5.1.1 <alice@example.org>: user unknown",
         tls: "plaintext",
+        mtaSts: null,
         updatedAt: "2026-10-19T10:00:01.000Z",
       },
       {
@@ -86,6 +88,7 @@ describe("serializeDeliveryState", () => {
         failureCode: null,
         lastError: null,
         tls: "starttls",
+        mtaSts: null,
         updatedAt: "2026-10-19T10:00:00.000Z",
       },
       {
@@ -97,6 +100,7 @@ describe("serializeDeliveryState", () => {
         failureCode: null,
         lastError: "No MX records found for domain: nowhere.example",
         tls: null,
+        mtaSts: null,
         updatedAt: null,
       },
     ]);
@@ -124,6 +128,33 @@ describe("serializeDeliveryState", () => {
       [null, "frank@flaky.example", "retry"],
     ]);
     expect(JSON.stringify(entries)).not.toContain("domain");
+  });
+
+  test("the MTA-STS mode of an entry is exposed, null without one", () => {
+    const entries = serializeDeliveryState({
+      "example.org": {
+        status: "sent",
+        recipients: ["bob@example.org"],
+        attempts: 1,
+        domain: "example.org",
+        mxHost: "mx.example.org",
+        tls: "starttls",
+        mtaSts: "enforce",
+      },
+      "example.net": {
+        status: "sent",
+        recipients: ["dave@example.net"],
+        attempts: 1,
+        domain: "example.net",
+        mxHost: "mx.example.net",
+        tls: "starttls",
+        mtaSts: null,
+      },
+    });
+    expect(entries.map((e) => [e.mx, e.mtaSts])).toEqual([
+      ["mx.example.net", null],
+      ["mx.example.org", "enforce"],
+    ]);
   });
 
   test("never exposes internal keys or fields", () => {
@@ -233,6 +264,45 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
       isTrashed: false,
     });
     expect(html).toContain("Sent without TLS");
+  });
+
+  test("an entry under an MTA-STS policy carries a note next to TLS", async () => {
+    const html = await EmailDetailPage({
+      email: {
+        ...EMAIL,
+        deliveryState: {
+          "example.org": {
+            status: "sent",
+            recipients: ["bob@example.org"],
+            attempts: 1,
+            domain: "example.org",
+            mxHost: "mx.example.org",
+            tls: "starttls",
+            mtaSts: "enforce",
+          },
+          "example.net": {
+            status: "sent",
+            recipients: ["dave@example.net"],
+            attempts: 1,
+            domain: "example.net",
+            mxHost: "mx.example.net",
+            tls: "starttls",
+            mtaSts: "testing",
+          },
+        },
+      },
+      isTrashed: false,
+    });
+    expect(html).toContain("MTA-STS enforced");
+    expect(html).toContain("MTA-STS testing");
+  });
+
+  test("no MTA-STS note without a policy", async () => {
+    const html = await EmailDetailPage({
+      email: { ...EMAIL, deliveryState: HOSTILE },
+      isTrashed: false,
+    });
+    expect(html).not.toContain("MTA-STS");
   });
 
   test("no table before the first attempt", async () => {

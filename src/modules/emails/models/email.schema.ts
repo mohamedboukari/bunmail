@@ -70,6 +70,14 @@ export interface DeliveryGroup {
    * entries never attempted.
    */
   tls?: DeliveryTls | null;
+  /**
+   * The recipient domain's MTA-STS policy mode on the attempt behind this
+   * entry's latest outcome (#250): `enforce` (only matching MX hosts, over
+   * verified TLS), `testing` (delivered as without a policy, mismatches
+   * logged), or `null` (no policy, or mode `none`). Absent on entries
+   * written before.
+   */
+  mtaSts?: DeliveryMtaSts | null;
   /** ISO timestamp of this entry's latest outcome (#250). Absent on entries written before. */
   updatedAt?: string;
 }
@@ -80,6 +88,9 @@ export interface DeliveryGroup {
  * refused it). Opportunistic: plaintext is allowed, and now recorded.
  */
 export type DeliveryTls = "starttls" | "plaintext";
+
+/** MTA-STS policy mode an entry's latest attempt ran under (#250), see `mta-sts.ts`. */
+export type DeliveryMtaSts = "enforce" | "testing";
 
 /**
  * Shape of `emails.delivery_state`: a map keyed by recipient domain (or

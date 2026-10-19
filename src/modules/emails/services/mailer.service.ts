@@ -7,16 +7,28 @@ import { parseRecipients, groupByDomain } from "../../../utils/recipients.ts";
 import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
-import { runMxSession, type RejectedRecipient } from "./mx-transport.ts";
+import {
+  runMxSession,
+  type RejectedRecipient,
+  type VerifiedTls,
+} from "./mx-transport.ts";
 import {
   deliverWithFailover,
   resolveMxRoute,
   type MxRoute,
   type RoutedOutcome,
 } from "./mx-route.ts";
+import {
+  discoverMtaStsPolicy,
+  matchingMxHosts,
+  mtaStsCache,
+  mtaStsTrustAnchors,
+  type ActiveMtaStsPolicy,
+} from "./mta-sts.ts";
 import type {
   CustomHeaders,
   DeliveryGroup,
+  DeliveryMtaSts,
   DeliveryState,
 } from "../models/email.schema.ts";
 
@@ -124,6 +136,15 @@ export interface UnsubscribeOptions {
  * `retry`; no MX records means the implicit MX (the domain's own A/AAAA).
  * The group then goes to the hosts in preference order, failing over on
  * connection-level errors and `421` only ({@link deliverWithFailover}).
+ *
+ * **MTA-STS (#250):** each pending domain's policy is discovered alongside
+ * its MX set ({@link discoverMtaStsPolicy}). In `enforce` mode only the MX
+ * hosts the policy names are tried, over required and verified TLS; no
+ * matching host, or a TLS or certificate failure, leaves the group in
+ * `retry` (never a bounce), and the retry window gives the RFC's eventual
+ * failure. In `testing` mode the group is delivered as without a policy,
+ * and what enforce mode would have refused is logged once per policy.
+ * The mode is recorded on each entry (`mtaSts`).
  *
  * **Signed return paths (#236):** with `returnPath`, a pending group of
  * several recipients is split into one entry per recipient, and each is
@@ -240,14 +261,28 @@ export async function sendMail(options: {
     pendingByDomain.set(group.domain, keys);
   }
 
-  /** Each domain resolved once per attempt, in parallel, never cached (#250). */
+  /**
+   * Each domain resolved once per attempt, in parallel, never cached
+   * (#250), its MTA-STS policy discovered alongside (cached per its `id`
+   * and `max_age`, see `mta-sts.ts`).
+   */
   const routes = new Map(
     await Promise.all(
-      [...pendingByDomain.keys()].map(
-        async (domain) => [domain, await resolveMxRoute(domain)] as const,
-      ),
+      [...pendingByDomain.keys()].map(async (domain) => {
+        const [route, policy] = await Promise.all([
+          resolveMxRoute(domain),
+          discoverMtaStsPolicy(domain, { allowPrivate: config.mail.allowPrivateMx }),
+        ]);
+        return [domain, { route, policy }] as const;
+      }),
     ),
   );
+  /** The MTA-STS mode each domain is delivered under, recorded on its entries. */
+  const mtaStsByDomain = new Map<string, DeliveryMtaSts | null>();
+  const mtaStsOf = (key: string): DeliveryMtaSts | null => {
+    const domain = state[key]?.domain;
+    return domain === undefined ? null : (mtaStsByDomain.get(domain) ?? null);
+  };
 
   /**
    * Sessions: the entries of every domain that resolved to the same hosts,
@@ -257,20 +292,54 @@ export async function sendMail(options: {
    */
   const sessions = new Map<string, MxSessionPlan>();
   for (const [domain, keys] of pendingByDomain) {
-    const route = routes.get(domain);
-    if (!route) continue;
+    const resolved = routes.get(domain);
+    if (!resolved) continue;
+    const { route, policy } = resolved;
+    const mtaSts = mtaStsModeOf(policy);
+    mtaStsByDomain.set(domain, mtaSts);
     if (route.kind !== "hosts") {
-      for (const key of keys) recordDnsOutcome(state, key, route, options.messageId);
+      for (const key of keys) {
+        recordUnsent(
+          state,
+          key,
+          route,
+          mtaSts,
+          options.messageId,
+          "Recipient domain not routable",
+        );
+      }
       continue;
     }
     if (route.implicit) {
       logger.debug("No MX records: delivering to the domain's own address", { domain });
     }
-    const id = route.hosts.join(" ");
+    const hosts = policyHosts(domain, route.hosts, policy);
+    if (hosts.length === 0) {
+      /** Enforce mode and no MX host the policy names: nothing is connected to. */
+      const unsent = {
+        kind: "retry" as const,
+        error: `${domain}: no MX host matches the MTA-STS policy; will retry`,
+      };
+      for (const key of keys) {
+        recordUnsent(
+          state,
+          key,
+          unsent,
+          mtaSts,
+          options.messageId,
+          "No MX host matches the MTA-STS policy",
+        );
+      }
+      continue;
+    }
+    const verifiedTls = mtaSts === "enforce";
+    /** Enforced domains never share a session with unverified ones. */
+    const id = `${verifiedTls ? "mta-sts " : ""}${hosts.join(" ")}`;
     const plan = sessions.get(id) ?? {
-      hosts: route.hosts,
+      hosts,
       domains: [],
       transactions: [],
+      verifiedTls,
     };
     plan.domains.push(domain);
     for (const key of keys) {
@@ -302,7 +371,16 @@ export async function sendMail(options: {
       autoSubmitted: options.autoSubmitted === true,
     });
     for (const outcome of outcomes) {
-      recordOutcome(state, outcome, options.messageId, order);
+      const domain = state[outcome.key]?.domain;
+      const policy = domain === undefined ? null : (routes.get(domain)?.policy ?? null);
+      if (
+        domain !== undefined &&
+        policy?.policy.mode === "testing" &&
+        outcome.tls === "plaintext"
+      ) {
+        warnTestingPolicy(domain, policy, "the MX host did not offer STARTTLS");
+      }
+      recordOutcome(state, outcome, options.messageId, order, mtaStsOf(outcome.key));
     }
   }
 
@@ -457,6 +535,60 @@ function envelopeSenderFor(
   const only = recipients.length === 1 ? recipients[0] : undefined;
   if (!returnPaths || only === undefined) return from;
   return returnPaths.get(only.toLowerCase())?.address ?? from;
+}
+
+/** The mode recorded on entries: `enforce` or `testing`, else `null` (no policy, or `none`). */
+function mtaStsModeOf(policy: ActiveMtaStsPolicy | null): DeliveryMtaSts | null {
+  const mode = policy?.policy.mode;
+  return mode === "enforce" || mode === "testing" ? mode : null;
+}
+
+/**
+ * The MX hosts to try for `domain` under its MTA-STS policy (#250): in
+ * `enforce` mode only those matching a policy pattern, in their order
+ * (none: the caller retries without connecting); otherwise all of them.
+ * In `testing` mode, no matching host is what enforce would have refused,
+ * which is logged once per policy.
+ */
+function policyHosts(
+  domain: string,
+  hosts: string[],
+  policy: ActiveMtaStsPolicy | null,
+): string[] {
+  if (policy === null || policy.policy.mode === "none") return hosts;
+  const matching = matchingMxHosts(hosts, policy.policy);
+  if (policy.policy.mode === "testing") {
+    if (matching.length === 0) {
+      warnTestingPolicy(domain, policy, "no MX host matches the policy");
+    }
+    return hosts;
+  }
+  if (matching.length < hosts.length) {
+    logger.debug("MX hosts outside the MTA-STS policy not tried", {
+      domain,
+      policyId: policy.id,
+      skipped: hosts.filter((host) => !matching.includes(host)),
+    });
+  }
+  return matching;
+}
+
+/**
+ * Logs, once per domain and policy `id`, that a `testing` policy would
+ * have failed this delivery in enforce mode (#250). BunMail sends no
+ * TLS-RPT report, so the operator's log is where this shows.
+ */
+function warnTestingPolicy(
+  domain: string,
+  policy: ActiveMtaStsPolicy,
+  reason: string,
+): void {
+  if (!mtaStsCache().firstWarning(domain, policy.id)) return;
+  logger.warn("MTA-STS testing policy would fail in enforce mode", {
+    domain,
+    policyId: policy.id,
+    reason,
+  });
 }
 
 /** Everything one MX group's message is built from. */
@@ -629,11 +761,13 @@ type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
 
 /** The pending transactions of one or more domains that share their MX hosts. */
 interface MxSessionPlan {
-  /** The MX hosts, in the order to try them. */
+  /** The MX hosts, in the order to try them (only the policy's in enforce mode). */
   hosts: string[];
   /** The recipient domains, for log lines. */
   domains: string[];
   transactions: MxTransaction[];
+  /** The domains' MTA-STS policy is in enforce mode: required, verified TLS (#250). */
+  verifiedTls: boolean;
 }
 
 /**
@@ -651,7 +785,8 @@ interface MxSessionPlan {
  * MX name still goes to TLS as SNI). Each session ({@link runMxSession}:
  * one pooled connection, TLS record, deadline, the connection closed
  * however it ends) runs under the per-MX throttle (#91) of the host it
- * connects to, released before the next host is tried.
+ * connects to, released before the next host is tried. An enforced
+ * MTA-STS plan (#250) requires verified TLS on every session.
  *
  * Never throws: every entry gets an outcome.
  */
@@ -672,8 +807,19 @@ async function sendToMxHosts(
       }),
     })),
     lock: (mxHost, fn) => withMxLock(mxHost, config.mail.mxConcurrency, fn),
-    runSession: (session) => runMxSession({ ...session, heloName: config.mail.hostname }),
+    runSession: (session) =>
+      runMxSession({
+        ...session,
+        heloName: config.mail.hostname,
+        ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
+      }),
   });
+}
+
+/** Verified TLS for an enforce-mode session: the system trust store, or the test CA. */
+function verifiedTlsOptions(): VerifiedTls {
+  const ca = mtaStsTrustAnchors();
+  return ca === undefined ? {} : { ca };
 }
 
 /** A failure's text, as stored in `lastError`. */
@@ -697,7 +843,12 @@ function failedEntry(
   group: DeliveryGroup,
   recipients: string[],
   err: unknown,
-  outcome: { tls: DeliveryGroup["tls"]; mxHost: string | undefined; updatedAt: string },
+  outcome: {
+    tls: DeliveryGroup["tls"];
+    mxHost: string | undefined;
+    mtaSts: DeliveryMtaSts | null;
+    updatedAt: string;
+  },
 ): DeliveryGroup {
   const parsed = classifySendFailure(err);
   const { failureKind: _kind, failureCode: _code, blocked: _blocked, ...rest } = group;
@@ -711,38 +862,43 @@ function failedEntry(
     ...(parsed?.kind === "policy" ? { blocked: true } : {}),
     tls: outcome.tls,
     mxHost: outcome.mxHost,
+    mtaSts: outcome.mtaSts,
     updatedAt: outcome.updatedAt,
   };
 }
 
 /**
- * Records a DNS outcome that sends nothing (#250): `failed` when the
- * domain cannot receive mail, `retry` when the lookup failed for now.
- * No SMTP reply, so no failure classification and no suppression.
+ * Records an outcome that sends nothing (#250): `failed` when the domain
+ * cannot receive mail, `retry` when the lookup failed for now or, in
+ * MTA-STS enforce mode, no MX host matches the policy. No SMTP reply, so
+ * no failure classification and no suppression.
  */
-function recordDnsOutcome(
+function recordUnsent(
   state: DeliveryState,
   key: string,
-  route: Exclude<MxRoute, { kind: "hosts" }>,
+  unsent: Exclude<MxRoute, { kind: "hosts" }>,
+  mtaSts: DeliveryMtaSts | null,
   messageId: string,
+  logMessage: string,
 ): void {
   const group = state[key];
   if (!group) return;
   const { failureKind: _kind, failureCode: _code, blocked: _blocked, ...rest } = group;
   state[key] = {
     ...rest,
-    status: route.kind,
+    status: unsent.kind,
     attempts: group.attempts + 1,
-    lastError: route.error,
+    lastError: unsent.error,
     tls: null,
+    mtaSts,
     updatedAt: new Date().toISOString(),
   };
-  logger.warn("Recipient domain not routable", {
+  logger.warn(logMessage, {
     domain: group.domain,
     group: key,
     recipientCount: group.recipients.length,
-    nextStatus: route.kind,
-    error: route.error,
+    nextStatus: unsent.kind,
+    error: unsent.error,
     messageId,
   });
 }
@@ -760,6 +916,8 @@ function recordOutcome(
   outcome: RoutedOutcome,
   messageId: string,
   order: string[],
+  /** The recipient domain's MTA-STS mode on this attempt (#250). */
+  mtaSts: DeliveryMtaSts | null,
 ): void {
   const { key, tls } = outcome;
   const group = state[key];
@@ -782,6 +940,7 @@ function recordOutcome(
       messageId,
       tls,
       mxHost,
+      mtaSts,
       updatedAt,
     };
     logger.info("MX group delivered", {
@@ -791,10 +950,16 @@ function recordOutcome(
       refusedCount: refused.length,
       messageId,
       tls,
+      mtaSts,
     });
     for (const { recipient, error } of refused) {
       const entryKey = refusedKey(state, key, recipient, order);
-      const entry = failedEntry(group, [recipient], error, { tls, mxHost, updatedAt });
+      const entry = failedEntry(group, [recipient], error, {
+        tls,
+        mxHost,
+        mtaSts,
+        updatedAt,
+      });
       state[entryKey] = entry;
       logger.warn("MX refused a recipient", {
         mxHost,
@@ -811,7 +976,12 @@ function recordOutcome(
 
   /** A failed transaction; an accepted one with nobody left accepted counts as one too. */
   const err = outcome.error ?? refused[0]?.error;
-  const entry = failedEntry(group, group.recipients, err, { tls, mxHost, updatedAt });
+  const entry = failedEntry(group, group.recipients, err, {
+    tls,
+    mxHost,
+    mtaSts,
+    updatedAt,
+  });
   state[key] = entry;
   logger.warn("MX group send failed", {
     mxHost,
@@ -822,6 +992,7 @@ function recordOutcome(
     error: redactEmailsInText(entry.lastError ?? ""),
     messageId,
     tls,
+    mtaSts,
   });
 }
 

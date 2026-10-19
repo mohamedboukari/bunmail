@@ -5,6 +5,7 @@ import SMTPTransport from "nodemailer/lib/smtp-transport";
 import {
   OUTBOUND_TLS_MIN_VERSION,
   createTlsRecorder,
+  enforcedTlsFailure,
   mxTransportOptions,
   type TlsRecorder,
 } from "../../src/modules/emails/services/mx-transport.ts";
@@ -97,6 +98,102 @@ describe("mxTransportOptions", () => {
     expect(options.host).toBe("203.0.113.10");
     expect(options.port).toBe(25);
     expect(options.logger).toBeDefined();
+  });
+
+  test("MTA-STS enforce: STARTTLS required, the certificate verified for the MX name", () => {
+    const options = mxTransportOptions({
+      address: "203.0.113.10",
+      mxHost: "mx.example.org",
+      heloName: "bunmail.example.test",
+      logger: createTlsRecorder().logger,
+      verifiedTls: {},
+    });
+    expect(options.requireTLS).toBe(true);
+    expect(options.opportunisticTLS).toBe(false);
+    expect(options.tls?.rejectUnauthorized).toBe(true);
+    expect(options.tls?.servername).toBe("mx.example.org");
+    expect(options.tls?.minVersion).toBe("TLSv1.2");
+    expect(options.tls?.ca).toBeUndefined();
+    /** Still pinned to the checked address. */
+    expect(options.host).toBe("203.0.113.10");
+  });
+
+  test("MTA-STS enforce: a test CA replaces the trust store only when given", () => {
+    const options = mxTransportOptions({
+      address: "203.0.113.10",
+      mxHost: "mx.example.org",
+      heloName: "bunmail.example.test",
+      logger: createTlsRecorder().logger,
+      verifiedTls: { ca: "-----BEGIN CERTIFICATE-----" },
+    });
+    expect(options.tls?.ca).toBe("-----BEGIN CERTIFICATE-----");
+  });
+});
+
+describe("enforcedTlsFailure (#250)", () => {
+  /** An error shaped like nodemailer's, with its extra fields. */
+  function smtpError(message: string, fields: Record<string, unknown>): Error {
+    return Object.assign(new Error(message), fields);
+  }
+
+  test("a refused STARTTLS loses its 5xx reply: retried, never a bounce", () => {
+    const refused = smtpError(
+      "Error upgrading connection with STARTTLS: 500 5.5.1 Error: command not recognized",
+      {
+        code: "ETLS",
+        responseCode: 500,
+        response: "500 5.5.1 Error: command not recognized",
+        command: "STARTTLS",
+      },
+    );
+    expect(classifySendFailure(refused)?.kind).toBe("hard");
+    const mapped = enforcedTlsFailure(refused, "mx.example.org");
+    expect(mapped).toBeInstanceOf(Error);
+    expect(classifySendFailure(mapped)).toBeNull();
+    expect(mapped instanceof Error ? mapped.message : "").toStartWith(
+      "MTA-STS: no verified TLS with mx.example.org (",
+    );
+    expect(
+      mapped instanceof Error ? Reflect.get(mapped, "responseCode") : 0,
+    ).toBeUndefined();
+  });
+
+  test("a multi-line reply never leaves a line starting with a reply code", () => {
+    const refused = smtpError(
+      "Error upgrading connection with STARTTLS:\n550-5.7.0 no\n550 5.7.0 tls",
+      {
+        code: "ETLS",
+        responseCode: 550,
+      },
+    );
+    expect(classifySendFailure(enforcedTlsFailure(refused, "mx.example.org"))).toBeNull();
+  });
+
+  test("a certificate failure is mapped too", () => {
+    const badCert = smtpError("Hostname/IP does not match certificate's altnames", {
+      code: "ESOCKET",
+      originalCode: "ERR_TLS_CERT_ALTNAME_INVALID",
+      command: "CONN",
+    });
+    const mapped = enforcedTlsFailure(badCert, "mx.example.org");
+    expect(mapped instanceof Error ? mapped.message : "").toContain("does not match");
+    expect(mapped).not.toBe(badCert);
+  });
+
+  test("any other failure is kept as it is", () => {
+    const rcpt = smtpError("Recipient command failed: 550 5.1.1 No such user", {
+      code: "EENVELOPE",
+      responseCode: 550,
+      command: "RCPT TO",
+    });
+    expect(enforcedTlsFailure(rcpt, "mx.example.org")).toBe(rcpt);
+    const refusedConnection = smtpError("connect ECONNREFUSED", {
+      code: "ESOCKET",
+      originalCode: "ECONNREFUSED",
+    });
+    expect(enforcedTlsFailure(refusedConnection, "mx.example.org")).toBe(
+      refusedConnection,
+    );
   });
 });
 

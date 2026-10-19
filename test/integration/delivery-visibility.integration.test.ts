@@ -102,6 +102,7 @@ describe("GET /api/v1/emails/:id: deliveryState (#250)", () => {
         failureCode: "5.1.1",
         lastError: "550 5.1.1 <script>alert(1)</script>",
         tls: "plaintext",
+        mtaSts: null,
         updatedAt: "2026-10-19T10:00:01.000Z",
       },
       {
@@ -113,6 +114,7 @@ describe("GET /api/v1/emails/:id: deliveryState (#250)", () => {
         failureCode: null,
         lastError: null,
         tls: "plaintext",
+        mtaSts: null,
         updatedAt: "2026-10-19T10:00:00.000Z",
       },
     ]);
