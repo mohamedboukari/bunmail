@@ -7,11 +7,14 @@ import { flashMessageFor } from "../flash-errors.ts";
 import { DomainAlreadyRegisteredError } from "../../modules/domains/errors.ts";
 import * as domainService from "../../modules/domains/services/domain.service.ts";
 import { verifyDomain } from "../../modules/domains/services/dns-verification.service.ts";
+import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
+import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
 import { toFlash } from "../lib/responses.ts";
 import { creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import { config } from "../../config.ts";
 
 /* ─── DNS-verify throttle (#133) ─── */
 
@@ -326,7 +329,17 @@ export function domainPages(app: GuardedDashboard) {
 
           const flash = toFlash(query.flash, query.flashType);
 
-          return <DomainDetailPage domain={domain} flash={flash} />;
+          const dns = await getDomainDnsStatus(domain.name);
+
+          return (
+            <DomainDetailPage
+              domain={domain}
+              dnsRecords={getRequiredDnsRecords(domain)}
+              dns={dns}
+              smtpEnabled={config.smtp.enabled}
+              flash={flash}
+            />
+          );
         },
         {
           beforeHandle: memberGuard,

@@ -4,6 +4,7 @@ import { updateDomainDto } from "./dtos/update-domain.dto.ts";
 import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
 import { verifyDomain } from "./services/dns-verification.service.ts";
+import { getDomainDnsStatus } from "./services/domain-dns-status.service.ts";
 import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -66,7 +67,7 @@ export const domainsPlugin = new Elysia({
 
       return {
         success: true,
-        data: serializeDomain(domain),
+        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
       };
     },
     {
@@ -89,14 +90,19 @@ export const domainsPlugin = new Elysia({
 
       return {
         success: true,
-        data: domains.map(serializeDomain),
+        data: await Promise.all(
+          domains.map(async (domain) =>
+            serializeDomain(domain, await getDomainDnsStatus(domain.name)),
+          ),
+        ),
       };
     },
     {
       detail: {
         tags: ["Domains"],
         summary: "List domains",
-        description: "Returns all registered domains with their verification status.",
+        description:
+          "Returns all registered domains with their verification status, the DNS records to publish (dnsRecords), the current DMARC check (dmarc) and where the MX points (mx).",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -114,14 +120,18 @@ export const domainsPlugin = new Elysia({
         return { success: false, error: "Domain not found" };
       }
 
-      return { success: true, data: serializeDomain(domain) };
+      return {
+        success: true,
+        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
+      };
     },
     {
       params: t.Object({ id: t.String() }),
       detail: {
         tags: ["Domains"],
         summary: "Get domain by ID",
-        description: "Returns a single domain by its ID.",
+        description:
+          "Returns a single domain by its ID, with the DNS records to publish (dnsRecords), the current DMARC check (dmarc) and where the MX points (mx).",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -155,7 +165,10 @@ export const domainsPlugin = new Elysia({
         });
       }
 
-      return { success: true, data: serializeDomain(domain) };
+      return {
+        success: true,
+        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
+      };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -187,7 +200,8 @@ export const domainsPlugin = new Elysia({
         target: { type: "domain", id: domain.id, label: domain.name },
       });
 
-      return { success: true, data: serializeDomain(domain) };
+      /** Gone: no DNS lookup for it. */
+      return { success: true, data: serializeDomain(domain, null) };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -223,7 +237,7 @@ export const domainsPlugin = new Elysia({
 
       return {
         success: true,
-        data: serializeDomain(updated!),
+        data: serializeDomain(updated!, await getDomainDnsStatus(domain.name)),
         verification: result,
       };
     },

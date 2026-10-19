@@ -7,6 +7,8 @@ import { logger } from "../../../utils/logger.ts";
 import type { Domain } from "../types/domain.types.ts";
 import { config } from "../../../config.ts";
 import { resolveSendingIps, type SendingIps } from "./sending-ips.service.ts";
+import { checkDmarc } from "./dmarc-check.service.ts";
+import { rememberDmarcCheck } from "./domain-dns-status.service.ts";
 
 export interface VerificationResult {
   spf: boolean;
@@ -14,6 +16,8 @@ export interface VerificationResult {
   dmarc: boolean;
   /** Why SPF passed or failed, for the operator (#247). */
   spfReason?: string;
+  /** Why DMARC passed or failed, for the operator (#250). */
+  dmarcReason?: string;
 }
 
 /** DNS and SPF evaluation, injectable for tests (#247). */
@@ -167,12 +171,18 @@ async function verifyDKIM(
 }
 
 /**
- * Checks whether the domain has a DMARC TXT record at `_dmarc.<domain>`.
+ * Checks the domain's DMARC record (#250, `dmarc-check.service.ts`):
+ * exactly one `v=DMARC1` record, at `_dmarc.<domain>` or inherited from the
+ * organizational domain, with a valid `p=`. The result also refreshes the
+ * DMARC check the domain page and API show.
  */
-async function verifyDMARC(domainName: string, deps: VerificationDeps): Promise<boolean> {
-  const host = `_dmarc.${domainName}`;
-  const records = await resolveTxt(host, deps);
-  return records.some((r) => r.startsWith("v=DMARC1"));
+async function verifyDMARC(
+  domainName: string,
+  deps: VerificationDeps,
+): Promise<{ ok: boolean; reason: string }> {
+  const check = await checkDmarc(domainName, { resolveTxt: deps.resolveTxt });
+  rememberDmarcCheck(domainName, check);
+  return { ok: check.ok, reason: check.reason };
 }
 
 /**
@@ -185,14 +195,21 @@ export async function verifyDomain(
 ): Promise<VerificationResult> {
   logger.info("Verifying DNS records", { domain: domain.name });
 
-  const [spfCheck, dkim, dmarc] = await Promise.all([
+  const [spfCheck, dkim, dmarcCheck] = await Promise.all([
     verifySPF(domain.name, deps),
     verifyDKIM(domain.name, domain.dkimSelector, domain.dkimPublicKey, deps),
     verifyDMARC(domain.name, deps),
   ]);
   const spf = spfCheck.ok;
+  const dmarc = dmarcCheck.ok;
 
-  const result: VerificationResult = { spf, dkim, dmarc, spfReason: spfCheck.reason };
+  const result: VerificationResult = {
+    spf,
+    dkim,
+    dmarc,
+    spfReason: spfCheck.reason,
+    dmarcReason: dmarcCheck.reason,
+  };
 
   logger.info("DNS verification result", { domain: domain.name, ...result });
 

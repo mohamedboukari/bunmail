@@ -29,7 +29,7 @@ describe("serializeDomain", () => {
   };
 
   test("includes public fields", () => {
-    const result = serializeDomain(domain);
+    const result = serializeDomain(domain, null);
     expect(result.id).toBe("dom_abc123");
     expect(result.name).toBe("example.com");
     expect(result.dkimSelector).toBe("bunmail");
@@ -41,17 +41,17 @@ describe("serializeDomain", () => {
   });
 
   test("strips dkimPrivateKey from output", () => {
-    const result = serializeDomain(domain);
+    const result = serializeDomain(domain, null);
     expect("dkimPrivateKey" in result).toBe(false);
   });
 
   test("strips dkimPublicKey from output", () => {
-    const result = serializeDomain(domain);
+    const result = serializeDomain(domain, null);
     expect("dkimPublicKey" in result).toBe(false);
   });
 
   test("strips updatedAt from output", () => {
-    const result = serializeDomain(domain);
+    const result = serializeDomain(domain, null);
     expect("updatedAt" in result).toBe(false);
   });
 
@@ -61,22 +61,57 @@ describe("serializeDomain", () => {
      * null, so the API needs to surface "unset" distinctly from a real
      * value the caller previously set.
      */
-    const noOverrides = serializeDomain(domain);
+    const noOverrides = serializeDomain(domain, null);
     expect(noOverrides.unsubscribeEmail).toBeNull();
     expect(noOverrides.unsubscribeUrl).toBeNull();
 
-    const withOverrides = serializeDomain({
-      ...domain,
-      unsubscribeEmail: "optout@example.com",
-      unsubscribeUrl: "https://example.com/unsubscribe?id=abc",
-    });
+    const withOverrides = serializeDomain(
+      {
+        ...domain,
+        unsubscribeEmail: "optout@example.com",
+        unsubscribeUrl: "https://example.com/unsubscribe?id=abc",
+      },
+      null,
+    );
     expect(withOverrides.unsubscribeEmail).toBe("optout@example.com");
     expect(withOverrides.unsubscribeUrl).toBe("https://example.com/unsubscribe?id=abc");
   });
 
   test("exposes notifyEmail (null when unset)", () => {
-    expect(serializeDomain(domain).notifyEmail).toBeNull();
-    const withNotify = serializeDomain({ ...domain, notifyEmail: "ops@external.com" });
+    expect(serializeDomain(domain, null).notifyEmail).toBeNull();
+    const withNotify = serializeDomain(
+      { ...domain, notifyEmail: "ops@external.com" },
+      null,
+    );
     expect(withNotify.notifyEmail).toBe("ops@external.com");
+  });
+
+  test("exposes the DNS records to publish and the DNS status (#250)", () => {
+    const withoutDns = serializeDomain(domain, null);
+    expect(withoutDns.dmarc).toBeNull();
+    expect(withoutDns.mx).toBeNull();
+    expect(withoutDns.dnsRecords.map((r) => r.type)).toContain("MX");
+    expect(withoutDns.dnsRecords.some((r) => r.host === "_dmarc.example.com")).toBe(true);
+
+    const mx = { status: "elsewhere" as const, hosts: ["aspmx.l.google.com"] };
+    const dmarc = {
+      status: "missing" as const,
+      ok: false,
+      reason: "No DMARC record at _dmarc.example.com",
+      warnings: [],
+      problems: [],
+      recordDomain: null,
+      inherited: false,
+      policy: null,
+      subdomainPolicy: null,
+      effectivePolicy: null,
+      pct: null,
+      adkim: null,
+      aspf: null,
+      rua: [],
+    };
+    const withDns = serializeDomain(domain, { dmarc, mx });
+    expect(withDns.mx).toEqual(mx);
+    expect(withDns.dmarc).toEqual(dmarc);
   });
 });

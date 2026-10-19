@@ -72,7 +72,7 @@ To open the dashboard, claim the owner account: on first boot BunMail logs a one
 
 **Honest answer: it depends on your sending setup, not on BunMail.** Self-hosted transactional email is a reputation problem, not a code problem.
 
-- ✅ **You'll land in inbox** if you send from a domain with a clean reputation, your server's IP isn't on a blacklist, and you've published correct SPF / DKIM / DMARC records (BunMail handles SPF/DKIM/DMARC for you, see [docs/self-hosting.md](docs/self-hosting.md)).
+- ✅ **You'll land in inbox** if you send from a domain with a clean reputation, your server's IP isn't on a blacklist, and you've published correct SPF / DKIM / DMARC records (BunMail signs with DKIM, lists the records to publish and checks SPF, DKIM and DMARC for each domain; you publish them at your DNS provider, see [docs/self-hosting.md](docs/self-hosting.md)).
 - ⚠️ **You'll likely land in spam** if you send from a brand-new `.xyz`/`.top`-style domain on a fresh budget VPS IP. That's not a BunMail bug: Gmail and Outlook penalise both factors heavily for any sender.
 - 🛠️ **Workarounds:** warm up your domain over 2 to 3 weeks (low volume, real recipients), or plug in a reputable SMTP relay (Postmark, SES, Resend) as the actual sender while keeping BunMail's queue, dashboard, and templates. *Relay mode is on the [roadmap](https://github.com/mohamedboukari/bunmail/issues).*
 
@@ -102,7 +102,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Direct SMTP delivery**: sends straight to recipient MX servers, no relay needed
 - **SMTP submission**: apps (Infisical, Netbird, Dify, any Nodemailer backend) send *through* BunMail over SMTP using an API key as the password; switch an app off SendGrid/Brevo with a credentials-only change ([docs/smtp-submission.md](docs/smtp-submission.md))
 - **DKIM signing**: auto-generates 2048-bit RSA keys per domain
-- **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard
+- **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard, with the records to publish per domain, the parsed DMARC policy and where the MX points
 - **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
 - **Idempotency keys**: an optional `Idempotency-Key` header on the send API makes retries safe; a repeat with the same key and body returns the first response instead of sending twice, even under concurrent retries ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **Templates**: Mustache-style `{{variable}}` substitution
@@ -268,7 +268,7 @@ For inbox placement on Gmail / Outlook / Yahoo, you need:
 1. **A clean sender domain**: older, no spam history.
 2. **A clean IP**: check at [mxtoolbox.com/blacklists](https://mxtoolbox.com/blacklists.aspx).
 3. **PTR (reverse DNS)** matching `MAIL_HOSTNAME` in `.env`.
-4. **SPF, DKIM, DMARC records**: BunMail's dashboard tells you exactly what to publish per domain.
+4. **SPF, DKIM, DMARC records**: BunMail's domain page lists what to publish per domain (with the A, PTR and optional MX records) and **Verify** checks SPF, DKIM and DMARC. The A and PTR records are checked at boot; your IP's reputation and blocklist status are not checked.
 5. **Patience**: fresh domain + IP combos take 2 to 3 weeks of low-volume sending to build reputation.
 
 See [docs/self-hosting.md](docs/self-hosting.md#dns-records) for the exact DNS record values.

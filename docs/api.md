@@ -267,12 +267,53 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "verifiedAt": null,
     "unsubscribeEmail": null,
     "unsubscribeUrl": null,
+    "notifyEmail": null,
+    "dnsRecords": [
+      {
+        "type": "TXT",
+        "host": "example.com",
+        "value": "v=spf1 a:mail.example.com -all",
+        "purpose": "SPF: authorizes this server to send for the domain",
+        "optional": false,
+        "note": "Already have an SPF record (...)? Add the a:mail.example.com term to it instead: ..."
+      },
+      { "type": "TXT", "host": "bunmail._domainkey.example.com", "value": "\"v=DKIM1; k=rsa; p=MIIBIjAN...\" \"...\"", "purpose": "...", "optional": false, "note": "..." },
+      { "type": "TXT", "host": "_dmarc.example.com", "value": "v=DMARC1; p=none; rua=mailto:dmarc@example.com", "purpose": "...", "optional": false, "note": "..." },
+      { "type": "A", "host": "mail.example.com", "value": "203.0.113.10", "purpose": "...", "optional": false, "note": "..." },
+      { "type": "PTR", "host": "203.0.113.10", "value": "mail.example.com", "purpose": "...", "optional": false, "note": "..." },
+      { "type": "MX", "host": "example.com", "value": "10 mail.example.com", "purpose": "...", "optional": true, "note": "..." }
+    ],
+    "dmarc": {
+      "status": "missing",
+      "ok": false,
+      "reason": "No DMARC record at _dmarc.example.com",
+      "warnings": [],
+      "problems": [],
+      "recordDomain": null,
+      "inherited": false,
+      "policy": null,
+      "subdomainPolicy": null,
+      "effectivePolicy": null,
+      "pct": null,
+      "adkim": null,
+      "aspf": null,
+      "rua": []
+    },
+    "mx": { "status": "elsewhere", "hosts": ["aspmx.l.google.com"] },
     "createdAt": "2026-03-15T12:00:00.000Z"
   }
 }
 ```
 
 The `unsubscribeEmail` / `unsubscribeUrl` fields shape the `List-Unsubscribe` header BunMail adds to every outbound message sent from this domain. See [docs/emails.md](emails.md#list-unsubscribe) for the resolution rules.
+
+Every domain response (create, list, get, verify, update) also carries (#250):
+
+- `dnsRecords`: the records to publish, each `{ type, host, value, purpose, optional, note? }`: SPF, DKIM (pre-split into quoted strings of at most 255 characters; `dkimDnsRecord` keeps the unsplit value), a starting DMARC record, the A/AAAA and PTR records of `MAIL_HOSTNAME`, and an `optional` MX. See [docs/domains.md](domains.md#dns-records-to-publish-dnsrecords-250).
+- `dmarc`: the current DMARC check. `status` is `pass`, `missing`, `multiple` (two or more records), `invalid` (no valid `p=`) or `error` (DNS failure); `ok` is true only for `pass`. `inherited` is true when the organizational domain's record applies, `effectivePolicy` is the policy receivers apply (`sp` when inherited and set, else `p`), `warnings` flag weak settings (`p=none`, `pct` below 100, no `rua`) and `problems` the invalid tag values. See [docs/domains.md](domains.md#dmarc-rules-250).
+- `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
+
+`dmarc` and `mx` come from live DNS, cached for an hour (five minutes after an error); a DNS failure never fails the request. `DELETE` returns them as `null`.
 
 ---
 
@@ -305,12 +346,15 @@ Trigger DNS verification for SPF, DKIM, and DMARC records.
     "spf": true,
     "dkim": false,
     "dmarc": true,
-    "spfReason": "SPF passes for 203.0.113.10"
+    "spfReason": "SPF passes for 203.0.113.10",
+    "dmarcReason": "DMARC policy quarantine at _dmarc.example.com"
   }
 }
 ```
 
 `spf` is true only when the domain publishes exactly one SPF record that gives `pass` for every sending IP of this server (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`), evaluated per RFC 7208 (#247). `spfReason` says why it passed or failed (no record, two records, a placeholder, more than 10 lookups, `fail`/`softfail` for an IP, a temporary DNS failure).
+
+`dmarc` is true only when exactly one `v=DMARC1` record with a valid `p=` applies, at `_dmarc.<domain>` or inherited from the organizational domain; `p=none` passes (#250). `dmarcReason` says why. The domain's `dmarc` field carries the parsed record.
 
 ---
 

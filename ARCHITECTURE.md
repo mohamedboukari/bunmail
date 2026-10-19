@@ -139,7 +139,10 @@ bunmail/
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
 │   │   │   │   ├── domain-dkim.service.ts ← DKIM options for out-of-queue mail (inbound notify, invitations, #217)
-│   │   │   │   └── dns-verification.service.ts ← SPF/DKIM/DMARC checks
+│   │   │   │   ├── dns-verification.service.ts ← SPF/DKIM/DMARC checks
+│   │   │   │   ├── dmarc-check.service.ts ← One DMARC record, org-domain fallback, strict tags (#250)
+│   │   │   │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status per domain (#250)
+│   │   │   │   └── required-dns-records.ts ← The DNS records to publish (`dnsRecords`, #250)
 │   │   │   ├── dtos/
 │   │   │   │   └── create-domain.dto.ts
 │   │   │   ├── models/
@@ -235,7 +238,7 @@ bunmail/
 │   │   │   │   ├── bounce-parser.service.ts  ← Pure RFC 3464 + regex fallback parser
 │   │   │   │   ├── bounce-handler.service.ts ← Return-path verification, escalation, suppress, mark bounced, webhook
 │   │   │   │   ├── return-path.ts            ← Signed per-recipient return path (VERP): mint, parse, MAC (#236)
-│   │   │   │   └── return-path-mx.ts         ← Sign only when the sender domain's MX points here, cached (#236)
+│   │   │   │   └── return-path-mx.ts         ← Sign only when the sender domain's MX points here, cached; MX status for the domain page (#236, #250)
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
 │   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), TOTP two-factor (#220), record ownership (#219)
@@ -324,7 +327,7 @@ bunmail/
 │       │   ├── email-detail.tsx          ← Single email view
 │       │   ├── api-keys.tsx              ← API keys list + create + revoke
 │       │   ├── domains.tsx               ← Domains list + add + delete
-│       │   ├── domain-detail.tsx         ← Domain verification status
+│       │   ├── domain-detail.tsx         ← Domain verification status, DMARC policy, records to publish, MX and mail flow (#250)
 │       │   ├── templates.tsx             ← Templates list + create
 │       │   ├── template-detail.tsx       ← Template edit form
 │       │   ├── webhooks.tsx              ← Webhooks list + create
