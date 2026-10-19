@@ -12,7 +12,10 @@ import type { DkimOptions } from "./mailer.service.ts";
 import { listUnsubscribeOptions } from "./list-unsubscribe.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import type { WebhookEventType } from "../../webhooks/types/webhook.types.ts";
-import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
+import {
+  addFromBounce,
+  SOFT_BOUNCE_WINDOW_MS,
+} from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { loggableError, sqlStateOf } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
@@ -547,7 +550,8 @@ export async function runQueueCycle(
  *    b. On success: mark "sent" with timestamp.
  *    c. On failure: hard 5xx groups are auto-suppressed (#68); temporary
  *       failures are requeued with backoff until the email is older than
- *       `MAIL_RETRY_MAX_AGE_HOURS`, then marked "failed" (#180).
+ *       `MAIL_RETRY_MAX_AGE_HOURS`, then marked "failed" (#180), with a
+ *       24-hour soft suppression when the last reply was `4.2.2` (#250).
  */
 async function startQueueCycle(
   deps: QueueDeps,
@@ -844,6 +848,60 @@ interface OutcomeEvent {
   data: Record<string, unknown>;
 }
 
+/** A recipient's inline bounce, suppressed and announced with the outcome. */
+interface InlineBounce {
+  recipient: string;
+  /** `hard`: a 5xx, permanent. `soft`: a full mailbox that never cleared (#250), 24 h. */
+  bounceType: "hard" | "soft";
+  /** The enhanced status code, e.g. `5.1.1` or `4.2.2`. */
+  code: string;
+  diagnostic: string;
+}
+
+/**
+ * The enhanced status code of a full mailbox (RFC 3463 `X.2.2`). The only
+ * temporary failure that says something about the recipient's mailbox and
+ * is worth a suppression once it outlasts the retry window: `4.2.0` and
+ * the other 4xx codes are too vague, and `4.7.x` is about the sender.
+ */
+const MAILBOX_FULL = "4.2.2";
+
+/**
+ * The soft bounces an exhausted retry window leads to (#250): every
+ * recipient of an entry that was still `retry` after this attempt and is
+ * `failed` in the terminal state (its temporary failures outlasted
+ * `MAIL_RETRY_MAX_AGE_HOURS`), when that entry's LAST failure was a
+ * `4.2.2` SMTP reply. Pure.
+ *
+ * Only the classification the mailer stored from the SMTP reply counts:
+ * a failure with no reply (DNS, network, TLS, MTA-STS) carries none, so it
+ * never suppresses, and `lastError` is never parsed for it. Entries that
+ * were already `failed` before (a hard bounce, or every recipient
+ * suppressed before this retry) are not touched.
+ *
+ * Exported for unit tests.
+ */
+export function exhaustedSoftBounces(
+  attemptState: DeliveryState,
+  finalState: DeliveryState,
+): InlineBounce[] {
+  const bounces: InlineBounce[] = [];
+  for (const [key, group] of Object.entries(attemptState)) {
+    if (group.status !== "retry") continue;
+    if (finalState[key]?.status !== "failed") continue;
+    if (group.failureKind !== "soft" || group.failureCode !== MAILBOX_FULL) continue;
+    for (const recipient of group.recipients) {
+      bounces.push({
+        recipient,
+        bounceType: "soft",
+        code: MAILBOX_FULL,
+        diagnostic: group.lastError ?? "(no diagnostic)",
+      });
+    }
+  }
+  return bounces;
+}
+
 /**
  * Waits before each retry of a failed outcome transaction (#184): two
  * retries, 100 ms then 500 ms, enough to ride out a deadlock or a
@@ -854,7 +912,8 @@ const OUTCOME_RETRY_DELAYS_MS = [100, 500] as const;
 /**
  * Records the outcome of an attempt that reached `sendMail` (#184).
  *
- * 1. One transaction: the inline hard-bounce suppressions with their
+ * 1. One transaction: the inline bounce suppressions (hard 5xx, and a
+ *    `4.2.2` that outlasted the retry window, #250) with their
  *    `email.bounced` events, then the row's status with `email.sent` /
  *    `email.failed`. Retried twice on failure ({@link OUTCOME_RETRY_DELAYS_MS}).
  * 2. Still failing: a degraded transaction saves the status and the
@@ -885,7 +944,7 @@ async function recordSendOutcome(
    * the earlier pass) and skip groups still in `retry` (no terminal
    * outcome yet).
    */
-  const hardBounces: Array<{ recipient: string; code: string; diagnostic: string }> = [];
+  const bounces: InlineBounce[] = [];
   for (const [mxHost, group] of Object.entries(deliveryState)) {
     if (group.status !== "failed") continue;
     if (priorStatuses.get(mxHost) === "failed") continue; /** Already handled. */
@@ -893,8 +952,9 @@ async function recordSendOutcome(
     if (parsed?.kind !== "hard")
       continue; /** Synthetic DNS failures + transient exhaust handled separately. */
     for (const recipient of group.recipients) {
-      hardBounces.push({
+      bounces.push({
         recipient,
+        bounceType: "hard",
         code: parsed.code,
         diagnostic: group.lastError ?? "(no diagnostic)",
       });
@@ -903,25 +963,42 @@ async function recordSendOutcome(
 
   const outcome = decideRowOutcome(email, sent);
 
+  /**
+   * A full mailbox that stayed full for the whole retry window (#250): a
+   * 24-hour soft-bounce suppression and a soft `email.bounced` per
+   * recipient, in the same transaction as the hard ones. Every other
+   * temporary failure ends `failed` with neither, as before.
+   */
+  if (outcome.kind === "terminal") {
+    bounces.push(...exhaustedSoftBounces(deliveryState, outcome.finalState));
+  }
+
   /** The outcome in one transaction; `withEvents: false` is the degraded write. */
   const write = (withEvents: boolean) =>
     db.transaction(async (tx) => {
       const filed: Array<{
         recipient: string;
+        bounceType: InlineBounce["bounceType"];
         code: string;
         suppressionId: string | null;
         applied: boolean;
       }> = [];
-      for (const bounce of hardBounces) {
-        /** Never weakens a permanent suppression already on file (#191). */
+      for (const bounce of bounces) {
+        /**
+         * Never weakens a permanent suppression already on file (#191); a
+         * soft one only refreshes a temporary row's window.
+         */
         const { suppression, applied } = await addFromBounce(
           email.apiKeyId,
           {
             email: bounce.recipient,
-            bounceType: "hard",
+            bounceType: bounce.bounceType,
             diagnosticCode: bounce.code,
             sourceEmailId: emailId,
-            expiresAt: null,
+            expiresAt:
+              bounce.bounceType === "soft"
+                ? new Date(Date.now() + SOFT_BOUNCE_WINDOW_MS)
+                : null,
           },
           tx,
         );
@@ -933,7 +1010,7 @@ async function recordSendOutcome(
               emailId,
               to: email.toAddress,
               recipient: bounce.recipient,
-              bounceType: "hard",
+              bounceType: bounce.bounceType,
               status: bounce.code,
               diagnostic: bounce.diagnostic,
               suppressionId: suppression?.id ?? null,
@@ -944,6 +1021,7 @@ async function recordSendOutcome(
         }
         filed.push({
           recipient: bounce.recipient,
+          bounceType: bounce.bounceType,
           code: bounce.code,
           suppressionId: suppression?.id ?? null,
           applied,
@@ -982,7 +1060,7 @@ async function recordSendOutcome(
       emailId,
       attempt,
       events: [
-        ...hardBounces.map(() => "email.bounced"),
+        ...bounces.map(() => "email.bounced"),
         ...(recorded.saved ? outcome.events.map((e) => e.event) : []),
       ],
       sqlState: sqlStateOf(lastError),
@@ -992,14 +1070,19 @@ async function recordSendOutcome(
   const { bounced, saved } = recorded;
 
   for (const bounce of bounced) {
-    logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {
-      emailId,
-      apiKeyId: email.apiKeyId,
-      recipient: redactEmail(bounce.recipient),
-      status: bounce.code,
-      suppressionId: bounce.suppressionId,
-      suppressionApplied: bounce.applied,
-    });
+    logger.warn(
+      bounce.bounceType === "hard"
+        ? "Multi-MX recipient hard-bounced: auto-suppressed"
+        : "Mailbox full for the whole retry window: soft-suppressed for 24 h",
+      {
+        emailId,
+        apiKeyId: email.apiKeyId,
+        recipient: redactEmail(bounce.recipient),
+        status: bounce.code,
+        suppressionId: bounce.suppressionId,
+        suppressionApplied: bounce.applied,
+      },
+    );
   }
   if (!saved) return;
 

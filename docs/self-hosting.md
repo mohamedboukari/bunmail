@@ -89,6 +89,9 @@ TRASH_RETENTION_DAYS=7
 # hours between checks of a passing domain, 6 to 168, default 24
 # DOMAIN_REVERIFY_ENABLED=true
 # DOMAIN_REVERIFY_INTERVAL_HOURS=24
+# Optional: also refuse addresses any API key hard-bounced or got a complaint
+# for (#250), default false
+# SUPPRESSIONS_SHARED_HARD=false
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -144,7 +147,9 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_PUBLIC_IP` (#247, #248): the public IPs this server sends from, comma-separated. Optional: unset, BunMail uses the A/AAAA records of `MAIL_HOSTNAME`. SPF verification checks that the domain authorizes these addresses, and every boot logs whether their PTR records name `MAIL_HOSTNAME` and resolve back (`Reverse DNS confirmed for every sending IP`, or a `warn` with the fix). Behind NAT the container can't see its egress address: set this to the real one.
 
-> `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h.
+> `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h. A recipient whose last reply was `4.2.2` (mailbox full) when the window ends gets a 24-hour soft suppression and a soft `email.bounced` (#250); every other temporary failure gets neither.
+
+> `SUPPRESSIONS_SHARED_HARD` (#250): every API key sends from the same IP and DKIM domains, so one key's bad list damages delivery for all of them. With `true`, a send (REST, dashboard, SMTP submission, and the queue's re-check before a retry) is also refused when **any** key holds a permanent hard-bounce suppression or a feedback-loop complaint for the address. Unsubscribes, manual entries and temporary rows stay per key (they are the tenant's own decision). The refusal is the usual `422 RECIPIENT_SUPPRESSED` (SMTP `550`) with `suppressionId: null`: it never names the other key or its row, and each key's suppression list still shows only its own rows. Default `false`. Only `true` or `false`; anything else refuses to boot. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
 
 > `QUEUE_BATCH_SIZE` / `QUEUE_POLL_INTERVAL_MS` / `QUEUE_MAX_CONCURRENT_SENDS`: send queue throughput (#176). Every `QUEUE_POLL_INTERVAL_MS` (default `2000`, 250 to 60000, with +/-10% jitter) the queue claims up to `QUEUE_BATCH_SIZE` due emails (default `5`, 1 to 100), but never more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS` (default `10`, 1 to 500), the cap on sends in flight per process. A slow receiver holds its slot instead of making the queue open more connections; sends waiting for a busy MX (`MAIL_MX_CONCURRENCY`) hold theirs too. Raise the cap for high volume to many different domains; mind your IP reputation. Any other value refuses to boot. Each batch is shared across API keys round-robin (#258), so one key's backlog cannot delay another key's mail.
 

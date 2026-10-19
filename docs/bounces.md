@@ -102,8 +102,8 @@ When `processEmail`'s SMTP send throws an error, the catch block parses the erro
 |---|---|
 | **Sender policy block (#246)**: `5.7.x`, or a `5xx` naming a blocklist, reputation or SPF/DKIM/DMARC failure (`550 5.7.1 ... blocked using Spamhaus`) | The receiver refused **the sender**, not the address: the group fails (`blocked: true` in its delivery state), **nobody is suppressed**, and `email.failed` carries `blocked: true`. A reply that also says the user doesn't exist stays a hard bounce. Fix the sending IP's reputation or the domain's authentication, then resend. |
 | **Hard (5xx)**: `550 5.1.1`, etc. | Auto-suppress recipient with `bounceType: "hard"`, mark email `status = 'bounced'`, fire `email.bounced` webhook with `source: "inline"`, **stop retrying**. Three retries to the same MX would just be three more `550` hits: exactly what tanks IP reputation. |
-| **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Retried with backoff (5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h) until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180). Repeated soft bounces are still handled by the async-DSN path's escalation rule: the inline catch-block doesn't have enough signal alone to make a per-recipient soft → hard call safely. |
-| **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error | Retried with backoff. An IP address or port in the error (`connect ECONNREFUSED 5.6.7.8:25`) is never read as a status code. Infrastructure problems don't tell us anything about the recipient. |
+| **Soft (4xx)**: `452 4.2.2 mailbox full`, `421 greylist`, etc. | Retried with backoff (5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h) until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180), then `failed`. When the window runs out and a recipient's **last** failure was exactly `4.2.2` (mailbox full, #250), that recipient gets a 24-hour soft suppression (`bounceType: "soft"`, through `addFromBounce`, so a permanent row is never weakened) and a soft `email.bounced` (`source: "inline"`), in the outcome transaction. `4.2.0`, `4.7.x` and every other 4xx get neither: they say nothing reliable about the mailbox. There is no soft → hard escalation on this path. |
+| **Non-SMTP error**: DNS resolution failure, socket timeout, TLS handshake error, MTA-STS refusal | Retried with backoff. An IP address or port in the error (`connect ECONNREFUSED 5.6.7.8:25`) is never read as a status code. Infrastructure problems don't tell us anything about the recipient: when the window runs out the email is `failed` with no suppression and no bounce event, whatever the error text says. |
 
 Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for further retries to confirm what the receiver already told us authoritatively.
 
@@ -133,9 +133,29 @@ Steps 3 to 5 are one transaction (#184): the suppression, the status and the eve
   "data": {
     "emailId": "msg_a1b2c3...",
     "to": "user@example.com",
+    "recipient": "user@example.com",
     "bounceType": "hard",
     "status": "5.1.1",
     "diagnostic": "Can't send mail - all recipients were rejected: 550-5.1.1 ...",
+    "suppressionId": "sup_d4e5f6...",
+    "source": "inline"
+  }
+}
+```
+
+`email.bounced` for a **full mailbox at the end of the retry window** (#250), also `source: "inline"`, with `bounceType: "soft"`; `email.failed` still fires for the email as before when no recipient was delivered:
+
+```json
+{
+  "event": "email.bounced",
+  "timestamp": "2026-05-10T...",
+  "data": {
+    "emailId": "msg_a1b2c3...",
+    "to": "user@example.com",
+    "recipient": "user@example.com",
+    "bounceType": "soft",
+    "status": "4.2.2",
+    "diagnostic": "452 4.2.2 Mailbox full",
     "suppressionId": "sup_d4e5f6...",
     "source": "inline"
   }

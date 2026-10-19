@@ -22,7 +22,8 @@ import { db, type Tx } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import {
   addFromBounce,
-  isSuppressed,
+  findActiveSuppression,
+  SOFT_BOUNCE_WINDOW_MS,
 } from "../../suppressions/services/suppression.service.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -30,9 +31,6 @@ import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import type { ParsedBounce } from "../types/bounce.types.ts";
 import { parseReturnPath, recipientOrder, returnPathMacMatches } from "./return-path.ts";
-
-/** Soft suppression backoff window. */
-const SOFT_BOUNCE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Public-facing email status string for bounced rows. */
 const STATUS_BOUNCED = "bounced";
@@ -294,8 +292,13 @@ export async function handleParsedBounce(
   binding: ReturnPathBinding,
 ): Promise<HandleBounceResult> {
   return handleBounce<Tx>(parsed, binding, {
+    /**
+     * The key's own row only: escalation is about this key's history, so
+     * a shared suppression (#250) must not turn this key's soft bounce
+     * into a permanent one.
+     */
     isSuppressed: async (apiKeyId, email) => {
-      const row = await isSuppressed(apiKeyId, email);
+      const row = await findActiveSuppression(apiKeyId, email);
       return row ? { id: row.id, bounceType: row.bounceType } : undefined;
     },
     transaction: (work) => db.transaction(work),

@@ -795,7 +795,7 @@ HTTP/1.1 422 Unprocessable Entity
 }
 ```
 
-No row is inserted into `emails`, no queue entry is created.
+No row is inserted into `emails`, no queue entry is created. With `SUPPRESSIONS_SHARED_HARD=true` (#250) the same response is returned for an address another API key holds an automatic permanent hard bounce or complaint for, with `"suppressionId": null`: that row is not the caller's, so it is never named. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
 
 ### SMTP Submission
 
@@ -838,7 +838,7 @@ All error responses follow this shape:
 }
 ```
 
-Some responses carry additional structured fields: e.g. suppression-list rejection is `422` with `code: "RECIPIENT_SUPPRESSED"` + `suppressionId` (pivot to `DELETE /api/v1/suppressions/:id`); a sender-authorization rejection (#126) is `403` with `code: "UNAUTHORIZED_SENDER"` + `sender` (the `From` that was rejected: add it to the key's `allowedSenders` via `PATCH /api/v1/api-keys/:id` if intended).
+Some responses carry additional structured fields: e.g. suppression-list rejection is `422` with `code: "RECIPIENT_SUPPRESSED"` + `suppressionId` (pivot to `DELETE /api/v1/suppressions/:id`; `null` for a shared suppression of another key, #250); a sender-authorization rejection (#126) is `403` with `code: "UNAUTHORIZED_SENDER"` + `sender` (the `From` that was rejected: add it to the key's `allowedSenders` via `PATCH /api/v1/api-keys/:id` if intended).
 
 | Status | Meaning                                         |
 |--------|-------------------------------------------------|

@@ -1,9 +1,10 @@
-import { and, eq, desc, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, desc, gt, isNotNull, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { db, type DbExecutor } from "../../../db/index.ts";
 import { suppressions } from "../models/suppression.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { config } from "../../../config.ts";
 import type {
   Suppression,
   CreateSuppressionInput,
@@ -24,15 +25,23 @@ function normaliseEmail(email: string): string {
 }
 
 /**
- * Returns the active suppression row for a (apiKeyId, email) pair, or
- * `undefined` if the recipient is allowed to receive mail. "Active"
- * means the row exists and either has no expiry or the expiry is in
- * the future.
- *
- * Hot path: runs on every send. The composite `(api_key_id, email)`
- * index serves it; one btree probe.
+ * How long a soft-bounce suppression lasts (#24, #250): an async soft DSN,
+ * or a `4.2.2` mailbox-full reply that outlasted the retry window.
  */
-export async function isSuppressed(
+export const SOFT_BOUNCE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Returns the active suppression row for a (apiKeyId, email) pair, or
+ * `undefined` if the key has none. "Active" means the row exists and
+ * either has no expiry or the expiry is in the future.
+ *
+ * The key's own list only: the bounce handler reads it to escalate a
+ * repeated soft bounce. Send gates use {@link isSuppressed}, which may
+ * also apply the shared hard suppressions.
+ *
+ * The composite `(api_key_id, email)` index serves it; one btree probe.
+ */
+export async function findActiveSuppression(
   apiKeyId: string,
   email: string,
 ): Promise<Suppression | undefined> {
@@ -53,6 +62,84 @@ export async function isSuppressed(
     .limit(1);
 
   return row;
+}
+
+/**
+ * Why the send gate refused an address: the key's own suppression, or a
+ * shared one (`SUPPRESSIONS_SHARED_HARD`, #250). A shared match carries
+ * nothing about the row behind it, so no caller can reveal another key's
+ * suppression, its id or its reason.
+ */
+export type SuppressionMatch =
+  { shared: false; suppression: Suppression } | { shared: true };
+
+/**
+ * The condition behind {@link hasSharedHardSuppression}: a row of ANY API
+ * key that holds an automatic permanent hard-bounce or complaint
+ * suppression for `target` (already normalised). Exported so a test can
+ * EXPLAIN the lookup.
+ *
+ * Only rows the automatic paths wrote count, never a tenant's own
+ * decision: a hard bounce carries `bounce_type = 'hard'` (a manual row
+ * never has a bounce type), and a complaint from a feedback loop carries
+ * the email it was about (a manual row never has `source_email_id`). So
+ * a key cannot block another key's recipients through
+ * `POST /api/v1/suppressions`. Unsubscribe, manual and temporary rows
+ * never count.
+ *
+ * The predicates are literals, not parameters, so the planner can match
+ * the partial index `suppressions_shared_hard_email_idx` in every plan.
+ */
+export function sharedHardSuppressionWhere(target: string): SQL | undefined {
+  return and(
+    eq(suppressions.email, target),
+    sql`${suppressions.expiresAt} IS NULL`,
+    sql`${suppressions.reason} IN ('bounce', 'complaint')`,
+    sql`((${suppressions.reason} = 'bounce' AND ${suppressions.bounceType} = 'hard') OR (${suppressions.reason} = 'complaint' AND ${suppressions.sourceEmailId} IS NOT NULL))`,
+  );
+}
+
+/** Whether the shared gate (#250) refuses `target`, see {@link sharedHardSuppressionWhere}. */
+async function hasSharedHardSuppression(target: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: suppressions.id })
+    .from(suppressions)
+    .where(sharedHardSuppressionWhere(target))
+    .limit(1);
+  return row !== undefined;
+}
+
+/**
+ * The send gate (#25): whether mail to `email` under `apiKeyId` must be
+ * refused. Used by `createEmail` (the REST API and SMTP submission) and by
+ * the queue's re-check before a retry (#262).
+ *
+ * 1. The key's own active suppression ({@link findActiveSuppression}), of
+ *    any reason.
+ * 2. With `SUPPRESSIONS_SHARED_HARD=true` (#250), an automatic permanent
+ *    hard bounce or complaint under ANY key (see
+ *    {@link hasSharedHardSuppression}): the sending IP and DKIM domains
+ *    are shared, so one key's bad list must not damage every key's
+ *    delivery. Logged at `info` with the requesting key and the redacted
+ *    address only; the match names no row.
+ *
+ * Hot path: runs on every send, one index probe per step.
+ */
+export async function isSuppressed(
+  apiKeyId: string,
+  email: string,
+): Promise<SuppressionMatch | undefined> {
+  const own = await findActiveSuppression(apiKeyId, email);
+  if (own) return { shared: false, suppression: own };
+  if (!config.suppressions.sharedHard) return undefined;
+
+  const target = normaliseEmail(email);
+  if (!(await hasSharedHardSuppression(target))) return undefined;
+  logger.info("Shared suppression applied", {
+    apiKeyId,
+    email: redactEmail(target),
+  });
+  return { shared: true };
 }
 
 /**

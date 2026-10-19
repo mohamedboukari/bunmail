@@ -258,11 +258,13 @@ async function prepareEmail(
 
   /**
    * Suppression gate (#25). Reject sends to addresses on the per-API-key
-   * suppression list before any other work: no template lookup, no
-   * domain check, no INSERT into `emails`. The error class is mapped to
-   * HTTP 422 by the global `onError` handler in `src/index.ts`, with the
-   * `suppressionId` surfaced in the body so callers can pivot directly
-   * to `DELETE /api/v1/suppressions/:id` when they want to undo.
+   * suppression list (and, with `SUPPRESSIONS_SHARED_HARD=true`, the
+   * shared hard suppressions, #250) before any other work: no template
+   * lookup, no domain check, no INSERT into `emails`. The error class is
+   * mapped to HTTP 422 by the global `onError` handler in `src/index.ts`,
+   * with the `suppressionId` surfaced in the body so callers can pivot
+   * directly to `DELETE /api/v1/suppressions/:id` when they want to undo
+   * (`null` for a shared suppression, which is not theirs to lift).
    *
    * **Covers `to`, `cc`, and `bcc`** (#87). Pre-multi-MX, suppressed
    * CC/BCC addresses were silently dropped by the single-MX send anyway:
@@ -273,18 +275,24 @@ async function prepareEmail(
    */
   const recipients = parseRecipients(input.to, input.cc, input.bcc);
   for (const rcpt of recipients) {
-    const sup = await isSuppressed(apiKeyId, rcpt.address);
-    if (!sup) continue;
+    const match = await isSuppressed(apiKeyId, rcpt.address);
+    if (!match) continue;
+    /**
+     * A shared suppression (#250) is another key's row: its id and reason
+     * are neither logged nor returned, only that the address is suppressed.
+     */
+    const own = match.shared ? null : match.suppression;
     logger.warn("Send blocked by suppression list", {
       id,
       apiKeyId,
       recipient: redactEmail(rcpt.address),
       kind: rcpt.kind,
-      suppressionId: sup.id,
-      reason: sup.reason,
+      suppressionId: own?.id ?? null,
+      reason: own?.reason,
+      shared: match.shared,
     });
     throw new SuppressedRecipientError({
-      suppressionId: sup.id,
+      suppressionId: own?.id ?? null,
       recipient: rcpt.address,
     });
   }
