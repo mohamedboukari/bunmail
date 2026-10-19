@@ -74,7 +74,7 @@ To open the dashboard, claim the owner account: on first boot BunMail logs a one
 
 - ✅ **You'll land in inbox** if you send from a domain with a clean reputation, your server's IP isn't on a blacklist, and you've published correct SPF / DKIM / DMARC records (BunMail signs with DKIM, lists the records to publish and checks SPF, DKIM and DMARC for each domain; you publish them at your DNS provider, see [docs/self-hosting.md](docs/self-hosting.md)).
 - ⚠️ **You'll likely land in spam** if you send from a brand-new `.xyz`/`.top`-style domain on a fresh budget VPS IP. That's not a BunMail bug: Gmail and Outlook penalise both factors heavily for any sender.
-- 🛠️ **Workarounds:** warm up your domain over 2 to 3 weeks (low volume, real recipients), or plug in a reputable SMTP relay (Postmark, SES, Resend) as the actual sender while keeping BunMail's queue, dashboard, and templates. *Relay mode is on the [roadmap](https://github.com/mohamedboukari/bunmail/issues).*
+- 🛠️ **What helps:** warm up the domain and IP over 2 to 3 weeks (low volume, real recipients who open and reply), set the reverse DNS of your IP to `MAIL_HOSTNAME`, and keep the dashboard's checks green: the Server identity card (reverse DNS), the Blocklists card (DNSBL listings of your sending IP) and each domain's SPF, DKIM and DMARC status. BunMail always delivers directly; it does not hand mail to a third-party provider.
 
 Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score for your specific setup before deploying.
 
@@ -283,8 +283,7 @@ Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/moh
 Near-term highlights:
 
 - Passkeys and SSO for dashboard accounts (#223, #224)
-- Optional SMTP relay mode (use Resend / SES / Postmark as the underlying sender)
-- Bun-native SMTP client (subsumes per-domain TLS observability and `requireValidCert`)
+- Bun-native SMTP client (#60)
 
 ## Contributing
 
