@@ -546,7 +546,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | updated_at    | timestamp      | NOT NULL, default `now()`       |
 | deleted_at    | timestamp      | nullable (soft-delete marker)   |
 
-Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180).
+Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180), `(message_id)` (linking inbound replies, bounces and complaints to the email by Message-ID, #192).
 
 `domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
@@ -691,8 +691,14 @@ Retention: finished rows (`delivered` and `failed`) are deleted by the worker's 
 | html         | text           | nullable                        |
 | text_content | text           | nullable                        |
 | raw_message  | text           | nullable                        |
+| message_id   | text           | nullable: the message's valid `Message-ID` (#192) |
+| in_reply_to  | text           | nullable: up to 20 valid msg-ids from `In-Reply-To` (#192) |
+| references   | text           | nullable: up to 20 valid msg-ids from `References`, root kept (#192) |
+| in_reply_to_email_id | varchar(36) | nullable, FK → emails.id `ON DELETE SET NULL`: the email of ours it replies to, same sender domain only (#192) |
 | received_at  | timestamp      | NOT NULL, default `now()`       |
 | deleted_at   | timestamp      | nullable (soft-delete marker)   |
+
+Indexes: `(received_at)`, `(deleted_at)`, `(in_reply_to_email_id)` (#192). The msg-id columns are attacker-controlled and validated before storage; see [docs/inbound.md](docs/inbound.md#threading-192).
 
 ### `suppressions`
 
@@ -1007,7 +1013,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/inbound/:id/restore     | Restore single          | Member |
 | POST   | /dashboard/inbound/:id/permanent   | Hard-delete single      | Admin |
 | GET    | /dashboard/inbound/:id             | Inbound email detail    | Member |
-| GET    | /dashboard/inbound/:id/reply       | Compose form pre-filled as a reply (#86) | Member |
+| GET    | /dashboard/inbound/:id/reply       | Compose form pre-filled as a reply (#86); the send sets `In-Reply-To` / `References` from the inbound id (#192) | Member |
 | GET    | /dashboard/dmarc-reports           | DMARC reports list + domain filter | Member |
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Member |
 | GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |

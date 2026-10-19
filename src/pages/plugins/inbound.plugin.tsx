@@ -9,6 +9,7 @@ import { adminGuard, memberGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as inboundService from "../../modules/inbound/services/inbound.service.ts";
+import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
 import { toIdArray } from "../lib/form.ts";
 import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
@@ -233,11 +234,25 @@ export function inboundPages(app: GuardedDashboard) {
       .get(
         "/inbound/:id",
         async ({ params, set }) => {
+          /**
+           * The email of ours it replies to (#192). Every role that may open
+           * this page (member and up) may open that email's page too.
+           */
           const live = await inboundService.getInboundEmailById(params.id);
-          if (live) return <InboundDetailPage email={live} isTrashed={false} />;
+          if (live) {
+            const repliedTo = await replyThreading.getRepliedEmail(live);
+            return (
+              <InboundDetailPage email={live} isTrashed={false} repliedTo={repliedTo} />
+            );
+          }
 
           const trashed = await inboundService.getTrashedInboundEmailById(params.id);
-          if (trashed) return <InboundDetailPage email={trashed} isTrashed={true} />;
+          if (trashed) {
+            const repliedTo = await replyThreading.getRepliedEmail(trashed);
+            return (
+              <InboundDetailPage email={trashed} isTrashed={true} repliedTo={repliedTo} />
+            );
+          }
 
           set.status = 404;
           return "Inbound email not found";
@@ -258,6 +273,9 @@ export function inboundPages(app: GuardedDashboard) {
        *   - body = the original message quoted: HTML wrapped in a
        *     `<blockquote>` with an attribution line, plain text with the
        *     classic `>` line prefix.
+       *
+       * The form carries the inbound id; `POST /dashboard/send` sets
+       * `In-Reply-To` and `References` from it (#192).
        *
        * This is a GET: operator may navigate to it, see what's pre-filled,
        * back out without sending. No side effects until they hit Send.
@@ -331,6 +349,8 @@ export function inboundPages(app: GuardedDashboard) {
                 subject: replySubject,
                 html: quotedHtml,
                 text: quotedText,
+                /** Threading headers are computed from it on send (#192). */
+                inboundId: inbound.id,
               }}
             />
           );

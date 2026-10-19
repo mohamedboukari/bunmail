@@ -44,6 +44,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_api_key_deleted` (`(api_key_id, deleted_at)`) trash list / purge queries
 - `idx_emails_due_per_key` (`(api_key_id, next_attempt_at, created_at)` WHERE `status = 'queued' AND deleted_at IS NULL`) fair queue claim of each key's due rows (#258, replaces `idx_emails_due` of #180)
 - `idx_emails_lease` (`(lease_until)` WHERE `status = 'sending'`) reclaim of expired leases (#180)
+- `idx_emails_message_id` (`(message_id)`) Message-ID lookups: linking an inbound reply to the email it answers (#192), and the bounce and complaint joins
 
 **Table:** `idempotency_keys` (#188)
 

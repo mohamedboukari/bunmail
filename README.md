@@ -107,7 +107,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Idempotency keys**: an optional `Idempotency-Key` header on the send API makes retries safe; a repeat with the same key and body returns the first response instead of sending twice, even under concurrent retries ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **Templates**: Mustache-style `{{variable}}` substitution
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`
-- **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
+- **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting; reply from the dashboard with RFC 5322 threading headers, and see which of your emails a received reply answers
 - **Inbound notifications**: per-domain "you have new mail" summary email on receive, DKIM-signed from the recipient domain; opt-in via each domain's `notify_email`
 - **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting
 - **Trash + auto-purge**: Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)

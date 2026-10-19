@@ -16,6 +16,7 @@ import { flashMessageFor } from "../flash-errors.ts";
 import * as emailService from "../../modules/emails/services/email.service.ts";
 import * as tombstoneService from "../../modules/emails/services/tombstone.service.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
+import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
 import { toIdArray } from "../lib/form.ts";
 import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
@@ -93,6 +94,15 @@ export function emailPages(app: GuardedDashboard) {
           }
 
           try {
+            /**
+             * A reply to an inbound email (#192): the form names the email
+             * by id and the threading headers are computed here from its
+             * validated, stored ids, then go through the custom-header
+             * rules like any other (#177).
+             */
+            const headers = body.inboundId
+              ? await replyThreading.replyHeadersForInbound(body.inboundId)
+              : undefined;
             const { warnings } = await emailService.createEmail(
               {
                 from: body.from,
@@ -103,6 +113,7 @@ export function emailPages(app: GuardedDashboard) {
                 subject: body.subject,
                 html: body.html || undefined,
                 text: body.text || undefined,
+                ...(headers ? { headers } : {}),
               },
               chosenKey.id,
             );
@@ -157,6 +168,8 @@ export function emailPages(app: GuardedDashboard) {
             subject: t.String({ maxLength: 500, pattern: "^[^\\u000d\\u000a]*$" }),
             html: t.Optional(t.String()),
             text: t.Optional(t.String()),
+            /** The inbound email a reply answers (#192): an id, never header text. */
+            inboundId: t.Optional(t.String({ maxLength: 36 })),
           }),
         },
       )

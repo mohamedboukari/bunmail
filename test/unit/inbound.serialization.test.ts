@@ -19,6 +19,10 @@ describe("serializeInboundEmail", () => {
     rawMessage: "From: sender@example.com\r\nTo: inbox@bunmail.dev\r\n...",
     receivedAt: new Date("2024-06-01"),
     deletedAt: null,
+    messageId: null,
+    inReplyTo: null,
+    references: null,
+    inReplyToEmailId: null,
   };
 
   test("maps fromAddress to from", () => {

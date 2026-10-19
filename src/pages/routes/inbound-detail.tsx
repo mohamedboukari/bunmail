@@ -3,6 +3,7 @@ import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
+import type { RepliedEmail } from "../../modules/inbound/services/reply-threading.service.ts";
 
 /**
  * Props for the inbound email detail page.
@@ -11,13 +12,19 @@ interface InboundDetailPageProps {
   email: InboundEmail;
   /** When true, the email is in trash: show Restore + Delete forever instead. */
   isTrashed: boolean;
+  /** The email of ours this message replies to (#192), when linked. */
+  repliedTo?: RepliedEmail;
 }
 
 /**
  * Inbound email detail page: shows full metadata, HTML preview, text content,
  * and a destructive action button that varies based on trash state.
  */
-export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) {
+export function InboundDetailPage({
+  email,
+  isTrashed,
+  repliedTo,
+}: InboundDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/inbound/trash" : "/dashboard/inbound";
   const backLabel = isTrashed ? "Back to trash" : "Back to inbound";
 
@@ -115,6 +122,24 @@ export function InboundDetailPage({ email, isTrashed }: InboundDetailPageProps) 
               <TimeDisplay value={email.receivedAt} />
             </p>
           </div>
+          {repliedTo !== undefined && (
+            <div class="sm:col-span-2">
+              <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+                In reply to
+              </p>
+              <p class="text-gray-900 dark:text-gray-100 break-all">
+                <a
+                  href={`/dashboard/emails/${encodeURIComponent(repliedTo.id)}`}
+                  class="underline hover:text-gray-600 dark:hover:text-gray-300"
+                  safe
+                >
+                  {repliedTo.subject}
+                </a>{" "}
+                <span class="text-gray-500 dark:text-gray-400">sent</span>{" "}
+                <TimeDisplay value={repliedTo.sentAt} />
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
