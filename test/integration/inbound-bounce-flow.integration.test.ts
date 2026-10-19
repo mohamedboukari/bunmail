@@ -1,13 +1,13 @@
 /**
  * End-to-end test for the inbound DSN flow (#35, bullets 4 + 5).
  *
- * The SMTP receiver, when a DSN arrives, calls
- * `parseBounce(rawMessage)` → `handleParsedBounce(parsed)`. Both are
- * exported, so we exercise the full chain here against real Postgres
- * + a captured `fetch` for webhook dispatch: the same pattern used
- * by `webhook-dispatch.integration.test.ts`. The closure in
- * `smtp-receiver.service.ts` adds nothing extra; this test covers the
- * DB + webhook side effects identically.
+ * The SMTP receiver, when a DSN arrives at a signed return path (#236),
+ * calls `resolveReturnPath(address)` → `parseBounce(rawMessage)` →
+ * `handleParsedBounce(parsed, binding)`. All are exported, so we exercise
+ * the full chain here against real Postgres + a captured `fetch` for
+ * webhook dispatch: the same pattern used by
+ * `webhook-dispatch.integration.test.ts`. The receiver itself is covered
+ * by `return-path.integration.test.ts`.
  *
  * Coverage:
  *   - Hard bounce DSN → suppression row, email row marked bounced,
@@ -16,8 +16,8 @@
  *     + webhook
  *   - Soft bounce on top of an existing soft suppression → escalation
  *     to hard (24h-window logic from #24)
- *   - DSN that doesn't link to any of our `emails` rows → dropped
- *     with a warning, no DB writes, no webhook
+ *   - A return path that does not verify (unknown email) binds to
+ *     nothing, so the DSN has no effect
  *
  * What this file deliberately does NOT cover:
  *   - The `onData` chunk-streaming + size-cap loop. Those live in the
@@ -32,7 +32,12 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { eq } from "drizzle-orm";
 import { parseBounce } from "../../src/modules/bounces/services/bounce-parser.service.ts";
-import { handleParsedBounce } from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import {
+  handleParsedBounce,
+  resolveReturnPath,
+  type ReturnPathBinding,
+} from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import { mintReturnPath } from "../../src/modules/bounces/services/return-path.ts";
 import { runPollCycle } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
 
@@ -86,6 +91,22 @@ afterEach(() => {
 async function waitForDispatch(ms = 100): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
   await runPollCycle();
+}
+
+/**
+ * The verified binding of the return path BunMail would have used for
+ * `recipient` (index 0, the only recipient) of `emailId`, sent from
+ * example.com: what the receiver resolves at RCPT TO.
+ */
+async function bindingFor(
+  emailId: string,
+  recipient: string,
+): Promise<ReturnPathBinding> {
+  const address = mintReturnPath({ emailId, index: 0, recipient }, "example.com");
+  if (address === null) throw new Error("expected a return path");
+  const binding = await resolveReturnPath(address);
+  if (binding === null) throw new Error("expected the return path to verify");
+  return binding;
 }
 
 /**
@@ -167,7 +188,10 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     expect(parsed!.kind).toBe("hard");
     expect(parsed!.recipient).toBe(recipient);
 
-    const result = await handleParsedBounce(parsed!);
+    const result = await handleParsedBounce(
+      parsed!,
+      await bindingFor(emailId, recipient),
+    );
     expect(result.outcome).toBe("applied");
     expect(result.bounceType).toBe("hard");
 
@@ -224,7 +248,10 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     const parsed = parseBounce(makeSoftBounceDsn(messageId, recipient));
     expect(parsed!.kind).toBe("soft");
 
-    const result = await handleParsedBounce(parsed!);
+    const result = await handleParsedBounce(
+      parsed!,
+      await bindingFor(emailId, recipient),
+    );
     expect(result.outcome).toBe("applied");
     expect(result.bounceType).toBe("soft");
 
@@ -258,7 +285,7 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     const { id: apiKeyId } = await seed.apiKey();
     const messageId = "test-soft-escalate-001@example.com";
     const recipient = "repeat@example.com";
-    await seed.email({
+    const { id: emailId } = await seed.email({
       apiKeyId,
       toAddress: recipient,
       status: "sent",
@@ -279,7 +306,10 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     });
 
     const parsed = parseBounce(makeSoftBounceDsn(messageId, recipient));
-    const result = await handleParsedBounce(parsed!);
+    const result = await handleParsedBounce(
+      parsed!,
+      await bindingFor(emailId, recipient),
+    );
 
     expect(result.outcome).toBe("escalated");
     expect(result.bounceType).toBe("hard");
@@ -301,32 +331,20 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     expect(body.data.bounceType).toBe("hard");
   });
 
-  test("DSN that doesn't link to any emails row is dropped: no DB writes, no webhook", async () => {
-    /** The DSN claims an Original-Message-ID we've never sent. The
-     *  handler refuses to act under "we don't know which tenant this
-     *  belongs to": better than risking suppressing under the wrong key. */
-    const { id: apiKeyId } = await seed.apiKey();
-    await seed.webhook({
-      apiKeyId,
-      url: "https://93.184.216.34/bounce",
-      events: ["email.bounced"],
-    });
-
-    const parsed = parseBounce(
-      makeHardBounceDsn("never-sent-by-us@example.com", "stranger@example.com"),
+  test("a return path for an email that does not exist binds to nothing (#236)", async () => {
+    /** Well formed and correctly signed, but no such email row: the
+     *  receiver refuses it, so no DSN sent there can have an effect. */
+    const address = mintReturnPath(
+      {
+        emailId: "msg_0123456789abcdef01234567",
+        index: 0,
+        recipient: "stranger@example.com",
+      },
+      "example.com",
     );
-    expect(parsed).not.toBeNull();
-
-    const result = await handleParsedBounce(parsed!);
-    expect(result.outcome).toBe("dropped-no-original");
-
-    /** No suppression created. */
-    const supRows = await db.select().from(suppressions);
-    expect(supRows).toHaveLength(0);
-
-    /** No webhook fired. */
-    await waitForDispatch();
-    expect(captured).toHaveLength(0);
+    expect(address).not.toBeNull();
+    expect(await resolveReturnPath(address!)).toBeNull();
+    expect(await db.select().from(suppressions)).toHaveLength(0);
   });
 });
 
@@ -344,7 +362,10 @@ describe("inbound DSN for an email that is still being retried (#180)", () => {
     });
 
     const parsed = parseBounce(makeHardBounceDsn(messageId, recipient));
-    const result = await handleParsedBounce(parsed!);
+    const result = await handleParsedBounce(
+      parsed!,
+      await bindingFor(emailId, recipient),
+    );
     expect(result.outcome).toBe("applied");
 
     const [emailRow] = await db.select().from(emails).where(eq(emails.id, emailId));

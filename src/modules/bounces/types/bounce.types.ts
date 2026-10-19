@@ -1,7 +1,8 @@
 /**
- * Output of the bounce parser. The handler reads this to decide what to
- * do with the original email (mark bounced) and what kind of suppression
- * to file (hard / soft).
+ * Output of the bounce parser. The handler reads this to decide what kind
+ * of suppression to file (hard / soft) and what the webhook reports. Which
+ * email and recipient it applies to comes from the signed return path the
+ * DSN arrived at (#236), not from these fields.
  *
  * `kind: "hard" | "soft"` is derived from the SMTP enhanced status code:
  *   - `5.x.x` → permanent failure → hard
@@ -25,13 +26,12 @@ export interface ParsedBounce {
   originalRecipient?: string;
 
   /**
-   * Original Message-ID header of the email that bounced. The handler
-   * uses this to look up the `emails` row and derive the owning API key.
-   * Required: bounces without an Original-Message-ID can't be linked
-   * back to a specific tenant safely (per #25's per-key scoping), so the
-   * parser refuses to return them.
+   * Original Message-ID of the email that bounced, when the DSN names one.
+   * Informational only: since #236 a bounce is bound to its email and
+   * recipient by the signed return path it was delivered to, never by
+   * anything in its body, so this is not used to find the email.
    */
-  originalMessageId: string;
+  originalMessageId?: string;
 
   /**
    * SMTP enhanced status code, e.g. "5.1.1" (no such user) or "4.2.2"

@@ -737,6 +737,13 @@ async function sendClaimedEmail(
         source: email.source === "smtp" ? "smtp" : "api",
         apiKeyId: email.apiKeyId,
       },
+      /**
+       * Signed per-recipient return paths (#236), only when inbound SMTP is
+       * on: that is the only setup where a DSN can reach BunMail, and the
+       * only one where a bounce is acted on. Otherwise the envelope sender
+       * stays the From address.
+       */
+      returnPath: config.smtp.enabled ? { emailId } : undefined,
     });
 
     /**

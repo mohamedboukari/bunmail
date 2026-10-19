@@ -157,8 +157,13 @@ describe("parseBounce: RFC 3464 path", () => {
     expect(parseBounce(RFC_DELIVERED_REPORT)).toBeNull();
   });
 
-  test("returns null when Original-Message-ID is missing, can't link to a tenant", () => {
-    expect(parseBounce(RFC_BOUNCE_WITHOUT_ORIGINAL_ID)).toBeNull();
+  test("parses a DSN without Original-Message-ID: the return path links it (#236)", () => {
+    const parsed = parseBounce(RFC_BOUNCE_WITHOUT_ORIGINAL_ID);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.kind).toBe("hard");
+    expect(parsed!.recipient).toBe("lost@example.com");
+    expect(parsed!.status).toBe("5.1.1");
+    expect(parsed!.originalMessageId).toBeUndefined();
   });
 });
 

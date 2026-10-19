@@ -104,7 +104,7 @@ The email is **not** inserted into the `emails` table. There's no row to retry, 
 
 ## Auto-suppression on bounces (#24)
 
-The bounce module (#24) closes the loop: when the inbound SMTP receives a Delivery Status Notification, the parser pulls out the recipient and SMTP enhanced status code, the handler links the bounce back to the original `emails` row by `Original-Message-ID`, and `addFromBounce()` persists the suppression under that email's `api_key_id`. See [docs/bounces.md](bounces.md) for the full chain.
+The bounce module (#24) closes the loop: when the inbound SMTP receives a Delivery Status Notification, the parser pulls out the SMTP enhanced status code, the signed return path the DSN was delivered to (#236) names the original `emails` row and the one recipient it bounced for, and `addFromBounce()` persists the suppression for that recipient under that email's `api_key_id`. A DSN sent to any other address has no effect. See [docs/bounces.md](bounces.md) for the full chain.
 
 Hard bounces (5.x.x) become permanent suppressions. Soft bounces (4.x.x) become 24-hour windowed suppressions; a second soft bounce while the previous one is still active escalates to permanent.
 

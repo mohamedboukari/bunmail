@@ -26,14 +26,20 @@ Replies thread in the recipient's mail client, and replies to BunMail's own mail
 
 ## Bounce branching
 
-Before any inbound message hits `inbound_emails`, the receiver runs it through the bounce parser. If the message is a Delivery Status Notification (DSN): i.e. a bounce for one of our outbound sends: we route it to the bounce handler instead of generic inbound storage. See [docs/bounces.md](bounces.md) for the bounce flow.
+With `SMTP_ENABLED=true`, outbound mail is sent with a signed per-recipient return path, `b+<id>.<index>.<MAC>@<sender domain>` (#236), so DSNs come back to that address. The receiver handles such recipients itself, independent of recipient domain validation (the `b+` local part is reserved):
+
+- **RCPT TO** `b+...@<domain>` (any case): accepted only when the address verifies against the email it names (the MAC over email id, recipient index and recipient, and the domain must be that email's sender domain). Invalid: refused with SMTP `550`, nothing stored. A database error answers `451`.
+- **DATA**, before every other branch: a DSN to a verified return path is routed to the bounce handler and applies to exactly the bound email and recipient, whatever its body says. Anything else sent there (auto-replies, vacation notices, ARF reports) is acknowledged and dropped. Either way the message is **not stored**, fires no `email.received` and no inbound notification; if it was also addressed to other mailboxes, only those continue below.
+- A DSN sent to any **other** address (not a verified return path) has no effect: logged at `warn`, acknowledged, not stored.
+
+See [docs/bounces.md](bounces.md#signed-return-paths-236) for the address format and the bounce flow.
 
 ## Unsubscribe mailbox (#249)
 
 Single-recipient outbound mail carries `List-Unsubscribe: <mailto:unsub+<token>@<sender domain>>` when `SMTP_ENABLED=true` (see [suppressions.md](suppressions.md#one-click-unsubscribe)). The receiver handles such recipients itself, independent of recipient domain validation:
 
 - **RCPT TO** `unsub+<token>@<domain>` (any case): the token is verified against its email row and the domain must be that email's sender domain. Invalid: refused with SMTP `550` (nothing stored; the sending MTA, not BunMail, tells its user, so no backscatter to a forged sender). A database error answers `451` (try again later).
-- **DATA**, before the bounce and DMARC branches: each `unsub+` recipient is suppressed (`source: "mailto"`). A message addressed only to such recipients is acknowledged and **not stored**, fires no `email.received` and no inbound notification. If it was also addressed to other mailboxes, only those continue through normal storage, and the notification goes to them alone. The size cap applies as for any message.
+- **DATA**, before the feedback-loop, bounce and DMARC branches: each `unsub+` recipient is suppressed (`source: "mailto"`). A message addressed only to such recipients is acknowledged and **not stored**, fires no `email.received` and no inbound notification. If it was also addressed to other mailboxes, only those continue through normal storage, and the notification goes to them alone. The size cap applies as for any message.
 
 Why bounce branching matters: bounces shouldn't pollute the inbound list (operators get noise about delivery failures from `mailer-daemon@gmail` every time someone mistypes an address), and the suppression-list auto-update only happens when bounces are processed as bounces.
 
@@ -155,13 +161,13 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 ## How It Works
 
 1. Client connects → rate limit check (instant) → DNSBL check (DNS lookup)
-2. RCPT TO command → `unsub+<token>` addresses verified (#249), others validated against registered domains
-3. DATA command → `unsub+` recipients suppressed (#249), feedback-loop reports handled (#191), then the message is parsed with `mailparser`
+2. RCPT TO command → `unsub+<token>` addresses (#249) and `b+` return paths (#236) verified, others validated against registered domains
+3. DATA command → `unsub+` recipients suppressed (#249), mail to verified return paths handled (DSNs bounce the bound recipient, the rest is dropped, #236), feedback-loop reports handled (#191), DSNs to any other address dropped, then the message is parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, raw message, the validated threading ids and the link to the email it replies to (#192) stored in `inbound_emails`
 5. `email.received` webhook event fired to all subscribed webhooks
 6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget), see below
 
-Unsubscribe requests, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
+Unsubscribe requests, mail to return paths, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
 ## Inbound Notifications (#106)
 

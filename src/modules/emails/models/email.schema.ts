@@ -47,11 +47,19 @@ export interface DeliveryGroup {
   failureCode?: string;
   /** Per-message-id is canonical across the row, but kept here for symmetry. */
   messageId?: string;
+  /**
+   * Destination MX when the entry's key is not the MX itself. With signed
+   * return paths (#236) a group of several recipients is split into one
+   * entry per recipient, keyed `<mx host>#<recipient index>`; absent on
+   * entries keyed by their MX.
+   */
+  mxHost?: string;
 }
 
 /**
  * Shape of `emails.delivery_state`: a map keyed by destination MX
- * hostname. Nullable on the column because legacy rows (created
+ * hostname (or `<mx host>#<recipient index>` for a per-recipient entry,
+ * #236, see {@link DeliveryGroup.mxHost}). Nullable on the column because legacy rows (created
  * before the Phase-2 migration shipped, or rows where `sendMail` has
  * not yet been called) carry `null` and are treated as "no prior
  * state" by the mailer.

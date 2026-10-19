@@ -9,7 +9,12 @@ import { notifyInboundReceived } from "./inbound-notify.service.ts";
 import { isBlacklistedIp } from "./dnsbl.service.ts";
 import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
-import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
+import {
+  handleParsedBounce,
+  resolveReturnPath,
+  type ReturnPathBinding,
+} from "../../bounces/services/bounce-handler.service.ts";
+import { isReturnPathAddress } from "../../bounces/services/return-path.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
 import { isFeedbackReport } from "./arf-parser.service.ts";
 import { handleInboundFeedbackReport } from "./feedback-handler.service.ts";
@@ -299,6 +304,33 @@ export function start(): void {
           return;
         }
 
+        /**
+         * Signed return path (#236), `b+<id>.<index>.<MAC>@<domain>`,
+         * whatever recipient validation says: the `b+` local part is
+         * reserved. Accepted only when it verifies against the email it
+         * names (MAC, recipient index, sender domain); anything else is
+         * refused here (550), so a forged or mistyped address never reaches
+         * DATA and nothing is stored. A valid one is acted on in `onData`.
+         */
+        if (isReturnPathAddress(address.address)) {
+          resolveReturnPath(address.address)
+            .then((binding) => {
+              if (binding) return callback();
+              logger.warn("SMTP RCPT TO rejected: return path not valid", {
+                domain: address.address.split("@")[1] ?? null,
+                ip: session.remoteAddress,
+              });
+              callback(smtpError("No such recipient", 550));
+            })
+            .catch((error: unknown) => {
+              logger.error("Return path check failed during RCPT TO", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+              callback(smtpError("Temporary failure, try again later", 451));
+            });
+          return;
+        }
+
         if (!spamProtection.recipientValidationEnabled) {
           return callback();
         }
@@ -396,15 +428,25 @@ export function start(): void {
                 /**
                  * Unsubscribe branch (#249): every `unsub+<token>` recipient
                  * (already verified at RCPT TO, checked again here) is
-                 * suppressed. Such a message is never stored as inbound mail
-                 * and triggers no notification; when it was also addressed
-                 * to other mailboxes, only those carry on below.
+                 * suppressed. Signed return paths (#236) are collected for
+                 * the branch below. Such a message is never stored as inbound
+                 * mail and triggers no notification; when it was also
+                 * addressed to other mailboxes, only those carry on below.
                  */
                 const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
                   (r) => r.address,
                 );
                 const otherRecipients: string[] = [];
+                /** Verified signed return paths this message was sent to (#236). */
+                const returnPaths: ReturnPathBinding[] = [];
                 for (const recipient of envelopeRecipients) {
+                  if (isReturnPathAddress(recipient)) {
+                    /** Verified at RCPT TO; checked again here. */
+                    const binding = await resolveReturnPath(recipient);
+                    if (binding) returnPaths.push(binding);
+                    else logger.warn("Return path mail dropped: address not valid");
+                    continue;
+                  }
                   const token = tokenFromUnsubscribeAddress(recipient);
                   if (token === null) {
                     otherRecipients.push(recipient);
@@ -414,13 +456,41 @@ export function start(): void {
                   if (target) await unsubscribe(target, "mailto");
                   else logger.warn("Unsubscribe mail dropped: address not valid");
                 }
+
+                const rawBytes = Buffer.concat(chunks);
+                const rawMessage = rawBytes.toString("utf-8");
+                /** Pure; `null` for anything that is not a DSN, ARF reports included. */
+                const bounce = parseBounce(rawMessage);
+
+                /**
+                 * Return-path branch (#236). A DSN that arrived at a verified
+                 * return path applies to exactly the email and recipient that
+                 * address names, whatever its body says. Anything else sent
+                 * there (an auto-reply, a vacation notice, a complaint report)
+                 * is acknowledged and dropped. Either way, return-path mail is
+                 * never stored as inbound mail and never notified.
+                 */
+                if (returnPaths.length > 0) {
+                  for (const binding of returnPaths) {
+                    if (bounce) {
+                      const result = await handleParsedBounce(bounce, binding);
+                      logger.debug("Bounce branch handled inbound message", { result });
+                    } else {
+                      logger.info(
+                        "Return path mail dropped: not a delivery status notification",
+                        {
+                          emailId: binding.email.id,
+                        },
+                      );
+                    }
+                  }
+                }
+
+                /** Nothing left for a regular mailbox (#249, #236). */
                 if (otherRecipients.length === 0 && envelopeRecipients.length > 0) {
                   callback();
                   return;
                 }
-
-                const rawBytes = Buffer.concat(chunks);
-                const rawMessage = rawBytes.toString("utf-8");
 
                 /**
                  * Feedback-loop branch (#191), before the bounce parser: an
@@ -454,25 +524,23 @@ export function start(): void {
                 const parsed = await simpleParser(rawBytes);
 
                 /**
-                 * Bounce branch (#24). If the message is a DSN, route it to
-                 * the bounce handler: suppress the recipient, mark the
-                 * original email as `bounced`, fire `email.bounced` webhook,
-                 * and skip the regular `inbound_emails` insert. Bounces
-                 * shouldn't pollute the inbound list (operators get noise
-                 * about delivery failures from mailer-daemon@gmail every
-                 * time someone mistypes an address).
+                 * A DSN sent to a regular address, not to a signed return path
+                 * (#236). Every bounce of mail BunMail sends goes to that
+                 * mail's return path, so this one is unauthenticated: it may
+                 * be a late DSN for mail sent before return paths were on, or
+                 * a forged one naming a co-recipient. It has no effect, and,
+                 * as before, a DSN is never stored as inbound mail (operators
+                 * would otherwise get noise from every mistyped address).
                  */
-                const bounce = parseBounce(rawMessage);
                 if (bounce) {
-                  const result = await handleParsedBounce(bounce);
-                  /**
-                   * `dropped-no-original` means we couldn't link the bounce
-                   * back to one of our `emails` rows. We still acknowledge
-                   * the SMTP transaction (returning ok keeps the upstream MTA
-                   * from retrying); the warning was already logged by the
-                   * handler.
-                   */
-                  logger.debug("Bounce branch handled inbound message", { result });
+                  /** Already handled above when it also went to a return path. */
+                  if (returnPaths.length === 0) {
+                    logger.warn("Bounce dropped: not sent to a signed return path", {
+                      recipient: redactEmail(bounce.recipient),
+                      status: bounce.status,
+                      source: bounce.source,
+                    });
+                  }
                   callback();
                   return;
                 }

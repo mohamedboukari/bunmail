@@ -230,7 +230,8 @@ bunmail/
 │   │   ├── bounces/                      ← DSN parsing + bounce → suppression chain (#24)
 │   │   │   ├── services/
 │   │   │   │   ├── bounce-parser.service.ts  ← Pure RFC 3464 + regex fallback parser
-│   │   │   │   └── bounce-handler.service.ts ← Lookup, escalation, suppress, mark bounced, webhook
+│   │   │   │   ├── bounce-handler.service.ts ← Return-path verification, escalation, suppress, mark bounced, webhook
+│   │   │   │   └── return-path.ts            ← Signed per-recipient return path (VERP): mint, parse, MAC (#236)
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
 │   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), TOTP two-factor (#220), record ownership (#219)
@@ -1088,7 +1089,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
-- **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
+- **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24). Only a DSN delivered to a verified **signed return path** counts (#236): with `SMTP_ENABLED=true` each recipient is sent in its own SMTP transaction with envelope sender `b+<email id hex>.<recipient index>.<MAC>@<sender domain>` (HMAC under a key derived from `DKIM_ENCRYPTION_KEY`), the receiver refuses (`550`) a `b+` address that does not verify, and the DSN then applies to exactly that email and recipient, whatever its body says. A DSN to any other address (the Message-ID link of before #236) has no effect; non-DSN mail to a return path (auto-replies) is dropped. Same sender domain as before, so SPF and DMARC alignment are unchanged. See [docs/bounces.md](docs/bounces.md#signed-return-paths-236).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
 - A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180) (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
