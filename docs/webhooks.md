@@ -18,10 +18,10 @@ A rejected URL at create time returns **HTTP 422** `{ "code": "WEBHOOK_URL_BLOCK
 ```
 src/modules/webhooks/
 ├── webhooks.plugin.ts               ← Elysia plugin (route group)
-├── errors.ts                        ← Typed errors (inbound admin-only, webhook cap, replay limit)
+├── errors.ts                        ← Typed errors (inbound admin-only, webhook cap, replay limit, outbox insert)
 ├── services/
 │   ├── webhook.service.ts           ← CRUD operations, per-key webhook cap
-│   ├── webhook-dispatch.service.ts  ← Enqueues one delivery per subscribed webhook
+│   ├── webhook-dispatch.service.ts  ← Outbox: one delivery per subscribed webhook, in the caller's transaction (#184)
 │   ├── webhook-delivery.service.ts  ← Fair claim, attempts, replay, retention purge
 │   ├── webhook-delivery-worker.service.ts ← Poll loop and hourly cleanup
 │   └── replay-limit.service.ts      ← Replay budget per delivery (in memory)
@@ -57,7 +57,7 @@ Table: `webhook_deliveries` (#30): persisted retry queue.
 
 | Column                | Type           | Constraints                                       |
 |-----------------------|----------------|---------------------------------------------------|
-| id                    | varchar(36)    | PK, prefixed `wdl_`                               |
+| id                    | varchar(36)    | PK, `wdl_` + 32 hex from `gen_random_uuid()` (#184; rows written before: `wdl_` + 24 hex) |
 | webhook_id            | varchar(36)    | FK → webhooks, NOT NULL, `ON DELETE CASCADE`      |
 | event                 | varchar(50)    | NOT NULL: the event vocabulary value            |
 | payload               | text           | NOT NULL: the JSON body bytes that get signed   |
@@ -301,6 +301,35 @@ Each retry attempt is signed with a **fresh timestamp**, so a long retry chain d
 
 Before this version, the signature was computed over the body alone (`HMAC(secret, body)`). It is now computed over `<timestamp>.<body>`. Existing consumers will see signature mismatches until they pick up the verification snippet above. There is no compatibility window: rotate together.
 
+## Transactional outbox (#184)
+
+An event is written in the **same transaction** as the state change it describes: the email's outcome, a suppression, a stored inbound message. Both commit together or neither does. Before #184 the state change committed first and the delivery rows were written afterwards, fire-and-forget: a crash or a failed insert in between lost the event for good (the email showed `sent`, the webhook never fired, nothing noticed).
+
+`enqueueEvent(tx, event, data, scope)` takes the caller's transaction (its type admits only a transaction, not the pool) and writes every delivery in one statement:
+
+```sql
+INSERT INTO webhook_deliveries (id, webhook_id, event, payload)
+SELECT 'wdl_' || replace(gen_random_uuid()::text, '-', ''), webhooks.id, $event, $body
+FROM webhooks JOIN api_keys ON api_keys.id = webhooks.api_key_id
+WHERE <active webhook of an active key, subscribed to $event, in scope>
+RETURNING id
+```
+
+- **Fan-out at write, not in the worker.** The match is the same one dispatch always used: an index probe on the owning key (`webhooks_api_key_id_idx`, #313) plus the JSON `events` containment, over at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (#258). That keeps the statement short inside the caller's transaction, and the delivery worker, its fair claim, replay, retention and the dashboard keep working on `webhook_deliveries` rows unchanged. An event table fanned out by the worker would decouple the write from the webhook count, but needs a second queue, a second claim and a new place for replay and inspection, for a fan-out that is already bounded.
+- **No matching webhook** inserts nothing and is success: the state change commits as before.
+- **The body** (`{ event, timestamp, data }`) is serialized once in the app and bound as one text parameter, stored verbatim and re-signed per attempt by the worker. It is stored as a JSON object, never a double-encoded JSON string. Nothing else is stored: the webhook's secret stays encrypted on `webhooks` and only the worker decrypts it.
+- **Failures surface.** A failed insert throws `WebhookEnqueueError` (the Postgres SQLSTATE only, never the payload), the caller's transaction rolls back with its state change, and the caller logs it at `error` with its IDs. Nothing is fire-and-forget any more.
+
+What each caller does when its transaction fails:
+
+| Caller | Transaction | On failure |
+|---|---|---|
+| Email queue (`email.sent`, `email.failed`, inline `email.bounced`) | The row's outcome, the inline hard-bounce suppressions and their events. The SMTP send happens before it, never inside | `Email outcome not saved: transaction rolled back, retried after the lease`. The row stays `sending` under its lease; once the lease expires the email is claimed and sent again, as when the status update alone failed before. When the lease was lost to another claim, the row's events are not enqueued: the claim that holds the row raises them |
+| DSN bounce (`email.bounced`, #236) | Suppression, email marked `bounced`, event | `Bounce not recorded`, the receiver answers `451`, the sending MTA retries |
+| Unsubscribe (`email.unsubscribed`, #249) | Suppression and event | `Unsubscribe not recorded`; the page errors, the mailto gets `451` |
+| Feedback loop (`email.complained`, #191) | Suppression and event (a complaint with no determinable recipient: the event alone) | `Complaint not recorded`, `451` |
+| Inbound mail (`email.received`) | The `inbound_emails` row and its event | `Inbound email not stored`, `451` |
+
 ## Delivery Behavior
 
 As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writes a row to the `webhook_deliveries` table; a worker poll loop (5s tick) drains the queue, retries on a multi-hour schedule, and surfaces inspection + replay via the dashboard and REST API.
@@ -309,7 +338,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 |---|---|
 | **Retry schedule** | 1m → 5m → 15m → 1h → 6h (5 attempts total over ~7h) |
 | **Timeout** | 10 seconds per request |
-| **Fire-and-forget enqueue** | `dispatchEvent` returns synchronously after INSERTing rows; the actual POST happens on the worker tick |
+| **Transactional enqueue** | `enqueueEvent` INSERTs the rows in the transaction of the state change (#184, see [Transactional outbox](#transactional-outbox-184)); the actual POST happens on the worker tick |
 | **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
 | **Fair across API keys** | Each batch (25 rows) is shared round-robin across the API keys owning the webhooks (#258): every key's oldest due delivery first, then each key's next one. A key whose receiver is down and collecting retries cannot delay other keys' events. A key's webhooks share its turn, and a single key keeps FIFO order by due time |
 | **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
@@ -364,21 +393,15 @@ Deletes a webhook, scoped to the requesting API key. CASCADE removes its deliver
 #### `findWebhookById(id, apiKeyId): Promise<Webhook | undefined>`
 Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to disambiguate "no deliveries yet" from "wrong id" before returning a 404.
 
-#### `findWebhooksForEvent(event, scope): Promise<{ id: string }[]>`
-Returns the ids of active webhooks subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` (only admin keys' webhooks). The owner filter runs in SQL; the event match runs on the parsed `events` array.
-
 ### webhook-dispatch.service.ts
 
-#### `dispatchEvent(event, data, scope): void`
-Finds the webhooks in `scope` subscribed to the event and **enqueues** one `webhook_deliveries` row per webhook. Synchronous from the caller's perspective; actual HTTP delivery happens on the worker tick.
+#### `enqueueEvent(tx, event, data, scope): Promise<number>`
+The outbox insert (#184): in the caller's transaction `tx`, one `INSERT ... SELECT` writes a `pending` `webhook_deliveries` row for every active webhook of an active key subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` (only admin keys' webhooks). Owner and event are matched in SQL. Returns the number of rows; zero is success. Throws `WebhookEnqueueError` (SQLSTATE only) when the insert fails. See [Transactional outbox](#transactional-outbox-184).
 
 #### `signPayload(timestamp, body, secret): string`
 HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once per attempt.
 
 ### webhook-delivery.service.ts (#30)
-
-#### `enqueueDelivery({ webhookId, envelope }): Promise<{ id }>`
-INSERTs one `pending` row at `next_attempt_at = now()`.
 
 #### `claimDueDeliveries(n, now?): Promise<Array<...>>`
 Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED`, shared round-robin across the API keys owning their webhooks (#258: a `LATERAL` per webhook takes its first `n` due rows, ranked within the owning key, lowest ranks first), and increments their `attempts` (each row's returned `attempts` is the count before this attempt). Inactive webhooks' rows are flipped to `failed` rather than delivered, and so are rows over `MAX_DELIVERY_ATTEMPTS` (attempts that never reached `recordAttempt` because the process died).

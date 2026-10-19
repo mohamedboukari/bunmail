@@ -14,7 +14,6 @@ import { eq } from "drizzle-orm";
 import { createWebhook } from "../../src/modules/webhooks/services/webhook.service.ts";
 import {
   claimDueDeliveries,
-  enqueueDelivery,
   performHttpAttempt,
 } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
 import { encryptWebhookSecrets } from "../../src/db/encrypt-webhook-secrets.ts";
@@ -25,7 +24,7 @@ import {
   isEncryptedSecret,
 } from "../../src/utils/crypto.ts";
 import { config } from "../../src/config.ts";
-import { truncateAll, seed, db } from "./_helpers.ts";
+import { truncateAll, seed, db, enqueueDelivery } from "./_helpers.ts";
 
 const ENVELOPE = {
   event: "email.sent",

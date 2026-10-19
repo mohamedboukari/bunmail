@@ -2,7 +2,7 @@ import { randomBytes } from "crypto";
 import { hostname } from "os";
 import { eq, and, sql, getTableColumns, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import { db } from "../../../db/index.ts";
+import { db, type DbExecutor, type Tx } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
@@ -10,9 +10,11 @@ import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions } from "./mailer.service.ts";
 import { listUnsubscribeOptions } from "./list-unsubscribe.ts";
-import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import type { WebhookEventType } from "../../webhooks/types/webhook.types.ts";
 import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
@@ -485,12 +487,16 @@ export async function releaseOwnLeases(): Promise<void> {
  * Writes a row's outcome and releases its lease, only if this claim still
  * holds it. If the lease was lost (the row was reclaimed), the update is
  * skipped and logged rather than overwriting the newer claim's state.
+ *
+ * @param executor The transaction that also enqueues the outcome's events (#184).
+ * @returns Whether the claim still held the row and the outcome was saved.
  */
 async function releaseRow(
   claim: Claim,
   values: PgUpdateSetSource<typeof emails>,
-): Promise<void> {
-  const updated = await db
+  executor: DbExecutor = db,
+): Promise<boolean> {
+  const updated = await executor
     .update(emails)
     .set({ ...values, lockedBy: null, leaseUntil: null, updatedAt: new Date() })
     .where(heldBy(claim))
@@ -499,7 +505,9 @@ async function releaseRow(
     logger.warn("Email outcome not saved: lease was lost to another claim", {
       emailId: claim.emailId,
     });
+    return false;
   }
+  return true;
 }
 
 /** Earliest time any MX group was delivered, if one was. */
@@ -650,6 +658,8 @@ async function sendClaimedEmail(
     return;
   }
 
+  /** Set once the mailer has run; the outcome is recorded after the try. */
+  let sent: SentAttempt;
   try {
     /**
      * Look up DKIM keys + unsubscribe overrides for the sender's domain.
@@ -758,134 +768,320 @@ async function sendClaimedEmail(
       },
       returnPath: signReturnPath ? { emailId } : undefined,
     });
-
+    sent = { deliveryState: result.deliveryState, messageId, priorStatuses };
+  } catch (error) {
     /**
-     * Fire `email.bounced` + auto-suppress for groups that **newly
-     * transitioned to `failed`** this attempt via a hard 5xx. Skip
-     * groups that were already `failed` before this attempt (we'd
-     * already fired for them on the earlier pass) and skip groups
-     * still in `retry` (no terminal outcome yet).
+     * `sendMail` only throws for fundamental input errors now (no
+     * valid recipients after parsing): never for transport / SMTP
+     * failures, which return as `failed`/`retry` groups in state.
+     * So this catch is a one-shot terminal: mark `failed`, no retry.
+     * The status and `email.failed` commit together (#184).
      */
-    for (const [mxHost, group] of Object.entries(result.deliveryState)) {
-      if (group.status !== "failed") continue;
-      if (priorStatuses.get(mxHost) === "failed") continue; /** Already handled. */
-      const parsed = failureOf(group);
-      if (parsed?.kind !== "hard")
-        continue; /** Synthetic DNS failures + transient exhaust handled separately. */
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    await db.transaction((tx) =>
+      releaseRowWithEvents(
+        tx,
+        email,
+        claim,
+        { status: "failed", lastError: errorMessage },
+        [
+          {
+            event: "email.failed",
+            data: {
+              emailId,
+              from: email.fromAddress,
+              to: email.toAddress,
+              subject: email.subject,
+              error: errorMessage,
+            },
+          },
+        ],
+      ),
+    );
+    logger.error("Email permanently failed (input error)", {
+      emailId,
+      attempt,
+      error: errorMessage,
+    });
+    return;
+  }
 
-      for (const rcpt of group.recipients) {
-        /** Never weakens a permanent suppression already on file (#191). */
-        const { suppression, applied } = await addFromBounce(email.apiKeyId, {
-          email: rcpt,
+  /**
+   * The send happened. Its outcome (inline bounce suppressions, the row's
+   * status, and every webhook event they raise) is one transaction (#184),
+   * with no network call inside. When it fails nothing of it is kept: the
+   * row stays `sending` under this claim's lease, so once the lease
+   * expires the email is claimed and sent again, the same as when the
+   * status update alone failed before the outbox.
+   */
+  try {
+    await recordSendOutcome(email, claim, sent);
+  } catch (error) {
+    logger.error(
+      "Email outcome not saved: transaction rolled back, retried after the lease",
+      {
+        emailId,
+        attempt,
+        error: loggableError(error),
+      },
+    );
+  }
+}
+
+/** What one SMTP attempt produced, for {@link recordSendOutcome}. */
+interface SentAttempt {
+  deliveryState: DeliveryState;
+  messageId: string;
+  /** Each MX group's status before this attempt. */
+  priorStatuses: Map<string, DeliveryGroup["status"]>;
+}
+
+/** A webhook event raised by a row's outcome, enqueued with it (#184). */
+interface OutcomeEvent {
+  event: WebhookEventType;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Records the outcome of an attempt that reached `sendMail`, in one
+ * transaction (#184): the inline hard-bounce suppressions with their
+ * `email.bounced` events, then the row's status with `email.sent` /
+ * `email.failed`. Log lines are written after the commit, so they only
+ * report what was stored. Throws when the transaction fails.
+ */
+async function recordSendOutcome(
+  email: ClaimedEmail,
+  claim: Claim,
+  sent: SentAttempt,
+): Promise<void> {
+  const emailId = email.id;
+  const attempt = email.attempts;
+  const { deliveryState, messageId, priorStatuses } = sent;
+
+  /**
+   * `email.bounced` + auto-suppress for groups that **newly transitioned
+   * to `failed`** this attempt via a hard 5xx. Skip groups that were
+   * already `failed` before this attempt (we'd already fired for them on
+   * the earlier pass) and skip groups still in `retry` (no terminal
+   * outcome yet).
+   */
+  const hardBounces: Array<{ recipient: string; code: string; diagnostic: string }> = [];
+  for (const [mxHost, group] of Object.entries(deliveryState)) {
+    if (group.status !== "failed") continue;
+    if (priorStatuses.get(mxHost) === "failed") continue; /** Already handled. */
+    const parsed = failureOf(group);
+    if (parsed?.kind !== "hard")
+      continue; /** Synthetic DNS failures + transient exhaust handled separately. */
+    for (const recipient of group.recipients) {
+      hardBounces.push({
+        recipient,
+        code: parsed.code,
+        diagnostic: group.lastError ?? "(no diagnostic)",
+      });
+    }
+  }
+
+  const outcome = decideRowOutcome(email, sent);
+
+  const { bounced, saved } = await db.transaction(async (tx) => {
+    const filed: Array<{
+      recipient: string;
+      code: string;
+      suppressionId: string | null;
+      applied: boolean;
+    }> = [];
+    for (const bounce of hardBounces) {
+      /** Never weakens a permanent suppression already on file (#191). */
+      const { suppression, applied } = await addFromBounce(
+        email.apiKeyId,
+        {
+          email: bounce.recipient,
           bounceType: "hard",
-          diagnosticCode: parsed.code,
+          diagnosticCode: bounce.code,
           sourceEmailId: emailId,
           expiresAt: null,
-        });
-        dispatchEvent(
-          "email.bounced",
-          {
-            emailId,
-            to: email.toAddress,
-            recipient: rcpt,
-            bounceType: "hard",
-            status: parsed.code,
-            diagnostic: group.lastError ?? "(no diagnostic)",
-            suppressionId: suppression?.id ?? null,
-            source: "inline",
-          },
-          { apiKeyId: email.apiKeyId },
-        );
-        logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {
+        },
+        tx,
+      );
+      await enqueueEvent(
+        tx,
+        "email.bounced",
+        {
           emailId,
-          apiKeyId: email.apiKeyId,
-          recipient: redactEmail(rcpt),
-          status: parsed.code,
+          to: email.toAddress,
+          recipient: bounce.recipient,
+          bounceType: "hard",
+          status: bounce.code,
+          diagnostic: bounce.diagnostic,
           suppressionId: suppression?.id ?? null,
-          suppressionApplied: applied,
-        });
-      }
+          source: "inline",
+        },
+        { apiKeyId: email.apiKeyId },
+      );
+      filed.push({
+        recipient: bounce.recipient,
+        code: bounce.code,
+        suppressionId: suppression?.id ?? null,
+        applied,
+      });
     }
+    const rowSaved = await releaseRowWithEvents(
+      tx,
+      email,
+      claim,
+      outcome.values,
+      outcome.events,
+    );
+    return { bounced: filed, saved: rowSaved };
+  });
 
-    /**
-     * Decide row-level outcome from the aggregate group state.
-     *
-     * - any group still `retry` AND the email is young enough → schedule
-     *   the next pass after the backoff (#180)
-     * - else (all terminal, or too old to retry) → terminal row status:
-     *   - any group `sent` → row `sent`
-     *   - else any failed-due-to-hard-5xx → row `bounced`
-     *   - else → row `failed`
-     */
-    const groups = Object.entries(result.deliveryState);
-    const anyRetry = groups.some(([, g]) => g.status === "retry");
-    const anySent = groups.some(([, g]) => g.status === "sent");
+  for (const bounce of bounced) {
+    logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {
+      emailId,
+      apiKeyId: email.apiKeyId,
+      recipient: redactEmail(bounce.recipient),
+      status: bounce.code,
+      suppressionId: bounce.suppressionId,
+      suppressionApplied: bounce.applied,
+    });
+  }
+  if (!saved) return;
 
-    const retryDelayMs = anyRetry
-      ? nextRetryDelayMs(attempt, email.ageMs, retryMaxAgeMs())
-      : null;
+  if (outcome.kind === "retry") {
+    logger.warn("Email send had retry groups, requeued", {
+      emailId,
+      attempt,
+      retryInSeconds: outcome.retrySeconds,
+    });
+    return;
+  }
+  const finalGroups = Object.values(outcome.finalState);
+  logger.info("Email reached terminal state", {
+    emailId,
+    messageId,
+    attempt,
+    finalStatus: outcome.finalStatus,
+    sentGroups: finalGroups.filter((g) => g.status === "sent").length,
+    failedGroups: finalGroups.filter((g) => g.status === "failed").length,
+  });
+}
 
-    if (retryDelayMs !== null) {
-      /** At least one group transient-failed; row goes back to `queued`
-       *  and is not claimable before the backoff passes (database clock).
-       *  Persist the state so the next pass can skip already-sent groups;
-       *  `sentAt` records the first delivered group. */
-      const retrySeconds = Math.round(retryDelayMs / 1000);
-      await releaseRow(claim, {
+/** The row update and events an attempt's delivery state leads to. */
+type RowOutcome =
+  | {
+      kind: "retry";
+      values: PgUpdateSetSource<typeof emails>;
+      events: OutcomeEvent[];
+      retrySeconds: number;
+    }
+  | {
+      kind: "terminal";
+      values: PgUpdateSetSource<typeof emails>;
+      events: OutcomeEvent[];
+      finalStatus: "sent" | "bounced" | "failed";
+      finalState: DeliveryState;
+    };
+
+/**
+ * Decides the row-level outcome from the aggregate group state. Pure.
+ *
+ * - any group still `retry` AND the email is young enough → schedule
+ *   the next pass after the backoff (#180)
+ * - else (all terminal, or too old to retry) → terminal row status:
+ *   - any group `sent` → row `sent`
+ *   - else any failed-due-to-hard-5xx → row `bounced`
+ *   - else → row `failed`
+ *
+ * `email.sent` fires once, on the attempt that landed the first group
+ * (checked against the prior statuses so a later pass does not fire it
+ * again); `email.failed` on a pure failure.
+ */
+function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
+  const { deliveryState, messageId, priorStatuses } = sent;
+  const groups = Object.entries(deliveryState);
+  const anyRetry = groups.some(([, g]) => g.status === "retry");
+  const anySent = groups.some(([, g]) => g.status === "sent");
+  const sentEvent: OutcomeEvent = {
+    event: "email.sent",
+    data: {
+      emailId: email.id,
+      from: email.fromAddress,
+      to: email.toAddress,
+      subject: email.subject,
+      messageId,
+    },
+  };
+
+  const retryDelayMs = anyRetry
+    ? nextRetryDelayMs(email.attempts, email.ageMs, retryMaxAgeMs())
+    : null;
+
+  if (retryDelayMs !== null) {
+    /** At least one group transient-failed; row goes back to `queued`
+     *  and is not claimable before the backoff passes (database clock).
+     *  Persist the state so the next pass can skip already-sent groups;
+     *  `sentAt` records the first delivered group. */
+    const retrySeconds = Math.round(retryDelayMs / 1000);
+    return {
+      kind: "retry",
+      retrySeconds,
+      values: {
         status: "queued",
         nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
         messageId,
-        deliveryState: result.deliveryState,
-        sentAt: firstDeliveredAt(result.deliveryState),
-        lastError: summariseRetries(result.deliveryState),
-      });
-      logger.warn("Email send had retry groups, requeued", {
-        emailId,
-        attempt,
-        retryInSeconds: retrySeconds,
-      });
-      /** If this attempt landed at least one group, fire `email.sent`
-       *  once: checked against priorStatuses so we don't double-fire
-       *  on a future attempt where the same group is already sent. */
-      if (anySent && !anySentBefore(priorStatuses)) {
-        dispatchEvent(
-          "email.sent",
-          {
-            emailId,
-            from: email.fromAddress,
-            to: email.toAddress,
-            subject: email.subject,
-            messageId,
-          },
-          { apiKeyId: email.apiKeyId },
-        );
-      }
-      return;
-    }
+        deliveryState,
+        sentAt: firstDeliveredAt(deliveryState),
+        lastError: summariseRetries(deliveryState),
+      },
+      events: anySent && !anySentBefore(priorStatuses) ? [sentEvent] : [],
+    };
+  }
 
-    /** Too-old-to-retry or all-terminal path. Flip any straggling retry
-     *  groups to `failed` (transient-exhausted, not hard-bounced) so
-     *  the persisted state has no ambiguous statuses left. */
-    const finalState: DeliveryState = { ...result.deliveryState };
-    for (const [mx, g] of Object.entries(finalState)) {
-      if (g.status === "retry") finalState[mx] = { ...g, status: "failed" };
-    }
+  /** Too-old-to-retry or all-terminal path. Flip any straggling retry
+   *  groups to `failed` (transient-exhausted, not hard-bounced) so
+   *  the persisted state has no ambiguous statuses left. */
+  const finalState: DeliveryState = { ...deliveryState };
+  for (const [mx, g] of Object.entries(finalState)) {
+    if (g.status === "retry") finalState[mx] = { ...g, status: "failed" };
+  }
 
-    const finalGroups = Object.values(finalState);
-    const finalAnySent = finalGroups.some((g) => g.status === "sent");
-    const finalAnyHardBounce = Object.entries(finalState).some(([, g]) => {
-      if (g.status !== "failed") return false;
-      const p = failureOf(g);
-      return p?.kind === "hard";
+  const finalGroups = Object.values(finalState);
+  const finalAnySent = finalGroups.some((g) => g.status === "sent");
+  const finalAnyHardBounce = finalGroups.some(
+    (g) => g.status === "failed" && failureOf(g)?.kind === "hard",
+  );
+
+  const finalStatus: "sent" | "bounced" | "failed" = finalAnySent
+    ? "sent"
+    : finalAnyHardBounce
+      ? "bounced"
+      : "failed";
+
+  const events: OutcomeEvent[] = [];
+  if (finalAnySent && !anySentBefore(priorStatuses)) events.push(sentEvent);
+  if (!finalAnySent && finalStatus === "failed") {
+    /** Pure failure (no group ever delivered + no hard 5xx): keep
+     *  the `email.failed` webhook fired by the legacy path so
+     *  consumers that watch this event still see it. */
+    events.push({
+      event: "email.failed",
+      data: {
+        emailId: email.id,
+        from: email.fromAddress,
+        to: email.toAddress,
+        subject: email.subject,
+        error: summariseFailures(finalState),
+        /** Some receiver refused the sender (#246), not the recipient. */
+        blocked: finalGroups.some((g) => g.blocked === true),
+      },
     });
+  }
 
-    const finalStatus: "sent" | "bounced" | "failed" = finalAnySent
-      ? "sent"
-      : finalAnyHardBounce
-        ? "bounced"
-        : "failed";
-
-    await releaseRow(claim, {
+  return {
+    kind: "terminal",
+    finalStatus,
+    finalState,
+    values: {
       status: finalStatus,
       messageId,
       deliveryState: finalState,
@@ -894,75 +1090,32 @@ async function sendClaimedEmail(
         finalStatus === "sent" && finalGroups.every((g) => g.status === "sent")
           ? null
           : summariseFailures(finalState),
-    });
+    },
+    events,
+  };
+}
 
-    logger.info("Email reached terminal state", {
-      emailId,
-      messageId,
-      attempt,
-      finalStatus,
-      sentGroups: finalGroups.filter((g) => g.status === "sent").length,
-      failedGroups: finalGroups.filter((g) => g.status === "failed").length,
-    });
-
-    if (finalAnySent && !anySentBefore(priorStatuses)) {
-      dispatchEvent(
-        "email.sent",
-        {
-          emailId,
-          from: email.fromAddress,
-          to: email.toAddress,
-          subject: email.subject,
-          messageId,
-        },
-        { apiKeyId: email.apiKeyId },
-      );
-    }
-
-    if (!finalAnySent && finalStatus === "failed") {
-      /** Pure failure (no group ever delivered + no hard 5xx): keep
-       *  the `email.failed` webhook fired by the legacy path so
-       *  consumers that watch this event still see it. */
-      dispatchEvent(
-        "email.failed",
-        {
-          emailId,
-          from: email.fromAddress,
-          to: email.toAddress,
-          subject: email.subject,
-          error: summariseFailures(finalState),
-          /** Some receiver refused the sender (#246), not the recipient. */
-          blocked: Object.values(finalState).some((g) => g.blocked === true),
-        },
-        { apiKeyId: email.apiKeyId },
-      );
-    }
-  } catch (error) {
-    /**
-     * `sendMail` only throws for fundamental input errors now (no
-     * valid recipients after parsing): never for transport / SMTP
-     * failures, which return as `failed`/`retry` groups in state.
-     * So this catch is a one-shot terminal: mark `failed`, no retry.
-     */
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    await releaseRow(claim, { status: "failed", lastError: errorMessage });
-    logger.error("Email permanently failed (input error)", {
-      emailId,
-      attempt,
-      error: errorMessage,
-    });
-    dispatchEvent(
-      "email.failed",
-      {
-        emailId,
-        from: email.fromAddress,
-        to: email.toAddress,
-        subject: email.subject,
-        error: errorMessage,
-      },
-      { apiKeyId: email.apiKeyId },
-    );
+/**
+ * Writes a row's outcome and enqueues the events it raises, in the
+ * caller's transaction (#184). The events are enqueued only when this
+ * claim still held the row: when the lease was lost, the outcome is not
+ * saved and the claim that took the row over raises its own events.
+ *
+ * @returns Whether the outcome was saved.
+ */
+async function releaseRowWithEvents(
+  tx: Tx,
+  email: ClaimedEmail,
+  claim: Claim,
+  values: PgUpdateSetSource<typeof emails>,
+  events: OutcomeEvent[],
+): Promise<boolean> {
+  const saved = await releaseRow(claim, values, tx);
+  if (!saved) return false;
+  for (const { event, data } of events) {
+    await enqueueEvent(tx, event, data, { apiKeyId: email.apiKeyId });
   }
+  return true;
 }
 
 /** `last_error` of a group whose every recipient was suppressed before a retry (#262). */
@@ -1029,23 +1182,26 @@ async function holdForUnreadableDkimKey(
     });
     return;
   }
-  await releaseRow(claim, { status: "failed", lastError });
+  /** The status and `email.failed` commit together (#184). */
+  await db.transaction((tx) =>
+    releaseRowWithEvents(tx, email, claim, { status: "failed", lastError }, [
+      {
+        event: "email.failed",
+        data: {
+          emailId: email.id,
+          from: email.fromAddress,
+          to: email.toAddress,
+          subject: email.subject,
+          error: lastError,
+        },
+      },
+    ]),
+  );
   logger.error("Email failed: DKIM key unreadable for the whole retry window", {
     emailId: email.id,
     domain: domainName,
     attempt: claim.attempt,
   });
-  dispatchEvent(
-    "email.failed",
-    {
-      emailId: email.id,
-      from: email.fromAddress,
-      to: email.toAddress,
-      subject: email.subject,
-      error: lastError,
-    },
-    { apiKeyId: email.apiKeyId },
-  );
 }
 
 /**

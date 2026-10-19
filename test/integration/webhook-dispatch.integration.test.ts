@@ -2,9 +2,10 @@
  * Integration tests for `webhook-dispatch.service.ts` against a real
  * Postgres + a fetch mock. Catches:
  *
- *   - `findWebhooksForEvent` filters by `isActive = true` and by event
- *     membership (the JSON `events` array column)
- *   - `dispatchEvent` posts to every subscribed URL
+ *   - `enqueueEvent` fans out to active webhooks by `isActive = true` and
+ *     by event membership (the JSON `events` array column), inside the
+ *     caller's transaction (#184)
+ *   - an enqueued event is posted to every subscribed URL
  *   - The signed envelope ships the right headers
  *     (`X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`)
  *   - Retry behaviour on non-2xx responses (3 attempts with exponential
@@ -15,19 +16,29 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
-  dispatchEvent,
+  enqueueEvent,
   signPayload,
+  type DispatchScope,
 } from "../../src/modules/webhooks/services/webhook-dispatch.service.ts";
 import { runPollCycle } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
 import {
   createWebhook,
-  findWebhooksForEvent,
   deleteWebhook,
   listWebhooks,
 } from "../../src/modules/webhooks/services/webhook.service.ts";
-import { truncateAll, seed, db, webhooks } from "./_helpers.ts";
+import { WebhookEnqueueError } from "../../src/modules/webhooks/errors.ts";
+import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
+import type { WebhookEventType } from "../../src/modules/webhooks/types/webhook.types.ts";
+import {
+  truncateAll,
+  seed,
+  db,
+  webhooks,
+  failWritesWhere,
+  removeInjectedFailures,
+} from "./_helpers.ts";
 
 interface CapturedRequest {
   url: string;
@@ -67,25 +78,36 @@ beforeEach(async () => {
   );
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
+  await removeInjectedFailures();
 });
 
 /**
- * Wait for `dispatchEvent`'s enqueue chain to drain, then trigger the
- * worker poll once so any due rows actually POST out. dispatchEvent
- * is fire-and-forget, so we wait briefly for the enqueue inserts to
- * commit before we ask the worker to claim them.
- *
- * Pre-#30 this was just a setTimeout: the old implementation POSTed
- * directly from `dispatchEvent`'s fire-and-forget chain. Now the POST
- * happens via the worker poll, so we drive one tick manually. The
- * tests' assertions (signed payload shape, fetch call count) are
- * unchanged: we just have an extra async hop to walk through.
+ * Drives one worker poll so any due rows actually POST out. `enqueueEvent`
+ * only INSERTs `webhook_deliveries` rows, committed with the caller's
+ * transaction (#184); the worker is what hits the consumer.
  */
-async function waitForDispatch(ms = 100): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+async function deliverDue(): Promise<void> {
   await runPollCycle();
+}
+
+/** Enqueues an event in a transaction of its own, the way a caller does. */
+function enqueue(
+  event: WebhookEventType,
+  data: Record<string, unknown>,
+  scope: DispatchScope,
+): Promise<number> {
+  return db.transaction((tx) => enqueueEvent(tx, event, data, scope));
+}
+
+/** The webhook ids that have a delivery row for `event`. */
+async function deliveredTo(event: WebhookEventType): Promise<string[]> {
+  const rows = await db
+    .select({ webhookId: webhookDeliveries.webhookId })
+    .from(webhookDeliveries)
+    .where(eq(webhookDeliveries.event, event));
+  return rows.map((row) => row.webhookId);
 }
 
 describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
@@ -125,7 +147,7 @@ describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
   });
 });
 
-describe("findWebhooksForEvent (event filtering)", () => {
+describe("enqueueEvent (event filtering)", () => {
   test("returns only active webhooks subscribed to the given event", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     /** Subscribed to email.sent. */
@@ -148,18 +170,18 @@ describe("findWebhooksForEvent (event filtering)", () => {
     });
     await db.update(webhooks).set({ isActive: false }).where(eq(webhooks.id, inactiveId));
 
-    const sent = await findWebhooksForEvent("email.sent", { apiKeyId });
-    expect(sent.map((h) => h.id)).toEqual([sentHook]);
+    expect(await enqueue("email.sent", {}, { apiKeyId })).toBe(1);
+    expect(await deliveredTo("email.sent")).toEqual([sentHook]);
 
-    const bounced = await findWebhooksForEvent("email.bounced", { apiKeyId });
-    expect(bounced.map((h) => h.id)).toEqual([bouncedHook]);
+    expect(await enqueue("email.bounced", {}, { apiKeyId })).toBe(1);
+    expect(await deliveredTo("email.bounced")).toEqual([bouncedHook]);
 
-    const queued = await findWebhooksForEvent("email.queued", { apiKeyId });
-    expect(queued).toHaveLength(0);
+    expect(await enqueue("email.queued", {}, { apiKeyId })).toBe(0);
+    expect(await deliveredTo("email.queued")).toEqual([]);
   });
 });
 
-describe("dispatchEvent: end-to-end", () => {
+describe("enqueueEvent: end-to-end through the worker", () => {
   test("posts to every subscribed webhook with signed headers", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { secret: secret1 } = await seed.webhook({
@@ -173,12 +195,12 @@ describe("dispatchEvent: end-to-end", () => {
       events: ["email.bounced"],
     });
 
-    dispatchEvent(
+    await enqueue(
       "email.bounced",
       { emailId: "msg_test", to: "user@example.com", bounceType: "hard" },
       { apiKeyId },
     );
-    await waitForDispatch();
+    await deliverDue();
 
     expect(captured).toHaveLength(2);
     const urls = captured.map((c) => c.url).toSorted();
@@ -218,8 +240,8 @@ describe("dispatchEvent: end-to-end", () => {
       events: ["email.sent"],
     });
 
-    dispatchEvent("email.bounced", { emailId: "msg_test" }, { apiKeyId });
-    await waitForDispatch();
+    expect(await enqueue("email.bounced", { emailId: "msg_test" }, { apiKeyId })).toBe(0);
+    await deliverDue();
 
     expect(captured).toHaveLength(0);
   });
@@ -246,17 +268,17 @@ describe("dispatch is scoped to the owning API key", () => {
       events: ["email.sent"],
     });
 
-    dispatchEvent(
+    await enqueue(
       "email.sent",
       { emailId: "msg_a", to: "customer@example.org", subject: "Tenant A only" },
       { apiKeyId: a.id },
     );
-    await waitForDispatch();
+    await deliverDue();
 
     expect(captured.map((c) => c.url)).toEqual(["https://93.184.216.34/"]);
   });
 
-  test("lookup returns nothing for a key without matching webhooks", async () => {
+  test("nothing is enqueued for a key without matching webhooks", async () => {
     const a = await seed.apiKey({ name: "tenant-a" });
     const b = await seed.apiKey({ name: "tenant-b" });
     await seed.webhook({
@@ -264,7 +286,8 @@ describe("dispatch is scoped to the owning API key", () => {
       url: "https://a.example.com",
       events: ["email.sent"],
     });
-    expect(await findWebhooksForEvent("email.sent", { apiKeyId: b.id })).toHaveLength(0);
+    expect(await enqueue("email.sent", {}, { apiKeyId: b.id })).toBe(0);
+    expect(await deliveredTo("email.sent")).toEqual([]);
   });
 
   test("inbound email.received reaches admin keys' webhooks only", async () => {
@@ -283,7 +306,100 @@ describe("dispatch is scoped to the owning API key", () => {
       events: ["email.received"],
     });
 
-    const hooks = await findWebhooksForEvent("email.received", { adminOnly: true });
-    expect(hooks.map((h) => h.id)).toEqual([adminHook]);
+    await enqueue("email.received", {}, { adminOnly: true });
+    expect(await deliveredTo("email.received")).toEqual([adminHook]);
+  });
+});
+
+/**
+ * The outbox insert itself (#184): one statement inside the caller's
+ * transaction, the stored body a JSON object, failures thrown.
+ */
+describe("enqueueEvent: the outbox insert", () => {
+  test("stores the envelope as a JSON object, one pending row per webhook", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id: hookA } = await seed.webhook({
+      apiKeyId,
+      url: "https://a.example.com",
+      events: ["email.sent"],
+    });
+    const { id: hookB } = await seed.webhook({
+      apiKeyId,
+      url: "https://b.example.com",
+      events: ["email.sent"],
+    });
+
+    expect(await enqueue("email.sent", { emailId: "msg_1", n: 1 }, { apiKeyId })).toBe(2);
+
+    const rows = await db
+      .select({
+        id: webhookDeliveries.id,
+        webhookId: webhookDeliveries.webhookId,
+        status: webhookDeliveries.status,
+        attempts: webhookDeliveries.attempts,
+        payload: webhookDeliveries.payload,
+        payloadType: sql<string>`jsonb_typeof(${webhookDeliveries.payload}::jsonb)`,
+      })
+      .from(webhookDeliveries);
+    expect(rows.map((r) => r.webhookId).toSorted()).toEqual([hookA, hookB].toSorted());
+    for (const row of rows) {
+      expect(row.id).toMatch(/^wdl_[0-9a-f]{32}$/);
+      expect(row.status).toBe("pending");
+      expect(row.attempts).toBe(0);
+      /** Not double-encoded: the stored text is a JSON object, not a JSON string. */
+      expect(row.payloadType).toBe("object");
+      const body: unknown = JSON.parse(row.payload);
+      expect(body).toMatchObject({
+        event: "email.sent",
+        data: { emailId: "msg_1", n: 1 },
+      });
+    }
+    expect(new Set(rows.map((r) => r.id)).size).toBe(2);
+  });
+
+  test("rolls back with the caller's transaction", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    await seed.webhook({
+      apiKeyId,
+      url: "https://a.example.com",
+      events: ["email.sent"],
+    });
+
+    const error = await db
+      .transaction(async (tx) => {
+        expect(await enqueueEvent(tx, "email.sent", {}, { apiKeyId })).toBe(1);
+        throw new Error("the caller's next write failed");
+      })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(String(error)).toContain("the caller's next write failed");
+
+    expect(await deliveredTo("email.sent")).toEqual([]);
+  });
+
+  test("a failed insert throws WebhookEnqueueError without the payload", async () => {
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id: hook } = await seed.webhook({
+      apiKeyId,
+      url: "https://a.example.com",
+      events: ["email.sent"],
+    });
+    await failWritesWhere("webhook_deliveries", { webhook_id: hook });
+
+    const error = await db
+      .transaction((tx) =>
+        enqueueEvent(tx, "email.sent", { to: "recipient@example.org" }, { apiKeyId }),
+      )
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(error).toBeInstanceOf(WebhookEnqueueError);
+    expect(error).toMatchObject({ sqlState: "P0001" });
+    expect(String(error)).not.toContain("recipient@example.org");
+    expect(await deliveredTo("email.sent")).toEqual([]);
   });
 });

@@ -262,7 +262,6 @@ void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () =>
   listWebhooks: mock(() => Promise.resolve([])),
   listAllWebhooks: mock(() => Promise.resolve([])),
   deleteWebhook: mock(() => Promise.resolve(undefined)),
-  findWebhooksForEvent: mock(() => Promise.resolve([])),
 }));
 
 void mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({

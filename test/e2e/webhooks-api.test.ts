@@ -89,7 +89,6 @@ void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () =>
   deleteWebhook: mock((id: string) =>
     Promise.resolve(id === "whk_test123" ? mockWebhook : undefined),
   ),
-  findWebhooksForEvent: mock(() => Promise.resolve([])),
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */

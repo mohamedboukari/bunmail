@@ -165,7 +165,7 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 2. RCPT TO command → `unsub+<token>` addresses (#249) and `b+` return paths (#236) verified, others validated against registered domains
 3. DATA command → `unsub+` recipients suppressed (#249), mail to verified return paths handled (DSNs bounce the bound recipient, the rest is dropped, #236), feedback-loop reports handled (#191), DSNs to any other address dropped, then the message is parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, raw message, the validated threading ids and the link to the email it replies to (#192) stored in `inbound_emails`
-5. `email.received` webhook event fired to all subscribed webhooks
+5. `email.received` enqueued for admin keys' webhooks, in the same transaction as step 4 (`storeInboundEmail`, #184): both are stored or neither is; a failure is logged (`Inbound email not stored`) and answered `451`, so the sender retries
 6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget), see below
 
 Unsubscribe requests, mail to return paths, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.

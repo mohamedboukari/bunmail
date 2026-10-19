@@ -1,6 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { handleBounce } from "../../src/modules/bounces/services/bounce-handler.service.ts";
-import type { ReturnPathBinding } from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import type {
+  BounceHandlerDeps,
+  ReturnPathBinding,
+} from "../../src/modules/bounces/services/bounce-handler.service.ts";
 import type { ParsedBounce } from "../../src/modules/bounces/types/bounce.types.ts";
 
 /**
@@ -13,6 +16,11 @@ import type { ParsedBounce } from "../../src/modules/bounces/types/bounce.types.
  * never from the DSN body.
  */
 
+/** The fake transaction handle: names the transaction a write ran in. */
+interface FakeTx {
+  txId: number;
+}
+
 interface CallLog {
   isSuppressed: Array<{ apiKeyId: string; email: string }>;
   addFromBounce: Array<{
@@ -22,23 +30,34 @@ interface CallLog {
     expiresAt: Date | null | undefined;
   }>;
   markEmailBounced: string[];
-  dispatchEvent: Array<{ event: string; data: Record<string, unknown> }>;
+  events: Array<{ event: string; data: Record<string, unknown> }>;
+  /** Every write, with the transaction it ran in (`null`: outside one). */
+  writes: Array<{ write: string; txId: number | null }>;
+  /** How each transaction ended. */
+  transactions: Array<"committed" | "rolled back">;
 }
 
 function makeDeps(opts: {
   existing?: { id: string; bounceType: string | null };
   /** A permanent suppression already on file, kept by addFromBounce (#191). */
   keptSuppressionId?: string;
+  /** Make the outbox insert fail (#184). */
+  enqueueFails?: boolean;
 }): {
-  deps: Parameters<typeof handleBounce>[2];
+  deps: BounceHandlerDeps<FakeTx>;
   calls: CallLog;
 } {
   const calls: CallLog = {
     isSuppressed: [],
     addFromBounce: [],
     markEmailBounced: [],
-    dispatchEvent: [],
+    events: [],
+    writes: [],
+    transactions: [],
   };
+  /** The transaction currently open, if any. */
+  let open: FakeTx | null = null;
+  const inTx = (tx: FakeTx): number | null => (open === tx ? tx.txId : null);
 
   return {
     calls,
@@ -47,7 +66,22 @@ function makeDeps(opts: {
         calls.isSuppressed.push({ apiKeyId, email });
         return opts.existing;
       },
-      addFromBounce: async (apiKeyId, input) => {
+      transaction: async (work) => {
+        const tx: FakeTx = { txId: calls.transactions.length + 1 };
+        open = tx;
+        try {
+          const result = await work(tx);
+          calls.transactions.push("committed");
+          return result;
+        } catch (error) {
+          calls.transactions.push("rolled back");
+          throw error;
+        } finally {
+          open = null;
+        }
+      },
+      addFromBounce: async (tx, apiKeyId, input) => {
+        calls.writes.push({ write: "addFromBounce", txId: inTx(tx) });
         calls.addFromBounce.push({
           apiKeyId,
           email: input.email,
@@ -58,14 +92,26 @@ function makeDeps(opts: {
           ? { suppressionId: "sup_new123", applied: true }
           : { suppressionId: opts.keptSuppressionId, applied: false };
       },
-      markEmailBounced: async (emailId) => {
+      markEmailBounced: async (tx, emailId) => {
+        calls.writes.push({ write: "markEmailBounced", txId: inTx(tx) });
         calls.markEmailBounced.push(emailId);
       },
-      dispatchEvent: (event, data) => {
-        calls.dispatchEvent.push({ event, data });
+      enqueueEvent: async (tx, event, data) => {
+        calls.writes.push({ write: "enqueueEvent", txId: inTx(tx) });
+        if (opts.enqueueFails) throw new Error("outbox insert failed");
+        calls.events.push({ event, data });
+        return 1;
       },
     },
   };
+}
+
+/** What `promise` rejects with, or `null` when it resolves. */
+function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (error: unknown) => error,
+  );
 }
 
 const HARD_BOUNCE: ParsedBounce = {
@@ -110,10 +156,10 @@ describe("handleBounce: happy paths", () => {
     /** Hard bounce → permanent (null expiresAt). */
     expect(calls.addFromBounce[0]!.expiresAt).toBeNull();
     expect(calls.markEmailBounced).toEqual(["msg_orig123"]);
-    expect(calls.dispatchEvent).toHaveLength(1);
-    expect(calls.dispatchEvent[0]!.event).toBe("email.bounced");
-    expect(calls.dispatchEvent[0]!.data.bounceType).toBe("hard");
-    expect(calls.dispatchEvent[0]!.data.suppressionId).toBe("sup_new123");
+    expect(calls.events).toHaveLength(1);
+    expect(calls.events[0]!.event).toBe("email.bounced");
+    expect(calls.events[0]!.data.bounceType).toBe("hard");
+    expect(calls.events[0]!.data.suppressionId).toBe("sup_new123");
   });
 
   test("first soft bounce: persists soft suppression with future expiresAt", async () => {
@@ -150,7 +196,7 @@ describe("handleBounce: escalation", () => {
     expect(calls.addFromBounce[0]!.bounceType).toBe("hard");
     /** Escalated → permanent. */
     expect(calls.addFromBounce[0]!.expiresAt).toBeNull();
-    expect(calls.dispatchEvent[0]!.data.bounceType).toBe("hard");
+    expect(calls.events[0]!.data.bounceType).toBe("hard");
   });
 
   test("hard bounce on top of existing hard suppression stays hard (no double-escalation)", async () => {
@@ -180,7 +226,7 @@ describe("handleBounce: the return path decides the recipient (#236)", () => {
       { apiKeyId: "key_abc", email: "user@example.com" },
     ]);
     expect(calls.addFromBounce.map((c) => c.email)).toEqual(["user@example.com"]);
-    expect(calls.dispatchEvent[0]!.data.to).toBe("user@example.com");
+    expect(calls.events[0]!.data.to).toBe("user@example.com");
   });
 
   test("a DSN without any Original-Message-ID still applies", async () => {
@@ -218,7 +264,32 @@ describe("handleBounce: suppression kept (#191)", () => {
     expect(result.suppressionApplied).toBe(false);
     expect(result.suppressionId).toBe("sup_complaint");
     expect(calls.markEmailBounced).toEqual(["msg_orig123"]);
-    expect(calls.dispatchEvent).toHaveLength(1);
-    expect(calls.dispatchEvent[0]!.data.suppressionId).toBe("sup_complaint");
+    expect(calls.events).toHaveLength(1);
+    expect(calls.events[0]!.data.suppressionId).toBe("sup_complaint");
+  });
+});
+
+describe("handleBounce: one transaction (#184)", () => {
+  test("the suppression, the status and the event are written in one transaction", async () => {
+    const { deps, calls } = makeDeps({});
+
+    await handleBounce(HARD_BOUNCE, BOUND, deps);
+
+    expect(calls.writes).toEqual([
+      { write: "addFromBounce", txId: 1 },
+      { write: "markEmailBounced", txId: 1 },
+      { write: "enqueueEvent", txId: 1 },
+    ]);
+    expect(calls.transactions).toEqual(["committed"]);
+  });
+
+  test("an enqueue failure rolls the transaction back and is thrown, not swallowed", async () => {
+    const { deps, calls } = makeDeps({ enqueueFails: true });
+
+    const error = await rejectionOf(handleBounce(HARD_BOUNCE, BOUND, deps));
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("outbox insert failed");
+    expect(calls.transactions).toEqual(["rolled back"]);
+    expect(calls.events).toEqual([]);
   });
 });

@@ -4,9 +4,9 @@
  * Replaces the old in-memory retry loop in `webhook-dispatch.service.ts`
  * with a durable, DB-backed queue. Three concerns live here:
  *
- *   1. **Enqueue.** `enqueueDelivery` turns one (webhook, event, body)
- *      tuple into a `webhook_deliveries` row at `status='pending'`.
- *      `dispatchEvent` calls this once per subscribed webhook.
+ *   1. **Enqueue.** Not here: `enqueueEvent` (webhook-dispatch.service.ts)
+ *      inserts one `pending` row per subscribed webhook, inside the
+ *      transaction of the state change the event describes (#184).
  *   2. **Claim + send.** `claimAndDeliverDueAttempts` pulls the next N
  *      due rows atomically (FOR UPDATE SKIP LOCKED: same pattern as
  *      the email queue claim from #20), POSTs each one, and updates
@@ -33,7 +33,6 @@ import { webhooks } from "../models/webhook.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { signPayload } from "./webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
-import { generateId } from "../../../utils/id.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import {
   buildPinnedRequest,
@@ -43,7 +42,6 @@ import {
   type ResolveAll,
 } from "../../../utils/ssrf-guard.ts";
 import { config } from "../../../config.ts";
-import type { WebhookEventType } from "../types/webhook.types.ts";
 import { ReplayLimitReachedError } from "../errors.ts";
 import { recordReplay, REPLAYS_PER_DELIVERY_PER_HOUR } from "./replay-limit.service.ts";
 
@@ -136,35 +134,6 @@ async function readBodyPreview(response: Response): Promise<string | null> {
       .slice(0, RESPONSE_PREVIEW_LIMIT)
       .toWellFormed()
   );
-}
-
-interface DeliveryEnvelope {
-  event: WebhookEventType;
-  /** ISO string: the time the event was *raised*, not the time it was
-   *  delivered. Stored verbatim in the body so consumers can reason
-   *  about event ordering even after retries. */
-  timestamp: string;
-  data: Record<string, unknown>;
-}
-
-/**
- * Enqueues one delivery row. Called by `dispatchEvent` for every
- * subscribed webhook. Returns the new row's id so callers (and tests)
- * can correlate.
- */
-export async function enqueueDelivery(opts: {
-  webhookId: string;
-  envelope: DeliveryEnvelope;
-}): Promise<{ id: string }> {
-  const id = generateId("wdl");
-  const body = JSON.stringify(opts.envelope);
-  await db.insert(webhookDeliveries).values({
-    id,
-    webhookId: opts.webhookId,
-    event: opts.envelope.event,
-    payload: body,
-  });
-  return { id };
 }
 
 /**

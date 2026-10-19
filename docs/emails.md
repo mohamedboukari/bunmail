@@ -326,9 +326,10 @@ Stops the queue processor gracefully.
 1. Arrives already `sending`, with `attempts` incremented and a 15-minute lease (the claim does both); the lease is renewed every minute while sending
 2. Looks up DKIM keys for the sender's domain
 3. Sends via SMTP with DKIM signing (if keys available)
-4. On success: marks `sent`, fires `email.sent` webhook
-5. On a temporary failure: requeues with `next_attempt_at` from the backoff schedule; once the email is older than `MAIL_RETRY_MAX_AGE_HOURS`, marks `failed` and fires `email.failed`
+4. On success: marks `sent`, enqueues `email.sent`
+5. On a temporary failure: requeues with `next_attempt_at` from the backoff schedule; once the email is older than `MAIL_RETRY_MAX_AGE_HOURS`, marks `failed` and enqueues `email.failed`
 6. Every outcome clears the lease, and is only written if this claim still holds the row (matched on `locked_by` and the claim's `attempts`)
+7. The outcome is one transaction (#184): the inline hard-bounce suppressions with their `email.bounced`, the row's status, and `email.sent` / `email.failed`, enqueued as `webhook_deliveries` rows ([webhooks.md](webhooks.md#transactional-outbox-184)). The SMTP send happens before it. If it fails, nothing of it is kept and `Email outcome not saved: transaction rolled back, retried after the lease` is logged: the row stays `sending` until its lease expires and is then claimed and sent again. Row events are enqueued only when the claim still held the row
 
 ## Status Flow
 

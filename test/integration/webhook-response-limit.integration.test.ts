@@ -12,12 +12,11 @@ import { describe, test, expect, beforeEach, afterAll } from "bun:test";
 import { eq, sql } from "drizzle-orm";
 import {
   claimDueDeliveries,
-  enqueueDelivery,
   MAX_DELIVERY_ATTEMPTS,
   performHttpAttempt,
 } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
-import { truncateAll, seed, db } from "./_helpers.ts";
+import { truncateAll, seed, db, enqueueDelivery } from "./_helpers.ts";
 
 /**
  * The hostile receiver runs in its own process, like a real one: a server

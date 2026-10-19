@@ -9,13 +9,14 @@ import { eq } from "drizzle-orm";
 import { apiKeys } from "../../src/modules/api-keys/models/api-key.schema.ts";
 import { InactiveApiKeyError } from "../../src/modules/api-keys/errors.ts";
 import { createEmail } from "../../src/modules/emails/services/email.service.ts";
-import { findWebhooksForEvent } from "../../src/modules/webhooks/services/webhook.service.ts";
 import {
-  claimDueDeliveries,
-  enqueueDelivery,
-} from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
+  enqueueEvent,
+  type DispatchScope,
+} from "../../src/modules/webhooks/services/webhook-dispatch.service.ts";
+import type { WebhookEventType } from "../../src/modules/webhooks/types/webhook.types.ts";
+import { claimDueDeliveries } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
-import { truncateAll, seed, db } from "./_helpers.ts";
+import { truncateAll, seed, db, enqueueDelivery } from "./_helpers.ts";
 
 async function revoke(apiKeyId: string): Promise<void> {
   await db.update(apiKeys).set({ isActive: false }).where(eq(apiKeys.id, apiKeyId));
@@ -25,6 +26,20 @@ beforeEach(async () => {
   await truncateAll();
 });
 
+/** The webhook ids an event is enqueued for, in its own transaction (#184). */
+async function enqueuedFor(
+  event: WebhookEventType,
+  scope: DispatchScope,
+): Promise<string[]> {
+  await db.transaction((tx) => enqueueEvent(tx, event, {}, scope));
+  const rows = await db
+    .select({ webhookId: webhookDeliveries.webhookId })
+    .from(webhookDeliveries)
+    .where(eq(webhookDeliveries.event, event));
+  await db.delete(webhookDeliveries);
+  return rows.map((row) => row.webhookId);
+}
+
 describe("webhook dispatch skips revoked keys", () => {
   test("a revoked key's webhooks get none of its email events", async () => {
     const { id: apiKeyId } = await seed.apiKey();
@@ -33,11 +48,11 @@ describe("webhook dispatch skips revoked keys", () => {
       url: "https://93.184.216.34/a",
       events: ["email.sent"],
     });
-    expect(await findWebhooksForEvent("email.sent", { apiKeyId })).toHaveLength(1);
+    expect(await enqueuedFor("email.sent", { apiKeyId })).toHaveLength(1);
 
     await revoke(apiKeyId);
 
-    expect(await findWebhooksForEvent("email.sent", { apiKeyId })).toEqual([]);
+    expect(await enqueuedFor("email.sent", { apiKeyId })).toEqual([]);
   });
 
   test("a revoked admin key's webhooks stop getting inbound mail; active admins still do", async () => {
@@ -56,8 +71,9 @@ describe("webhook dispatch skips revoked keys", () => {
 
     await revoke(revoked.id);
 
-    const hooks = await findWebhooksForEvent("email.received", { adminOnly: true });
-    expect(hooks.map((h) => h.id)).toEqual([activeHook]);
+    expect(await enqueuedFor("email.received", { adminOnly: true })).toEqual([
+      activeHook,
+    ]);
   });
 });
 

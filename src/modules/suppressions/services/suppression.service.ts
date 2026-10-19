@@ -1,5 +1,5 @@
 import { and, eq, desc, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
-import { db } from "../../../db/index.ts";
+import { db, type DbExecutor } from "../../../db/index.ts";
 import { suppressions } from "../models/suppression.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -62,8 +62,9 @@ export async function isSuppressed(
 async function findRow(
   apiKeyId: string,
   email: string,
+  executor: DbExecutor = db,
 ): Promise<Suppression | undefined> {
-  const [row] = await db
+  const [row] = await executor
     .select()
     .from(suppressions)
     .where(and(eq(suppressions.apiKeyId, apiKeyId), eq(suppressions.email, email)))
@@ -181,15 +182,18 @@ export interface BounceSuppressionResult {
  * manual, an earlier hard bounce) is left exactly as it is; otherwise a
  * late soft bounce could turn a complaint into a 24-hour entry that
  * lapses. The check and the write are one statement, so it is race-safe.
+ *
+ * @param executor The transaction that also enqueues `email.bounced` (#184).
  */
 export async function addFromBounce(
   apiKeyId: string,
   input: AddFromBounceInput,
+  executor: DbExecutor = db,
 ): Promise<BounceSuppressionResult> {
   const target = normaliseEmail(input.email);
   const id = generateId("sup");
 
-  const [row] = await db
+  const [row] = await executor
     .insert(suppressions)
     .values({
       id,
@@ -215,7 +219,7 @@ export async function addFromBounce(
     })
     .returning();
 
-  const suppression = row ?? (await findRow(apiKeyId, target));
+  const suppression = row ?? (await findRow(apiKeyId, target, executor));
 
   logger.info("Auto-suppressing from bounce", {
     id: suppression?.id ?? null,
@@ -246,13 +250,15 @@ export async function addFromBounce(
  * @returns The row when this call created it or made it a permanent
  *   unsubscribe (the caller fires `email.unsubscribed` then), `undefined`
  *   when it was already permanent (a repeated request).
+ * @param executor The transaction that also enqueues `email.unsubscribed` (#184).
  */
 export async function addFromUnsubscribe(
   input: AddFromUnsubscribeInput,
+  executor: DbExecutor = db,
 ): Promise<Suppression | undefined> {
   const target = normaliseEmail(input.email);
 
-  const [row] = await db
+  const [row] = await executor
     .insert(suppressions)
     .values({
       id: generateId("sup"),
@@ -304,13 +310,15 @@ export async function addFromUnsubscribe(
  * @returns The row when this call created or changed it (the caller fires
  *   `email.complained` then), `undefined` when the address already had a
  *   permanent complaint suppression.
+ * @param executor The transaction that also enqueues `email.complained` (#184).
  */
 export async function addFromComplaint(
   input: AddFromComplaintInput,
+  executor: DbExecutor = db,
 ): Promise<Suppression | undefined> {
   const target = normaliseEmail(input.email);
 
-  const [row] = await db
+  const [row] = await executor
     .insert(suppressions)
     .values({
       id: generateId("sup"),

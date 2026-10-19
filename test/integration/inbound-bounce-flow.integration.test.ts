@@ -83,13 +83,12 @@ afterEach(() => {
 });
 
 /**
- * Wait for `dispatchEvent`'s enqueue chain to drain, then drive one
- * worker poll so the captured-fetch mock actually fires. As of #30,
- * `dispatchEvent` is an INSERT into `webhook_deliveries`, not a direct
- * POST: the worker is what hits the consumer.
+ * Drive one worker poll so the captured-fetch mock actually fires. The
+ * bounce handler INSERTs into `webhook_deliveries` in the transaction of
+ * the bounce itself (#184), so the rows are committed by the time it
+ * returns: the worker is what hits the consumer.
  */
-async function waitForDispatch(ms = 100): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+async function deliverDue(): Promise<void> {
   await runPollCycle();
 }
 
@@ -212,7 +211,7 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     expect(emailRow?.status).toBe("bounced");
 
     /** Bullet 5: the email.bounced webhook fired. */
-    await waitForDispatch();
+    await deliverDue();
     expect(captured).toHaveLength(1);
     const req = captured[0]!;
     expect(req.url).toBe("https://93.184.216.34/bounce");
@@ -274,7 +273,7 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     const emailRow = (await db.select().from(emails).where(eq(emails.id, emailId)))[0];
     expect(emailRow?.status).toBe("bounced");
 
-    await waitForDispatch();
+    await deliverDue();
     const body = JSON.parse(captured[0]!.body);
     expect(body.data.bounceType).toBe("soft");
     expect(body.data.status).toBe("4.2.2");
@@ -325,7 +324,7 @@ describe("inbound DSN → bounce handler: end-to-end (#35 bullets 4 + 5)", () =>
     expect(supRows[0]?.bounceType).toBe("hard");
     expect(supRows[0]?.expiresAt).toBeNull();
 
-    await waitForDispatch();
+    await deliverDue();
     const body = JSON.parse(captured[0]!.body);
     /** Webhook reflects the escalated kind, not the parsed soft. */
     expect(body.data.bounceType).toBe("hard");

@@ -21,7 +21,6 @@ import { describe, test, expect, beforeAll } from "bun:test";
 import { Elysia } from "elysia";
 import { eq } from "drizzle-orm";
 import { apiPlugins } from "../../src/modules/api-plugins.ts";
-import { enqueueDelivery } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
 import { emailTombstones } from "../../src/modules/emails/models/email-tombstone.schema.ts";
 import {
   truncateAll,
@@ -32,6 +31,7 @@ import {
   templates,
   webhooks,
   suppressions,
+  enqueueDelivery,
 } from "./_helpers.ts";
 
 const app = new Elysia().use(apiPlugins);

@@ -19,7 +19,7 @@
 
 import { eq } from "drizzle-orm";
 import { dkimVerify } from "mailauth/lib/dkim/verify";
-import { db } from "../../../db/index.ts";
+import { db, type Tx } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import { addFromComplaint } from "../../suppressions/services/suppression.service.ts";
 import {
@@ -27,8 +27,9 @@ import {
   type UnsubscribeTarget,
 } from "../../suppressions/services/unsubscribe.service.ts";
 import type { AddFromComplaintInput } from "../../suppressions/types/suppression.types.ts";
-import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseFeedbackReport } from "./arf-parser.service.ts";
@@ -68,19 +69,37 @@ export interface DkimCheck {
   signingDomain: string | null;
 }
 
-export interface FeedbackHandlerDeps {
+/**
+ * The handler's side effects. `T` is the transaction handle: `Tx` in
+ * production, a plain marker in unit tests, so they can check that the
+ * suppression and its event share one transaction.
+ */
+export interface FeedbackHandlerDeps<T> {
   /** The email BunMail sent with this Message-ID (exact match), if any. */
   findEmailByMessageId: (messageId: string) => Promise<LinkedEmail | undefined>;
+  /**
+   * Runs `work` in one transaction: it commits when `work` resolves and
+   * rolls back when it throws (#184).
+   */
+  transaction: <R>(work: (tx: T) => Promise<R>) => Promise<R>;
   /** Permanent `complaint` suppression; `undefined` when one was already on file. */
-  addFromComplaint: (input: AddFromComplaintInput) => Promise<{ id: string } | undefined>;
-  /** The #249 unsubscribe path; `true` when it created the suppression. */
+  addFromComplaint: (
+    tx: T,
+    input: AddFromComplaintInput,
+  ) => Promise<{ id: string } | undefined>;
+  /** The #249 unsubscribe path (its own transaction); `true` when it created the suppression. */
   unsubscribe: (target: UnsubscribeTarget, source: "fbl") => Promise<boolean>;
-  /** Fire-and-forget `email.complained` to the sending key's webhooks. */
-  dispatchEvent: (
+  /**
+   * Enqueue `email.complained` for the sending key's webhooks, in the
+   * transaction of the suppression (see `enqueueEvent`). Throws when the
+   * insert fails, which rolls the suppression back with it.
+   */
+  enqueueEvent: (
+    tx: T,
     event: "email.complained",
     data: Record<string, unknown>,
     scope: { apiKeyId: string },
-  ) => void;
+  ) => Promise<unknown>;
   /** DKIM verdict on the report (logged, never required). */
   verifyDkim: () => Promise<DkimCheck>;
 }
@@ -130,10 +149,12 @@ function reporterOf(report: FeedbackReport): string | null {
  * Orchestration core. `report` is the parser's result (`null` when the
  * message was a `feedback-report` without a readable feedback part). Never
  * throws for a bad report: every drop is logged and returned as an outcome.
+ * A failed write is logged and thrown: the receiver answers with a
+ * temporary error, so the provider delivers the report again later.
  */
-export async function handleFeedbackReport(
+export async function handleFeedbackReport<T>(
   report: FeedbackReport | null,
-  deps: FeedbackHandlerDeps,
+  deps: FeedbackHandlerDeps<T>,
 ): Promise<HandleFeedbackResult> {
   if (report === null) {
     logger.warn("Feedback report dropped: no readable feedback part");
@@ -216,15 +237,33 @@ export async function handleFeedbackReport(
       ...linkedContext,
       originalRcptTo: report.originalRcptTo.map((address) => redactEmail(address)),
     });
-    deps.dispatchEvent("email.complained", payload, { apiKeyId: original.apiKeyId });
+    /** No state change to commit with: the event gets a transaction of its own. */
+    await recorded(linkedContext, () =>
+      deps.transaction((tx) =>
+        deps.enqueueEvent(tx, "email.complained", payload, {
+          apiKeyId: original.apiKeyId,
+        }),
+      ),
+    );
     return { outcome: "complained-no-recipient", emailId: original.id };
   }
 
-  const suppression = await deps.addFromComplaint({
-    apiKeyId: original.apiKeyId,
-    email: recipient,
-    emailId: original.id,
-  });
+  /** The suppression and its event commit together, or neither does (#184). */
+  const suppression = await recorded(linkedContext, () =>
+    deps.transaction(async (tx) => {
+      const changed = await deps.addFromComplaint(tx, {
+        apiKeyId: original.apiKeyId,
+        email: recipient,
+        emailId: original.id,
+      });
+      if (changed) {
+        await deps.enqueueEvent(tx, "email.complained", payload, {
+          apiKeyId: original.apiKeyId,
+        });
+      }
+      return changed;
+    }),
+  );
   if (!suppression) {
     logger.debug("Complaint already on file, nothing to do", {
       ...linkedContext,
@@ -233,13 +272,32 @@ export async function handleFeedbackReport(
     return { outcome: "already-complained", emailId: original.id };
   }
 
-  deps.dispatchEvent("email.complained", payload, { apiKeyId: original.apiKeyId });
   logger.info("Complaint handled", {
     ...linkedContext,
     recipient: redactEmail(recipient),
     suppressionId: suppression.id,
   });
   return { outcome: "complained", emailId: original.id };
+}
+
+/**
+ * Runs a complaint's transaction; a failure is logged with the email's ids
+ * and thrown, so the caller can refuse the report temporarily.
+ */
+async function recorded<R>(
+  context: { emailId: string; apiKeyId: string },
+  write: () => Promise<R>,
+): Promise<R> {
+  try {
+    return await write();
+  } catch (error) {
+    logger.error("Complaint not recorded: transaction rolled back", {
+      emailId: context.emailId,
+      apiKeyId: context.apiKeyId,
+      error: loggableError(error),
+    });
+    throw error;
+  }
 }
 
 /**
@@ -318,11 +376,12 @@ export async function handleInboundFeedbackReport(
   raw: string,
   rawBytes: Buffer,
 ): Promise<HandleFeedbackResult> {
-  return handleFeedbackReport(parseFeedbackReport(raw), {
+  return handleFeedbackReport<Tx>(parseFeedbackReport(raw), {
     findEmailByMessageId,
-    addFromComplaint,
+    transaction: (work) => db.transaction(work),
+    addFromComplaint: (tx, input) => addFromComplaint(input, tx),
     unsubscribe,
-    dispatchEvent,
+    enqueueEvent,
     verifyDkim: () => verifyReportDkim(raw, rawBytes),
   });
 }

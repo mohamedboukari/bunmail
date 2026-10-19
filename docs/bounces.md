@@ -118,7 +118,9 @@ When a DSN parses cleanly and arrived at a verified return path, the bounce hand
    - Parsed kind `soft`, **existing soft suppression still active** → escalate to `hard` (permanent). Repeated transient failures are effectively permanent for IP-reputation purposes.
 3. **Persist via `suppressionService.addFromBounce`**. A bounce never weakens a suppression (#191): with no row on file it inserts one; on conflict it only rewrites a **temporary** row (a soft bounce refreshes the window, a hard bounce makes it permanent); a **permanent** row of any reason (complaint, unsubscribe, manual, an earlier hard bounce) is left exactly as it is. Steps 4 and 5 run either way. See [suppressions.md](suppressions.md#precedence).
 4. **Mark the original email row**: `status = 'bounced'`, only if the queue has finished with it (`sent` or `failed`); a row still being retried keeps its status so its other recipients are still attempted. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
-5. **Fire `email.bounced` webhook** with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the suppression in effect: the one just written, or the permanent one left in place).
+5. **Enqueue the `email.bounced` webhook** (a `webhook_deliveries` row per subscribed webhook, see [webhooks.md](webhooks.md#transactional-outbox-184)) with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the suppression in effect: the one just written, or the permanent one left in place).
+
+Steps 3 to 5 are one transaction (#184): the suppression, the status and the event commit together or not at all. A failure is logged (`Bounce not recorded: transaction rolled back`) and the receiver answers the DSN with `451`, so the sending MTA delivers it again later.
 
 ## Webhook payload
 

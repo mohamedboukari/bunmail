@@ -1,9 +1,9 @@
 /**
  * Orchestrates everything that happens when a DSN arrives at a verified
  * signed return path (#236): decide hard vs soft (with escalation on
- * repeat), persist the suppression for the one recipient the return path
- * names, mark the original email row as bounced, and fire the
- * `email.bounced` webhook.
+ * repeat), then, in one transaction (#184), persist the suppression for
+ * the one recipient the return path names, mark the original email row as
+ * bounced, and enqueue the `email.bounced` webhook.
  *
  * The return path is the only link from a DSN to an email
  * ({@link resolveReturnPath}): the Message-ID in a DSN body is visible to
@@ -18,14 +18,15 @@
  */
 
 import { and, eq, inArray } from "drizzle-orm";
-import { db } from "../../../db/index.ts";
+import { db, type Tx } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
 import {
   addFromBounce,
   isSuppressed,
 } from "../../suppressions/services/suppression.service.ts";
-import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import type { ParsedBounce } from "../types/bounce.types.ts";
 import { parseReturnPath, recipientOrder, returnPathMacMatches } from "./return-path.ts";
@@ -94,15 +95,27 @@ export async function resolveReturnPath(
   return { email: { id: row.id, apiKeyId: row.apiKeyId }, recipient };
 }
 
-export interface BounceHandlerDeps {
+/**
+ * The handler's side effects. `T` is the transaction handle: `Tx` in
+ * production, a plain marker in unit tests, so they can check that every
+ * write runs inside the one transaction.
+ */
+export interface BounceHandlerDeps<T> {
   /**
    * Lookup of the existing suppression row (or undefined). Used to
-   * decide if a second soft bounce should escalate to hard.
+   * decide if a second soft bounce should escalate to hard. Read before
+   * the transaction opens.
    */
   isSuppressed: (
     apiKeyId: string,
     email: string,
   ) => Promise<{ id: string; bounceType: string | null } | undefined>;
+
+  /**
+   * Runs `work` in one transaction: it commits when `work` resolves and
+   * rolls back when it throws (#184).
+   */
+  transaction: <R>(work: (tx: T) => Promise<R>) => Promise<R>;
 
   /**
    * Persist the suppression. Idempotent upsert in production, see
@@ -112,6 +125,7 @@ export interface BounceHandlerDeps {
    * when it vanished between the write and the read-back.
    */
   addFromBounce: (
+    tx: T,
     apiKeyId: string,
     input: {
       email: string;
@@ -123,17 +137,19 @@ export interface BounceHandlerDeps {
   ) => Promise<{ suppressionId: string | null; applied: boolean }>;
 
   /** Update the original email row's status column to `bounced`. */
-  markEmailBounced: (emailId: string) => Promise<void>;
+  markEmailBounced: (tx: T, emailId: string) => Promise<void>;
 
   /**
-   * Fire `email.bounced` to subscribed webhooks. Fire-and-forget: the
-   * handler doesn't await it (matches `dispatchEvent`'s contract).
+   * Enqueue `email.bounced` for the key's webhooks, in the same
+   * transaction (see `enqueueEvent`). Throws when the insert fails, which
+   * rolls the suppression and the status back with it.
    */
-  dispatchEvent: (
+  enqueueEvent: (
+    tx: T,
     event: "email.bounced",
     data: Record<string, unknown>,
     scope: { apiKeyId: string },
-  ) => void;
+  ) => Promise<unknown>;
 }
 
 export interface HandleBounceResult {
@@ -171,10 +187,10 @@ function escalateIfRepeat(
  * `Final-Recipient` / `Original-Recipient` name someone else, that is
  * logged and ignored, and the bound recipient is still the one handled.
  */
-export async function handleBounce(
+export async function handleBounce<T>(
   parsed: ParsedBounce,
   binding: ReturnPathBinding,
-  deps: BounceHandlerDeps,
+  deps: BounceHandlerDeps<T>,
 ): Promise<HandleBounceResult> {
   const original = binding.email;
   const recipient = binding.recipient;
@@ -197,34 +213,52 @@ export async function handleBounce(
   const expiresAt =
     finalKind === "hard" ? null : new Date(Date.now() + SOFT_BOUNCE_WINDOW_MS);
 
-  const suppression = await deps.addFromBounce(original.apiKeyId, {
-    email: recipient,
-    bounceType: finalKind,
-    diagnosticCode: parsed.diagnostic ?? parsed.status,
-    sourceEmailId: original.id,
-    expiresAt,
-  });
-
-  await deps.markEmailBounced(original.id);
-
   /**
-   * Fire-and-forget webhook, whether or not the suppression write
-   * applied. Carries the suppressionId (the suppression in effect, which
-   * is the existing permanent one when the bounce left it in place) so
-   * receivers can cross-reference it without a separate lookup.
+   * The suppression, the status and the event commit together (#184). The
+   * event fires whether or not the suppression write applied, and carries
+   * the suppressionId (the suppression in effect, which is the existing
+   * permanent one when the bounce left it in place) so receivers can
+   * cross-reference it without a separate lookup. A failure rolls all
+   * three back and is thrown: the receiver answers the DSN with a
+   * temporary error, so the sending MTA delivers it again later.
    */
-  deps.dispatchEvent(
-    "email.bounced",
-    {
+  let suppression: { suppressionId: string | null; applied: boolean };
+  try {
+    suppression = await deps.transaction(async (tx) => {
+      const filed = await deps.addFromBounce(tx, original.apiKeyId, {
+        email: recipient,
+        bounceType: finalKind,
+        diagnosticCode: parsed.diagnostic ?? parsed.status,
+        sourceEmailId: original.id,
+        expiresAt,
+      });
+
+      await deps.markEmailBounced(tx, original.id);
+
+      await deps.enqueueEvent(
+        tx,
+        "email.bounced",
+        {
+          emailId: original.id,
+          to: recipient,
+          bounceType: finalKind,
+          status: parsed.status,
+          diagnostic: parsed.diagnostic ?? null,
+          suppressionId: filed.suppressionId,
+        },
+        { apiKeyId: original.apiKeyId },
+      );
+      return filed;
+    });
+  } catch (error) {
+    logger.error("Bounce not recorded: transaction rolled back", {
       emailId: original.id,
-      to: recipient,
+      apiKeyId: original.apiKeyId,
       bounceType: finalKind,
-      status: parsed.status,
-      diagnostic: parsed.diagnostic ?? null,
-      suppressionId: suppression.suppressionId,
-    },
-    { apiKeyId: original.apiKeyId },
-  );
+      error: loggableError(error),
+    });
+    throw error;
+  }
 
   const escalated = parsed.kind === "soft" && finalKind === "hard";
 
@@ -259,27 +293,28 @@ export async function handleParsedBounce(
   parsed: ParsedBounce,
   binding: ReturnPathBinding,
 ): Promise<HandleBounceResult> {
-  return handleBounce(parsed, binding, {
+  return handleBounce<Tx>(parsed, binding, {
     isSuppressed: async (apiKeyId, email) => {
       const row = await isSuppressed(apiKeyId, email);
       return row ? { id: row.id, bounceType: row.bounceType } : undefined;
     },
-    addFromBounce: async (apiKeyId, input) => {
-      const result = await addFromBounce(apiKeyId, input);
+    transaction: (work) => db.transaction(work),
+    addFromBounce: async (tx, apiKeyId, input) => {
+      const result = await addFromBounce(apiKeyId, input, tx);
       return { suppressionId: result.suppression?.id ?? null, applied: result.applied };
     },
-    markEmailBounced: async (emailId) => {
+    markEmailBounced: async (tx, emailId) => {
       /**
        * Only rows the queue has finished with. A row still `queued` or
        * `sending` has groups being retried (multi-MX sends can bounce for
        * one recipient while another is deferred); marking it `bounced`
        * would stop those retries. The suppression is still recorded.
        */
-      await db
+      await tx
         .update(emails)
         .set({ status: STATUS_BOUNCED, updatedAt: new Date() })
         .where(and(eq(emails.id, emailId), inArray(emails.status, ["sent", "failed"])));
     },
-    dispatchEvent,
+    enqueueEvent,
   });
 }
