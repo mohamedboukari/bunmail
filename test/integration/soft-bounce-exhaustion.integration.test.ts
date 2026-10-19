@@ -161,6 +161,8 @@ describe("soft suppression after an exhausted 4.2.2 retry window", () => {
       diagnostic: "452 4.2.2 Mailbox full",
       suppressionId: row?.id,
       source: "inline",
+      /** The email has no tags (#189). */
+      tags: null,
     });
     /** `email.failed` still fires as before: no group was delivered. */
     expect(rows.filter((r) => r.event === "email.failed")).toHaveLength(1);

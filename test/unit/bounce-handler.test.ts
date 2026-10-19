@@ -149,7 +149,7 @@ const SOFT_BOUNCE: ParsedBounce = {
 
 /** The verified return path the DSN arrived at: email and recipient. */
 const BOUND: ReturnPathBinding = {
-  email: { id: "msg_orig123", apiKeyId: "key_abc" },
+  email: { id: "msg_orig123", apiKeyId: "key_abc", tags: { flow: "reset" } },
   recipient: "user@example.com",
 };
 
@@ -175,6 +175,8 @@ describe("handleBounce: happy paths", () => {
     expect(calls.events[0]!.event).toBe("email.bounced");
     expect(calls.events[0]!.data.bounceType).toBe("hard");
     expect(calls.events[0]!.data.suppressionId).toBe("sup_new123");
+    /** The email's tags ride along (#189). */
+    expect(calls.events[0]!.data.tags).toEqual({ flow: "reset" });
   });
 
   test("first soft bounce: persists soft suppression with future expiresAt", async () => {
@@ -348,6 +350,7 @@ describe("handleBounce: policy DSN (#250)", () => {
           error:
             "Receiver refused the sender (DSN 5.7.1): 550 5.7.1 Message rejected due to DMARC policy",
           blocked: true,
+          tags: { flow: "reset" },
         },
       },
     ]);

@@ -1,5 +1,5 @@
 import { isEmailCategory, type Email, type EmailCategory } from "../types/email.types.ts";
-import type { CustomHeaders } from "../models/email.schema.ts";
+import type { CustomHeaders, EmailTags } from "../models/email.schema.ts";
 import {
   serializeDeliveryState,
   type SerializedDeliveryGroup,
@@ -30,6 +30,8 @@ export interface SerializedEmail {
   source: string;
   /** "transactional" or "marketing" as set on the send (#250); null when unset. */
   category: EmailCategory | null;
+  /** Labels set on the send (#189), key to value; null when none. */
+  tags: EmailTags | null;
   attempts: number;
   /**
    * When a deferred email will be retried (#180): set while `status` is
@@ -69,6 +71,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     status: email.status,
     source: email.source,
     category: isEmailCategory(email.category) ? email.category : null,
+    tags: email.tags,
     attempts: email.attempts,
     nextAttemptAt: email.status === "queued" ? email.nextAttemptAt : null,
     lastError: email.lastError,

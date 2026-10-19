@@ -81,6 +81,8 @@ export function toJsonObject(body: object): JsonObject {
  * trashed or purged, so a permanent delete really removes the content.
  * `fromName` and `category` (#250) stay in the snapshot: a sender label
  * and the kind of send, like the addresses that also stay, not content.
+ * `tags` (#189) stay too: they label the send and are never part of the
+ * message the recipient gets.
  */
 const CONTENT_FIELDS = ["subject", "html", "text", "headers"] as const;
 

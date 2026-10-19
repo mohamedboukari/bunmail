@@ -821,6 +821,7 @@ async function sendClaimedEmail(
               from: email.fromAddress,
               to: email.toAddress,
               subject: email.subject,
+              tags: email.tags,
               error: errorMessage,
             },
           },
@@ -1042,6 +1043,7 @@ async function recordSendOutcome(
               diagnostic: bounce.diagnostic,
               suppressionId: suppression?.id ?? null,
               source: "inline",
+              tags: email.tags,
             },
             { apiKeyId: email.apiKeyId },
           );
@@ -1215,6 +1217,7 @@ function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
       to: email.toAddress,
       subject: email.subject,
       messageId,
+      tags: email.tags,
     },
   };
 
@@ -1333,6 +1336,7 @@ function decideRowOutcome(email: ClaimedEmail, sent: SentAttempt): RowOutcome {
         error: summariseFailures(finalState),
         /** Some receiver refused the sender (#246), not the recipient. */
         blocked: finalGroups.some((g) => g.blocked === true),
+        tags: email.tags,
       },
     });
   }
@@ -1457,6 +1461,7 @@ async function holdForUnreadableDkimKey(
           from: email.fromAddress,
           to: email.toAddress,
           subject: email.subject,
+          tags: email.tags,
           error: lastError,
         },
       },

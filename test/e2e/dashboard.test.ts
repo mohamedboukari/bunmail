@@ -118,6 +118,8 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
   /** Reads */
   listAllEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
   listEmails: mock(() => Promise.resolve({ data: [], total: 0 })),
+  /** Mocks leak across e2e files: the emails API routes call it too (#189). */
+  checkTagFilters: mock(() => []),
   getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
   getEmailById: mock(() => Promise.resolve(undefined)),
   createEmail: mock(() => Promise.resolve({ email: {}, warnings: [] })),

@@ -204,7 +204,7 @@ Each policy DSN is logged at `warn` (`Policy DSN: receiver refused the sender, r
 }
 ```
 
-The async-DSN path doesn't emit a `source` field today (consumers can treat its absence as `"rfc3464"` or `"fallback"`). Both payload shapes carry `suppressionId` so receivers can cross-reference the auto-created suppression row regardless of which path fired.
+The async-DSN path doesn't emit a `source` field today (consumers can treat its absence as `"rfc3464"` or `"fallback"`). Both payload shapes carry `suppressionId` so receivers can cross-reference the auto-created suppression row regardless of which path fired. Every shape also carries `tags`, the email's tags or `null` (#189, see [webhooks.md](webhooks.md#webhook-payload)); left out above for brevity.
 
 ## What we do **not** do
 

@@ -113,6 +113,27 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
           {!!email.messageId && (
             <DetailField label="Message ID" value={email.messageId} />
           )}
+          {email.tags !== null && Object.keys(email.tags).length > 0 && (
+            <div>
+              <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
+                Tags
+              </p>
+              {/* Each tag links to the list filtered by it (#189). */}
+              <ul class="flex flex-wrap gap-1.5">
+                {Object.entries(email.tags).map(([key, value]) => (
+                  <li>
+                    <a
+                      href={`/dashboard/emails?tag=${encodeURIComponent(`${key}:${value}`)}`}
+                      class="inline-block px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200 break-all hover:underline"
+                      safe
+                    >
+                      {`${key}: ${value}`}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <p class="text-gray-500 dark:text-gray-400 text-xs uppercase tracking-wide mb-0.5">
               Created

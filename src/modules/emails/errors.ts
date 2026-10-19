@@ -1,5 +1,6 @@
 import type { CustomHeaderProblem } from "./services/custom-headers.ts";
 import type { FromNameProblem } from "./services/from-name.ts";
+import type { TagProblem } from "./services/tags.ts";
 
 /**
  * Rejections `email.service.createEmail` raises for a send it refuses on
@@ -163,6 +164,30 @@ export class InvalidFromNameError extends EmailSendRejectedError {
   constructor(problem: FromNameProblem, message: string) {
     super(message);
     this.problem = problem;
+  }
+}
+
+/**
+ * A tag (#189) breaks a rule of `services/tags.ts`, in a send's `tags`
+ * or in a `tag` list filter. Answered like a request validation failure
+ * (`422 VALIDATION_ERROR`, `path` in `details`), as `InvalidFromNameError`
+ * is. The message and the path name the tag key only when the key is
+ * valid, and never include the value: tags may hold customer ids. SMTP
+ * submission answers it with `550`.
+ */
+export class InvalidTagError extends EmailSendRejectedError {
+  override readonly name = "InvalidTagError";
+  readonly status = 422;
+  readonly code = "VALIDATION_ERROR";
+  /** Which rule the tag broke. */
+  readonly problem: TagProblem;
+  /** JSON pointer of the refused input: `/tags/<key>`, `/tags` or `/tag`. */
+  readonly path: string;
+
+  constructor(problem: TagProblem, path: string, message: string) {
+    super(message);
+    this.problem = problem;
+    this.path = path;
   }
 }
 

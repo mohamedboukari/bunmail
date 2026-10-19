@@ -49,7 +49,7 @@ export type FromNameCheck =
  * Length in code points: a surrogate pair counts once, a lone surrogate
  * (stored as U+FFFD) counts once too.
  */
-function codePointLength(value: string): number {
+export function codePointLength(value: string): number {
   let count = 0;
   for (let i = 0; i < value.length; i += 1) {
     const unit = value.charCodeAt(i);

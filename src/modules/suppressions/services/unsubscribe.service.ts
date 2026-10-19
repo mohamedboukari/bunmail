@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
-import { emails } from "../../emails/models/email.schema.ts";
+import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
 import { loggableError } from "../../../utils/db-error.ts";
@@ -26,6 +26,8 @@ export interface UnsubscribeTarget {
   recipient: string;
   /** Domain of the email's From address, lowercased. */
   senderDomain: string;
+  /** The email's tags (#189), carried by `email.unsubscribed`; null when none. */
+  tags: EmailTags | null;
 }
 
 /**
@@ -50,6 +52,7 @@ export async function resolveUnsubscribeToken(
       toAddress: emails.toAddress,
       cc: emails.cc,
       bcc: emails.bcc,
+      tags: emails.tags,
     })
     .from(emails)
     .where(eq(emails.id, parsed.emailId))
@@ -65,7 +68,7 @@ export async function resolveUnsubscribeToken(
   const senderDomain = row.fromAddress.split("@")[1]?.trim().toLowerCase();
   if (!senderDomain) return null;
 
-  return { ...subject, apiKeyId: row.apiKeyId, senderDomain };
+  return { ...subject, apiKeyId: row.apiKeyId, senderDomain, tags: row.tags };
 }
 
 /**
@@ -105,6 +108,7 @@ export async function unsubscribe(
           recipient: target.recipient,
           source,
           unsubscribedAt: new Date().toISOString(),
+          tags: target.tags,
         },
         { apiKeyId: target.apiKeyId },
       );

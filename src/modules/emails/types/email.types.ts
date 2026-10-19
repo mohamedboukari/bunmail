@@ -1,6 +1,7 @@
 import type { emails } from "../models/email.schema.ts";
 import type { InferSelectModel } from "drizzle-orm";
 import type { db } from "../../../db/index.ts";
+import type { TagFilter } from "../services/tags.ts";
 
 /** All possible statuses an email can be in during its lifecycle */
 export const EMAIL_STATUSES = ["queued", "sending", "sent", "failed", "bounced"] as const;
@@ -76,6 +77,11 @@ export interface SendEmailInput {
   headers?: Record<string, string>;
   /** Transactional or marketing (#250); see {@link EmailCategory}. */
   category?: EmailCategory;
+  /**
+   * Labels (#189), key to value. Checked by `createEmail`
+   * (`services/tags.ts`); a violation throws `InvalidTagError`.
+   */
+  tags?: Record<string, string>;
   /**
    * Attachments are not supported (#250): any value here, an empty array
    * included, makes `createEmail` throw `AttachmentsNotSupportedError`
@@ -154,6 +160,12 @@ export interface ListEmailsFilters {
    * by the unscoped `listAllEmails` path the dashboard uses.
    */
   apiKeyId?: string;
+
+  /**
+   * Tag filters (#189), already checked (`parseTagFilters`): an email
+   * matches when it carries every one of them (AND).
+   */
+  tags?: TagFilter[];
 
   /** Page number for pagination (1-based) */
   page: number;

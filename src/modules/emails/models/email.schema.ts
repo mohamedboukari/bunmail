@@ -111,6 +111,15 @@ export type DeliveryState = Record<string, DeliveryGroup>;
 export type CustomHeaders = Record<string, string>;
 
 /**
+ * Shape of `emails.tags` (#189): caller-set labels, key to value, e.g.
+ * `{ "flow": "password-reset", "tenant": "t_42" }`. At most 10 entries,
+ * keys of 1 to 40 `A-Z a-z 0-9 _ -` characters (unique ignoring case),
+ * values of 1 to 256 characters with no control or bidi-control
+ * character. Validated by `services/tags.ts` before it is stored.
+ */
+export type EmailTags = Record<string, string>;
+
+/**
  * Emails table: every email sent through BunMail gets a row here.
  *
  * Lifecycle: an email is inserted with status `queued`, picked up by the
@@ -213,6 +222,14 @@ export const emails = pgTable(
      */
     category: varchar("category", { length: 20 }),
 
+    /**
+     * Labels set by the caller (#189), key to value; null when none. Not
+     * message content: they are never sent to the recipient, only stored,
+     * returned, filtered on (`GET /api/v1/emails?tag=key:value`) and put
+     * in the `email.*` webhook payloads. See `services/tags.ts`.
+     */
+    tags: jsonb<EmailTags | null>("tags"),
+
     /** Number of send attempts so far (retries stop when the email is
      *  older than `MAIL_RETRY_MAX_AGE_HOURS`, not after a fixed count) */
     attempts: integer("attempts").notNull().default(0),
@@ -305,5 +322,11 @@ export const emails = pgTable(
     index("idx_emails_lease")
       .on(table.leaseUntil)
       .where(sql`status = 'sending'`),
+    /**
+     * Tag filter (#189): `tags @> jsonb_build_object(key, value)` per
+     * filter. `jsonb_path_ops` indexes only containment, which is the one
+     * operator the filter uses, and is smaller than the default class.
+     */
+    index("idx_emails_tags").using("gin", table.tags.op("jsonb_path_ops")),
   ],
 );

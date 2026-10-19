@@ -26,6 +26,7 @@ describe("serializeEmail", () => {
     source: "api",
     fromName: null,
     category: null,
+    tags: null,
     attempts: 1,
     nextAttemptAt: new Date("2024-01-01"),
     lockedBy: null,
@@ -103,5 +104,11 @@ describe("serializeEmail", () => {
     expect(serializeEmail(email).headers).toBeNull();
     const result = serializeEmail({ ...email, headers: { "X-Correlation-Id": "abc" } });
     expect(result.headers).toEqual({ "X-Correlation-Id": "abc" });
+  });
+
+  test("exposes tags, null when none (#189)", () => {
+    expect(serializeEmail(email).tags).toBeNull();
+    const result = serializeEmail({ ...email, tags: { flow: "reset" } });
+    expect(result.tags).toEqual({ flow: "reset" });
   });
 });
