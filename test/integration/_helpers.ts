@@ -23,6 +23,7 @@ import { emails } from "../../src/modules/emails/models/email.schema.ts";
 import { suppressions } from "../../src/modules/suppressions/models/suppression.schema.ts";
 import { templates } from "../../src/modules/templates/models/template.schema.ts";
 import { webhooks } from "../../src/modules/webhooks/models/webhook.schema.ts";
+import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import { users } from "../../src/modules/users/models/user.schema.ts";
 import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
 import { sessions } from "../../src/modules/users/models/session.schema.ts";
@@ -214,8 +215,8 @@ export const seed = {
   },
 
   /**
-   * Insert a webhook subscription. Used by the dispatch integration
-   * test so the lookup query (`findWebhooksForEvent`) finds something.
+   * Insert a webhook subscription, so `enqueueEvent` (the outbox insert,
+   * #184) has a webhook to fan an event out to.
    */
   async webhook(opts: {
     apiKeyId: string;
@@ -368,6 +369,91 @@ export const seed = {
     return { id, token };
   },
 };
+
+/**
+ * Insert one `pending` delivery row for `webhookId` directly, the shape
+ * `enqueueEvent` writes (#184): the worker, replay and retention tests
+ * need a delivery without going through an event's transaction.
+ */
+export async function enqueueDelivery(opts: {
+  webhookId: string;
+  envelope: { event: string; timestamp: string; data: Record<string, unknown> };
+}): Promise<{ id: string }> {
+  const id = generateId("wdl");
+  await db.insert(webhookDeliveries).values({
+    id,
+    webhookId: opts.webhookId,
+    event: opts.envelope.event,
+    payload: JSON.stringify(opts.envelope),
+  });
+  return { id };
+}
+
+/** Tables a test may make a write fail on, and the column it matches. */
+type FailableTable = "webhook_deliveries" | "emails" | "suppressions" | "inbound_emails";
+
+/** Triggers installed by {@link failWritesWhere} and not removed yet. */
+const injectedTriggers: Array<{ table: FailableTable; name: string }> = [];
+
+/**
+ * Test seam for the webhook outbox (#184): makes every INSERT or UPDATE of
+ * a `table` row whose columns equal all of `match` fail with SQLSTATE
+ * `P0001` (`injected failure`).
+ *
+ * - default: a `BEFORE` row trigger, so the statement itself throws (an
+ *   outbox insert, or the state change, fails mid-transaction);
+ * - `deferred`: a constraint trigger `INITIALLY DEFERRED`, so every
+ *   statement succeeds and the transaction fails at COMMIT, the last
+ *   moment before the state change and its events would be durable.
+ *
+ * `times` limits the failures to the first N matching writes (counted by
+ * a sequence, which a rollback does not undo): a transient failure.
+ *
+ * Matching one row's values keeps other rows unaffected. Remove the
+ * triggers with {@link removeInjectedFailures} (in `afterEach`).
+ */
+export async function failWritesWhere(
+  table: FailableTable,
+  match: Record<string, string>,
+  opts: { deferred?: boolean; times?: number } = {},
+): Promise<void> {
+  assertWipeableDatabase();
+  const conditions = Object.entries(match).map(([column, value]) => {
+    if (!/^[a-z_]+$/.test(column)) throw new Error(`bad column name ${column}`);
+    return `NEW.${column} = '${value.replaceAll("'", "''")}'`;
+  });
+  if (conditions.length === 0) throw new Error("failWritesWhere needs a match");
+  const name = `test_fail_${generateId("wdl").slice(4)}`;
+  const limit =
+    opts.times === undefined
+      ? ""
+      : `IF nextval('${name}_seq') > ${Math.floor(opts.times)} THEN RETURN NEW; END IF;`;
+  if (opts.times !== undefined) {
+    await db.execute(drizzleSql.raw(`CREATE SEQUENCE ${name}_seq`));
+  }
+  await db.execute(
+    drizzleSql.raw(`CREATE FUNCTION ${name}_fn() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN ${limit} RAISE EXCEPTION 'injected failure'; END $$`),
+  );
+  const timing = opts.deferred
+    ? `CREATE CONSTRAINT TRIGGER ${name} AFTER INSERT OR UPDATE ON ${table} DEFERRABLE INITIALLY DEFERRED`
+    : `CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON ${table}`;
+  await db.execute(
+    drizzleSql.raw(
+      `${timing} FOR EACH ROW WHEN (${conditions.join(" AND ")}) EXECUTE FUNCTION ${name}_fn()`,
+    ),
+  );
+  injectedTriggers.push({ table, name });
+}
+
+/** Drops every trigger {@link failWritesWhere} installed. */
+export async function removeInjectedFailures(): Promise<void> {
+  for (const { table, name } of injectedTriggers.splice(0)) {
+    await db.execute(drizzleSql.raw(`DROP TRIGGER IF EXISTS ${name} ON ${table}`));
+    await db.execute(drizzleSql.raw(`DROP FUNCTION IF EXISTS ${name}_fn()`));
+    await db.execute(drizzleSql.raw(`DROP SEQUENCE IF EXISTS ${name}_seq`));
+  }
+}
 
 /**
  * Re-export the `db` instance and the schema tables so tests can read

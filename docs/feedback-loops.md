@@ -94,7 +94,7 @@ The parsed fields, or `null` when the message is not a feedback report or has no
 The type rule of step 3.
 
 #### `handleFeedbackReport(report, deps): Promise<{ outcome, emailId? }>`
-Steps 3 to 7 with injected dependencies (lookup, `addFromComplaint`, `unsubscribe`, `dispatchEvent`, DKIM check). Outcomes: `complained`, `complained-no-recipient`, `already-complained`, `unsubscribed`, `already-unsubscribed`, `dropped-unparseable`, `dropped-ignored-type`, `dropped-no-original`, `dropped-no-recipient`.
+Steps 3 to 7 with injected dependencies (lookup, `transaction`, `addFromComplaint`, `unsubscribe`, `enqueueEvent`, DKIM check). The complaint suppression and `email.complained` are written in one transaction (#184); a failure is logged (`Complaint not recorded`) and thrown, so the receiver answers `451` and the provider resends the report. Outcomes: `complained`, `complained-no-recipient`, `already-complained`, `unsubscribed`, `already-unsubscribed`, `dropped-unparseable`, `dropped-ignored-type`, `dropped-no-original`, `dropped-no-recipient`.
 
 #### `handleInboundFeedbackReport(raw, rawBytes): Promise<{ outcome, emailId? }>`
 Parses and handles with the real database, webhook and mailauth dependencies. Called by the receiver.

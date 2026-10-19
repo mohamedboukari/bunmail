@@ -43,7 +43,7 @@ export const webhookDeliveries = pgTable(
 
     /** Event vocabulary mirrors the union in webhook.types.ts.
      *  Stored as text for forward-compat; valid values gated at
-     *  `dispatchEvent` time. */
+     *  `enqueueEvent` time (#184). */
     event: varchar("event", { length: 50 }).notNull(),
 
     /** The body bytes (JSON.stringify of the WebhookPayload envelope).

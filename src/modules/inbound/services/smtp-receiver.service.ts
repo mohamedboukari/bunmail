@@ -3,7 +3,7 @@ import { simpleParser } from "mailparser";
 import { db } from "../../../db/index.ts";
 import { inboundEmails } from "../models/inbound-email.schema.ts";
 import { generateId } from "../../../utils/id.ts";
-import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { domainExistsByName } from "../../domains/services/domain.service.ts";
 import {
   inboundNotifyDeps,
@@ -26,6 +26,7 @@ import { threadingColumnsFor } from "./reply-threading.service.ts";
 import { config } from "../../../config.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { tokenFromUnsubscribeAddress } from "../../suppressions/services/unsubscribe-token.ts";
@@ -140,6 +141,40 @@ async function resolveUnsubscribeRecipient(
   const target = await resolveUnsubscribeToken(token);
   const domain = address.split("@")[1]?.trim().toLowerCase();
   return target && domain === target.senderDomain ? target : null;
+}
+
+/**
+ * Stores a received message and enqueues `email.received` for admin keys'
+ * webhooks in one transaction (#184): the row and its event commit
+ * together, or neither does. A failure is thrown; the receiver then
+ * answers `451`, so the sending MTA delivers the message again later
+ * instead of BunMail keeping it without its event.
+ */
+export async function storeInboundEmail(
+  row: typeof inboundEmails.$inferInsert & { id: string },
+): Promise<void> {
+  try {
+    await db.transaction(async (tx) => {
+      await tx.insert(inboundEmails).values(row);
+      await enqueueEvent(
+        tx,
+        "email.received",
+        {
+          inboundEmailId: row.id,
+          from: row.fromAddress,
+          to: row.toAddress,
+          subject: row.subject ?? null,
+        },
+        { adminOnly: true },
+      );
+    });
+  } catch (error) {
+    logger.error("Inbound email not stored: transaction rolled back", {
+      id: row.id,
+      error: loggableError(error),
+    });
+    throw error;
+  }
 }
 
 /**
@@ -610,7 +645,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                   otherRecipients,
                 );
 
-                await db.insert(inboundEmails).values({
+                await storeInboundEmail({
                   id,
                   fromAddress: from,
                   toAddress: to,
@@ -636,18 +671,6 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                   id,
                   subjectLength: parsed.subject?.length ?? 0,
                 });
-
-                /** Fire webhook event asynchronously (fire-and-forget) */
-                dispatchEvent(
-                  "email.received",
-                  {
-                    inboundEmailId: id,
-                    from,
-                    to,
-                    subject: parsed.subject ?? null,
-                  },
-                  { adminOnly: true },
-                );
 
                 /**
                  * Send the per-domain inbound notification (#106), fire-and-forget.

@@ -138,14 +138,14 @@ Files: `services/unsubscribe-token.ts` (mint, parse, verify, `soleRecipient`), `
 
 ### Service methods
 
-#### `addFromUnsubscribe(input): Promise<Suppression | undefined>`
+#### `addFromUnsubscribe(input, executor = db): Promise<Suppression | undefined>`
 `{ apiKeyId, email, emailId, source }`, from a verified token only. Returns the row when it was created or upgraded from a temporary entry, `undefined` when a permanent one was already there.
 
 #### `resolveUnsubscribeToken(token, key?): Promise<UnsubscribeTarget | null>`
 Verifies a token against its email row: `{ emailId, apiKeyId, recipient, senderDomain }`, or `null` for every failure.
 
 #### `unsubscribe(target, source): Promise<boolean>`
-`addFromUnsubscribe`, then `email.unsubscribed` on first creation. `true` when this request created the suppression.
+`addFromUnsubscribe`, then `email.unsubscribed` on first creation, in one transaction (#184): both are stored or neither is. A failure is logged (`Unsubscribe not recorded`) and thrown. `true` when this request created the suppression.
 
 ## Complaints (feedback loops)
 
@@ -153,7 +153,7 @@ When a recipient marks an email as spam and their mailbox provider runs a feedba
 
 **Precedence** (`addFromComplaint`): a complaint is the strongest reason. It creates the row; turns a temporary one (a soft-bounce backoff, or a manual entry with an expiry) into a permanent complaint; and replaces any other permanent reason (`bounce`, `unsubscribe`, `manual`) with `complaint`, clearing `bounce_type` and `diagnostic_code` and setting `source_email_id`. A permanent `complaint` already on file is left exactly as it is, so a repeated report changes and fires nothing. The check and the write are one `INSERT ... ON CONFLICT DO UPDATE ... WHERE` statement, so racing reports change the row once. Nothing else can weaken a complaint afterwards, see [Precedence](#precedence).
 
-#### `addFromComplaint(input): Promise<Suppression | undefined>`
+#### `addFromComplaint(input, executor = db): Promise<Suppression | undefined>`
 `{ apiKeyId, email, emailId }`, built from the linked email row. Returns the row when it was created or changed (the caller then fires `email.complained`), `undefined` when a permanent complaint was already there. Logs `Complaint suppression processed` at `info` with `emailId`, `apiKeyId`, the redacted address and `outcome`.
 
 ## Precedence
@@ -169,8 +169,8 @@ When a recipient marks an email as spam and their mailbox provider runs a feedba
 
 A bounce never weakens a suppression (#191): before, `addFromBounce` overwrote whatever was on file, so a late DSN for an email sent before a complaint or an unsubscribe turned that row into a bounce, and a soft one into a 24-hour entry that lapsed. A bounce that leaves a permanent row in place still marks the email `bounced` and still fires `email.bounced`, with `suppressionId` naming the row in effect. A manual entry is the tenant's own decision, so it may still change an unsubscribe or a bounce; lifting a complaint takes a deliberate `DELETE` first.
 
-#### `addFromBounce(apiKeyId, input): Promise<{ applied, suppression }>`
-`applied` is `true` when the row was created or a temporary one rewritten, `false` when a permanent row was left in place; `suppression` is the row in effect afterwards (the kept one in the second case), `undefined` only if it was deleted between the write and the read-back. Callers fire `email.bounced` either way.
+#### `addFromBounce(apiKeyId, input, executor = db): Promise<{ applied, suppression }>`
+`applied` is `true` when the row was created or a temporary one rewritten, `false` when a permanent row was left in place; `suppression` is the row in effect afterwards (the kept one in the second case), `undefined` only if it was deleted between the write and the read-back. Callers enqueue `email.bounced` either way, passing as `executor` the transaction that also enqueues it (#184); `addFromUnsubscribe` and `addFromComplaint` take theirs the same way.
 
 #### `createSuppression(apiKeyId, input): Promise<Suppression>`
 The manual upsert behind `POST /api/v1/suppressions`. Returns the written row, or the permanent complaint it left in place.

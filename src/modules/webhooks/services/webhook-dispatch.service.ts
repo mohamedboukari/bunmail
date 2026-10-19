@@ -1,6 +1,10 @@
 import { createHmac } from "crypto";
-import { findWebhooksForEvent, type DispatchScope } from "./webhook.service.ts";
-import { enqueueDelivery } from "./webhook-delivery.service.ts";
+import { sql, type SQL } from "drizzle-orm";
+import type { Tx } from "../../../db/index.ts";
+import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
+import { webhookDeliveries } from "../models/webhook-delivery.schema.ts";
+import { webhooks } from "../models/webhook.schema.ts";
+import { toWebhookEnqueueError } from "../errors.ts";
 import { logger } from "../../../utils/logger.ts";
 import type { WebhookEventType } from "../types/webhook.types.ts";
 
@@ -31,65 +35,108 @@ export function signPayload(timestamp: string, body: string, secret: string): st
 }
 
 /**
- * Dispatches an event to all subscribed webhooks.
+ * Who an event may be delivered to.
  *
- * As of #30, this is a synchronous **enqueue**: for each subscribed
- * webhook, one row is INSERTed into `webhook_deliveries` at
- * `status='pending'`. The actual HTTP POST is performed by the
- * delivery worker poll loop in `webhook-delivery-worker.service.ts`.
- *
- * Why durably enqueue instead of in-memory retry:
- *   - A server restart no longer loses pending events; rows survive
- *     reboot and the next poll picks them up.
- *   - Consumer outages longer than ~7s no longer burn through retries
- *     before the consumer recovers; the worker retries over hours.
- *   - Operators get inspection + replay via the dashboard / REST API.
- *
- * Still **fire-and-forget** from the caller's perspective: callers
- * (queue.service.ts on `email.sent`, bounce-handler on `email.bounced`,
- * etc.) don't await this: errors are logged, never thrown.
+ * - `{ apiKeyId }`: an event about one API key's email (`email.sent`,
+ *   `email.failed`, `email.bounced`, `email.complained`,
+ *   `email.unsubscribed`). Only that key's webhooks receive it.
+ * - `{ adminOnly: true }`: an event with no owning key (`email.received`:
+ *   domains and inbound mail aren't owned by a key). Only webhooks owned by
+ *   admin keys receive it, matching the admin-only inbound API (#130).
  */
-export function dispatchEvent(
+export type DispatchScope = { apiKeyId: string } | { adminOnly: true };
+
+/**
+ * The webhooks that receive `event` in `scope`, as a `WHERE` condition on
+ * `webhooks` joined to its `api_keys` row: active webhooks of an active
+ * key (revoking a leaked key also cuts off the event feed its holder
+ * registered), subscribed to the event, owned by the scope's key or by an
+ * admin key. The event is matched in SQL (#173): `events` holds real JSON
+ * since #261, and the array is built from a plain parameter (see
+ * `src/db/jsonb.ts`). The owner filter is served by
+ * `webhooks_api_key_id_idx` (#313).
+ */
+function matchingWebhooks(event: WebhookEventType, scope: DispatchScope): SQL {
+  const owner =
+    "apiKeyId" in scope
+      ? sql`${webhooks.apiKeyId} = ${scope.apiKeyId}`
+      : sql`${apiKeys.isAdmin} = true`;
+  return sql`${webhooks.isActive} = true
+    AND ${apiKeys.isActive} = true
+    AND ${webhooks.events} @> jsonb_build_array(${event}::text)
+    AND ${owner}`;
+}
+
+/**
+ * Enqueues `event` for every webhook that receives it, inside the caller's
+ * transaction: the webhook outbox (#184).
+ *
+ * The caller opens one transaction for the state change the event
+ * describes (an email row's outcome, a suppression, an inbound row) and
+ * this insert, so both commit together or neither does. Before, the state
+ * change committed first and the delivery rows were written afterwards,
+ * fire-and-forget: a crash or a failed insert in between lost the event
+ * for good, with nothing to detect it. The `Tx` parameter makes the
+ * transaction a requirement, not a convention: `db` itself does not fit.
+ *
+ * Fan-out happens here, at write time, in ONE statement:
+ * `INSERT INTO webhook_deliveries ... SELECT ... FROM webhooks`, one
+ * `pending` row per matching webhook. The match is an index probe on the
+ * owning key (#313) and a key has at most `WEBHOOKS_MAX_PER_API_KEY`
+ * webhooks (#258), so the statement stays short inside the caller's
+ * transaction, and the delivery worker, replay and the dashboard keep
+ * working on `webhook_deliveries` rows unchanged. No matching webhook
+ * inserts nothing, which is success.
+ *
+ * The body is serialized once here (it is what the worker POSTs and
+ * re-signs per attempt) and bound as one text parameter; the webhook's
+ * secret is not read. Delivery ids are `wdl_` plus 32 hex characters
+ * from `gen_random_uuid()`, generated per row by the database.
+ *
+ * Throws `WebhookEnqueueError` (SQLSTATE only, never the payload) when
+ * the insert fails; the caller's transaction then rolls back, state change
+ * included, and the caller handles it like any failed write.
+ *
+ * @returns How many delivery rows were enqueued.
+ */
+export async function enqueueEvent(
+  tx: Tx,
   event: WebhookEventType,
   data: Record<string, unknown>,
   /** Who may receive it: the owning API key, or admin keys only. See DispatchScope. */
   scope: DispatchScope,
-): void {
+): Promise<number> {
   const envelope: WebhookPayload = {
     event,
     timestamp: new Date().toISOString(),
     data,
   };
+  const body = JSON.stringify(envelope);
 
-  findWebhooksForEvent(event, scope)
-    .then(async (hooks) => {
-      if (hooks.length === 0) return;
+  /** Bare column names: an INSERT column list takes no table qualifier. */
+  const column = (name: string) => sql.identifier(name);
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await tx.execute(sql`
+      INSERT INTO ${webhookDeliveries} (
+        ${column(webhookDeliveries.id.name)},
+        ${column(webhookDeliveries.webhookId.name)},
+        ${column(webhookDeliveries.event.name)},
+        ${column(webhookDeliveries.payload.name)}
+      )
+      SELECT
+        'wdl_' || replace(gen_random_uuid()::text, '-', ''),
+        ${webhooks.id},
+        ${event}::varchar,
+        ${body}::text
+      FROM ${webhooks}
+      INNER JOIN ${apiKeys} ON ${apiKeys.id} = ${webhooks.apiKeyId}
+      WHERE ${matchingWebhooks(event, scope)}
+      RETURNING ${column(webhookDeliveries.id.name)}`);
+  } catch (error) {
+    throw toWebhookEnqueueError(event, error);
+  }
 
-      logger.debug("Enqueuing webhook event", {
-        event,
-        webhookCount: hooks.length,
-      });
-
-      /** Enqueue one row per subscribed webhook. Errors at the row
-       *  level shouldn't abort the others: log and continue. */
-      await Promise.allSettled(
-        hooks.map(async (hook) => {
-          try {
-            await enqueueDelivery({ webhookId: hook.id, envelope });
-          } catch (err) {
-            logger.error("Failed to enqueue webhook delivery", {
-              event,
-              webhookId: hook.id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }),
-      );
-    })
-    .catch((error) => {
-      logger.error("Failed to find webhooks for event", {
-        event,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  logger.debug("Webhook event enqueued", { event, deliveries: rows.length });
+  return rows.length;
 }

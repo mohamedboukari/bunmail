@@ -1,7 +1,9 @@
 import { eq } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../../emails/models/email.schema.ts";
-import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { addFromUnsubscribe } from "./suppression.service.ts";
 import {
   parseUnsubscribeToken,
@@ -68,8 +70,13 @@ export async function resolveUnsubscribeToken(
 
 /**
  * Suppresses a verified target (permanent, reason `unsubscribe`, scoped to
- * the sending key) and, the first time only, fires `email.unsubscribed` to
- * that key's webhooks. A repeated request succeeds and fires nothing.
+ * the sending key) and, the first time only, enqueues `email.unsubscribed`
+ * for that key's webhooks. A repeated request succeeds and fires nothing.
+ *
+ * The suppression and its event are one transaction (#184): either both
+ * are stored or neither is. A failure is logged and thrown, so the page
+ * answers with an error and the mailto is refused with a temporary error
+ * (the sender retries), instead of a suppression without its event.
  *
  * @returns `true` when this request created the suppression.
  */
@@ -77,23 +84,39 @@ export async function unsubscribe(
   target: UnsubscribeTarget,
   source: UnsubscribeSource,
 ): Promise<boolean> {
-  const row = await addFromUnsubscribe({
-    apiKeyId: target.apiKeyId,
-    email: target.recipient,
-    emailId: target.emailId,
-    source,
-  });
-  if (!row) return false;
+  try {
+    return await db.transaction(async (tx) => {
+      const row = await addFromUnsubscribe(
+        {
+          apiKeyId: target.apiKeyId,
+          email: target.recipient,
+          emailId: target.emailId,
+          source,
+        },
+        tx,
+      );
+      if (!row) return false;
 
-  dispatchEvent(
-    "email.unsubscribed",
-    {
+      await enqueueEvent(
+        tx,
+        "email.unsubscribed",
+        {
+          emailId: target.emailId,
+          recipient: target.recipient,
+          source,
+          unsubscribedAt: new Date().toISOString(),
+        },
+        { apiKeyId: target.apiKeyId },
+      );
+      return true;
+    });
+  } catch (error) {
+    logger.error("Unsubscribe not recorded: transaction rolled back", {
       emailId: target.emailId,
-      recipient: target.recipient,
+      apiKeyId: target.apiKeyId,
       source,
-      unsubscribedAt: new Date().toISOString(),
-    },
-    { apiKeyId: target.apiKeyId },
-  );
-  return true;
+      error: loggableError(error),
+    });
+    throw error;
+  }
 }

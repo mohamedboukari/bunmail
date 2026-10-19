@@ -1,3 +1,5 @@
+import { DrizzleQueryError } from "drizzle-orm";
+
 /**
  * Thrown by `webhook.service.createWebhook` when a non-admin API key tries
  * to subscribe to `email.received`. Inbound mail has no owning API key, and
@@ -58,4 +60,39 @@ export class ReplayLimitReachedError extends Error {
     );
     this.retryAfterSec = retryAfterSec;
   }
+}
+
+/**
+ * The webhook outbox insert failed (#184), stripped of what the query
+ * carried. Drizzle's message embeds the query parameters, and here they
+ * include the event payload (recipients, subjects): only the Postgres
+ * SQLSTATE is kept. Thrown inside the caller's transaction, so the state
+ * change the event describes rolls back with it.
+ */
+export class WebhookEnqueueError extends Error {
+  override readonly name = "WebhookEnqueueError";
+
+  /** Postgres SQLSTATE (e.g. `P0001` from a trigger), or `null`. */
+  readonly sqlState: string | null;
+
+  constructor(event: string, sqlState: string | null) {
+    super(
+      `Webhook event ${event} could not be enqueued${sqlState ? ` (SQLSTATE ${sqlState})` : ""}`,
+    );
+    this.sqlState = sqlState;
+  }
+}
+
+/**
+ * Wraps any error of the outbox insert in a `WebhookEnqueueError` (Bun's
+ * `PostgresError` exposes the SQLSTATE as `errno`).
+ */
+export function toWebhookEnqueueError(
+  event: string,
+  error: unknown,
+): WebhookEnqueueError {
+  const cause: unknown = error instanceof DrizzleQueryError ? error.cause : error;
+  const sqlState =
+    typeof cause === "object" && cause !== null ? Reflect.get(cause, "errno") : undefined;
+  return new WebhookEnqueueError(event, typeof sqlState === "string" ? sqlState : null);
 }

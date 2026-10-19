@@ -99,6 +99,7 @@ bunmail/
 │   │   ├── logger.ts                     ← Structured JSON logger: adds the log context, redacts secret-named fields (#284)
 │   │   ├── log-context.ts                ← Request/job/SMTP-session correlation IDs on AsyncLocalStorage (#284)
 │   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
+│   │   ├── db-error.ts                   ← A failed write's log text: SQLSTATE only for drizzle query errors (#184)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
 │   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
@@ -151,7 +152,7 @@ bunmail/
 │   │   │   ├── webhooks.plugin.ts                 ← CRUD + deliveries inspection + replay
 │   │   │   ├── services/
 │   │   │   │   ├── webhook.service.ts             ← CRUD
-│   │   │   │   ├── webhook-dispatch.service.ts    ← Enqueues into webhook_deliveries (#30)
+│   │   │   │   ├── webhook-dispatch.service.ts    ← Outbox: enqueues webhook_deliveries in the caller's transaction (#30, #184)
 │   │   │   │   ├── webhook-delivery.service.ts    ← Claim / send / reschedule / replay (#30)
 │   │   │   │   ├── webhook-delivery-worker.service.ts ← Poll loop + retention cleanup (#30)
 │   │   │   │   └── replay-limit.service.ts        ← Replay budget per delivery, in memory (#258)
@@ -466,6 +467,11 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 │     │                                       │                   │
 │     │ d. Every outcome clears the lease,    │                   │
 │     │    only if this worker still holds it │                   │
+│     │                                       │                   │
+│     │ e. The outcome, its inline-bounce     │                   │
+│     │    suppressions and its webhook       │                   │
+│     │    events commit in ONE transaction   │                   │
+│     │    (outbox, #184); no network inside  │                   │
 │     └───────────────────────────────────────┘                   │
 │                                                                 │
 │  While sending: the lease is renewed every minute. A dead       │
@@ -476,6 +482,8 @@ The queue is DB-driven for crash recovery with an in-memory poll loop.
 `FOR UPDATE SKIP LOCKED` makes the claim safe under concurrency: two workers running the same statement at the same time get **disjoint** result sets: never the same row twice. Single-instance today, but the queue is no longer the blocker for horizontal scaling. (#20)
 
 The batch is shared across API keys round-robin (#258): each key's oldest due row ranks 1, its next one 2, and the batch takes the lowest ranks first, so one key's backlog cannot delay another key's mail; a single key keeps FIFO order. Each key's rows are read through the partial index `idx_emails_due_per_key` (`api_key_id, next_attempt_at, created_at` WHERE `status = 'queued' AND deleted_at IS NULL`), one short probe per key whatever the backlog. The webhook delivery worker claims the same way, per webhook through `webhook_deliveries_due_per_webhook_idx` and ranked by the webhook's key. Details: [docs/emails.md](docs/emails.md#queue-architecture), [docs/webhooks.md](docs/webhooks.md#delivery-behavior).
+
+**Webhook events are a transactional outbox (#184):** every state change that raises an event (the queue's outcome with `email.sent` / `email.failed` / inline `email.bounced`, a DSN bounce, an unsubscribe, a complaint, a stored inbound message) writes its `webhook_deliveries` rows in its own transaction, with one `INSERT ... SELECT` over the matching webhooks (`enqueueEvent`). Both commit or neither does, so a crash between them can no longer lose an event; an insert failure rolls the state change back and is logged at `error` (the SMTP paths answer `451` so the sender retries). After a send the queue never risks a second send for a webhook problem: it retries the transaction twice, then saves the status without the events (logged, the events are lost); only a database that cannot take even that leaves the row to its lease. Fan-out happens at write time: the match is an index probe on the owning key (#313) over at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (#258), and the worker, replay and the dashboard read `webhook_deliveries` unchanged. Details: [docs/webhooks.md](docs/webhooks.md#transactional-outbox-184).
 
 **Email Status Flow:**
 
@@ -645,11 +653,11 @@ Unique index `(api_key_id, key)`: the send claims the key with `INSERT ... ON CO
 
 ### `webhook_deliveries` (#30)
 
-Persisted retry queue. Every dispatch enqueues one row per subscribed webhook; the worker drains it on a 5s poll. See [docs/webhooks.md](docs/webhooks.md) for the full lifecycle.
+Persisted retry queue and transactional outbox (#184). An event enqueues one row per subscribed webhook in the same transaction as the state change it describes; the worker drains it on a 5s poll. See [docs/webhooks.md](docs/webhooks.md) for the full lifecycle.
 
 | Column                | Type           | Constraints                                   |
 |-----------------------|----------------|-----------------------------------------------|
-| id                    | varchar(36)    | PK, prefixed `wdl_`                           |
+| id                    | varchar(36)    | PK, `wdl_` + 32 hex from `gen_random_uuid()` (#184; older rows `wdl_` + 24 hex) |
 | webhook_id            | varchar(36)    | FK → webhooks.id, NOT NULL, `ON DELETE CASCADE` |
 | event                 | varchar(50)    | NOT NULL                                      |
 | payload               | text           | NOT NULL: JSON body bytes (re-signed per attempt) |
@@ -1091,7 +1099,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - Decrypted in memory on each send and handed to nodemailer's signer. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
-- **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
+- **Inline 5xx** during the SMTP transaction → classified per MX group ([`parseSmtpError`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue.service.ts](src/modules/emails/services/queue.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24). Only a DSN delivered to a verified **signed return path** counts (#236): with `SMTP_ENABLED=true` and the sender domain's MX naming `MAIL_HOSTNAME` (cached per domain; other domains keep the From address as envelope sender), each recipient is sent in its own SMTP transaction with envelope sender `b+<email id hex>.<recipient index>.<MAC>@<sender domain>` (HMAC under a key derived from `DKIM_ENCRYPTION_KEY`), the receiver refuses (`550`) a `b+` address that does not verify, and the DSN then applies to exactly that email and recipient, whatever its body says. A DSN to any other address (the Message-ID link of before #236) has no effect; non-DSN mail to a return path (auto-replies) is dropped. Same sender domain as before, so SPF and DMARC alignment are unchanged. See [docs/bounces.md](docs/bounces.md#signed-return-paths-236).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
 - A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).

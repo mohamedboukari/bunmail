@@ -13,12 +13,21 @@ import type { FeedbackReport } from "../../src/modules/inbound/types/feedback-re
  * side (the suppression precedence) is covered by the integration test.
  */
 
+/** The fake transaction handle: names the transaction a write ran in. */
+interface FakeTx {
+  txId: number;
+}
+
 interface Calls {
   lookups: string[];
   complaints: Array<{ apiKeyId: string; email: string; emailId: string }>;
   unsubscribes: Array<{ recipient: string; source: string; senderDomain: string }>;
   events: Array<{ event: string; data: Record<string, unknown>; apiKeyId: string }>;
   dkimChecks: number;
+  /** Every write, with the transaction it ran in (`null`: outside one). */
+  writes: Array<{ write: string; txId: number | null }>;
+  /** How each transaction ended. */
+  transactions: Array<"committed" | "rolled back">;
 }
 
 const EMAIL: LinkedEmail = {
@@ -35,14 +44,21 @@ function makeDeps(opts: {
   /** What addFromComplaint returns: a row (changed) or undefined (already on file). */
   complaintChanged?: boolean;
   unsubscribeCreated?: boolean;
-}): { deps: FeedbackHandlerDeps; calls: Calls } {
+  /** Make the outbox insert fail (#184). */
+  enqueueFails?: boolean;
+}): { deps: FeedbackHandlerDeps<FakeTx>; calls: Calls } {
   const calls: Calls = {
     lookups: [],
     complaints: [],
     unsubscribes: [],
     events: [],
     dkimChecks: 0,
+    writes: [],
+    transactions: [],
   };
+  /** The transaction currently open, if any. */
+  let open: FakeTx | null = null;
+  const inTx = (tx: FakeTx): number | null => (open === tx ? tx.txId : null);
   return {
     calls,
     deps: {
@@ -50,7 +66,22 @@ function makeDeps(opts: {
         calls.lookups.push(messageId);
         return opts.email;
       },
-      addFromComplaint: async (input) => {
+      transaction: async (work) => {
+        const tx: FakeTx = { txId: calls.transactions.length + 1 };
+        open = tx;
+        try {
+          const result = await work(tx);
+          calls.transactions.push("committed");
+          return result;
+        } catch (error) {
+          calls.transactions.push("rolled back");
+          throw error;
+        } finally {
+          open = null;
+        }
+      },
+      addFromComplaint: async (tx, input) => {
+        calls.writes.push({ write: "addFromComplaint", txId: inTx(tx) });
         calls.complaints.push(input);
         return (opts.complaintChanged ?? true) ? { id: "sup_1" } : undefined;
       },
@@ -62,8 +93,11 @@ function makeDeps(opts: {
         });
         return opts.unsubscribeCreated ?? true;
       },
-      dispatchEvent: (event, data, scope) => {
+      enqueueEvent: async (tx, event, data, scope) => {
+        calls.writes.push({ write: "enqueueEvent", txId: inTx(tx) });
+        if (opts.enqueueFails) throw new Error("outbox insert failed");
         calls.events.push({ event, data, apiKeyId: scope.apiKeyId });
+        return 1;
       },
       verifyDkim: async () => {
         calls.dkimChecks += 1;
@@ -71,6 +105,14 @@ function makeDeps(opts: {
       },
     },
   };
+}
+
+/** What `promise` rejects with, or `null` when it resolves. */
+function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (error: unknown) => error,
+  );
 }
 
 function makeReport(overrides: Partial<FeedbackReport> = {}): FeedbackReport {
@@ -249,5 +291,34 @@ describe("handleFeedbackReport", () => {
         .outcome,
     ).toBe("dropped-no-recipient");
     expect(multi.calls.unsubscribes).toHaveLength(0);
+  });
+});
+
+describe("handleFeedbackReport: one transaction (#184)", () => {
+  test("the complaint suppression and its event are written in one transaction", async () => {
+    const { deps, calls } = makeDeps({ email: EMAIL });
+    await handleFeedbackReport(makeReport(), deps);
+    expect(calls.writes).toEqual([
+      { write: "addFromComplaint", txId: 1 },
+      { write: "enqueueEvent", txId: 1 },
+    ]);
+    expect(calls.transactions).toEqual(["committed"]);
+  });
+
+  test("an enqueue failure rolls the suppression back and is thrown, not swallowed", async () => {
+    const { deps, calls } = makeDeps({ email: EMAIL, enqueueFails: true });
+    const error = await rejectionOf(handleFeedbackReport(makeReport(), deps));
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("outbox insert failed");
+    expect(calls.transactions).toEqual(["rolled back"]);
+    expect(calls.events).toHaveLength(0);
+  });
+
+  test("a complaint with no recipient enqueues its event in a transaction of its own", async () => {
+    const email = { ...EMAIL, toAddress: "a@example.org", cc: "c@example.org" };
+    const { deps, calls } = makeDeps({ email });
+    await handleFeedbackReport(makeReport(), deps);
+    expect(calls.writes).toEqual([{ write: "enqueueEvent", txId: 1 }]);
+    expect(calls.transactions).toEqual(["committed"]);
   });
 });

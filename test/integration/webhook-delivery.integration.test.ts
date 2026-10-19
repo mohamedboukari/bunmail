@@ -15,7 +15,6 @@
 import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
 import { eq } from "drizzle-orm";
 import {
-  enqueueDelivery,
   claimDueDeliveries,
   recordAttempt,
   performHttpAttempt,
@@ -29,8 +28,9 @@ import {
   runCleanupCycle,
   runPollCycle,
 } from "../../src/modules/webhooks/services/webhook-delivery-worker.service.ts";
+import { enqueueEvent } from "../../src/modules/webhooks/services/webhook-dispatch.service.ts";
 import { generateId } from "../../src/utils/id.ts";
-import { truncateAll, seed, db } from "./_helpers.ts";
+import { truncateAll, seed, db, enqueueDelivery } from "./_helpers.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import { webhooks } from "../../src/modules/webhooks/models/webhook.schema.ts";
 
@@ -67,7 +67,7 @@ function envelope(event: "email.sent" | "email.bounced" = "email.sent") {
   } as const;
 }
 
-describe("enqueueDelivery: initial state", () => {
+describe("enqueueEvent: initial state (#184)", () => {
   test("inserts a pending row with attempts=0 and next_attempt_at=now-ish", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const { id: webhookId } = await seed.webhook({
@@ -77,20 +77,24 @@ describe("enqueueDelivery: initial state", () => {
     });
 
     const before = Date.now();
-    const { id } = await enqueueDelivery({ webhookId, envelope: envelope() });
+    const { data } = envelope();
+    await db.transaction((tx) => enqueueEvent(tx, "email.sent", data, { apiKeyId }));
     const after = Date.now();
-
-    expect(id).toMatch(/^wdl_/);
 
     const [row] = await db
       .select()
       .from(webhookDeliveries)
-      .where(eq(webhookDeliveries.id, id));
+      .where(eq(webhookDeliveries.webhookId, webhookId));
+    expect(row?.id).toMatch(/^wdl_/);
     expect(row?.status).toBe("pending");
     expect(row?.attempts).toBe(0);
     expect(row?.event).toBe("email.sent");
     /** Body bytes are stored verbatim: re-signed per attempt by the worker. */
-    expect(JSON.parse(row!.payload)).toEqual(envelope());
+    expect(JSON.parse(row!.payload)).toEqual({
+      event: "email.sent",
+      timestamp: expect.any(String),
+      data,
+    });
     /** `next_attempt_at` should be set to ~now (defaultNow). */
     const nextMs = row!.nextAttemptAt.getTime();
     expect(nextMs).toBeGreaterThanOrEqual(before - 500);

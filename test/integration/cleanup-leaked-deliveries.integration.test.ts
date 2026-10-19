@@ -9,10 +9,9 @@
 import { describe, test, expect, beforeEach } from "bun:test";
 import { join } from "path";
 import { sql } from "drizzle-orm";
-import { enqueueDelivery } from "../../src/modules/webhooks/services/webhook-delivery.service.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import { emailTombstones } from "../../src/modules/emails/models/email-tombstone.schema.ts";
-import { truncateAll, seed, db } from "./_helpers.ts";
+import { truncateAll, seed, db, enqueueDelivery } from "./_helpers.ts";
 
 const MIGRATION = join(
   import.meta.dir,
