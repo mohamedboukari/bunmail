@@ -554,7 +554,7 @@ describe("deliverWithFailover: buckets and rate budget", () => {
           tls: null,
         })),
       lock: recordingLock([]),
-      bucketOf: (host) => (host.endsWith("example.net") ? "example.net" : "example.org"),
+      bucketOf: (host) => (host === "backup.example.net" ? "example.net" : "example.org"),
       admit,
       routeDeps: stubDeps(),
     });
