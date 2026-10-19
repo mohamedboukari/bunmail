@@ -4,6 +4,7 @@ import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
+import type { AttachmentMeta } from "../../modules/emails/services/attachment-storage.ts";
 import {
   serializeDeliveryState,
   type SerializedDeliveryGroup,
@@ -13,6 +14,8 @@ interface EmailDetailPageProps {
   email: Email;
   /** When true, the email is in trash: show Restore + Delete forever instead of Trash. */
   isTrashed: boolean;
+  /** Attachment metadata (#181), in order; empty when none. Never the bytes. */
+  attachments: AttachmentMeta[];
 }
 
 /**
@@ -20,7 +23,7 @@ interface EmailDetailPageProps {
  * Includes HTML preview, text content, full metadata, and a destructive
  * action button that varies based on whether the row is in trash.
  */
-export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
+export function EmailDetailPage({ email, isTrashed, attachments }: EmailDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/emails/trash" : "/dashboard/emails";
   const backLabel = isTrashed ? "Back to trash" : "Back to emails";
 
@@ -156,6 +159,8 @@ export function EmailDetailPage({ email, isTrashed }: EmailDetailPageProps) {
       </div>
 
       <DeliveryTable groups={serializeDeliveryState(email.deliveryState)} />
+
+      <AttachmentsTable emailId={email.id} attachments={attachments} />
 
       {/* HTML preview */}
       {!!email.html && (
@@ -308,4 +313,77 @@ function isoDate(value: string | null): Date | null {
   if (value === null) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** A byte count for people: B, KB or MB (of 1,000), one decimal above 1 KB. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1000) return `${bytes} B`;
+  if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+/**
+ * Attachments (#181): name, type, size, inline Content-ID, and a download
+ * link while the bytes are stored. Every value is escaped: the filename
+ * and Content-ID come from the sender. The download is always a forced
+ * `attachment` (see the route), never rendered in the page.
+ */
+function AttachmentsTable({
+  emailId,
+  attachments,
+}: {
+  emailId: string;
+  attachments: AttachmentMeta[];
+}) {
+  if (attachments.length === 0) return <></>;
+  return (
+    <div class="mb-6">
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+        Attachments
+      </h2>
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+              <th class="px-4 py-2 font-medium">File</th>
+              <th class="px-4 py-2 font-medium">Type</th>
+              <th class="px-4 py-2 font-medium">Size</th>
+              <th class="px-4 py-2 font-medium">Inline</th>
+              <th class="px-4 py-2 font-medium">Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            {attachments.map((attachment) => (
+              <tr class="border-b last:border-b-0 border-gray-100 dark:border-gray-800 align-top">
+                <td class="px-4 py-2 break-all" safe>
+                  {attachment.filename}
+                </td>
+                <td class="px-4 py-2 break-all" safe>
+                  {attachment.contentType}
+                </td>
+                <td class="px-4 py-2 whitespace-nowrap" safe>
+                  {formatBytes(attachment.sizeBytes)}
+                </td>
+                <td class="px-4 py-2 break-all" safe>
+                  {attachment.contentId === null ? "" : `cid:${attachment.contentId}`}
+                </td>
+                <td class="px-4 py-2 whitespace-nowrap">
+                  {attachment.available ? (
+                    <a
+                      href={`/dashboard/emails/${encodeURIComponent(emailId)}/attachments/${attachment.position}`}
+                      class="text-gray-900 dark:text-gray-100 underline"
+                    >
+                      Download
+                    </a>
+                  ) : (
+                    <span class="text-gray-500 dark:text-gray-400">No longer stored</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }

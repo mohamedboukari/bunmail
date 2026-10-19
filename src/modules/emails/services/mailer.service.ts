@@ -100,6 +100,19 @@ export const DKIM_SIGNED_HEADERS = [
   "Feedback-ID",
 ].join(":");
 
+/**
+ * One attachment as the mailer sends it (#181): already checked, typed
+ * from its bytes (`services/attachments.ts`) and loaded by the queue.
+ */
+export interface OutboundAttachment {
+  filename: string;
+  /** The derived Content-Type, never a declared one. */
+  contentType: string;
+  /** Content-ID of an inline image (`cid:` in the HTML), else `null`. */
+  contentId: string | null;
+  content: Uint8Array;
+}
+
 /** DKIM signing options passed from the queue processor. */
 export interface DkimOptions {
   domainName: string;
@@ -211,6 +224,12 @@ export async function sendMail(options: {
    * never override BunMail's own headers or split a header line.
    */
   headers?: CustomHeaders | null;
+  /**
+   * Attachments (#181), loaded by the queue for this attempt: the same on
+   * every transaction and every retry, so each recipient gets the whole
+   * message. Inline ones (with a Content-ID) go beside the HTML.
+   */
+  attachments?: readonly OutboundAttachment[];
   /** Prior delivery state when this is a retry pass; undefined on first send. */
   existingState?: DeliveryState | null;
   dkim?: DkimOptions;
@@ -263,6 +282,8 @@ export async function sendMail(options: {
     subject: options.subject,
     dkim: options.dkim ? options.dkim.domainName : "none",
     messageId: options.messageId,
+    /** Count only: filenames may carry personal data (#181). */
+    attachmentCount: options.attachments?.length ?? 0,
     retry: options.existingState ? "yes" : "no",
     returnPath: options.returnPath ? "signed" : "plain",
   });
@@ -415,6 +436,7 @@ export async function sendMail(options: {
       text: body.text,
       messageId: options.messageId,
       headers: customHeaders,
+      attachments: options.attachments ?? [],
       dkim: options.dkim,
       unsubscribe: options.unsubscribe,
       feedback: options.feedback,
@@ -681,6 +703,8 @@ interface MxGroupMessage {
   messageId: string;
   /** Custom headers (#177), already passed through {@link safeCustomHeaders}. */
   headers: CustomHeaders;
+  /** Attachments (#181); absent or empty for a message without any. */
+  attachments?: readonly OutboundAttachment[];
   dkim?: DkimOptions;
   unsubscribe?: UnsubscribeOptions;
   /** For the `Feedback-ID` header (#250). */
@@ -781,7 +805,32 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
       from: args.envelopeFrom ?? args.from,
       to: args.recipients,
     },
+    /**
+     * Nothing in a message may make Nodemailer read a file or fetch a URL
+     * (a `path` or `href` content): every part BunMail builds is inline
+     * data. Defense in depth for the attachments (#181).
+     */
+    disableFileAccess: true,
+    disableUrlAccess: true,
   };
+
+  /**
+   * Attachments (#181), each with its derived type. One with a Content-ID
+   * is an inline part beside the HTML (Nodemailer moves it into the
+   * `multipart/related` node, and the HTML's `cid:` references are left as
+   * they are); every other one is `Content-Disposition: attachment`. The
+   * filename is RFC 2231 encoded by Nodemailer when it is not ASCII.
+   */
+  if (args.attachments && args.attachments.length > 0) {
+    mailOptions.attachments = args.attachments.map((a) => ({
+      filename: a.filename,
+      content: Buffer.from(a.content.buffer, a.content.byteOffset, a.content.byteLength),
+      contentType: a.contentType,
+      ...(a.contentId === null
+        ? { contentDisposition: "attachment" }
+        : { cid: a.contentId, contentDisposition: "inline" }),
+    }));
+  }
 
   /**
    * Extra headers: the custom ones (#177) first, then BunMail's own

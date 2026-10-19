@@ -260,6 +260,13 @@
       "when": 1792443676355,
       "tag": "0036_email_tags",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792447071684,
+      "tag": "0037_email_attachments",
+      "breakpoints": true
     }
   ]
 }

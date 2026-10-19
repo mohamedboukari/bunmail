@@ -205,11 +205,15 @@ const EMAIL: Email = {
 
 describe("serializeEmail: deliveryState (#250)", () => {
   test("carries the serialized delivery state", () => {
-    expect(serializeEmail(EMAIL).deliveryState).toEqual(serializeDeliveryState(STATE));
+    expect(serializeEmail(EMAIL, []).deliveryState).toEqual(
+      serializeDeliveryState(STATE),
+    );
   });
 
   test("an email not attempted yet has an empty delivery state", () => {
-    expect(serializeEmail({ ...EMAIL, deliveryState: null }).deliveryState).toEqual([]);
+    expect(serializeEmail({ ...EMAIL, deliveryState: null }, []).deliveryState).toEqual(
+      [],
+    );
   });
 });
 
@@ -239,6 +243,7 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
     const html = await EmailDetailPage({
       email: { ...EMAIL, deliveryState: HOSTILE },
       isTrashed: false,
+      attachments: [],
     });
     expect(html).toContain("Delivery by MX");
     expect(html).not.toContain("<script>alert(1)</script>");
@@ -265,6 +270,7 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
         },
       },
       isTrashed: false,
+      attachments: [],
     });
     expect(html).toContain("Sent without TLS");
   });
@@ -295,6 +301,7 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
         },
       },
       isTrashed: false,
+      attachments: [],
     });
     expect(html).toContain("MTA-STS enforced");
     expect(html).toContain("MTA-STS testing");
@@ -304,6 +311,7 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
     const html = await EmailDetailPage({
       email: { ...EMAIL, deliveryState: HOSTILE },
       isTrashed: false,
+      attachments: [],
     });
     expect(html).not.toContain("MTA-STS");
   });
@@ -312,6 +320,7 @@ describe("EmailDetailPage: delivery by MX (#250)", () => {
     const html = await EmailDetailPage({
       email: { ...EMAIL, deliveryState: null },
       isTrashed: false,
+      attachments: [],
     });
     expect(html).not.toContain("Delivery by MX");
   });

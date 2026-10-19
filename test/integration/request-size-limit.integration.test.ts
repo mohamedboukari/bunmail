@@ -9,6 +9,17 @@
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { join } from "path";
+import {
+  BYTES_PER_MB,
+  DEFAULT_ATTACHMENTS_MAX_TOTAL_MB,
+  maxRequestBodyBytesFor,
+} from "../../src/config.ts";
+
+/**
+ * The limit the spawned app runs with: the default attachment budget
+ * (#181), since `ATTACHMENTS_MAX_TOTAL_MB` is unset for it.
+ */
+const LIMIT = maxRequestBodyBytesFor(DEFAULT_ATTACHMENTS_MAX_TOTAL_MB * BYTES_PER_MB);
 
 const PORT = 20_000 + Math.floor(Math.random() * 20_000);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -26,6 +37,7 @@ beforeAll(async () => {
         HOST: "127.0.0.1",
         SMTP_ENABLED: "false",
         SMTP_SUBMISSION_ENABLED: "false",
+        ATTACHMENTS_MAX_TOTAL_MB: "",
       },
       stdout: "ignore",
       stderr: "ignore",
@@ -65,13 +77,45 @@ function post(body: string): Promise<Response> {
   });
 }
 
+/** A send carrying one attachment of `bytes` bytes, as base64 (#181). */
+function sendWithAttachment(bytes: number): string {
+  return JSON.stringify({
+    from: "hello@example.com",
+    to: "user@example.com",
+    subject: "x",
+    text: "x",
+    attachments: [
+      { filename: "a.bin", content: Buffer.alloc(bytes, 1).toString("base64") },
+    ],
+  });
+}
+
 describe("request body size limit", () => {
-  test("a body over 12 MB is rejected with 413 before auth", async () => {
-    expect((await post(validSend(13 * 1024 * 1024))).status).toBe(413);
+  test("a body one byte over the limit is rejected with 413 before auth", async () => {
+    const body = validSend(LIMIT);
+    expect(body.length).toBeGreaterThan(LIMIT);
+    expect((await post(body)).status).toBe(413);
   });
 
   test("a valid body under the limit reaches auth (401 without a key)", async () => {
     expect((await post(validSend(1024 * 1024))).status).toBe(401);
+  });
+
+  test("the base64 of the whole attachment budget, with full bodies, fits", async () => {
+    const budget = DEFAULT_ATTACHMENTS_MAX_TOTAL_MB * BYTES_PER_MB;
+    const body = JSON.stringify({
+      ...JSON.parse(sendWithAttachment(budget)),
+      html: "x".repeat(5 * 1024 * 1024),
+      text: "y".repeat(5 * 1024 * 1024),
+    });
+    expect(body.length).toBeLessThan(LIMIT);
+    expect((await post(body)).status).toBe(401);
+  });
+
+  test("an attachment whose base64 is over the limit is rejected with 413", async () => {
+    const body = sendWithAttachment(Math.ceil((LIMIT * 3) / 4));
+    expect(body.length).toBeGreaterThan(LIMIT);
+    expect((await post(body)).status).toBe(413);
   });
 });
 

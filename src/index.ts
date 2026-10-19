@@ -14,6 +14,8 @@ import {
   EmailSendRejectedError,
   InvalidFromNameError,
   InvalidTagError,
+  InvalidAttachmentError,
+  AttachmentTypeNotAllowedError,
 } from "./modules/emails/errors.ts";
 import {
   DkimRotationError,
@@ -374,6 +376,28 @@ const app = new Elysia()
         error: "Request validation failed",
         code: error.code,
         details: [{ path: error.path, message: error.message }],
+      };
+    }
+
+    /** An attachment refused on its input (#181): the same shape, naming its index only. */
+    if (error instanceof InvalidAttachmentError) {
+      set.status = error.status;
+      return {
+        success: false,
+        error: "Request validation failed",
+        code: error.code,
+        details: [{ path: error.path, message: error.message }],
+      };
+    }
+
+    /** An executable, script or installer attachment (#181): its index, never its name. */
+    if (error instanceof AttachmentTypeNotAllowedError) {
+      set.status = error.status;
+      return {
+        success: false,
+        error: error.message,
+        code: error.code,
+        index: error.index,
       };
     }
 

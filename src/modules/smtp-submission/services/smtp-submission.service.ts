@@ -17,11 +17,12 @@ import { findByHash } from "../../api-keys/services/api-key.service.ts";
 import { createEmail } from "../../emails/services/email.service.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
-import { EmailSendRejectedError } from "../../emails/errors.ts";
+import { AttachmentsTooLargeError, EmailSendRejectedError } from "../../emails/errors.ts";
 import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/errors.ts";
 import type { SendEmailInput } from "../../emails/types/email.types.ts";
 import {
   buildSubmissionInput,
+  submissionAttachments,
   selectRelayHeaders,
   submissionCategory,
   submissionTags,
@@ -48,11 +49,26 @@ import {
  * guard here is authentication, not recipient-domain validation).
  */
 
+/** The size cap of a submitted message without attachments (the inbound cap). */
+const BASE_MESSAGE_BYTES = 10 * 1024 * 1024;
+
+/** MIME room per attachment part (boundary, part headers) for up to 10 parts. */
+const ATTACHMENT_MIME_OVERHEAD_BYTES = 64 * 1024;
+
 /**
- * Maximum size (bytes) of a submitted message: advertised via the SIZE
- * ESMTP extension and enforced inside `onData`. Matches the inbound cap.
+ * Maximum size (bytes) of a submitted message for an attachment budget
+ * (#181): advertised via the SIZE ESMTP extension and enforced inside
+ * `onData`. The base cap plus the budget as MIME encodes it: base64 (4/3)
+ * in 76-character lines with CRLF (78/76), plus the part headers. About
+ * 17.4 MB with the default 5 MB budget, 35.2 MB at 18.
  */
-const MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
+export function submissionMaxMessageBytes(attachmentsMaxTotalBytes: number): number {
+  return (
+    BASE_MESSAGE_BYTES +
+    Math.ceil(((attachmentsMaxTotalBytes * 4) / 3) * (78 / 76)) +
+    ATTACHMENT_MIME_OVERHEAD_BYTES
+  );
+}
 
 /**
  * Maximum recipients accepted per transaction. A submission client that
@@ -251,6 +267,8 @@ export function start(portOverride?: number): void {
     );
   }
 
+  const maxMessageBytes = submissionMaxMessageBytes(config.attachments.maxTotalBytes);
+
   server = new SMTPServer({
     ...tlsOptions,
     secure: false,
@@ -265,7 +283,7 @@ export function start(portOverride?: number): void {
      * `false` means TLS is configured and clients STARTTLS before AUTH.
      */
     allowInsecureAuth,
-    size: MAX_MESSAGE_BYTES,
+    size: maxMessageBytes,
 
     /**
      * One summary line per connection when it closes (#284): who, how many
@@ -416,12 +434,12 @@ export function start(portOverride?: number): void {
           runWithLogContext(sessionContext(session), () => {
             if (aborted) return;
             totalBytes += chunk.length;
-            if (totalBytes > MAX_MESSAGE_BYTES) {
+            if (totalBytes > maxMessageBytes) {
               aborted = true;
               logger.warn("SMTP submission DATA rejected: message exceeds size cap", {
                 ip: session.remoteAddress,
                 totalBytes,
-                cap: MAX_MESSAGE_BYTES,
+                cap: maxMessageBytes,
               });
               chunks.length = 0;
               stream.unpipe();
@@ -483,32 +501,22 @@ export function start(portOverride?: number): void {
                   }
                 }
 
-                /** Raw bytes, not a UTF-8 string: each part keeps its charset (#250). */
-                const parsed = await simpleParser(Buffer.concat(chunks)).catch(
-                  (parseError: unknown) => {
-                    logger.warn("SMTP submission message did not parse", {
-                      apiKeyId,
-                      error:
-                        parseError instanceof Error ? parseError.name : typeof parseError,
-                    });
-                    throw new SubmissionRejectedError("Message could not be parsed");
-                  },
-                );
-
                 /**
-                 * Attachments are not supported yet: refuse the message rather
-                 * than deliver it without them (#250). A recipient silently
-                 * missing an attachment is worse than a clear rejection.
+                 * Raw bytes, not a UTF-8 string: each part keeps its charset
+                 * (#250). `keepCidLinks`: the HTML's `cid:` references stay as
+                 * they are (#181), pointing at the inline parts relayed with
+                 * their Content-ID, instead of being inlined as data URLs.
                  */
-                if (parsed.attachments.length > 0) {
-                  logger.warn("SMTP submission rejected: attachments not supported", {
+                const parsed = await simpleParser(Buffer.concat(chunks), {
+                  keepCidLinks: true,
+                }).catch((parseError: unknown) => {
+                  logger.warn("SMTP submission message did not parse", {
                     apiKeyId,
-                    attachments: parsed.attachments.length,
+                    error:
+                      parseError instanceof Error ? parseError.name : typeof parseError,
                   });
-                  throw new SubmissionRejectedError(
-                    "Attachments are not supported: send the message without them",
-                  );
-                }
+                  throw new SubmissionRejectedError("Message could not be parsed");
+                });
 
                 const envelopeFrom =
                   session.envelope.mailFrom &&
@@ -576,6 +584,7 @@ export function start(portOverride?: number): void {
                   fromName: submittedName.fromName,
                   category,
                   tags,
+                  attachments: submissionAttachments(parsed.attachments),
                 });
 
                 /**
@@ -628,7 +637,13 @@ export function start(portOverride?: number): void {
                  */
                 if (error instanceof EmailSendRejectedError) {
                   logger.warn("SMTP submission rejected", { apiKeyId, code: error.code });
-                  callback(smtpError(error.message, 550));
+                  /** Attachments over the size budget (#181): 552, exceeded storage allocation. */
+                  callback(
+                    smtpError(
+                      error.message,
+                      error instanceof AttachmentsTooLargeError ? 552 : 550,
+                    ),
+                  );
                   return;
                 }
                 /** Refusals the client must not retry: 550 with their (fixed) message. */

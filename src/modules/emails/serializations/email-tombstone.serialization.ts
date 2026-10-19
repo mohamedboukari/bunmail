@@ -1,4 +1,7 @@
-import type { EmailTombstone } from "../models/email-tombstone.schema.ts";
+import type {
+  EmailTombstone,
+  TombstoneAttachment,
+} from "../models/email-tombstone.schema.ts";
 
 export interface SerializedEmailTombstone {
   id: string;
@@ -10,6 +13,8 @@ export interface SerializedEmailTombstone {
   sentAt: Date | null;
   deletedAt: Date | null;
   purgedAt: Date;
+  /** The email's attachments (#181), metadata only; empty when none. */
+  attachments: TombstoneAttachment[];
 }
 
 /**
@@ -29,5 +34,6 @@ export function serializeEmailTombstone(row: EmailTombstone): SerializedEmailTom
     sentAt: row.sentAt,
     deletedAt: row.deletedAt,
     purgedAt: row.purgedAt,
+    attachments: row.attachments ?? [],
   };
 }

@@ -2,6 +2,8 @@ import type { emails } from "../models/email.schema.ts";
 import type { InferSelectModel } from "drizzle-orm";
 import type { db } from "../../../db/index.ts";
 import type { TagFilter } from "../services/tags.ts";
+import type { AttachmentInput } from "../services/attachments.ts";
+import type { AttachmentMeta } from "../services/attachment-storage.ts";
 
 /** All possible statuses an email can be in during its lifecycle */
 export const EMAIL_STATUSES = ["queued", "sending", "sent", "failed", "bounced"] as const;
@@ -83,11 +85,13 @@ export interface SendEmailInput {
    */
   tags?: Record<string, string>;
   /**
-   * Attachments are not supported (#250): any value here, an empty array
-   * included, makes `createEmail` throw `AttachmentsNotSupportedError`
-   * instead of queuing the email without them. Only a REST body can set it.
+   * Files to attach (#181): base64 content from the REST body, raw bytes
+   * from SMTP submission. Checked by `createEmail`
+   * (`services/attachments.ts`): count, size, filename, `contentId`,
+   * strict base64, and blocked executable types, by extension and by
+   * sniffed content. The declared `contentType` is never used.
    */
-  attachments?: unknown;
+  attachments?: AttachmentInput[];
 }
 
 /**
@@ -104,6 +108,8 @@ export type SendWarning =
 /** What `createEmail` returns: the queued row and its sender-domain warnings. */
 export interface CreatedEmail {
   email: Email;
+  /** Metadata of the attachments stored with it (#181), in order; empty when none. */
+  attachments: AttachmentMeta[];
   /** Empty when the sender domain is registered and fully verified. */
   warnings: SendWarning[];
 }

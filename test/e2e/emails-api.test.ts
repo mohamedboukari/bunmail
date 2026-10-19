@@ -107,7 +107,7 @@ const mockTrashedEmail = {
 /* ─── Mock email service ─── */
 /** Held so tests can assert what the route passed to the service. */
 const createEmailMock = mock((_input: unknown, _apiKeyId: string) =>
-  Promise.resolve({ email: mockEmail, warnings: ["spf_unverified"] }),
+  Promise.resolve({ email: mockEmail, warnings: ["spf_unverified"], attachments: [] }),
 );
 /**
  * The idempotent send (#188): replays when the key is "replay-me", so
@@ -118,12 +118,16 @@ const createEmailIdempotentMock = mock(
     _input: unknown,
     _apiKeyId: string,
     idempotencyKey: string,
-    buildResponse: (created: { email: typeof mockEmail; warnings: string[] }) => {
+    buildResponse: (created: {
+      email: typeof mockEmail;
+      warnings: string[];
+      attachments: never[];
+    }) => {
       status: number;
       body: object;
     },
   ) => {
-    const response = buildResponse({ email: mockEmail, warnings: [] });
+    const response = buildResponse({ email: mockEmail, warnings: [], attachments: [] });
     return Promise.resolve({
       status: response.status,
       body: response.body,
@@ -173,6 +177,9 @@ void mock.module("../../src/modules/emails/services/email.service.ts", () => ({
     Promise.resolve(id === "msg_test123" ? mockTrashedEmail : undefined),
   ),
   trashEmailsUnscoped: mock((ids: string[]) => Promise.resolve(ids.length)),
+  /** Attachment metadata (#181): none in these fixtures. */
+  attachmentsFor: mock(() => Promise.resolve(new Map())),
+  findAttachmentForDownload: mock(() => Promise.resolve(undefined)),
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */

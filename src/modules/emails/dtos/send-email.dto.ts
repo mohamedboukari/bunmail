@@ -9,6 +9,16 @@ import { t } from "elysia";
 export const MAX_BODY_LENGTH = 5 * 1024 * 1024;
 
 /**
+ * Longest `content` of one attachment, in base64 characters (#181): the
+ * base64 of the largest budget `ATTACHMENTS_MAX_TOTAL_MB` allows, 18 MB of
+ * 1,000,000 bytes (a unit test keeps the two in step). A literal, not
+ * read from `config.ts`: the DTO must load under the partial config stubs
+ * of the e2e tests. The configured budget is enforced on the decoded size
+ * by `createEmail`.
+ */
+export const MAX_ATTACHMENT_BASE64_LENGTH = 24_000_000;
+
+/**
  * Validation schema for POST /api/v1/emails/send request body.
  *
  * Supports two modes:
@@ -107,16 +117,51 @@ export const sendEmailDto = t.Object({
   ),
 
   /**
-   * Not supported (#250). Declared so the property reaches `createEmail`,
-   * which refuses the send with `422 ATTACHMENTS_NOT_SUPPORTED` whatever
-   * the value is (an empty array included), instead of queuing it without
-   * them. Every other unknown property is still ignored.
+   * Attachments (#181), Resend-compatible. Only the shape and raw caps are
+   * checked here, so a send over a rule gets that rule's code rather than
+   * a generic validation error: `createEmail` (`services/attachments.ts`)
+   * refuses more than 10 (`422 TOO_MANY_ATTACHMENTS`), more than
+   * `ATTACHMENTS_MAX_TOTAL_MB` decoded (`422 ATTACHMENTS_TOO_LARGE`), a bad
+   * filename, `contentId` or base64 (`422 VALIDATION_ERROR` at
+   * `/attachments/<i>/<field>`), and executables, scripts and installers
+   * by extension or sniffed content (`422 ATTACHMENT_TYPE_NOT_ALLOWED`).
+   * `content` is capped at the base64 of the largest allowed budget (18
+   * MB); the HTTP body limit refuses a larger body before it is parsed.
    */
   attachments: t.Optional(
-    t.Unknown({
-      description:
-        "Not supported: a send with this property, whatever its value (an empty array included), is refused with 422 ATTACHMENTS_NOT_SUPPORTED and nothing is queued.",
-    }),
+    t.Array(
+      t.Object({
+        filename: t.String({
+          maxLength: 1024,
+          description:
+            "1 to 255 characters after trimming; no control or bidi-control characters, no / or \\, not only dots.",
+        }),
+        content: t.String({
+          maxLength: MAX_ATTACHMENT_BASE64_LENGTH,
+          description:
+            "The file, as standard padded base64 (no whitespace, no line breaks).",
+        }),
+        contentType: t.Optional(
+          t.String({
+            maxLength: 255,
+            description:
+              "Accepted for compatibility and ignored: the type sent is derived from the file's bytes, else a few text extensions, else application/octet-stream.",
+          }),
+        ),
+        contentId: t.Optional(
+          t.String({
+            maxLength: 1024,
+            description:
+              "Content-ID for an inline image referenced as cid:<contentId> in the HTML: 1 to 128 characters of A-Z a-z 0-9 . _ % + -, optionally followed by @ and a domain.",
+          }),
+        ),
+      }),
+      {
+        maxItems: 100,
+        description:
+          "Files to attach: at most 10, at most ATTACHMENTS_MAX_TOTAL_MB (default 5) decoded in total. Executables, scripts and installers are refused (422 ATTACHMENT_TYPE_NOT_ALLOWED). For larger files, upload them to your own storage and send a link.",
+      },
+    ),
   ),
 
   headers: t.Optional(

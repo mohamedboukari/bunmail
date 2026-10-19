@@ -128,6 +128,8 @@ bunmail/
 │   │   │   │   ├── mta-sts.ts            ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── from-name.ts          ← From display-name rules (#250)
+│   │   │   │   ├── attachments.ts        ← Attachment rules: filename, Content-ID, strict base64, limits, blocked types, derived type (#181)
+│   │   │   │   ├── attachment-storage.ts ← Storage interface for attachment bytes (Postgres) + metadata reads (#181)
 │   │   │   │   ├── message-body.ts       ← Send-time HTML wrapper and text alternative (#250)
 │   │   │   │   ├── html-to-text.ts       ← Bounded, linear HTML-to-text converter (#250)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
@@ -139,6 +141,7 @@ bunmail/
 │   │   │   │   └── list-emails.dto.ts
 │   │   │   ├── models/
 │   │   │   │   ├── email.schema.ts       ← emails pgTable
+│   │   │   │   ├── email-attachment.schema.ts ← email_attachments pgTable (#181)
 │   │   │   │   ├── email-tombstone.schema.ts ← email_tombstones pgTable (#34)
 │   │   │   │   └── idempotency-key.schema.ts ← idempotency_keys pgTable (#188)
 │   │   │   ├── serializations/
@@ -626,6 +629,25 @@ Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `id
 
 `domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
+### `email_attachments` (#181)
+
+The files of an outbound email (migration `0037`), one row per attachment, inserted in the email's transaction. The bytes are kept only until the email reaches a final state: the outcome transaction that sets `sent`, `failed` or `bounced` sets `content = NULL` and keeps the metadata. Every read other than the mailer's send and the dashboard download selects the metadata columns only (`content IS NOT NULL` for `available`). Accessed through the `AttachmentStorage` interface (`services/attachment-storage.ts`), so an object store can replace the `content` column later. See [docs/emails.md](docs/emails.md#attachments-181).
+
+| Column       | Type           | Constraints                                   |
+|--------------|----------------|-----------------------------------------------|
+| id           | varchar(36)    | PK (`att_…`)                                  |
+| email_id     | varchar(36)    | NOT NULL, FK → emails.id `ON DELETE CASCADE`  |
+| position     | integer        | NOT NULL: 0-based index in the send's list    |
+| filename     | varchar(255)   | NOT NULL: checked, trimmed                    |
+| content_type | varchar(255)   | NOT NULL: derived from the bytes, never declared |
+| size_bytes   | integer        | NOT NULL: decoded size                        |
+| content_id   | varchar(128)   | nullable: inline `cid`                        |
+| sha256       | varchar(64)    | NOT NULL: hex digest (dedup, debugging)       |
+| content      | bytea          | nullable: raw bytes; `NULL` once final        |
+| created_at   | timestamp      | NOT NULL, default `now()`                     |
+
+Indexes: `uq_email_attachments_email_position` unique `(email_id, position)` (also the `email_id` index).
+
 ### `api_keys`
 
 | Column       | Type           | Constraints                     |
@@ -703,6 +725,7 @@ Post-purge audit trail. Every hard-delete of an `emails` row first writes a snap
 | sent_at        | timestamptz    | nullable                                      |
 | deleted_at     | timestamptz    | nullable, when the original was soft-deleted to trash |
 | purged_at      | timestamptz    | NOT NULL, default `now()`: retention starts here |
+| attachments    | jsonb          | nullable: each attachment's `filename`, `contentType`, `size` (#181), never the bytes |
 
 Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list).
 
@@ -720,7 +743,7 @@ Retention: `TOMBSTONE_RETENTION_DAYS` (default 90): the existing 6h trash purge 
 | request_hash    | text           | NOT NULL: SHA-256 hex of the canonical JSON body |
 | email_id        | varchar(36)    | nullable, FK → emails.id `ON DELETE SET NULL`, indexed |
 | response_status | integer        | nullable (only inside the creating transaction) |
-| response_body   | jsonb          | nullable: the first response without message content (subject, html, text, headers are filled from the live email on replay, or null) |
+| response_body   | jsonb          | nullable: the first response without message content (subject, html, text, headers are filled from the live email on replay, or null); attachment metadata only, never a file (#181) |
 | created_at      | timestamptz    | NOT NULL, default `now()`                     |
 | expires_at      | timestamptz    | NOT NULL, indexed (purge)                     |
 
@@ -919,6 +942,7 @@ user_credentials ──1:N──▶ sessions  (credential_id, CASCADE, #277)
 user_credentials ──1:N──▶ user_recovery_codes  (credential_id of the totp row, CASCADE, #220)
 sessions  ──1:N──▶ session_token_history  (CASCADE, #216)
 emails    ──1:N──▶ suppressions    (source_email_id, when auto-suppressed from a bounce, unsubscribe or complaint)
+emails    ──1:N──▶ email_attachments  (CASCADE on email delete, #181)
 dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 ```
 
@@ -930,7 +954,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 | Method | Path                                | Description                                | Auth |
 |--------|-------------------------------------|--------------------------------------------|------|
-| POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188) | Yes  |
+| POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188; optional `attachments`, #181) | Yes  |
 | GET    | /api/v1/emails                      | List sent emails (excludes trash); `status`, `source` and repeatable `tag=key:value` filters | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
 | GET    | /api/v1/emails/:id                  | Get email by ID, with its per-MX `deliveryState` (#250) | Yes  |
@@ -1067,7 +1091,8 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/emails/:id/restore      | Restore single          | Member |
 | POST   | /dashboard/emails/:id/permanent    | Hard-delete single (writes tombstone) | Admin |
 | GET    | /dashboard/emails/tombstones       | Tombstone list + Message-ID search | Member |
-| GET    | /dashboard/emails/:id              | Email detail            | Member |
+| GET    | /dashboard/emails/:id              | Email detail, attachments table (#181) | Member |
+| GET    | /dashboard/emails/:id/attachments/:position | Forced download of one attachment (octet-stream, `attachment`, nosniff, sandbox CSP, no-store; 410 once dropped, #181) | Member |
 | GET    | /dashboard/api-keys                | API keys management (a member: own keys, #219) | Member |
 | POST   | /dashboard/api-keys                | Create API key (a member: restricted only, #219) | Member |
 | POST   | /dashboard/api-keys/:id/revoke     | Revoke API key (a member: own keys, #219) | Member |
@@ -1253,7 +1278,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `IDEMPOTENCY_KEY_TTL_HOURS` (#188, 1 to 168, default 24) sets how long an `Idempotency-Key` on the send API is remembered; anything else refuses to boot. Optional: `INBOUND_NOTIFY_PREVIEW=true` (#250) adds the original subject and a link-stripped preview to the body of inbound notifications (default `false`: no inbound content; only `true` or `false`, anything else refuses to boot). Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional (#250): `DOMAIN_REVERIFY_ENABLED` (default `true`) and `DOMAIN_REVERIFY_INTERVAL_HOURS` (6 to 168, default 24) control the scheduled DNS re-verification of domains; anything invalid refuses to boot. Optional: `SUPPRESSIONS_SHARED_HARD=true` (#250) also refuses addresses any API key holds a permanent hard-bounce or complaint suppression for (default `false`; only `true` or `false`, anything else refuses to boot). Optional: `SENDING_IP_DNSBL_CHECK=false` (#250) turns off the daily DNSBL self-check of the sending IPs (default `true`; only `true` or `false`, anything else refuses to boot). Optional tuning, with defaults: `PORT` (`3000`) and `HOST` (`0.0.0.0`); `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW` (`100` requests per `60` seconds, positive integers); `DASHBOARD_TRUSTED_PROXY_HOPS` (`0`) and `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `5` from 1 to 100, `900` seconds from 60 to 86400); `MAIL_PUBLIC_IP` (unset: the A/AAAA records of `MAIL_HOSTNAME`), `MAIL_MX_CONCURRENCY` (`1`), `MAIL_MX_RATE_PER_MIN` (unset, 1 to 100000), `MAIL_IP_FAMILY` (`4` or `6`, default `4`), `MAIL_RETRY_MAX_AGE_HOURS` (`48`, a positive integer) and `MAIL_ALLOW_PRIVATE_MX` (`false`); `QUEUE_BATCH_SIZE` (`5`, 1 to 100), `QUEUE_POLL_INTERVAL_MS` (`2000`, 250 to 60000) and `QUEUE_MAX_CONCURRENT_SENDS` (`10`, 1 to 500); `INBOUND_NOTIFY_ENABLED` (`true`) and `INBOUND_NOTIFY_FROM_LOCAL` (`notifications`); `TRASH_RETENTION_DAYS` (`7`) and `TOMBSTONE_RETENTION_DAYS` (`90`); `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`); `LOG_LEVEL` (`info`: `debug`, `info`, `warn` or `error`) and `LOG_REDACT_PII` (`true` in production, `false` in development). The SMTP listeners' variables are listed below. Out-of-range values of the bounded variables refuse to boot. Descriptions: [.env.example](.env.example) and [docs/self-hosting.md](docs/self-hosting.md). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `IDEMPOTENCY_KEY_TTL_HOURS` (#188, 1 to 168, default 24) sets how long an `Idempotency-Key` on the send API is remembered; anything else refuses to boot. Optional: `ATTACHMENTS_MAX_TOTAL_MB` (#181, 1 to 18 MB of 1,000,000 bytes, default 5) caps the decoded attachments of one email; the HTTP body limit and the SMTP submission size limit follow it; anything else refuses to boot. Optional: `INBOUND_NOTIFY_PREVIEW=true` (#250) adds the original subject and a link-stripped preview to the body of inbound notifications (default `false`: no inbound content; only `true` or `false`, anything else refuses to boot). Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional (#250): `DOMAIN_REVERIFY_ENABLED` (default `true`) and `DOMAIN_REVERIFY_INTERVAL_HOURS` (6 to 168, default 24) control the scheduled DNS re-verification of domains; anything invalid refuses to boot. Optional: `SUPPRESSIONS_SHARED_HARD=true` (#250) also refuses addresses any API key holds a permanent hard-bounce or complaint suppression for (default `false`; only `true` or `false`, anything else refuses to boot). Optional: `SENDING_IP_DNSBL_CHECK=false` (#250) turns off the daily DNSBL self-check of the sending IPs (default `true`; only `true` or `false`, anything else refuses to boot). Optional tuning, with defaults: `PORT` (`3000`) and `HOST` (`0.0.0.0`); `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW` (`100` requests per `60` seconds, positive integers); `DASHBOARD_TRUSTED_PROXY_HOPS` (`0`) and `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `5` from 1 to 100, `900` seconds from 60 to 86400); `MAIL_PUBLIC_IP` (unset: the A/AAAA records of `MAIL_HOSTNAME`), `MAIL_MX_CONCURRENCY` (`1`), `MAIL_MX_RATE_PER_MIN` (unset, 1 to 100000), `MAIL_IP_FAMILY` (`4` or `6`, default `4`), `MAIL_RETRY_MAX_AGE_HOURS` (`48`, a positive integer) and `MAIL_ALLOW_PRIVATE_MX` (`false`); `QUEUE_BATCH_SIZE` (`5`, 1 to 100), `QUEUE_POLL_INTERVAL_MS` (`2000`, 250 to 60000) and `QUEUE_MAX_CONCURRENT_SENDS` (`10`, 1 to 500); `INBOUND_NOTIFY_ENABLED` (`true`) and `INBOUND_NOTIFY_FROM_LOCAL` (`notifications`); `TRASH_RETENTION_DAYS` (`7`) and `TOMBSTONE_RETENTION_DAYS` (`90`); `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`); `LOG_LEVEL` (`info`: `debug`, `info`, `warn` or `error`) and `LOG_REDACT_PII` (`true` in production, `false` in development). The SMTP listeners' variables are listed below. Out-of-range values of the bounded variables refuse to boot. Descriptions: [.env.example](.env.example) and [docs/self-hosting.md](docs/self-hosting.md). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1279,7 +1304,7 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
   - Request validation failure → 422 with `{ code: "VALIDATION_ERROR", details: [{ path, message }] }` (submitted values never echoed); malformed JSON → 400 `INVALID_BODY`
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
-  - `EmailSendRejectedError` subclasses (`src/modules/emails/errors.ts`) → their own status and code: 404 `TEMPLATE_NOT_FOUND`; 422 `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (#245), `SUBJECT_REQUIRED`, `BODY_REQUIRED` (#250), `INVALID_CUSTOM_HEADER` (#177), `IDEMPOTENCY_KEY_REUSED` (#188), `MARKETING_REQUIRES_ONE_CLICK`, `ATTACHMENTS_NOT_SUPPORTED` (#250); an invalid `fromName` (`InvalidFromNameError`, #250) is 422 `VALIDATION_ERROR` with `details` naming `/fromName`
+  - `EmailSendRejectedError` subclasses (`src/modules/emails/errors.ts`) → their own status and code: 404 `TEMPLATE_NOT_FOUND`; 422 `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (#245), `SUBJECT_REQUIRED`, `BODY_REQUIRED` (#250), `INVALID_CUSTOM_HEADER` (#177), `IDEMPOTENCY_KEY_REUSED` (#188), `MARKETING_REQUIRES_ONE_CLICK` (#250), `TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED` (with `index`, #181); an invalid `fromName` (`InvalidFromNameError`, #250) is 422 `VALIDATION_ERROR` with `details` naming `/fromName`, an invalid attachment input (`InvalidAttachmentError`, #181) the same at `/attachments/<i>/<field>`
   - `DomainAlreadyRegisteredError` → 409 `DOMAIN_ALREADY_REGISTERED`; `InvalidDkimSelectorError` → 422 `INVALID_DKIM_SELECTOR`; `DkimRotationError` → 409 with its code (`DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE`, #250)
   - `TemplateTooLargeError` → 422 `TEMPLATE_OUTPUT_TOO_LARGE`
   - `InactiveApiKeyError` → 401 `API_KEY_REVOKED`
