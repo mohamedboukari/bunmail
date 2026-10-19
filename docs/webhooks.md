@@ -83,7 +83,7 @@ Indexes:
 | `email.sent`       | An email is successfully delivered                             |
 | `email.failed`     | An email permanently fails (temporary failures are retried with backoff until it is `MAIL_RETRY_MAX_AGE_HOURS` old). `data.blocked: true` when a receiver refused the sender (blocklist, reputation, SPF/DKIM/DMARC), not the recipient (#246) |
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification: DSN parsed by the bounce module, original `emails` row marked `bounced`, recipient auto-suppressed (#24). See [docs/bounces.md](bounces.md). |
-| `email.complained` | A recipient marked the message as spam. Reserved for future Feedback Loop (FBL) processing: wiring TBD. |
+| `email.complained` | A mailbox provider's feedback loop reported that a recipient marked the message as spam (an ARF `abuse` or `fraud` report linked to the email by its Message-ID), and a permanent `complaint` suppression was created or strengthened (#191). Fires once per suppression change: a repeated report for an address already suppressed as `complaint` fires nothing. Needs `SMTP_ENABLED=true` and feedback-loop enrolment, see [feedback-loops.md](feedback-loops.md). |
 | `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |
 | `email.unsubscribed` | A recipient used the per-recipient one-click unsubscribe link or `unsub+` mailto, and a permanent `unsubscribe` suppression was created (#249). Fires once per suppression: repeated requests fire nothing. See [suppressions.md](suppressions.md#one-click-unsubscribe). |
 
@@ -91,7 +91,7 @@ Indexes:
 
 Events are scoped to the API key that owns the webhook:
 
-- `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.unsubscribed`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
+- `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
 - `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 - Webhooks of a **revoked** key receive nothing, and deliveries already queued for them are marked `failed` instead of sent.
 - Before dispatch was scoped, events could reach other keys' webhooks. Migration `0014` deletes any such deliveries left over in `webhook_deliveries` on upgrade.
@@ -146,7 +146,26 @@ Events are scoped to the API key that owns the webhook:
 }
 ```
 
-`source` is `"one_click"` (RFC 8058 POST from the mailbox provider), `"link"` (the confirmation page's button) or `"mailto"` (mail to `unsub+<token>@<domain>`). `emailId` is the email whose header was used; `recipient` is lowercased.
+`source` is `"one_click"` (RFC 8058 POST from the mailbox provider), `"link"` (the confirmation page's button), `"mailto"` (mail to `unsub+<token>@<domain>`) or `"fbl"` (an `opt-out` feedback-loop report, #191). `emailId` is the email whose header was used (for `"fbl"`, the email the report was about); `recipient` is lowercased.
+
+`email.complained` (#191):
+
+```json
+{
+  "event": "email.complained",
+  "timestamp": "2026-10-19T10:05:02.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "recipient": "user@example.com",
+    "feedbackType": "abuse",
+    "reporter": "Example-Mail-Feedback/2.0",
+    "arrivalDate": "2026-10-19T10:00:00.000Z",
+    "receivedAt": "2026-10-19T10:05:02.000Z"
+  }
+}
+```
+
+`recipient` is the lowercased address that was suppressed, or `null` when the email had several recipients and the report did not say which one complained (providers often redact `Original-Rcpt-To`); nothing is suppressed then, and the event fires on every such report. `feedbackType` is the report's `Feedback-Type` (`"abuse"` or `"fraud"`), `null` when the report had none. `reporter` is the report's `User-Agent`, else the domain of its `From` address (at most 200 characters, `null` when neither is present). `arrivalDate` is the report's `Arrival-Date` (when the provider received the original), `null` when missing or unparseable; `receivedAt` is when BunMail processed the report. Report contents are unauthenticated input: treat `reporter` as a label, not a verified identity.
 
 The `suppressionId` lets receivers cross-reference the auto-created suppression row. `bounceType` is `"hard"` (5.x.x) or `"soft"` (4.x.x). A second soft bounce for the same recipient within 24h escalates to `"hard"`: the webhook will fire with `bounceType: "hard"` even though the inbound DSN's status code was a 4.x.x.
 

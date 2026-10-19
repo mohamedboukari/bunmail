@@ -105,7 +105,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard
 - **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
 - **Templates**: Mustache-style `{{variable}}` substitution
-- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.received`, `email.unsubscribed` (`email.complained` is reserved for future feedback-loop processing)
+- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting
 - **Inbound notifications**: per-domain "you have new mail" summary email on receive, DKIM-signed from the recipient domain; opt-in via each domain's `notify_email`
 - **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting

@@ -25,7 +25,7 @@ Expired rows stay in the table: they're not auto-purged today. If you need clean
 | Value | When |
 |---|---|
 | `bounce` | Auto-set by the bounce module (#24) when a Delivery Status Notification arrives at the inbound SMTP. The DSN parser calls `addFromBounce()` and persists `bounce_type` + `diagnostic_code` from the SMTP enhanced status code. See [docs/bounces.md](bounces.md). |
-| `complaint` | Reserved for FBL (Feedback Loop) processing, when a recipient marks your message as spam. Not implemented yet. |
+| `complaint` | Set by feedback-loop processing (#191): a mailbox provider sent an ARF report saying the recipient marked an email as spam. Permanent; `source_email_id` is the email complained about. The strongest reason: see [Complaints](#complaints-feedback-loops). Can also be set manually. |
 | `manual` | Operator/customer added the address themselves (e.g. "I know this address bounces, just block it"). |
 | `unsubscribe` | Set by the one-click unsubscribe flow (#249): a recipient used the per-recipient `List-Unsubscribe` link or mailto. Permanent; `source_email_id` is the email whose link was used. See [One-click unsubscribe](#one-click-unsubscribe). Can also be set manually. |
 
@@ -147,9 +147,17 @@ Verifies a token against its email row: `{ emailId, apiKeyId, recipient, senderD
 #### `unsubscribe(target, source): Promise<boolean>`
 `addFromUnsubscribe`, then `email.unsubscribed` on first creation. `true` when this request created the suppression.
 
+## Complaints (feedback loops)
+
+When a recipient marks an email as spam and their mailbox provider runs a feedback loop, an ARF report (RFC 5965) arrives at the inbound SMTP receiver. The feedback handler (`src/modules/inbound/services/feedback-handler.service.ts`, see [feedback-loops.md](feedback-loops.md)) links it to the email by its Message-ID, chooses the recipient, and calls `addFromComplaint` under the email's API key. An `opt-out` report goes through `unsubscribe(target, "fbl")` instead (reason `unsubscribe`).
+
+**Precedence** (`addFromComplaint`): a complaint is the strongest reason. It creates the row; turns a temporary one (a soft-bounce backoff, or a manual entry with an expiry) into a permanent complaint; and replaces any other permanent reason (`bounce`, `unsubscribe`, `manual`) with `complaint`, clearing `bounce_type` and `diagnostic_code` and setting `source_email_id`. A permanent `complaint` already on file is left exactly as it is, so a repeated report changes and fires nothing. The check and the write are one `INSERT ... ON CONFLICT DO UPDATE ... WHERE` statement, so racing reports change the row once. A later unsubscribe never weakens a complaint (`addFromUnsubscribe` leaves a permanent row alone). **Known gap:** `addFromBounce` still overwrites whatever is on file, so a late DSN for an email sent before the complaint turns the row into a bounce (a soft one with a 24 h expiry); the same holds for a permanent unsubscribe today.
+
+#### `addFromComplaint(input): Promise<Suppression | undefined>`
+`{ apiKeyId, email, emailId }`, built from the linked email row. Returns the row when it was created or changed (the caller then fires `email.complained`), `undefined` when a permanent complaint was already there. Logs `Complaint suppression processed` at `info` with `emailId`, `apiKeyId`, the redacted address and `outcome`.
+
 ## Out of scope (separate tickets)
 
-- Complaint Feedback Loop (FBL) ingestion
 - Bulk import (CSV upload)
 - Dashboard UI for managing suppressions
 - Auto-purge of expired rows

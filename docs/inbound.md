@@ -29,6 +29,10 @@ Single-recipient outbound mail carries `List-Unsubscribe: <mailto:unsub+<token>@
 
 Why bounce branching matters: bounces shouldn't pollute the inbound list (operators get noise about delivery failures from `mailer-daemon@gmail` every time someone mistypes an address), and the suppression-list auto-update only happens when bounces are processed as bounces.
 
+## Feedback-loop branch (#191)
+
+ARF complaint reports (`multipart/report; report-type=feedback-report`, RFC 5965) from mailbox-provider feedback loops are recognised in DATA, after the `unsub+` branch and **before** the bounce parser and the DMARC branch. They go to the feedback handler (`feedback-handler.service.ts`), which links the report to an email BunMail sent by its Message-ID and suppresses the recipient who complained (`complaint`) or, for `opt-out`, unsubscribes them, firing `email.complained` or `email.unsubscribed` to the sending key's webhooks. Whatever the outcome (handled, unlinkable, ignored type, unparseable), the report is acknowledged, **not stored** in `inbound_emails`, fires no `email.received` and no inbound notification. See [feedback-loops.md](feedback-loops.md).
+
 ## Module Layout
 
 ```
@@ -36,6 +40,8 @@ src/modules/inbound/
 ├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
 ├── services/
 │   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
+│   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
@@ -44,7 +50,8 @@ src/modules/inbound/
 ├── serializations/
 │   └── inbound.serialization.ts     ← Response mapper (strips raw message)
 └── types/
-    └── inbound.types.ts             ← InboundEmail type
+    ├── inbound.types.ts             ← InboundEmail type
+    └── feedback-report.types.ts     ← Parsed ARF report, action, outcome (#191)
 ```
 
 ## Database Schema
@@ -135,12 +142,12 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 
 1. Client connects → rate limit check (instant) → DNSBL check (DNS lookup)
 2. RCPT TO command → `unsub+<token>` addresses verified (#249), others validated against registered domains
-3. DATA command → `unsub+` recipients suppressed (#249), then the message is parsed with `mailparser`
+3. DATA command → `unsub+` recipients suppressed (#249), feedback-loop reports handled (#191), then the message is parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, and raw message stored in `inbound_emails`
 5. `email.received` webhook event fired to all subscribed webhooks
 6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget), see below
 
-Unsubscribe requests, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
+Unsubscribe requests, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
 ## Inbound Notifications (#106)
 
@@ -182,6 +189,10 @@ Starts the SMTP server on the configured port.
 
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
+
+### arf-parser.service.ts / feedback-handler.service.ts
+
+`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `handleFeedbackReport`, `handleInboundFeedbackReport`: see [feedback-loops.md](feedback-loops.md#service-methods).
 
 ### dnsbl.service.ts
 

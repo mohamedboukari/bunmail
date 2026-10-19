@@ -39,6 +39,16 @@ const MULTIPART_REPORT_RE = /multipart\/report/i;
 const DELIVERY_STATUS_RE = /report-type\s*=\s*"?delivery-status/i;
 
 /**
+ * `report-type=feedback-report` marks an ARF complaint report (RFC 5965,
+ * #191). It is a `multipart/report` too, so without this check it fell
+ * into the fallback parser below, which linked it by the report's own
+ * Message-ID and usually dropped it. The receiver routes these to the
+ * feedback-loop handler before this parser runs; here they are never a
+ * bounce.
+ */
+const FEEDBACK_REPORT_RE = /report-type\s*=\s*"?feedback-report/i;
+
+/**
  * Longest input `cleanAddress` looks at. An address is at most 254
  * characters; the cap keeps the address regex linear on a long,
  * attacker-supplied line with no `@`.
@@ -272,6 +282,9 @@ export function parseBounce(raw: string): ParsedBounce | null {
     /^Content-Type:\s*([^\r\n]+(?:\r?\n[ \t][^\r\n]+)*)/im,
   );
   const contentType = contentTypeMatch?.[1] ?? "";
+  if (MULTIPART_REPORT_RE.test(contentType) && FEEDBACK_REPORT_RE.test(contentType)) {
+    return null;
+  }
   const isDsn =
     MULTIPART_REPORT_RE.test(contentType) && DELIVERY_STATUS_RE.test(contentType);
 

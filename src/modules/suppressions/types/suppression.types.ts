@@ -50,8 +50,11 @@ export interface AddFromBounceInput {
   expiresAt?: Date | null;
 }
 
-/** How an unsubscribe request arrived (#249); also the webhook's `source`. */
-export type UnsubscribeSource = "one_click" | "link" | "mailto";
+/**
+ * How an unsubscribe request arrived (#249); also the webhook's `source`.
+ * `fbl` is an `opt-out` feedback-loop report from a mailbox provider (#191).
+ */
+export type UnsubscribeSource = "one_click" | "link" | "mailto" | "fbl";
 
 /**
  * Input of the unsubscribe path (#249). Built only from a verified
@@ -63,4 +66,16 @@ export interface AddFromUnsubscribeInput {
   /** The email whose `List-Unsubscribe` link or mailto was used. */
   emailId: string;
   source: UnsubscribeSource;
+}
+
+/**
+ * Input of the feedback-loop complaint path (#191). Built only from an
+ * email row a report was linked to by its Message-ID, never from report
+ * fields alone.
+ */
+export interface AddFromComplaintInput {
+  apiKeyId: string;
+  email: string;
+  /** The email the complaint was about. */
+  emailId: string;
 }

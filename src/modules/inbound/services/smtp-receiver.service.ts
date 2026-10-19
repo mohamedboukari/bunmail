@@ -11,6 +11,8 @@ import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import { handleParsedBounce } from "../../bounces/services/bounce-handler.service.ts";
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
+import { isFeedbackReport } from "./arf-parser.service.ts";
+import { handleInboundFeedbackReport } from "./feedback-handler.service.ts";
 import { config } from "../../../config.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -418,6 +420,31 @@ export function start(): void {
 
                 const rawBytes = Buffer.concat(chunks);
                 const rawMessage = rawBytes.toString("utf-8");
+
+                /**
+                 * Feedback-loop branch (#191), before the bounce parser: an
+                 * ARF complaint report (`multipart/report;
+                 * report-type=feedback-report`) suppresses the recipient who
+                 * complained and fires `email.complained`, when it links to
+                 * an email we sent. Whatever the outcome (linked, dropped,
+                 * unparseable), the report is acknowledged, never stored as
+                 * inbound mail and never notified: it is machine mail about
+                 * our sending, and it can carry a copy of a customer's
+                 * message.
+                 */
+                if (isFeedbackReport(rawMessage)) {
+                  const feedback = await handleInboundFeedbackReport(
+                    rawMessage,
+                    rawBytes,
+                  );
+                  logger.debug("Feedback branch handled inbound message", {
+                    outcome: feedback.outcome,
+                    emailId: feedback.emailId,
+                  });
+                  callback();
+                  return;
+                }
+
                 /**
                  * MIME parsing gets the raw bytes (#250): decoding them as UTF-8
                  * first corrupted 8-bit parts in other charsets before
@@ -527,8 +554,9 @@ export function start(): void {
 
                 /**
                  * Send the per-domain inbound notification (#106), fire-and-forget.
-                 * Sits after the bounce/DMARC early-returns, so DSNs and DMARC
-                 * reports never trigger it. NOT awaited: a slow notification
+                 * Sits after the feedback/bounce/DMARC early-returns, so ARF
+                 * reports, DSNs and DMARC reports never trigger it. NOT
+                 * awaited: a slow notification
                  * (DNS/MX resolution) must never delay the SMTP ack below, which
                  * would risk the upstream MTA timing out and redelivering.
                  *

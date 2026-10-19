@@ -1,4 +1,4 @@
-import { and, eq, desc, gt, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, eq, desc, gt, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { suppressions } from "../models/suppression.schema.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -9,6 +9,7 @@ import type {
   CreateSuppressionInput,
   AddFromBounceInput,
   AddFromUnsubscribeInput,
+  AddFromComplaintInput,
 } from "../types/suppression.types.ts";
 
 /**
@@ -211,6 +212,66 @@ export async function addFromUnsubscribe(
     email: redactEmail(target),
     source: input.source,
     outcome: row ? "suppressed" : "already-suppressed",
+  });
+
+  return row;
+}
+
+/**
+ * Suppression from a feedback-loop complaint (#191): a recipient marked an
+ * email as spam and their mailbox provider sent an ARF report, linked to
+ * that email by its Message-ID before this runs. Permanent,
+ * `reason = 'complaint'`, scoped to the key the email was sent with.
+ *
+ * A complaint is the strongest reason, so it takes precedence: it creates
+ * the row, turns a temporary one (a soft-bounce backoff, or a manual entry
+ * with an expiry) into a permanent complaint, and replaces any other
+ * permanent reason (`bounce`, `unsubscribe`, `manual`). Only a permanent
+ * `complaint` already on file is left as it is, which makes a repeated
+ * report a no-op. The check and the write are one statement, so two
+ * reports racing each other change the row once.
+ *
+ * @returns The row when this call created or changed it (the caller fires
+ *   `email.complained` then), `undefined` when the address already had a
+ *   permanent complaint suppression.
+ */
+export async function addFromComplaint(
+  input: AddFromComplaintInput,
+): Promise<Suppression | undefined> {
+  const target = normaliseEmail(input.email);
+
+  const [row] = await db
+    .insert(suppressions)
+    .values({
+      id: generateId("sup"),
+      apiKeyId: input.apiKeyId,
+      email: target,
+      reason: "complaint",
+      sourceEmailId: input.emailId,
+      expiresAt: null,
+    })
+    .onConflictDoUpdate({
+      target: [suppressions.apiKeyId, suppressions.email],
+      set: {
+        reason: "complaint",
+        bounceType: null,
+        diagnosticCode: null,
+        sourceEmailId: input.emailId,
+        expiresAt: null,
+      },
+      /** Everything but a permanent complaint is replaced. */
+      setWhere: or(
+        isNotNull(suppressions.expiresAt),
+        ne(suppressions.reason, "complaint"),
+      ),
+    })
+    .returning();
+
+  logger.info("Complaint suppression processed", {
+    emailId: input.emailId,
+    apiKeyId: input.apiKeyId,
+    email: redactEmail(target),
+    outcome: row ? "suppressed" : "already-complained",
   });
 
   return row;

@@ -136,7 +136,7 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 - **No `2.x.x` "delivered" reports**: those are positive confirmations and don't need handling.
 - **No fuzzy linking when `Original-Message-ID` is missing**: it would risk suppressing under the wrong API key. We log a warning and drop.
 - **No retry of the original email**: by definition the recipient's MX accepted the SMTP transaction; retrying would just bounce again and double-tank reputation.
-- **No DMARC `rua` / FBL complaint processing**: those are separate parsers (#41 and a future ticket).
+- **No DMARC `rua` / FBL complaint processing here**: those are separate parsers (#41, see [dmarc-reports.md](dmarc-reports.md); #191, see [feedback-loops.md](feedback-loops.md)). A `multipart/report` with `report-type=feedback-report` is never taken as a bounce: `parseBounce` returns `null` for it (before #191 it fell into the fallback parser and was usually dropped), and the receiver routes it to the feedback-loop handler first.
 
 ## Status column mapping
 
