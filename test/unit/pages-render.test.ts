@@ -206,7 +206,31 @@ describe("Dashboard page render smoke tests", () => {
   });
 
   test("DomainDetailPage", async () => {
-    const html = await DomainDetailPage({ domain });
+    /** DNS status and records (#250): their rendering is covered in domain-dns-page.test.tsx. */
+    const dnsProps = {
+      dnsRecords: [],
+      dns: {
+        dmarc: {
+          status: "missing" as const,
+          ok: false,
+          reason: "No DMARC record at _dmarc.example.com",
+          warnings: [],
+          problems: [],
+          recordDomain: null,
+          inherited: false,
+          policy: null,
+          subdomainPolicy: null,
+          effectivePolicy: null,
+          pct: null,
+          adkim: null,
+          aspf: null,
+          rua: [],
+        },
+        mx: { status: "none" as const, hosts: [] },
+      },
+      smtpEnabled: false,
+    };
+    const html = await DomainDetailPage({ domain, ...dnsProps });
     expect(html).toContain("example.com");
     /** Inbound-notification edit form is present (#106). */
     expect(html).toContain(`/dashboard/domains/${domain.id}/notify-email`);
@@ -214,6 +238,7 @@ describe("Dashboard page render smoke tests", () => {
     /** A configured address pre-fills the input. */
     const withNotify = await DomainDetailPage({
       domain: { ...domain, notifyEmail: "ops@external.com" },
+      ...dnsProps,
     });
     expect(withNotify).toContain("ops@external.com");
   });

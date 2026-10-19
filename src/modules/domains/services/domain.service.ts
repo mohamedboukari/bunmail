@@ -137,20 +137,20 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
  * is. A domain with an existing SPF record must merge the `a:` term into
  * it: two records are a permerror.
  */
-export function suggestedSpfRecord(): string {
-  return `v=spf1 ${spfAuthorizationTerm()} -all`;
+export function suggestedSpfRecord(hostname: string = config.mail.hostname): string {
+  return `v=spf1 ${spfAuthorizationTerm(hostname)} -all`;
 }
 
 /** The SPF term that authorizes this server (`a:MAIL_HOSTNAME`), to merge into an existing record. */
-export function spfAuthorizationTerm(): string {
-  return `a:${config.mail.hostname}`;
+export function spfAuthorizationTerm(hostname: string = config.mail.hostname): string {
+  return `a:${hostname}`;
 }
 
 /**
  * Returns the raw base64 public key for DNS TXT record setup.
  * Format: `v=DKIM1; k=rsa; p=<base64>`
  */
-export function getDkimDnsRecord(domain: Domain): string | null {
+export function getDkimDnsRecord(domain: Pick<Domain, "dkimPublicKey">): string | null {
   if (!domain.dkimPublicKey) return null;
   const b64 = extractPublicKeyBase64(domain.dkimPublicKey);
   return `v=DKIM1; k=rsa; p=${b64}`;

@@ -50,8 +50,21 @@ const defaultDeps: MxCheckDeps = {
   timeoutMs: MX_LOOKUP_TIMEOUT_MS,
 };
 
+/**
+ * What a domain's MX set says about this server (#250): `here` when it
+ * names `MAIL_HOSTNAME`, `elsewhere` when it names other hosts only, `none`
+ * without MX hosts (NXDOMAIN, no MX, or only a null MX), `error` when the
+ * lookup failed or timed out. Informational on the domain page; the
+ * return path uses only `here`.
+ */
+export interface MxStatus {
+  status: "here" | "elsewhere" | "none" | "error";
+  /** The MX host names, lowercased, without the trailing dot, in DNS order. */
+  hosts: string[];
+}
+
 interface CacheEntry {
-  pointsHere: boolean;
+  mx: MxStatus;
   expiresAt: number;
 }
 
@@ -59,7 +72,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 /** Lookups in flight, so concurrent sends for one domain share one query. */
-const inflight = new Map<string, Promise<boolean>>();
+const inflight = new Map<string, Promise<MxStatus>>();
 
 /** Empties the cache (tests). */
 export function clearMxCache(): void {
@@ -123,26 +136,62 @@ async function resolveAndRemember(
   domain: string,
   hostname: string,
   deps: MxCheckDeps,
-): Promise<boolean> {
+): Promise<MxStatus> {
   try {
     const records = await lookupWithTimeout(domain, deps);
-    const pointsHere = records.some((r) => normalizeHost(r.exchange) === hostname);
-    remember(key, { pointsHere, expiresAt: deps.now() + MX_ANSWER_TTL_MS });
-    return pointsHere;
+    /** A null MX (`.`, RFC 7505) normalizes to "" and names no host. */
+    const hosts = [
+      ...new Set(records.map((r) => normalizeHost(r.exchange)).filter((h) => h !== "")),
+    ];
+    const status =
+      hosts.length === 0 ? "none" : hosts.includes(hostname) ? "here" : "elsewhere";
+    const mx: MxStatus = { status, hosts };
+    remember(key, { mx, expiresAt: deps.now() + MX_ANSWER_TTL_MS });
+    return mx;
   } catch (error) {
     const code = errorCode(error);
     if (code !== undefined && NO_MX_CODES.has(code)) {
-      remember(key, { pointsHere: false, expiresAt: deps.now() + MX_ANSWER_TTL_MS });
-      return false;
+      const mx: MxStatus = { status: "none", hosts: [] };
+      remember(key, { mx, expiresAt: deps.now() + MX_ANSWER_TTL_MS });
+      return mx;
     }
-    remember(key, { pointsHere: false, expiresAt: deps.now() + MX_ERROR_TTL_MS });
+    const mx: MxStatus = { status: "error", hosts: [] };
+    remember(key, { mx, expiresAt: deps.now() + MX_ERROR_TTL_MS });
     logger.warn("Sender domain MX lookup failed: plain envelope sender used", {
       domain,
       code: code ?? null,
       retryInSeconds: Math.round(MX_ERROR_TTL_MS / 1000),
     });
-    return false;
+    return mx;
   }
+}
+
+/**
+ * The MX status of `domain` relative to `mailHostname` (both compared
+ * lowercased, trailing dot ignored), from the cache shared with the
+ * return-path decision (#236, #250). Never rejects: a DNS error or timeout
+ * answers `error`. An empty name answers `none` without a lookup.
+ */
+export async function resolveMxStatus(
+  domain: string,
+  mailHostname: string,
+  deps: MxCheckDeps = defaultDeps,
+): Promise<MxStatus> {
+  const name = normalizeHost(domain);
+  const hostname = normalizeHost(mailHostname);
+  if (!name || !hostname) return { status: "none", hosts: [] };
+  const key = `${hostname} ${name}`;
+
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > deps.now()) return cached.mx;
+
+  const pending = inflight.get(key);
+  if (pending) return pending;
+  const lookup = resolveAndRemember(key, name, hostname, deps).finally(() => {
+    inflight.delete(key);
+  });
+  inflight.set(key, lookup);
+  return lookup;
 }
 
 /**
@@ -155,21 +204,7 @@ export async function mxPointsHere(
   mailHostname: string,
   deps: MxCheckDeps = defaultDeps,
 ): Promise<boolean> {
-  const name = normalizeHost(domain);
-  const hostname = normalizeHost(mailHostname);
-  if (!name || !hostname) return false;
-  const key = `${hostname} ${name}`;
-
-  const cached = cache.get(key);
-  if (cached && cached.expiresAt > deps.now()) return cached.pointsHere;
-
-  const pending = inflight.get(key);
-  if (pending) return pending;
-  const lookup = resolveAndRemember(key, name, hostname, deps).finally(() => {
-    inflight.delete(key);
-  });
-  inflight.set(key, lookup);
-  return lookup;
+  return (await resolveMxStatus(domain, mailHostname, deps)).status === "here";
 }
 
 /**

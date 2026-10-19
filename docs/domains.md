@@ -10,7 +10,11 @@ src/modules/domains/
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
 │   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
-│   └── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification
+│   ├── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification
+│   ├── dmarc-check.service.ts      ← DMARC discovery, org-domain fallback, strict tag parsing (#250)
+│   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status, mail-flow summary (#250)
+│   ├── required-dns-records.ts     ← The DNS records to publish (`dnsRecords`, #250)
+│   └── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
 ├── dtos/
 │   └── create-domain.dto.ts        ← POST body validation
 ├── models/
@@ -60,9 +64,43 @@ The `dns-verification.service.ts` checks three DNS record types:
 |--------|-----------------------------------------|---------------------------------------------|
 | SPF    | `<domain>`                              | exactly one `v=spf1` record that gives `pass` (RFC 7208, evaluated with mailauth) for every sending IP of this server (#247) |
 | DKIM   | `<selector>._domainkey.<domain>`        | TXT record containing the expected public key |
-| DMARC  | `_dmarc.<domain>`                       | TXT record starting with `v=DMARC1`         |
+| DMARC  | `_dmarc.<domain>`, else `_dmarc.<organizational domain>` | exactly one record matching `v=DMARC1` with a valid `p=` (#250, see below) |
 
 Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button.
+
+### DMARC rules (#250)
+
+`dmarc-check.service.ts` follows RFC 7489 6.6.3:
+
+- The TXT records at `_dmarc.<domain>` are read with their chunks joined, and only those matching `/^v\s*=\s*DMARC1\s*(;|$)/i` count (`xv=DMARC1` or `v=DMARC10` do not).
+- No such record: the organizational domain's record applies (`inherited`). More than one, at either name: the check fails (`multiple`), since receivers then apply no policy. A DNS error, or the 5 s budget the two lookups share running out, is `error`, without a further fallback; NXDOMAIN and "no TXT" count as no record.
+- The tags `p`, `sp`, `pct`, `adkim`, `aspf` and `rua` are parsed strictly: names and values case-insensitive, unknown tags ignored, an invalid value reported in `problems` and replaced by its default (`pct` 100, alignment `r`); `rua` keeps only `mailto:` URIs.
+- The check passes when exactly one record has a valid `p=` (`none`, `quarantine` or `reject`). The effective policy is `sp` when the record is inherited and `sp` is set, else `p`. `p=none` (or an inherited `sp=none`) passes with a warning that it only monitors; `pct` below 100 and a missing `rua` warn too.
+
+**The organizational domain heuristic.** There is no Public Suffix List dependency: the organizational domain is the last two labels, or the last three when the second-to-last label is a common second-level label (`co`, `com`, `net`, `org`, `gov`, `ac`, `edu`, `ne`, `or`, `mil`) under a two-letter TLD, so `mail.example.co.uk` gives `example.co.uk`. It is wrong for other public suffixes (`github.io`, `pvt.k12.ma.us`, `blogspot.com`...): the fallback then queries a name above the real organizational domain, which normally has no record, so the check reports `missing` instead of a wrong policy, and the fix is to publish a record at `_dmarc.<domain>` itself.
+
+The result is returned as `dmarc` (below). `verifyDomain` stores `dmarc_verified` and refreshes the cached check, so the page shows it at once.
+
+### Live DNS status: `dmarc` and `mx` (#250)
+
+`domain-dns-status.service.ts` gives each domain's current DMARC check and MX status, for the API (`GET` and verify) and the domain page. Lookups use `dns/promises`, are cached in memory (an hour, five minutes after an error, at most 10,000 domains) and never fail a request: a DNS failure is an `error` status. The DMARC check and the MX lookup run in parallel under one overall 5 s deadline per domain; the DMARC fallback to the organizational domain runs after the domain's own lookup but within the same budget, so a request waits at most one timeout. A part still pending at the deadline is reported as `error` and its lookup keeps filling the cache. Create, update and delete never wait on DNS (`dmarc` and `mx` are `null`). `resolveDomainTxt()` is the TXT lookup `verifyDomain` uses by default, so one seam covers both. The MX answer shares the cache of the signed return path (`resolveMxStatus` in `bounces/services/return-path-mx.ts`, #236), so the page shows what the mailer does. `setDomainDnsDeps()` replaces the lookups in tests; the integration run installs an NXDOMAIN stub for everything in `test/integration/_preload.ts`, so no integration test does real DNS.
+
+`mx` is `{ status, hosts }`: `here` (the MX set names `MAIL_HOSTNAME`), `elsewhere` (other hosts only), `none` (NXDOMAIN, no MX or a null MX) or `error`, with the host names lowercased. It is informational and never required: a domain whose MX serves mailboxes elsewhere (Google Workspace, Microsoft 365) sends normally. With `SMTP_ENABLED`, `mailFlowFeatures()` says on the page whether signed return paths, async bounces, DMARC reports and inbound mail are active for the domain: all four need inbound SMTP on and the MX `here`.
+
+### DNS records to publish: `dnsRecords` (#250)
+
+`getRequiredDnsRecords(domain, { mailHostname, publicIps })` (pure; defaults from `config`) returns `{ type, host, value, purpose, optional, note? }` entries, in this order:
+
+| Type | Host | Value | Notes |
+|------|------|-------|-------|
+| TXT | `<domain>` | `v=spf1 a:<MAIL_HOSTNAME> -all` | merge the `a:` term into an existing SPF record instead |
+| TXT | `<selector>._domainkey.<domain>` | the DKIM record as quoted strings of at most 255 characters | left out when the domain has no public key |
+| TXT | `_dmarc.<domain>` | `v=DMARC1; p=none; rua=mailto:dmarc@<domain>` | BunMail stores the reports when inbound SMTP is on and the MX points here; otherwise use an address you read |
+| A / AAAA | `MAIL_HOSTNAME` | each `MAIL_PUBLIC_IP` | described ("this server's public IP address") when `MAIL_PUBLIC_IP` is unset; once per server |
+| PTR | each sending IP | `MAIL_HOSTNAME` | set at the hosting provider, not in the zone |
+| MX | `<domain>` | `10 <MAIL_HOSTNAME>` | `optional`: only to receive bounces, DMARC reports and inbound mail; leave an MX that serves mailboxes as it is |
+
+There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 
 ## Service Methods
 
@@ -99,13 +137,31 @@ Hard-deletes a domain and its keys.
 ### dns-verification.service.ts
 
 #### `verifyDomain(domain): Promise<VerificationResult>`
-Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns `{ spf, dkim, dmarc, spfReason }`. SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record.
+Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns `{ spf, dkim, dmarc, spfReason, dmarcReason }`. SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
+
+### dmarc-check.service.ts
+
+- `checkDmarc(domain, { resolveTxt, timeoutMs? }): Promise<DmarcCheck>`: the DMARC check described above, within one budget (`timeoutMs`, 5 s) for both lookups. Never rejects. Logs the status and record count at `debug` (never the TXT values) and a failed lookup at `warn`.
+- `parseDmarcRecord(record): ParsedDmarcRecord`: strict tag parsing of one record.
+- `organizationalDomain(domain): string`: the heuristic above.
+
+### domain-dns-status.service.ts
+
+- `getDomainDnsStatus(name): Promise<{ dmarc, mx }>`: the cached live status. Never rejects.
+- `getDomainsDnsStatus(names, concurrency = 8)`: the same for a list, in order, with at most `DNS_STATUS_CONCURRENCY` (8) domains looked up at once (a small worker pool), so listing a large install with a cold cache stays bounded. Used by `GET /api/v1/domains`.
+- `rememberDmarcCheck(name, check)`: stores a fresh check (used by `verifyDomain`).
+- `mailFlowFeatures(mx, smtpEnabled)`: the four mail flows with `active` and a one-line explanation.
+
+### required-dns-records.ts
+
+- `getRequiredDnsRecords(domain, settings?)`: the table above. `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
 
 ## Serialization
 
-The `serializeDomain()` function:
+The `serializeDomain(domain, dns)` function:
 - **Strips** `dkimPrivateKey` and `dkimPublicKey` (never exposed in API responses)
-- **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS
+- **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS (unsplit)
+- **Adds** `dnsRecords` (always), and `dmarc` and `mx` from `dns`, which is `null` on `DELETE` (no lookup for a removed domain) (#250)
 
 ## API Endpoints
 

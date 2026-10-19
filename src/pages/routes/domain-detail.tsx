@@ -4,24 +4,38 @@ import { FlashMessage } from "../components/flash-message.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
 import {
-  getDkimDnsRecord,
-  spfAuthorizationTerm,
-  suggestedSpfRecord,
-} from "../../modules/domains/services/domain.service.ts";
-import type { Domain } from "../../modules/domains/types/domain.types.ts";
+  mailFlowFeatures,
+  type DomainDnsStatus,
+} from "../../modules/domains/services/domain-dns-status.service.ts";
+import type { MxStatus } from "../../modules/bounces/services/return-path-mx.ts";
+import type {
+  DmarcCheck,
+  Domain,
+  RequiredDnsRecord,
+} from "../../modules/domains/types/domain.types.ts";
 
 interface DomainDetailPageProps {
   domain: Domain;
+  /** The records to publish (#250), from `getRequiredDnsRecords`. */
+  dnsRecords: RequiredDnsRecord[];
+  /** The live DMARC check and MX status (#250). */
+  dns: DomainDnsStatus;
+  /** `SMTP_ENABLED`: with the MX, decides which mail flows are active. */
+  smtpEnabled: boolean;
   flash?: { message: string; type: "success" | "error" };
 }
 
 /**
- * Domain detail page: shows DNS verification status, required DNS records,
- * and a verify button for a single domain.
+ * Domain detail page: shows DNS verification status, the DMARC policy,
+ * the DNS records to publish, where the MX points, and a verify button.
  */
-export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
-  const dkimRecord = getDkimDnsRecord(domain);
-
+export function DomainDetailPage({
+  domain,
+  dnsRecords,
+  dns,
+  smtpEnabled,
+  flash,
+}: DomainDetailPageProps) {
   return (
     <BaseLayout title={domain.name} activeNav="domains">
       <a
@@ -60,39 +74,37 @@ export function DomainDetailPage({ domain, flash }: DomainDetailPageProps) {
         </div>
       </div>
 
-      {/* DNS Records to add */}
+      <DmarcPanel dmarc={dns.dmarc} />
+
+      {/* DNS records to publish (#250) */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
-        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-4">
+        <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
           Required DNS Records
         </h2>
-        <div class="space-y-4">
-          <DnsRecordEntry
-            type="TXT"
-            host={domain.name}
-            value={suggestedSpfRecord()}
-            label="SPF Record"
-          />
-          <p class="text-xs text-gray-500 dark:text-gray-400 -mt-2">
-            Already have an SPF record (Google Workspace, Microsoft 365, ...)? Add the{" "}
-            <code safe>{spfAuthorizationTerm()}</code> term to it instead: a domain must
-            publish exactly one SPF record.
-          </p>
-          {dkimRecord != null && (
-            <DnsRecordEntry
-              type="TXT"
-              host={`${domain.dkimSelector}._domainkey.${domain.name}`}
-              value={dkimRecord}
-              label="DKIM Record"
-            />
-          )}
-          <DnsRecordEntry
-            type="TXT"
-            host={`_dmarc.${domain.name}`}
-            value={`v=DMARC1; p=quarantine; rua=mailto:postmaster@${domain.name}`}
-            label="DMARC Record"
-          />
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          Publish these at your DNS provider. Click a value to select it for copying.
+          Verify checks SPF, DKIM and DMARC; the server records are checked at boot.
+        </p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-gray-200 dark:border-gray-800 text-left text-gray-500 dark:text-gray-400">
+                <th class="px-2 py-2 font-medium">Type</th>
+                <th class="px-2 py-2 font-medium">Host</th>
+                <th class="px-2 py-2 font-medium">Value</th>
+                <th class="px-2 py-2 font-medium">Purpose</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dnsRecords.map((record) => (
+                <DnsRecordRow record={record} />
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
+
+      <MailFlowPanel mx={dns.mx} smtpEnabled={smtpEnabled} />
 
       {/* Inbound notifications (#106) */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
@@ -211,45 +223,152 @@ function VerificationCard({ label, verified }: { label: string; verified: boolea
   );
 }
 
+/** A DMARC policy value, or a dash. */
+function policyText(value: string | null): string {
+  return value ?? "-";
+}
+
 /**
- * DNS record entry: shows host, type, and value for a DNS record the user must add.
+ * The DMARC check (#250): status, where the record lives, the effective
+ * policy and the parsed tags. Every value from DNS is escaped.
  */
-function DnsRecordEntry({
-  type,
-  host,
-  value,
-  label,
-}: {
-  type: string;
-  host: string;
-  value: string;
-  label: string;
-}) {
+function DmarcPanel({ dmarc }: { dmarc: DmarcCheck }) {
   return (
-    <div class="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-      <p class="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2" safe>
-        {label}
+    <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+        DMARC Policy
+      </h2>
+      <p
+        class={`text-sm mb-4 ${dmarc.ok ? "text-gray-700 dark:text-gray-300" : "text-red-600 dark:text-red-400"}`}
+        safe
+      >
+        {dmarc.reason}
       </p>
-      <div class="space-y-1 text-xs">
-        <div class="flex gap-2">
-          <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Type:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100" safe>
-            {type}
-          </span>
+      {dmarc.recordDomain != null && dmarc.status !== "multiple" && (
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
+          <DetailField
+            label="Record"
+            value={`_dmarc.${dmarc.recordDomain}${dmarc.inherited ? " (inherited)" : ""}`}
+          />
+          <DetailField
+            label="Effective policy"
+            value={policyText(dmarc.effectivePolicy)}
+          />
+          <DetailField label="p" value={policyText(dmarc.policy)} />
+          <DetailField label="sp" value={policyText(dmarc.subdomainPolicy)} />
+          <DetailField label="pct" value={dmarc.pct === null ? "-" : String(dmarc.pct)} />
+          <DetailField label="adkim" value={dmarc.adkim ?? "-"} />
+          <DetailField label="aspf" value={dmarc.aspf ?? "-"} />
+          <DetailField
+            label="rua"
+            value={dmarc.rua.length > 0 ? dmarc.rua.join(", ") : "-"}
+          />
         </div>
-        <div class="flex gap-2">
-          <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Host:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>
-            {host}
-          </span>
-        </div>
-        <div class="flex gap-2">
-          <span class="text-gray-500 dark:text-gray-400 w-12 shrink-0">Value:</span>
-          <span class="font-mono text-gray-900 dark:text-gray-100 break-all" safe>
-            {value}
-          </span>
-        </div>
-      </div>
+      )}
+      {dmarc.warnings.length > 0 && (
+        <ul class="list-disc pl-5 text-sm text-amber-700 dark:text-amber-400 space-y-1 mb-2">
+          {dmarc.warnings.map((warning) => (
+            <li safe>{warning}</li>
+          ))}
+        </ul>
+      )}
+      {dmarc.problems.length > 0 && (
+        <ul class="list-disc pl-5 text-sm text-red-600 dark:text-red-400 space-y-1">
+          {dmarc.problems.map((problem) => (
+            <li safe>{problem}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** One record to publish: type, host, a selectable value, purpose and note. */
+function DnsRecordRow({ record }: { record: RequiredDnsRecord }) {
+  return (
+    <tr class="border-b border-gray-100 dark:border-gray-800 align-top">
+      <td class="px-2 py-3 font-mono text-gray-900 dark:text-gray-100">{record.type}</td>
+      <td class="px-2 py-3 font-mono text-gray-900 dark:text-gray-100 break-all" safe>
+        {record.host}
+      </td>
+      <td class="px-2 py-3 min-w-64">
+        <code
+          class="block font-mono text-gray-900 dark:text-gray-100 break-all select-all bg-gray-50 dark:bg-gray-950 rounded px-2 py-1"
+          safe
+        >
+          {record.value}
+        </code>
+      </td>
+      <td class="px-2 py-3 text-gray-600 dark:text-gray-400">
+        <p>
+          <span safe>{record.purpose}</span>
+          {record.optional && (
+            <span class="ml-1 inline-flex px-1.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+              optional
+            </span>
+          )}
+        </p>
+        {record.note != null && (
+          <p class="mt-1 text-gray-500 dark:text-gray-500" safe>
+            {record.note}
+          </p>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+/** What the MX status means, in one line. */
+function mxSummary(mx: MxStatus): string {
+  switch (mx.status) {
+    case "here":
+      return "The MX points at this server.";
+    case "elsewhere":
+      return "The MX points at another mail host. That is fine for sending; it decides where replies and bounces go.";
+    case "none":
+      return "The domain has no MX record. Sending works without one.";
+    case "error":
+      return "The MX lookup failed. Sending is unaffected; reload in a few minutes.";
+  }
+}
+
+/**
+ * Where the domain's MX points and which mail flows BunMail handles for it
+ * (#250). Informational: nothing here gates sending.
+ */
+function MailFlowPanel({ mx, smtpEnabled }: { mx: MxStatus; smtpEnabled: boolean }) {
+  return (
+    <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-1">
+        MX and Mail Flow
+      </h2>
+      <p class="text-sm text-gray-700 dark:text-gray-300 mb-1" safe>
+        {mxSummary(mx)}
+      </p>
+      {mx.hosts.length > 0 && (
+        <p class="text-xs font-mono text-gray-500 dark:text-gray-400 break-all mb-4" safe>
+          {`MX: ${mx.hosts.join(", ")}`}
+        </p>
+      )}
+      <ul class="space-y-2 text-sm mt-3">
+        {mailFlowFeatures(mx, smtpEnabled).map((feature) => (
+          <li class="flex gap-2">
+            <span
+              class={`shrink-0 w-14 text-xs font-medium ${feature.active ? "text-emerald-700 dark:text-emerald-400" : "text-gray-500 dark:text-gray-400"}`}
+            >
+              {feature.active ? "Active" : "Off"}
+            </span>
+            <span>
+              <span class="font-medium text-gray-900 dark:text-gray-100" safe>
+                {feature.name}
+              </span>
+              <span class="text-gray-600 dark:text-gray-400" safe>
+                {`: ${feature.explanation}`}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

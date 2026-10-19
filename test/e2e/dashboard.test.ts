@@ -56,7 +56,8 @@ void mock.module("../../src/config.ts", () => ({
     appBaseUrl: "",
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost" },
+    mail: { hostname: "localhost", publicIps: [] },
+    smtp: { enabled: false },
     dashboard: dashboardConfig,
     /** Read by the invitation services (#217), which are mocked below. */
     systemMailFrom: null,

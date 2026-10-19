@@ -148,7 +148,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 ## 2. DNS Records
 
-Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.):
+Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.). Once the domain is registered (step 4), its dashboard page lists the exact records for it, with this server's `MAIL_HOSTNAME` and `MAIL_PUBLIC_IP` filled in, and the API returns them as `dnsRecords` (#250).
 
 ### A Record (points your mail subdomain to the server)
 
@@ -156,11 +156,13 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 |------|--------|------------------|
 | A    | `mail` | `YOUR_SERVER_IP` |
 
-### MX Record (tells other servers where to deliver mail)
+### MX Record (optional: where other servers deliver mail for the domain)
 
 | Type | Host | Value                  | Priority |
 |------|------|------------------------|----------|
 | MX   | `@`  | `mail.yourdomain.com`  | 10       |
+
+Needed only for BunMail to receive bounces, DMARC reports and inbound mail for the domain (`SMTP_ENABLED=true`). Sending works without it. If the domain's mail is hosted elsewhere (Google Workspace, Microsoft 365), keep that MX: replacing it moves the domain's mailboxes to BunMail. The domain page shows where the MX points and which of these flows are active (#250).
 
 ### SPF Record (authorizes your server to send email for this domain)
 
@@ -172,15 +174,19 @@ Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare,
 
 ### DMARC Record (tells receivers what to do with unauthenticated mail)
 
-| Type | Host     | Value                                                          |
-|------|----------|----------------------------------------------------------------|
-| TXT  | `_dmarc` | `v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com` |
+| Type | Host     | Value                                                  |
+|------|----------|--------------------------------------------------------|
+| TXT  | `_dmarc` | `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com`    |
+
+Start at `p=none`, which only collects reports, and move to `p=quarantine`, then `p=reject`, once the reports show your mail passes. BunMail stores the reports itself when inbound SMTP is on and the MX points at it; otherwise send them to an address you read. Publish exactly one DMARC record. **Verify** requires exactly one `v=DMARC1` record with a valid `p=` (a subdomain may inherit its parent domain's record) and shows the parsed policy (#250).
 
 ### DKIM Record (added after registering your domain in BunMail, see step 4)
 
 | Type | Host                 | Value                    |
 |------|----------------------|--------------------------|
 | TXT  | `bunmail._domainkey` | `v=DKIM1; k=rsa; p=...`  |
+
+A 2048-bit key is longer than the 255 characters one TXT string holds: the domain page shows it split into quoted strings to paste as they are; providers that take one long value split it themselves.
 
 ### PTR Record (Reverse DNS)
 
@@ -260,6 +266,8 @@ The response includes `dkimDnsRecord`: add it as a TXT record in your DNS:
 | Type | Host                 | Value (from response)    |
 |------|----------------------|--------------------------|
 | TXT  | `bunmail._domainkey` | `v=DKIM1; k=rsa; p=...`  |
+
+A 2048-bit key is longer than the 255 characters one TXT string holds: the domain page shows it split into quoted strings to paste as they are; providers that take one long value split it themselves.
 
 ### Verify DNS records
 
@@ -471,7 +479,7 @@ dig TXT bunmail._domainkey.yourdomain.com +short
 
 # DMARC
 dig TXT _dmarc.yourdomain.com +short
-# Expected: "v=DMARC1; p=quarantine; rua=mailto:postmaster@yourdomain.com"
+# Expected: "v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com" (then quarantine or reject)
 ```
 
 | Record | What it does | Without it |
@@ -498,9 +506,9 @@ The PTR hostname must:
 - Match your `MAIL_HOSTNAME` in `.env`
 - Have a matching A record pointing back to the same IP (forward-confirmed reverse DNS)
 
-### 3. MX Record (Required)
+### 3. MX Record (Recommended)
 
-Even if you only send email, having an MX record tells other servers your domain is a legitimate mail domain:
+Even if you only send email, an MX record tells other servers your domain receives mail, so replies and bounces have somewhere to go. It need not point at BunMail: a domain whose mailboxes are hosted elsewhere keeps its own MX.
 
 ```bash
 dig MX yourdomain.com +short
@@ -577,7 +585,7 @@ If any of these show `FAIL` or `NONE`, fix the corresponding DNS record.
 [ ] SPF TXT record added
 [ ] DKIM TXT record added (from BunMail domain registration)
 [ ] DMARC TXT record added
-[ ] MX record pointing to mail.yourdomain.com
+[ ] MX record (pointing to mail.yourdomain.com only if BunMail should receive bounces, DMARC reports and inbound mail)
 [ ] A record for mail.yourdomain.com → server IP
 [ ] PTR (reverse DNS) set to mail.yourdomain.com
 [ ] Server hostname matches PTR

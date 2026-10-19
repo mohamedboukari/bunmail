@@ -259,6 +259,26 @@ describe("verifyDomain: DMARC", () => {
   test("returns false when no DMARC record exists", async () => {
     const result = await verifyDomain(baseDomain);
     expect(result.dmarc).toBe(false);
+    expect(result.dmarcReason).toBe("No DMARC record at _dmarc.example.com");
+  });
+
+  test("two DMARC records fail (#250)", async () => {
+    txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=reject"], ["v=DMARC1; p=none"]];
+    const result = await verifyDomain(baseDomain);
+    expect(result.dmarc).toBe(false);
+    expect(result.dmarcReason).toContain("2 DMARC records");
+  });
+
+  test("a record without a valid p fails (#250)", async () => {
+    txtRecords["_dmarc.example.com"] = [["v=DMARC1; rua=mailto:x@example.com"]];
+    expect((await verifyDomain(baseDomain)).dmarc).toBe(false);
+  });
+
+  test("a subdomain inherits the organizational domain's record (#250)", async () => {
+    txtRecords["_dmarc.example.com"] = [["v=DMARC1; p=reject"]];
+    const result = await verifyDomain({ ...baseDomain, name: "mail.example.com" });
+    expect(result.dmarc).toBe(true);
+    expect(result.dmarcReason).toContain("organizational domain");
   });
 });
 

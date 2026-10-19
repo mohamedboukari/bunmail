@@ -21,6 +21,9 @@ interface SerializedDomain {
   dkimVerified: boolean;
   dmarcVerified: boolean;
   verifiedAt: string | null;
+  dnsRecords: Array<{ type: string; host: string; value: string; optional: boolean }>;
+  dmarc: { status: string; policy: string | null } | null;
+  mx: { status: string; hosts: string[] } | null;
   createdAt: string;
 }
 
@@ -48,7 +51,8 @@ void mock.module("../../src/config.ts", () => ({
   config: {
     database: { url: "postgres://test:test@localhost/test" },
     server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost" },
+    mail: { hostname: "localhost", publicIps: [] },
+    smtp: { enabled: false },
     dashboard: { ownerEmail: null },
     logLevel: "error",
   },
@@ -102,6 +106,44 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
   ),
   getDkimDnsRecord: mock(() => null),
 }));
+
+/* ─── Mock the live DNS status (#250): no real DNS in e2e ─── */
+const dnsStatus = {
+  dmarc: {
+    status: "pass",
+    ok: true,
+    reason: "DMARC policy reject at _dmarc.example.com",
+    warnings: [],
+    problems: [],
+    recordDomain: "example.com",
+    inherited: false,
+    policy: "reject",
+    subdomainPolicy: null,
+    effectivePolicy: "reject",
+    pct: 100,
+    adkim: "r",
+    aspf: "r",
+    rua: [],
+  },
+  mx: { status: "elsewhere", hosts: ["aspmx.l.google.com"] },
+};
+/** Every export: mock.module leaks across files. */
+void mock.module(
+  "../../src/modules/domains/services/domain-dns-status.service.ts",
+  () => ({
+    getDomainDnsStatus: mock(() => Promise.resolve(dnsStatus)),
+    getDomainsDnsStatus: mock((names: string[]) =>
+      Promise.resolve(names.map(() => dnsStatus)),
+    ),
+    DNS_STATUS_CONCURRENCY: 8,
+    resolveDomainTxt: mock(() =>
+      Promise.reject(Object.assign(new Error("nx"), { code: "ENOTFOUND" })),
+    ),
+    rememberDmarcCheck: mock(() => {}),
+    setDomainDnsDeps: mock(() => {}),
+    mailFlowFeatures: mock(() => []),
+  }),
+);
 
 /* ─── Mock auth + rate limit middleware ─── */
 void mock.module("../../src/middleware/auth.ts", () => ({
@@ -194,6 +236,19 @@ describe("Domains API E2E", () => {
       const body = await readJson<DomainResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("dom_test123");
+      /** DNS guidance and status (#250). */
+      expect(body.data.dnsRecords.map((r) => r.type)).toEqual([
+        "TXT",
+        "TXT",
+        "A",
+        "PTR",
+        "MX",
+      ]);
+      expect(body.data.dmarc?.policy).toBe("reject");
+      expect(body.data.mx).toEqual({
+        status: "elsewhere",
+        hosts: ["aspmx.l.google.com"],
+      });
     });
 
     test("returns 404 when domain not found", async () => {
@@ -223,6 +278,9 @@ describe("Domains API E2E", () => {
       const body = await readJson<DomainResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("dom_test123");
+      /** A deleted domain is not looked up. */
+      expect(body.data.dmarc).toBeNull();
+      expect(body.data.mx).toBeNull();
     });
 
     test("returns 404 when domain not found", async () => {

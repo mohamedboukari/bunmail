@@ -4,6 +4,10 @@ import { updateDomainDto } from "./dtos/update-domain.dto.ts";
 import { serializeDomain } from "./serializations/domain.serialization.ts";
 import * as domainService from "./services/domain.service.ts";
 import { verifyDomain } from "./services/dns-verification.service.ts";
+import {
+  getDomainDnsStatus,
+  getDomainsDnsStatus,
+} from "./services/domain-dns-status.service.ts";
 import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -64,9 +68,14 @@ export const domainsPlugin = new Elysia({
         target: { type: "domain", id: domain.id, label: domain.name },
       });
 
+      /**
+       * Never waits on DNS (#250): `dmarc` and `mx` are null (not checked
+       * yet) until the next GET or Verify. A slow resolver must not hold
+       * up registering a domain.
+       */
       return {
         success: true,
-        data: serializeDomain(domain),
+        data: serializeDomain(domain, null),
       };
     },
     {
@@ -86,17 +95,22 @@ export const domainsPlugin = new Elysia({
       logger.info("GET /api/v1/domains");
 
       const domains = await domainService.listDomains();
+      /** At most 8 domains looked up at once (#250). */
+      const statuses = await getDomainsDnsStatus(domains.map((domain) => domain.name));
 
       return {
         success: true,
-        data: domains.map(serializeDomain),
+        data: domains.map((domain, index) =>
+          serializeDomain(domain, statuses[index] ?? null),
+        ),
       };
     },
     {
       detail: {
         tags: ["Domains"],
         summary: "List domains",
-        description: "Returns all registered domains with their verification status.",
+        description:
+          "Returns all registered domains with their verification status, the DNS records to publish (dnsRecords), the current DMARC check (dmarc) and where the MX points (mx).",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -114,14 +128,18 @@ export const domainsPlugin = new Elysia({
         return { success: false, error: "Domain not found" };
       }
 
-      return { success: true, data: serializeDomain(domain) };
+      return {
+        success: true,
+        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
+      };
     },
     {
       params: t.Object({ id: t.String() }),
       detail: {
         tags: ["Domains"],
         summary: "Get domain by ID",
-        description: "Returns a single domain by its ID.",
+        description:
+          "Returns a single domain by its ID, with the DNS records to publish (dnsRecords), the current DMARC check (dmarc) and where the MX points (mx).",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -155,7 +173,8 @@ export const domainsPlugin = new Elysia({
         });
       }
 
-      return { success: true, data: serializeDomain(domain) };
+      /** A settings change never waits on DNS either: `dmarc` and `mx` are null. */
+      return { success: true, data: serializeDomain(domain, null) };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -187,7 +206,8 @@ export const domainsPlugin = new Elysia({
         target: { type: "domain", id: domain.id, label: domain.name },
       });
 
-      return { success: true, data: serializeDomain(domain) };
+      /** Gone: no DNS lookup for it. */
+      return { success: true, data: serializeDomain(domain, null) };
     },
     {
       params: t.Object({ id: t.String() }),
@@ -223,7 +243,7 @@ export const domainsPlugin = new Elysia({
 
       return {
         success: true,
-        data: serializeDomain(updated!),
+        data: serializeDomain(updated!, await getDomainDnsStatus(domain.name)),
         verification: result,
       };
     },
