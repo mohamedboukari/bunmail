@@ -5,7 +5,7 @@ import {
   plainTextLine,
   type BuildNotificationInput,
 } from "../../src/modules/inbound/services/inbound-notify.service.ts";
-import { config, optionalStrictBoolean } from "../../src/config.ts";
+import { optionalStrictBoolean } from "../../src/config.ts";
 
 /**
  * Unit tests for the pure parts of inbound notifications (#106, #250):
@@ -280,11 +280,12 @@ describe("automaticInboundReason", () => {
 });
 
 describe("INBOUND_NOTIFY_PREVIEW", () => {
-  test("off by default", () => {
-    expect(config.inboundNotify.preview).toBe(false);
-  });
-
-  test("strict: only true or false, anything else refuses to boot", () => {
+  /**
+   * Read through the parser, not the `config` singleton: other unit files
+   * stub `config` with `mock.module`, and that stub leaks into this file in
+   * some run orders. The `undefined` case below is the default.
+   */
+  test("off by default; strict: only true or false, anything else refuses to boot", () => {
     const read = (raw: string | undefined): boolean =>
       optionalStrictBoolean("INBOUND_NOTIFY_PREVIEW", false, raw);
     expect(read(undefined)).toBe(false);
