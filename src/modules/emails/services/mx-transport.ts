@@ -19,7 +19,7 @@ export const SMTP_SETUP_TIMEOUT_MS = 60_000;
  * own timeout, but a peer that keeps answering slowly could still hold
  * the MX lock for hours; this caps the whole attempt.
  */
-const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
+export const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
 
 /**
  * Nodemailer's own log line for a completed STARTTLS upgrade, written by
@@ -187,9 +187,17 @@ export function mxTransportOptions(args: {
 }
 
 /** One SMTP transaction of a session: its delivery-state key and its message. */
-interface MxSessionTransaction {
+export interface MxSessionTransaction {
   key: string;
   mail: Mail.Options;
+}
+
+/** A recipient the MX refused at `RCPT TO` while it accepted others (#250). */
+export interface RejectedRecipient {
+  /** The address as it was given in the envelope. */
+  recipient: string;
+  /** Nodemailer's error for it, carrying the reply (`responseCode`, `response`). */
+  error: Error;
 }
 
 /** One transaction's outcome: no `error` means the MX accepted it. */
@@ -198,6 +206,13 @@ export interface MxSessionOutcome {
   error?: unknown;
   /** The session's encryption, see {@link TlsRecorder} (#250). */
   tls: DeliveryTls | null;
+  /**
+   * Accepted transactions only: the recipients the MX refused at `RCPT TO`
+   * while it accepted at least one other (#250). Absent when every
+   * recipient was accepted. When every recipient is refused, the
+   * transaction fails instead, with `error`.
+   */
+  rejected?: RejectedRecipient[];
 }
 
 /**
@@ -264,13 +279,18 @@ export async function runMxSession(args: {
       recorder.beginTransaction();
       try {
         if (remainingMs <= 0) throw sessionDeadlineError(deadlineMs);
-        await sendWithDeadline(
+        const info = await sendWithDeadline(
           transport,
           transaction.mail,
           remainingMs,
           recorder.stalled,
         );
-        outcomes.push({ key: transaction.key, tls: recorder.result() });
+        const rejected = rejectedRecipients(info);
+        outcomes.push(
+          rejected.length > 0
+            ? { key: transaction.key, tls: recorder.result(), rejected }
+            : { key: transaction.key, tls: recorder.result() },
+        );
       } catch (error) {
         outcomes.push({ key: transaction.key, error, tls: recorder.result() });
       }
@@ -288,6 +308,34 @@ export async function runMxSession(args: {
     transport.close();
   }
   return outcomes;
+}
+
+/**
+ * The recipients an accepted transaction's MX refused (#250), from the
+ * info nodemailer resolves with: `rejectedErrors` (one error per refused
+ * recipient, with its reply), and any `rejected` address without one. A
+ * fake or unusual transport may report neither: nobody was refused.
+ */
+function rejectedRecipients(info: unknown): RejectedRecipient[] {
+  if (typeof info !== "object" || info === null) return [];
+  const found: RejectedRecipient[] = [];
+  const errors: unknown = Reflect.get(info, "rejectedErrors");
+  if (Array.isArray(errors)) {
+    for (const error of errors) {
+      if (!(error instanceof Error)) continue;
+      const recipient: unknown = Reflect.get(error, "recipient");
+      if (typeof recipient === "string") found.push({ recipient, error });
+    }
+  }
+  const rejected: unknown = Reflect.get(info, "rejected");
+  if (Array.isArray(rejected)) {
+    for (const recipient of rejected) {
+      if (typeof recipient !== "string") continue;
+      if (found.some((r) => r.recipient === recipient)) continue;
+      found.push({ recipient, error: new Error("Recipient rejected without a reply") });
+    }
+  }
+  return found;
 }
 
 /**
@@ -346,14 +394,15 @@ function sessionDeadlineError(deadlineMs: number): Error {
  * SMTP reply and is therefore retried later, not treated as a bounce.
  * `abort` (a stalled STARTTLS upgrade, see `TlsRecorder.stalled`) ends the
  * attempt the same way, earlier. {@link runMxSession} then destroys the
- * session's sockets.
+ * session's sockets. Resolves with what the transport resolved with (its
+ * `info`, which lists refused recipients).
  */
 export async function sendWithDeadline(
   transport: ClosableTransport,
   options: Mail.Options,
   deadlineMs: number,
   abort?: Promise<never>,
-): Promise<void> {
+): Promise<unknown> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
@@ -371,7 +420,7 @@ export async function sendWithDeadline(
     );
   }
   try {
-    await Promise.race(racers);
+    return await Promise.race(racers);
   } finally {
     clearTimeout(timer);
   }

@@ -156,7 +156,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 
 The `source` field is the ingress channel the email arrived through: `api` (this REST endpoint) or `smtp` (the SMTP submission server, #120).
 
-**`deliveryState`** (#250) is on every email in a response: one entry per destination MX, or per recipient when signed return paths split the MX's group (#236). It is `[]` until the first delivery attempt (so on the send response, and on a replayed send, which returns the snapshot as queued). Entries are sorted by `mx`, then by first recipient.
+**`deliveryState`** (#250) is on every email in a response: one entry per recipient domain, or per recipient when signed return paths (#236) or a partial `RCPT TO` rejection (#250) split the domain's group. It is `[]` until the first delivery attempt (so on the send response, and on a replayed send, which returns the snapshot as queued). Entries are sorted by `mx`, then by first recipient.
 
 ```json
 "deliveryState": [
@@ -187,7 +187,7 @@ The `source` field is the ingress channel the email arrived through: `api` (this
 
 | Field | Description |
 |-------|-------------|
-| `mx` | Destination MX host; `null` when the recipient domain's MX could not be resolved (never attempted). |
+| `mx` | MX host of the latest outcome: the one that accepted or answered, or the last one tried (the mailer fails over across MX hosts, #250); `null` while no MX host was reached (the recipient domain did not resolve, or no host could be connected to). |
 | `recipients` | The addresses this entry delivers to. |
 | `status` | `sent` (accepted), `retry` (temporary failure, retried on the backoff) or `failed` (terminal). |
 | `attempts` | Attempts this entry has used. |

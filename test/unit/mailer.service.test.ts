@@ -51,6 +51,8 @@ let mxResolver:
 let sendBehaviour:
   ((mxHost: string, opts: Record<string, unknown>) => Error | void | undefined) | null =
   null;
+/** What an accepted send resolves with, e.g. refused recipients (#250); default a bare id. */
+let sendInfo: ((opts: Record<string, unknown>) => Record<string, unknown>) | null = null;
 
 /** Public test address (TEST-NET-3) every MX host resolves to by default. */
 const MX_IP = "203.0.113.10";
@@ -112,6 +114,7 @@ const createTransportMock = mock((cfg: Record<string, unknown>) => ({
       const result = sendBehaviour(mxOf(cfg), opts);
       if (result instanceof Error) throw result;
     }
+    if (sendInfo) return sendInfo(opts);
     return { messageId: "<test-msg@mx.test>" };
   }),
   close: mock(() => {
@@ -140,6 +143,7 @@ beforeEach(() => {
   mxResult = [{ exchange: "mx.example.org", priority: 10 }];
   mxResolver = null;
   sendBehaviour = null;
+  sendInfo = null;
   lookupResult = [{ address: MX_IP, family: 4 }];
   createTransportMock.mockClear();
   closedTransports = 0;
@@ -191,7 +195,7 @@ describe("sendMail: TLS record (#250)", () => {
       subject: "test",
       messageId: MID,
     });
-    const group = result.deliveryState["mx.example.org"];
+    const group = result.deliveryState["example.org"];
     expect(group?.status).toBe("sent");
     expect(group?.tls).toBe("starttls");
     expect(Date.parse(group?.updatedAt ?? "")).toBeGreaterThanOrEqual(before);
@@ -205,7 +209,7 @@ describe("sendMail: TLS record (#250)", () => {
       subject: "test",
       messageId: MID,
     });
-    expect(result.deliveryState["mx.example.org"]?.tls).toBe("plaintext");
+    expect(result.deliveryState["example.org"]?.tls).toBe("plaintext");
   });
 
   test("a session that never got ready records no TLS, and the failure is retried", async () => {
@@ -216,7 +220,7 @@ describe("sendMail: TLS record (#250)", () => {
       subject: "test",
       messageId: MID,
     });
-    const group = result.deliveryState["mx.example.org"];
+    const group = result.deliveryState["example.org"];
     expect(group?.status).toBe("retry");
     expect(group?.tls).toBeNull();
     expect(group?.updatedAt).toBeString();
@@ -231,7 +235,7 @@ describe("sendMail: TLS record (#250)", () => {
       subject: "test",
       messageId: MID,
     });
-    const group = result.deliveryState["mx.example.org"];
+    const group = result.deliveryState["example.org"];
     expect(group?.status).toBe("failed");
     expect(group?.tls).toBe("starttls");
   });
@@ -414,12 +418,10 @@ describe("sendMail: fundamental error paths", () => {
     );
   });
 
-  test("DNS resolution failure becomes a terminal `failed` group instead of throwing", async () => {
-    /** Post-#97 a domain with no MX records doesn't crash the send:
-     *  it shows up as a synthetic `<dns:...>` entry in `failed` state
-     *  so the queue can render it in the row's delivery_state for the
-     *  operator. Retrying that group is pointless (no MX exists), so
-     *  it stays terminal. */
+  test("a domain with no MX and no address records is a terminal `failed` group (#250)", async () => {
+    /** No MX records and no A/AAAA either (the mock answers none): no
+     *  implicit MX, nothing to retry against. Not a throw: the entry is
+     *  in the state for the operator, keyed by its domain. */
     mxResult = [];
     const result = await sendMail({
       from: "hello@example.com",
@@ -427,11 +429,46 @@ describe("sendMail: fundamental error paths", () => {
       subject: "test",
       messageId: MID,
     });
-    const entry = result.deliveryState["<dns:nomx.test>"];
+    expect(createTransportMock).not.toHaveBeenCalled();
+    const entry = result.deliveryState["nomx.test"];
     expect(entry).toBeDefined();
     expect(entry!.status).toBe("failed");
     expect(entry!.recipients).toEqual(["user@nomx.test"]);
-    expect(entry!.lastError).toMatch(/No MX records/);
+    expect(entry!.lastError).toBe("nomx.test: domain has no MX or address records");
+    expect(entry!.failureKind).toBeUndefined();
+  });
+
+  test("a temporary DNS failure leaves the group in `retry`, resolved again next time (#250)", async () => {
+    mxResult = Object.assign(new Error("queryMx ESERVFAIL flaky.test"), {
+      code: "ESERVFAIL",
+    });
+    const first = await sendMail({
+      from: "hello@example.com",
+      to: "user@flaky.test",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(createTransportMock).not.toHaveBeenCalled();
+    expect(first.deliveryState["flaky.test"]).toMatchObject({
+      status: "retry",
+      attempts: 1,
+      lastError: "flaky.test: MX lookup failed temporarily (ESERVFAIL); will retry",
+    });
+
+    mxResult = [{ exchange: "mx.flaky.test", priority: 10 }];
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: "user@flaky.test",
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
+    });
+    expect(mxOf(captured[0]!.transportConfig)).toBe("mx.flaky.test");
+    expect(second.deliveryState["flaky.test"]).toMatchObject({
+      status: "sent",
+      attempts: 2,
+      mxHost: "mx.flaky.test",
+    });
   });
 });
 
@@ -622,7 +659,7 @@ describe("sendMail: per-group outcomes (#97)", () => {
       messageId: MID,
     });
 
-    const group = result.deliveryState["smtp.outlook.com"];
+    const group = result.deliveryState["outlook.com"];
     expect(group?.status).toBe("failed");
     expect(group?.blocked).toBe(true);
   });
@@ -639,7 +676,7 @@ describe("sendMail: per-group outcomes (#97)", () => {
       messageId: MID,
     });
 
-    expect(result.deliveryState["smtp.outlook.com"]?.status).toBe("retry");
+    expect(result.deliveryState["outlook.com"]?.status).toBe("retry");
   });
 
   test("hard 5xx marks the group `failed` (terminal), not `retry`", async () => {
@@ -654,7 +691,7 @@ describe("sendMail: per-group outcomes (#97)", () => {
       messageId: MID,
     });
 
-    const group = result.deliveryState["smtp.gmail.com"];
+    const group = result.deliveryState["gmail.com"];
     expect(group).toBeDefined();
     expect(group!.status).toBe("failed");
     expect(group!.attempts).toBe(1);
@@ -673,7 +710,7 @@ describe("sendMail: per-group outcomes (#97)", () => {
       messageId: MID,
     });
 
-    const group = result.deliveryState["smtp.gmail.com"];
+    const group = result.deliveryState["gmail.com"];
     expect(group!.status).toBe("retry");
     expect(group!.attempts).toBe(1);
     expect(group!.lastError).toMatch(/421/);
@@ -693,8 +730,143 @@ describe("sendMail: per-group outcomes (#97)", () => {
       messageId: MID,
     });
 
-    expect(result.deliveryState["smtp.gmail.com"]!.status).toBe("sent");
-    expect(result.deliveryState["smtp.outlook.com"]!.status).toBe("retry");
+    expect(result.deliveryState["gmail.com"]!.status).toBe("sent");
+    expect(result.deliveryState["outlook.com"]!.status).toBe("retry");
+  });
+});
+
+describe("sendMail: MX failover (#250)", () => {
+  beforeEach(() => {
+    mxResult = [
+      { exchange: "mx2.example.org", priority: 20 },
+      { exchange: "mx1.example.org", priority: 10 },
+    ];
+  });
+
+  test("a connection error on the preferred MX: the next one delivers", async () => {
+    sendBehaviour = (host) =>
+      host === "mx1.example.org"
+        ? new Error("connect ECONNREFUSED 203.0.113.10:25")
+        : undefined;
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(captured.map((c) => mxOf(c.transportConfig))).toEqual([
+      "mx1.example.org",
+      "mx2.example.org",
+    ]);
+    expect(result.deliveryState["example.org"]).toMatchObject({
+      status: "sent",
+      attempts: 1,
+      mxHost: "mx2.example.org",
+    });
+  });
+
+  test("a 550 from the preferred MX is final: no failover", async () => {
+    sendBehaviour = () =>
+      Object.assign(new Error("Recipient command failed: 550 5.1.1 user unknown"), {
+        responseCode: 550,
+        response: "550 5.1.1 user unknown",
+      });
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(captured.map((c) => mxOf(c.transportConfig))).toEqual(["mx1.example.org"]);
+    expect(result.deliveryState["example.org"]).toMatchObject({
+      status: "failed",
+      failureKind: "hard",
+      failureCode: "5.1.1",
+      mxHost: "mx1.example.org",
+    });
+  });
+});
+
+describe("sendMail: per-recipient RCPT outcomes (#250)", () => {
+  /** Nodemailer's error for one refused recipient. */
+  function refusal(recipient: string, reply: string): Error {
+    return Object.assign(new Error(`Recipient command failed: ${reply}`), {
+      recipient,
+      responseCode: Number(reply.slice(0, 3)),
+      response: reply,
+    });
+  }
+
+  test("accepted recipients are sent; each refused one gets its own entry and code", async () => {
+    sendInfo = () => ({
+      accepted: ["alice@example.org"],
+      rejected: ["Bob@example.org", "carol@example.org"],
+      rejectedErrors: [
+        refusal("Bob@example.org", "450 4.2.1 mailbox busy"),
+        refusal("carol@example.org", "550 5.1.1 user unknown"),
+      ],
+    });
+    const first = await sendMail({
+      from: "hello@example.com",
+      to: "alice@example.org, bob@example.org",
+      cc: "carol@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(captured).toHaveLength(1);
+    expect(first.deliveryState["example.org"]).toMatchObject({
+      status: "sent",
+      recipients: ["alice@example.org"],
+      attempts: 1,
+    });
+    expect(first.deliveryState["example.org#1"]).toMatchObject({
+      status: "retry",
+      recipients: ["bob@example.org"],
+      failureKind: "soft",
+      failureCode: "4.2.1",
+      attempts: 1,
+      domain: "example.org",
+    });
+    expect(first.deliveryState["example.org#2"]).toMatchObject({
+      status: "failed",
+      recipients: ["carol@example.org"],
+      failureKind: "hard",
+      failureCode: "5.1.1",
+    });
+
+    /** Next attempt: only the 4xx recipient goes out, alone. */
+    captured.length = 0;
+    sendInfo = null;
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: "alice@example.org, bob@example.org",
+      cc: "carol@example.org",
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
+    });
+    expect(captured).toHaveLength(1);
+    expect(asRecord(captured[0]!.mailOptions.envelope).to).toEqual(["bob@example.org"]);
+    expect(second.deliveryState["example.org#1"]).toMatchObject({
+      status: "sent",
+      attempts: 2,
+    });
+    expect(second.deliveryState["example.org"]?.attempts).toBe(1);
+  });
+
+  test("a send whose info lists no refusals marks every recipient sent", async () => {
+    sendInfo = () => ({
+      accepted: ["alice@example.org", "bob@example.org"],
+      rejected: [],
+    });
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@example.org, bob@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    expect(Object.keys(result.deliveryState)).toEqual(["example.org"]);
+    expect(result.deliveryState["example.org"]?.recipients).toHaveLength(2);
   });
 });
 
@@ -734,10 +906,10 @@ describe("sendMail: stateful retry (#97)", () => {
 
     /** Final state: both groups sent, gmail's attempt count unchanged
      *  from attempt 1 because we never re-tried it. */
-    expect(second.deliveryState["smtp.gmail.com"]!.status).toBe("sent");
-    expect(second.deliveryState["smtp.gmail.com"]!.attempts).toBe(1);
-    expect(second.deliveryState["smtp.outlook.com"]!.status).toBe("sent");
-    expect(second.deliveryState["smtp.outlook.com"]!.attempts).toBe(2);
+    expect(second.deliveryState["gmail.com"]!.status).toBe("sent");
+    expect(second.deliveryState["gmail.com"]!.attempts).toBe(1);
+    expect(second.deliveryState["outlook.com"]!.status).toBe("sent");
+    expect(second.deliveryState["outlook.com"]!.attempts).toBe(2);
   });
 
   test("a retry pass with all groups already sent is a no-op", async () => {
@@ -764,30 +936,54 @@ describe("sendMail: stateful retry (#97)", () => {
     expect(second.deliveryState).toEqual(first.deliveryState);
   });
 
-  test("synthetic `<dns:...>` entries from prior state are not retried", async () => {
-    /** First attempt: DNS fails for the only recipient. */
-    mxResult = [];
-    const first = await sendMail({
-      from: "hello@example.com",
-      to: "user@nomx.test",
-      subject: "test",
-      messageId: MID,
-    });
-    expect(first.deliveryState["<dns:nomx.test>"]!.status).toBe("failed");
-    captured.length = 0;
-
-    /** Even if DNS magically starts working, the failed entry stays
-     *  failed: we don't re-resolve from a DNS-failed key. */
+  test("synthetic `<dns:...>` entries from rows before #250 are not retried", async () => {
     mxResult = [{ exchange: "now-resolves.test", priority: 10 }];
     const second = await sendMail({
       from: "hello@example.com",
       to: "user@nomx.test",
       subject: "test",
       messageId: MID,
-      existingState: first.deliveryState,
+      existingState: {
+        "<dns:nomx.test>": {
+          status: "failed",
+          recipients: ["user@nomx.test"],
+          attempts: 0,
+          lastError: "No MX records found for domain: nomx.test",
+        },
+      },
     });
     expect(captured).toHaveLength(0);
     expect(second.deliveryState["<dns:nomx.test>"]!.status).toBe("failed");
+  });
+
+  test("a pending entry from before #250, keyed by its MX, is routed by its domain", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `new-mx.${domain}`, priority: 10 }]);
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "a@one.test, b@two.test",
+      subject: "test",
+      messageId: MID,
+      existingState: {
+        "shared-mx.test": {
+          status: "retry",
+          recipients: ["a@one.test", "b@two.test"],
+          attempts: 1,
+        },
+      },
+    });
+    expect(captured.map((c) => mxOf(c.transportConfig))).toEqual([
+      "new-mx.one.test",
+      "new-mx.two.test",
+    ]);
+    expect(result.deliveryState["shared-mx.test|one.test"]).toMatchObject({
+      status: "sent",
+      recipients: ["a@one.test"],
+      domain: "one.test",
+      mxHost: "new-mx.one.test",
+      attempts: 2,
+    });
+    expect(result.deliveryState["shared-mx.test|two.test"]?.status).toBe("sent");
   });
 });
 
@@ -803,7 +999,7 @@ describe("sendMail: outbound SSRF guard on MX hosts", () => {
     });
 
     expect(createTransportMock).not.toHaveBeenCalled();
-    const group = result.deliveryState["mx.example.org"]!;
+    const group = result.deliveryState["example.org"]!;
     expect(group.status).toBe("retry");
     expect(group.lastError).toContain("non-public address");
     /** The internal address is not echoed back to the API caller. */
@@ -912,12 +1108,12 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     expect(cfg.maxRequeues).toBe(0);
     expect(closedTransports).toBe(1);
 
-    /** One state entry per recipient, keyed by MX and recipient index. */
+    /** One state entry per recipient, keyed by domain and recipient index (#250). */
     expect(Object.keys(result.deliveryState)).toEqual([
-      "mx.example.org#0",
-      "mx.example.org#1",
-      "mx.example.org#2",
-      "mx.example.org#3",
+      "example.org#0",
+      "example.org#1",
+      "example.org#2",
+      "example.org#3",
     ]);
     for (const group of Object.values(result.deliveryState)) {
       expect(group.status).toBe("sent");
@@ -926,7 +1122,7 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     }
   });
 
-  test("a single-recipient email is one transaction, keyed by its MX as before", async () => {
+  test("a single-recipient email is one transaction, keyed by its domain", async () => {
     const result = await sendMail({
       from: "hello@example.com",
       to: "alice@example.org",
@@ -940,7 +1136,7 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     /** Every session is one pooled connection, closed afterwards (#250). */
     expect(captured[0]!.transportConfig.pool).toBe(true);
     expect(closedTransports).toBe(1);
-    expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
+    expect(Object.keys(result.deliveryState)).toEqual(["example.org"]);
   });
 
   test("without a return path: one transaction per MX, envelope sender is From", async () => {
@@ -965,7 +1161,7 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     });
     expect(captured[0]!.transportConfig.pool).toBe(true);
     expect(closedTransports).toBe(1);
-    expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
+    expect(Object.keys(result.deliveryState)).toEqual(["example.org"]);
   });
 
   test("failures are classified per recipient: hard, soft and sent side by side", async () => {
@@ -987,16 +1183,16 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     });
 
     const state = result.deliveryState;
-    expect(state["mx.example.org#0"]).toMatchObject({
+    expect(state["example.org#0"]).toMatchObject({
       status: "sent",
       recipients: ["alice@example.org"],
     });
-    expect(state["mx.example.org#1"]).toMatchObject({
+    expect(state["example.org#1"]).toMatchObject({
       status: "failed",
       recipients: ["bob@example.org"],
       failureKind: "hard",
     });
-    expect(state["mx.example.org#2"]).toMatchObject({
+    expect(state["example.org#2"]).toMatchObject({
       status: "retry",
       recipients: ["carol@example.org"],
     });
@@ -1016,7 +1212,7 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
       messageId: MID,
       returnPath: { emailId: EMAIL_ID },
     });
-    expect(first.deliveryState["mx.example.org#1"]!.status).toBe("retry");
+    expect(first.deliveryState["example.org#1"]!.status).toBe("retry");
     captured.length = 0;
     sendBehaviour = null;
 
@@ -1034,7 +1230,7 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     expect(verifiedRecipient(envelopeOf(captured[0]!).from)).toBe("bob@example.org");
     /** One code path: a lone transaction is a pooled session too (#250). */
     expect(captured[0]!.transportConfig.pool).toBe(true);
-    expect(second.deliveryState["mx.example.org#1"]).toMatchObject({
+    expect(second.deliveryState["example.org#1"]).toMatchObject({
       status: "sent",
       attempts: 2,
     });

@@ -13,6 +13,10 @@
  *              answers again: the TLS handshake never completes (no smtp-server)
  *   stall-data offers STARTTLS (TLS 1.2 and up), then never answers the end
  *              of DATA: a session stuck after a completed TLS handshake
+ *   busy       greets every connection with `421` and closes it (#250)
+ *   rcpt-codes offers STARTTLS and answers RCPT TO by local part (#250):
+ *              `soft...` gets `450 4.2.1`, `hard...` gets `550 5.1.1`,
+ *              anything else is accepted
  *
  * Prints `{"port":N}` on one line once listening, then counts on stdout
  * each accepted message and connection, the open connections whenever
@@ -121,6 +125,28 @@ function startSmtpServer() {
     onConnect(_session, callback) {
       connections += 1;
       report({ connection: connections });
+      if (mode === "busy") {
+        const busy = new Error("4.3.2 Too busy, try another server");
+        busy.responseCode = 421;
+        callback(busy);
+        return;
+      }
+      callback();
+    },
+    onRcptTo(address, _session, callback) {
+      const local = address.address.split("@")[0] ?? "";
+      if (mode === "rcpt-codes" && local.startsWith("soft")) {
+        const soft = new Error("4.2.1 Mailbox busy, try later");
+        soft.responseCode = 450;
+        callback(soft);
+        return;
+      }
+      if (mode === "rcpt-codes" && local.startsWith("hard")) {
+        const hard = new Error("5.1.1 No such user");
+        hard.responseCode = 550;
+        callback(hard);
+        return;
+      }
       callback();
     },
     onData(stream, _session, callback) {

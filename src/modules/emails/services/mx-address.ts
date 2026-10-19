@@ -13,7 +13,8 @@ import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
  * nodemailer resolve it again is not enough either: the caller controls
  * the DNS answer and can change it between the two lookups. So the mailer
  * resolves the host here, refuses if any address is not public, and
- * connects to the address returned (the connection is pinned to it).
+ * connects to an address returned (the connection is pinned to it). Every
+ * address goes through this check, an implicit MX (#250) included.
  *
  * Config-free (the caller passes `allowPrivate`), and `lookup` is
  * injectable, so it unit-tests with no environment and no `mock.module`.
@@ -30,21 +31,25 @@ export type LookupAll = (host: string) => Promise<{ address: string }[]>;
 const lookupAll: LookupAll = (host) => lookup(host, { all: true });
 
 /**
- * Resolves an MX host to the address to connect to.
+ * Resolves an MX host to the addresses to connect to, in the order to try
+ * them.
  *
- * @param mxHost - The MX exchange name from DNS
+ * @param mxHost - The MX exchange name from DNS (or, for an implicit MX,
+ *   the recipient domain itself, #250)
  * @param options.allowPrivate - Operator opt-out (`MAIL_ALLOW_PRIVATE_MX`)
  * @param options.lookup - DNS lookup, injectable for tests
- * @returns The address to connect to (IPv4 preferred, as nodemailer does:
- *   receivers such as Gmail are stricter about reverse DNS over IPv6);
- *   every resolved address was checked
+ * @returns The IPv4 addresses when the host has any, else its IPv6 ones,
+ *   in DNS order. IPv4 is preferred, as nodemailer does: receivers such as
+ *   Gmail are stricter about reverse DNS over IPv6, so a host with an IPv4
+ *   address is never reached over IPv6. Every resolved address, of both
+ *   families, was checked.
  * @throws BlockedMxError for a null MX, an unresolvable host, or any
  *   non-public address (unless `allowPrivate`)
  */
-export async function resolveMxAddress(
+export async function resolveMxAddresses(
   mxHost: string,
   options: { allowPrivate: boolean; lookup?: LookupAll },
-): Promise<string> {
+): Promise<string[]> {
   /** RFC 7505 null MX ("." , which resolves to an empty exchange): the
    *  domain accepts no mail. Never fall back to a default host. */
   const host = mxHost.trim().replace(/\.$/, "");
@@ -55,8 +60,9 @@ export async function resolveMxAddress(
     : await (options.lookup ?? lookupAll)(host).catch(() => {
         throw new BlockedMxError(`MX host "${host}" could not be resolved.`);
       });
-  const chosen = addresses.find(({ address }) => isIP(address) === 4) ?? addresses[0];
-  if (!chosen) throw new BlockedMxError(`MX host "${host}" resolved to no addresses.`);
+  if (addresses.length === 0) {
+    throw new BlockedMxError(`MX host "${host}" resolved to no addresses.`);
+  }
 
   if (!options.allowPrivate && addresses.some(({ address }) => isBlockedIp(address))) {
     /** Deliberately no address in the message: it is stored in `lastError`
@@ -66,5 +72,6 @@ export async function resolveMxAddress(
     );
   }
 
-  return chosen.address;
+  const ipv4 = addresses.filter(({ address }) => isIP(address) === 4);
+  return [...new Set((ipv4.length > 0 ? ipv4 : addresses).map(({ address }) => address))];
 }

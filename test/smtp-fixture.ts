@@ -8,7 +8,14 @@ const FIXTURE = new URL("fixtures/smtp-tls-server.mjs", import.meta.url).pathnam
 
 /** What the fixture server does, see the fixture's header. */
 export type FixtureMode =
-  "starttls" | "plaintext" | "tls11" | "silent" | "mute-tls" | "stall-data";
+  | "starttls"
+  | "plaintext"
+  | "tls11"
+  | "silent"
+  | "mute-tls"
+  | "stall-data"
+  | "busy"
+  | "rcpt-codes";
 
 /** A running fixture server and what it reported on stdout. */
 export interface FixtureServer {

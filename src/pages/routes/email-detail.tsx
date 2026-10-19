@@ -186,9 +186,9 @@ function DetailField({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * Per-MX delivery state (#250): one row per destination MX, or per
- * recipient when signed return paths split the group (#236), labelled with
- * the MX host. Every value is escaped: the MX name comes from the
+ * Per-MX delivery state (#250): one row per recipient domain, or per
+ * recipient when signed return paths (#236) or a partial `RCPT TO`
+ * rejection (#250) split the group, labelled with the MX host it ended on. Every value is escaped: the MX name comes from the
  * recipient domain's DNS and the error from the remote server. A session
  * that ran without TLS gets a visible badge.
  */
