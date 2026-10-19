@@ -13,6 +13,7 @@ import {
   addFromBounce,
   createSuppression,
 } from "../../src/modules/suppressions/services/suppression.service.ts";
+import { mintReturnPath } from "../../src/modules/bounces/services/return-path.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
 
 /** Isolated port, distinct from the other SMTP test files. */
@@ -133,8 +134,21 @@ Original-Message-ID: <${originalMessageId}>
 `;
 }
 
+/**
+ * The signed return path of the seeded email's only recipient (#236): DSNs
+ * only take effect there.
+ */
+function returnPath(): string {
+  const address = mintReturnPath(
+    { emailId, index: 0, recipient: RECIPIENT },
+    "example.com",
+  );
+  if (address === null) throw new Error("expected a return path");
+  return address;
+}
+
 /** Delivers a raw message to the receiver; resolves once it was accepted. */
-async function deliver(raw: string): Promise<void> {
+async function deliver(raw: string, to = "fbl@example.com"): Promise<void> {
   const transport = createTransport({
     host: "127.0.0.1",
     port: INBOUND_PORT,
@@ -143,7 +157,7 @@ async function deliver(raw: string): Promise<void> {
   });
   try {
     await transport.sendMail({
-      envelope: { from: "feedback@isp.example.net", to: "fbl@example.com" },
+      envelope: { from: "feedback@isp.example.net", to },
       raw,
     });
   } finally {
@@ -404,8 +418,8 @@ describe("other reports", () => {
     expect(await storedInbound(s)).toBe(0);
   });
 
-  test("a DSN still takes the bounce path", async () => {
-    await deliver(dsn(uniqueSubject(), messageId));
+  test("a DSN to the return path still takes the bounce path", async () => {
+    await deliver(dsn(uniqueSubject(), messageId), returnPath());
 
     expect(await suppressionOf(apiKeyId)).toMatchObject({
       reason: "bounce",
@@ -475,7 +489,7 @@ describe("late bounces never weaken a permanent suppression", () => {
         .from(suppressions)
         .where(eq(suppressions.id, id));
 
-      await deliver(dsn(uniqueSubject(), messageId, status));
+      await deliver(dsn(uniqueSubject(), messageId, status), returnPath());
 
       expect(await suppressionOf(apiKeyId)).toEqual(before);
       const events = await deliveries("email.bounced");
@@ -492,7 +506,7 @@ describe("late bounces never weaken a permanent suppression", () => {
       diagnosticCode: "5.1.1",
       expiresAt: null,
     });
-    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"));
+    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"), returnPath());
 
     expect(await suppressionOf(apiKeyId)).toMatchObject({
       id,
@@ -509,7 +523,7 @@ describe("late bounces never weaken a permanent suppression", () => {
       bounceType: "soft",
       expiresAt: new Date(Date.now() + HOUR_MS),
     });
-    await deliver(dsn(uniqueSubject(), messageId, "5.1.1"));
+    await deliver(dsn(uniqueSubject(), messageId, "5.1.1"), returnPath());
 
     expect(await suppressionOf(apiKeyId)).toMatchObject({
       id,
@@ -527,7 +541,7 @@ describe("late bounces never weaken a permanent suppression", () => {
       bounceType: "soft",
       expiresAt: new Date(Date.now() - HOUR_MS),
     });
-    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"));
+    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"), returnPath());
 
     const row = await suppressionOf(apiKeyId);
     expect(row).toMatchObject({ id, reason: "bounce", bounceType: "soft" });

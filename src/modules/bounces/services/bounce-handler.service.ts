@@ -1,8 +1,15 @@
 /**
- * Orchestrates everything that happens when the parser identifies a
- * bounce: lookup the original email, decide hard vs soft (with
- * escalation on repeat), persist the suppression, mark the original
- * email row as bounced, and fire the `email.bounced` webhook.
+ * Orchestrates everything that happens when a DSN arrives at a verified
+ * signed return path (#236): decide hard vs soft (with escalation on
+ * repeat), persist the suppression for the one recipient the return path
+ * names, mark the original email row as bounced, and fire the
+ * `email.bounced` webhook.
+ *
+ * The return path is the only link from a DSN to an email
+ * ({@link resolveReturnPath}): the Message-ID in a DSN body is visible to
+ * every recipient of the email, so linking by it let one recipient forge
+ * a bounce for a co-recipient. A DSN that did not arrive at a valid
+ * return path has no effect.
  *
  * The orchestration is split into a pure-ish core (`handleBounce`)
  * that takes its dependencies as callbacks, and a thin public wrapper
@@ -19,9 +26,9 @@ import {
 } from "../../suppressions/services/suppression.service.ts";
 import { dispatchEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { logger } from "../../../utils/logger.ts";
-import { parseRecipients } from "../../../utils/recipients.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import type { ParsedBounce } from "../types/bounce.types.ts";
+import { parseReturnPath, recipientOrder, returnPathMacMatches } from "./return-path.ts";
 
 /** Soft suppression backoff window. */
 const SOFT_BOUNCE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -33,19 +40,61 @@ const STATUS_BOUNCED = "bounced";
 export interface OriginalEmail {
   id: string;
   apiKeyId: string;
-  toAddress: string;
-  cc: string | null;
-  bcc: string | null;
+}
+
+/**
+ * What a verified return path binds a DSN to (#236): one email and one of
+ * its recipients. Every field comes from the email row.
+ */
+export interface ReturnPathBinding {
+  email: OriginalEmail;
+  /** The recipient the return path names, lowercased. */
+  recipient: string;
+}
+
+/**
+ * Verifies a signed return path (#236) and returns what it binds to, or
+ * `null` for every kind of failure: malformed, an email id that does not
+ * exist (never sent, or purged), an index past the email's recipients, a
+ * MAC that does not match, a domain that is not the email's sender domain.
+ * One result for all of them, so the caller can only say "not valid".
+ *
+ * @param key Return-path key override, for tests; defaults to the configured one.
+ */
+export async function resolveReturnPath(
+  address: string,
+  key?: Buffer,
+): Promise<ReturnPathBinding | null> {
+  const parsed = parseReturnPath(address);
+  if (!parsed) return null;
+
+  const [row] = await db
+    .select({
+      id: emails.id,
+      apiKeyId: emails.apiKeyId,
+      fromAddress: emails.fromAddress,
+      toAddress: emails.toAddress,
+      cc: emails.cc,
+      bcc: emails.bcc,
+    })
+    .from(emails)
+    .where(eq(emails.id, parsed.emailId))
+    .limit(1);
+  if (!row) return null;
+
+  const recipient = recipientOrder(row.toAddress, row.cc, row.bcc)[parsed.index];
+  if (recipient === undefined) return null;
+
+  const subject = { emailId: row.id, index: parsed.index, recipient };
+  if (!returnPathMacMatches(subject, parsed.mac, key)) return null;
+
+  const senderDomain = row.fromAddress.slice(row.fromAddress.lastIndexOf("@") + 1);
+  if (senderDomain.trim().toLowerCase() !== parsed.domain) return null;
+
+  return { email: { id: row.id, apiKeyId: row.apiKeyId }, recipient };
 }
 
 export interface BounceHandlerDeps {
-  /**
-   * Look up the original email row this bounce refers to. Returns
-   * `undefined` when no row matches: the handler then drops the
-   * bounce (we never suppress under an unknown tenant).
-   */
-  findEmailByMessageId: (messageId: string) => Promise<OriginalEmail | undefined>;
-
   /**
    * Lookup of the existing suppression row (or undefined). Used to
    * decide if a second soft bounce should escalate to hard.
@@ -88,9 +137,9 @@ export interface BounceHandlerDeps {
 }
 
 export interface HandleBounceResult {
-  outcome: "applied" | "dropped-no-original" | "dropped-recipient-mismatch" | "escalated";
-  emailId?: string;
-  apiKeyId?: string;
+  outcome: "applied" | "escalated";
+  emailId: string;
+  apiKeyId: string;
   /** The suppression in effect for the recipient afterwards, when known. */
   suppressionId?: string;
   bounceType?: "hard" | "soft";
@@ -116,47 +165,30 @@ function escalateIfRepeat(
 /**
  * Pure-ish orchestration core. Dependencies are injected so unit tests
  * can assert exactly which side effects fire and in what order.
+ *
+ * The bounce applies to the email and recipient of `binding` only (#236).
+ * What the DSN body says about recipients is not trusted: when its
+ * `Final-Recipient` / `Original-Recipient` name someone else, that is
+ * logged and ignored, and the bound recipient is still the one handled.
  */
 export async function handleBounce(
   parsed: ParsedBounce,
+  binding: ReturnPathBinding,
   deps: BounceHandlerDeps,
 ): Promise<HandleBounceResult> {
-  const original = await deps.findEmailByMessageId(parsed.originalMessageId);
+  const original = binding.email;
+  const recipient = binding.recipient;
 
-  if (!original) {
-    logger.warn("Bounce dropped: no original email matches Message-ID", {
-      originalMessageId: parsed.originalMessageId,
-      recipient: redactEmail(parsed.recipient),
-      status: parsed.status,
-      source: parsed.source,
-    });
-    return { outcome: "dropped-no-original" };
-  }
-
-  /**
-   * The bounced address must be one the email was actually sent to.
-   * Bounces arrive over unauthenticated inbound SMTP and are linked only
-   * by Message-ID, which every recipient can see, so without this check
-   * a forged DSN could suppress any address under the sender's key.
-   * `Original-Recipient` also counts (forwarding and aliases change
-   * `Final-Recipient`); the suppression is filed for the address we sent
-   * to, since that is what a later send would use.
-   */
-  const sentTo = new Set(
-    parseRecipients(original.toAddress, original.cc, original.bcc).map((r) =>
-      r.address.toLowerCase(),
-    ),
-  );
-  const recipient = [parsed.recipient, parsed.originalRecipient].find(
-    (address) => address !== undefined && sentTo.has(address),
-  );
-  if (!recipient) {
-    logger.warn("Bounce dropped: recipient was not a recipient of the original email", {
-      emailId: original.id,
-      recipient: redactEmail(parsed.recipient),
-      source: parsed.source,
-    });
-    return { outcome: "dropped-recipient-mismatch", emailId: original.id };
+  if (parsed.recipient !== recipient && parsed.originalRecipient !== recipient) {
+    logger.warn(
+      "DSN names another recipient than its return path: bound recipient used",
+      {
+        emailId: original.id,
+        recipient: redactEmail(recipient),
+        dsnRecipient: redactEmail(parsed.recipient),
+        source: parsed.source,
+      },
+    );
   }
 
   const existing = await deps.isSuppressed(original.apiKeyId, recipient);
@@ -220,47 +252,14 @@ export async function handleBounce(
 
 /**
  * Public wrapper. Wires the real DB / service implementations. Called
- * by `inbound/services/smtp-receiver.service.ts` after the parser
- * returns a non-null `ParsedBounce`.
+ * by `inbound/services/smtp-receiver.service.ts` when a DSN arrives at a
+ * return path {@link resolveReturnPath} verified.
  */
 export async function handleParsedBounce(
   parsed: ParsedBounce,
+  binding: ReturnPathBinding,
 ): Promise<HandleBounceResult> {
-  return handleBounce(parsed, {
-    findEmailByMessageId: async (messageId) => {
-      /**
-       * When BunMail sends, nodemailer fills `messageId` like
-       * `<id@host>` and we persist it on `emails.message_id`. The
-       * bounce's `Original-Message-ID` arrives with or without angle
-       * brackets: the parser already stripped them, but we look up
-       * with both shapes to be safe across SMTP-flavour quirks.
-       */
-      const wrapped = `<${messageId}>`;
-      const [row] = await db
-        .select({
-          id: emails.id,
-          apiKeyId: emails.apiKeyId,
-          toAddress: emails.toAddress,
-          cc: emails.cc,
-          bcc: emails.bcc,
-        })
-        .from(emails)
-        .where(eq(emails.messageId, wrapped))
-        .limit(1);
-      if (row) return row;
-      const [unwrapped] = await db
-        .select({
-          id: emails.id,
-          apiKeyId: emails.apiKeyId,
-          toAddress: emails.toAddress,
-          cc: emails.cc,
-          bcc: emails.bcc,
-        })
-        .from(emails)
-        .where(eq(emails.messageId, messageId))
-        .limit(1);
-      return unwrapped;
-    },
+  return handleBounce(parsed, binding, {
     isSuppressed: async (apiKeyId, email) => {
       const row = await isSuppressed(apiKeyId, email);
       return row ? { id: row.id, bounceType: row.bounceType } : undefined;

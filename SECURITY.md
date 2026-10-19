@@ -100,7 +100,7 @@ Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_
 
 A safer rolling rotation (read with old key, write with new) needs both keys to coexist briefly, see the follow-up issue for the planned design.
 
-**Unsubscribe links (#249).** The per-recipient `List-Unsubscribe` tokens are HMACs under a key derived (HKDF) from `DKIM_ENCRYPTION_KEY`, and nothing is stored to re-encrypt: rotating the key invalidates every unsubscribe link and `unsub+` address in mail already sent. Those recipients then see "This link is not valid", and mailbox providers' one-click requests fail with `404`. Rotate when no recent bulk mail is outstanding if you can, and expect some recipients to fall back to "Report spam" otherwise.
+**Unsubscribe links (#249).** The per-recipient `List-Unsubscribe` tokens are HMACs under a key derived (HKDF) from `DKIM_ENCRYPTION_KEY`, and nothing is stored to re-encrypt: rotating the key invalidates every unsubscribe link and `unsub+` address in mail already sent. Those recipients then see "This link is not valid", and mailbox providers' one-click requests fail with `404`. Rotate when no recent bulk mail is outstanding if you can, and expect some recipients to fall back to "Report spam" otherwise. The signed return paths (#236, `b+<id>.<index>.<MAC>@<domain>`, with `SMTP_ENABLED=true`) use another key derived the same way: rotation also invalidates every return path in mail already sent, with no grace window (there is no previous-key mechanism for `DKIM_ENCRYPTION_KEY`), so a DSN for mail sent before the rotation is refused and suppresses nobody. Synchronous `5xx` rejections at send time still suppress.
 
 ### What's *not* protected by this
 

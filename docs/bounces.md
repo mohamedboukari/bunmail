@@ -1,6 +1,6 @@
 # Bounces Module
 
-Parses Delivery Status Notifications (DSNs) that arrive at BunMail's inbound SMTP, links them back to the original outbound email, and feeds the **suppression list** ([docs/suppressions.md](suppressions.md)) so we stop sending to dead recipients.
+Parses Delivery Status Notifications (DSNs) that arrive at BunMail's inbound SMTP, binds them to the original outbound email and recipient through a signed per-recipient return path (#236), and feeds the **suppression list** ([docs/suppressions.md](suppressions.md)) so we stop sending to dead recipients.
 
 Repeatedly sending to bouncing addresses is the **single fastest way to kill IP reputation**. Gmail / Yahoo / Outlook track sender bounce rates per-IP and per-domain; a few hundred sends to non-existent mailboxes is enough to start landing legitimate mail in spam. This module closes the loop.
 
@@ -8,7 +8,7 @@ Repeatedly sending to bouncing addresses is the **single fastest way to kill IP 
 
 When BunMail's outbound SMTP delivers a message, the recipient's MX server **accepts the SMTP transaction** at handoff: that's why the email row's `status` becomes `sent`. The recipient's mail system then tries to land the message in the actual mailbox. If that fails (mailbox doesn't exist, full, blocked, etc.), the receiver sends a **Delivery Status Notification** back to the envelope sender.
 
-The DSN arrives at our **inbound** SMTP server, which is why this module lives next to `smtp-receiver`.
+The DSN arrives at our **inbound** SMTP server, which is why this module lives next to `smtp-receiver`. With inbound SMTP enabled, that envelope sender is a [signed return path](#signed-return-paths-236) naming one email and one recipient.
 
 ## Two bounce flavours
 
@@ -37,7 +37,7 @@ Triggered when the message's `Content-Type` is `multipart/report; report-type=de
 | `Original-Recipient` | Optional: the address as first submitted, before forwarding or alias expansion (see recipient check below) |
 | `Status` | Enhanced SMTP status code (`5.x.x` = hard, `4.x.x` = soft, `2.x.x` = ignored) |
 | `Diagnostic-Code` | Human-readable reason: persisted on the suppression row |
-| `Original-Message-ID` | Links the bounce back to the outbound `emails` row |
+| `Original-Message-ID` | Optional and informational: the return path, not this field, links the bounce to its email (#236). Postfix, for one, does not send it |
 
 Modern Gmail / Outlook / Yahoo bounces all hit this path.
 
@@ -47,19 +47,48 @@ Older MTAs (qmail, Exim with old configs, custom mail servers) sometimes send pl
 
 - Any enhanced (`5.1.1`) or basic (`550`) SMTP status code from the body
 - The first `<user@host>` recipient in the **body** (not in headers: `Message-ID:` and `In-Reply-To:` headers also carry `<x@y>` and would otherwise win document order)
-- An `In-Reply-To:` or embedded `Message-ID:` header to link back to the original
+- An `In-Reply-To:` or embedded `Message-ID:` header: part of the evidence that a plain-text message is a bounce at all (it is not used to link it, #236)
 
 The fallback only runs when the message has obvious bounce markers: sender is `MAILER-DAEMON` or `postmaster`, subject mentions delivery failure, or content-type is `multipart/report`. This **`looksLikeBounce` gate** prevents normal customer reply mail that happens to contain a status-code-shaped string from being mis-classified.
 
-## Linking back to the original email
+## Signed return paths (#236)
 
-We **require** an `originalMessageId` from the parser. Without it, we can't safely link the bounce to a specific tenant, and per #25's per-API-key suppression scoping, suppressing under the wrong key would be worse than dropping the bounce. The parser refuses to return a `ParsedBounce` without one, and the handler refuses to act if the lookup misses.
+A DSN is unauthenticated mail, and the Message-ID in its body is visible to every recipient of the email. Linking bounces by Message-ID (as before #236) let one recipient forge a DSN for a co-recipient of the same email and get that address suppressed under the sender's key. So the link now comes from the address the DSN is delivered to, which BunMail signs.
 
-The lookup uses the `messageId` column on `emails`, set by nodemailer at send time. Both the wrapped (`<id@host>`) and unwrapped form are tried: different SMTP flavours include or strip the angle brackets.
+**When.** Signed return paths are used for domains whose MX points at this BunMail; other domains keep the From address as envelope sender. Precisely, both must hold, decided once per email at each send attempt (the same answer for all its recipients):
 
-### Recipient check
+- inbound SMTP is enabled (`SMTP_ENABLED=true`), the only setup where a DSN can reach BunMail;
+- the sender domain's MX set names this server's `MAIL_HOSTNAME` (case-insensitive, trailing dot ignored).
 
-DSNs arrive over unauthenticated inbound SMTP, and the Message-ID that links them is visible to every recipient of the email. So the handler only acts when the bounced address was actually a recipient of that email: `Final-Recipient` or `Original-Recipient` must be one of the original row's `to` / `cc` / `bcc` addresses (case-insensitive). The suppression is filed for that matched address, which is what a later send would use. Anything else is dropped with outcome `dropped-recipient-mismatch` and a warning log. Remaining gap: a recipient of an email can still forge a bounce for another recipient of the same email; a signed per-message return path would close it.
+A multi-domain install can send for a domain whose mail is hosted elsewhere (a Google Workspace mailbox, say). Such a domain keeps the From address as envelope sender: a `b+` address there would be rejected by its own mail host, losing DSNs that today at least reach a human, and receivers doing sender-verification callouts could refuse the mail. The MX answer is cached in memory per domain (an hour for a yes or a no, NXDOMAIN and "no MX" included; five minutes after a DNS error or a 5-second timeout; at most 10,000 domains). A DNS error falls back to the plain envelope (fail safe) and is logged at `warn` once per domain per five minutes. Pointing a domain's MX here (or away) takes effect within the hour; a retry decides again, and the delivery state copes with the change. With `SMTP_ENABLED=false` nothing changes.
+
+**The address.** Each recipient of an email gets its own envelope sender (`MAIL FROM`):
+
+```
+b+<24 hex of the email id>.<recipient index>.<MAC>@<sender domain>
+```
+
+- **Recipient index**: the recipient's position in the email's recipients in a fixed order: `to`, then `cc`, then `bcc`, parsed and de-duplicated as the mailer does (`parseRecipients`, first occurrence wins). Decimal, no leading zero, at most 999999.
+- **MAC**: HMAC-SHA256 over `verp:v1:<email id>:<index>:<lowercased recipient>`, truncated to 96 bits (24 hex characters), under a key derived with HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` under its own label (`bunmail return path v1`, separate from the unsubscribe key). No new secret, nothing stored per address.
+- **Lowercase hex only**, so a receiving MTA that folds the case of the local part does not break it. The local part is at most 58 characters (RFC 5321 allows 64).
+- **Domain**: the domain of the From address, the same as the envelope sender before #236. SPF is still evaluated for that domain and DMARC alignment of the envelope sender is unchanged. Its MX points at this BunMail (see **When**), so DSNs arrive here.
+
+**One SMTP transaction per recipient.** The envelope sender belongs to the whole transaction, so with return paths each recipient is sent in its own transaction, with only that recipient in `RCPT TO`: a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection). Headers, DKIM signature, custom headers, `List-Unsubscribe` and `Feedback-ID` are the same in every transaction. Delivery outcomes, failure classification and retries are per recipient: the delivery state holds one entry per recipient, keyed `<mx host>#<recipient index>`. A single-recipient email is one transaction, as before.
+
+**Verification.** At `RCPT TO`, an address whose local part starts with `b+` (any case) is accepted only when it verifies: it parses, the email row exists, the index names one of its recipients, the MAC matches that recipient (constant-time compare), and the domain is the email's sender domain. Anything else is refused with `550` (a database error answers `451`), so nothing is stored. The `b+` local part is therefore reserved on domains BunMail receives for.
+
+**At DATA**, a message to a verified return path is handled before every other branch and is never stored as inbound mail or notified:
+
+- a DSN (RFC 3464, or the heuristic fallback) applies to **exactly the bound email and recipient**. What the DSN body says about recipients (`Final-Recipient`, `Original-Recipient`) is ignored; a mismatch is logged at `warn`.
+- anything else (an auto-reply or vacation notice, which RFC 3834 sends to the return path, an ARF report) is acknowledged and dropped, logged at `info`.
+
+**No Message-ID fallback.** A DSN sent to any other address (not a verified `b+` address) has no effect: it is logged at `warn`, acknowledged and dropped, as unlinkable bounces always were. That is what makes a DSN with a missing or invalid signature harmless.
+
+**Upgrade consequences.** Late DSNs for emails sent before the upgrade (or before `SMTP_ENABLED` was turned on, or before the domain's MX pointed here) arrive at the plain sender address and are ignored; synchronous `5xx` rejections at send time still suppress, unchanged. Auto-replies sent to the return path are dropped, as at every major ESP.
+
+**Rotation.** Rotating `DKIM_ENCRYPTION_KEY` invalidates every return path already sent: there is no previous-key mechanism for that key, so DSNs for mail sent before the rotation have no effect (SECURITY.md, Rotation).
+
+**Residual.** Whoever can read a recipient's own return path (the recipient, whose delivered copy usually shows it in `Return-Path:`, their mailbox provider, or anyone they forward the message to) can bounce that one recipient, the same as that recipient's own provider bouncing it. Nobody can bounce a co-recipient.
 
 ### Parser performance
 
@@ -80,9 +109,8 @@ Auto-suppression on inline 5xx fires on **attempt 1**: no point waiting for furt
 
 ## Async DSN → suppression flow
 
-When a DSN parses cleanly and links to an `emails` row, the bounce handler does five things:
+When a DSN parses cleanly and arrived at a verified return path, the bounce handler does five things for the email and recipient that return path names (see [Signed return paths](#signed-return-paths-236)):
 
-0. **Check the recipient** (see [Recipient check](#recipient-check)); drop the bounce if it doesn't match.
 1. **Look up existing suppression** for `(api_key_id, recipient)`.
 2. **Decide hard vs soft** with escalation:
    - Parsed kind `hard` → always `hard`.
@@ -134,7 +162,7 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 ## What we do **not** do
 
 - **No `2.x.x` "delivered" reports**: those are positive confirmations and don't need handling.
-- **No fuzzy linking when `Original-Message-ID` is missing**: it would risk suppressing under the wrong API key. We log a warning and drop.
+- **No linking by Message-ID** (#236): a DSN that did not arrive at a verified return path is logged and dropped, whatever Message-ID it carries. The Message-ID is visible to every recipient, so it cannot tell a real bounce from a forged one.
 - **No retry of the original email**: by definition the recipient's MX accepted the SMTP transaction; retrying would just bounce again and double-tank reputation.
 - **No DMARC `rua` / FBL complaint processing here**: those are separate parsers (#41, see [dmarc-reports.md](dmarc-reports.md); #191, see [feedback-loops.md](feedback-loops.md)). A `multipart/report` with `report-type=feedback-report` is never taken as a bounce: `parseBounce` returns `null` for it (before #191 it fell into the fallback parser and was usually dropped), and the receiver routes it to the feedback-loop handler first.
 
@@ -150,9 +178,11 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 
 ## Testing
 
-The parser is fully unit-testable in [test/unit/bounce-parser.test.ts](../test/unit/bounce-parser.test.ts): 6 cases covering RFC 3464 hard / soft, 2.x.x delivered, missing Original-Message-ID, qmail-style fallback, and the negative case where normal customer reply mail mentions a status code.
+The parser is fully unit-testable in [test/unit/bounce-parser.test.ts](../test/unit/bounce-parser.test.ts): RFC 3464 hard / soft, 2.x.x delivered, a DSN without Original-Message-ID, qmail-style fallback, and the negative case where normal customer reply mail mentions a status code.
 
-The handler's orchestration is unit-testable via injected callbacks in [test/unit/bounce-handler.test.ts](../test/unit/bounce-handler.test.ts): 5 cases covering hard, first soft, escalation on second soft, no double-escalation on already-hard, and drop-when-no-original.
+The handler's orchestration is unit-testable via injected callbacks in [test/unit/bounce-handler.test.ts](../test/unit/bounce-handler.test.ts): hard, first soft, escalation on second soft, no double-escalation on already-hard, a DSN naming a co-recipient (only the bound recipient is affected), and a permanent suppression kept on file.
+
+Return paths: [test/unit/return-path.test.ts](../test/unit/return-path.test.ts) (round trip, every tamper, case folding, wrong recipient / index / email / domain / key, the 64-character bound, recipient order), the MX rule and its cache in [test/unit/return-path-mx.test.ts](../test/unit/return-path-mx.test.ts), the per-recipient transactions in [test/unit/mailer.service.test.ts](../test/unit/mailer.service.test.ts), and the real receiver in [test/integration/return-path.integration.test.ts](../test/integration/return-path.integration.test.ts).
 
 ## Manual smoke test (when staging)
 
@@ -167,7 +197,8 @@ curl -X POST https://your-host/api/v1/emails/send \
   -H "Authorization: Bearer YOUR_KEY" \
   -d '{"from": "hello@your-domain", "to": "garbage-non-existent@gmail.com", "subject": "test", "html": "<p>x</p>"}'
 
-# 3. Wait ~30s for the bounce DSN to arrive
+# 3. Wait ~30s for the bounce DSN to arrive (needs SMTP_ENABLED=true and the
+#    sending domain's MX pointing at BunMail: it comes back to b+...@your-domain)
 docker compose logs app | grep "Bounce handled"
 # → expect "bounceType":"hard","status":"5.1.1","escalated":false
 

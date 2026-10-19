@@ -22,6 +22,7 @@ import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { domainNameIs } from "../../domains/services/domain.service.ts";
+import { signedReturnPathEnabled } from "../../bounces/services/return-path-mx.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -192,6 +193,12 @@ type ClaimedEmail = typeof emails.$inferSelect & { ageMs: number };
 /** The mailer, injectable so tests can drive the queue without SMTP. */
 interface QueueDeps {
   sendMail: typeof sendMail;
+  /**
+   * Whether an email from this address gets signed return paths (#236):
+   * inbound SMTP on and the sender domain's MX pointing here. Injectable so
+   * tests need no DNS; defaults to {@link signedReturnPathEnabled}.
+   */
+  signedReturnPath?: (fromAddress: string) => Promise<boolean>;
 }
 
 const defaultDeps: QueueDeps = { sendMail };
@@ -717,6 +724,18 @@ async function sendClaimedEmail(
       }
     }
 
+    /**
+     * Signed per-recipient return paths (#236): only with inbound SMTP on
+     * (the only setup where a DSN can reach BunMail) and when the sender
+     * domain's MX points at this server, so its DSNs actually arrive here.
+     * Other domains keep the From address as envelope sender. Decided once
+     * per attempt, for every recipient; never throws (a DNS error answers
+     * no).
+     */
+    const signReturnPath = await (deps.signedReturnPath ?? signedReturnPathEnabled)(
+      email.fromAddress,
+    );
+
     const result = await deps.sendMail({
       from: email.fromAddress,
       to: email.toAddress,
@@ -737,6 +756,7 @@ async function sendClaimedEmail(
         source: email.source === "smtp" ? "smtp" : "api",
         apiKeyId: email.apiKeyId,
       },
+      returnPath: signReturnPath ? { emailId } : undefined,
     });
 
     /**

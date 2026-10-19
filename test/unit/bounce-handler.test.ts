@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { handleBounce } from "../../src/modules/bounces/services/bounce-handler.service.ts";
-import type { OriginalEmail } from "../../src/modules/bounces/services/bounce-handler.service.ts";
+import type { ReturnPathBinding } from "../../src/modules/bounces/services/bounce-handler.service.ts";
 import type { ParsedBounce } from "../../src/modules/bounces/types/bounce.types.ts";
 
 /**
@@ -8,11 +8,12 @@ import type { ParsedBounce } from "../../src/modules/bounces/types/bounce.types.
  *
  * `handleBounce` takes its dependencies as injected callbacks (same
  * pattern as `resolveDomainForEmail`), so we can assert which side
- * effects fire and in what order without standing up a DB.
+ * effects fire and in what order without standing up a DB. Since #236 the
+ * email and recipient come from the verified return path (`binding`),
+ * never from the DSN body.
  */
 
 interface CallLog {
-  findEmailByMessageId: string[];
   isSuppressed: Array<{ apiKeyId: string; email: string }>;
   addFromBounce: Array<{
     apiKeyId: string;
@@ -25,16 +26,14 @@ interface CallLog {
 }
 
 function makeDeps(opts: {
-  email?: OriginalEmail;
   existing?: { id: string; bounceType: string | null };
   /** A permanent suppression already on file, kept by addFromBounce (#191). */
   keptSuppressionId?: string;
 }): {
-  deps: Parameters<typeof handleBounce>[1];
+  deps: Parameters<typeof handleBounce>[2];
   calls: CallLog;
 } {
   const calls: CallLog = {
-    findEmailByMessageId: [],
     isSuppressed: [],
     addFromBounce: [],
     markEmailBounced: [],
@@ -44,10 +43,6 @@ function makeDeps(opts: {
   return {
     calls,
     deps: {
-      findEmailByMessageId: async (messageId) => {
-        calls.findEmailByMessageId.push(messageId);
-        return opts.email;
-      },
       isSuppressed: async (apiKeyId, email) => {
         calls.isSuppressed.push({ apiKeyId, email });
         return opts.existing;
@@ -91,25 +86,22 @@ const SOFT_BOUNCE: ParsedBounce = {
   source: "rfc3464",
 };
 
-const ORIGINAL = {
-  id: "msg_orig123",
-  apiKeyId: "key_abc",
-  toAddress: "user@example.com",
-  cc: null,
-  bcc: null,
+/** The verified return path the DSN arrived at: email and recipient. */
+const BOUND: ReturnPathBinding = {
+  email: { id: "msg_orig123", apiKeyId: "key_abc" },
+  recipient: "user@example.com",
 };
 
 describe("handleBounce: happy paths", () => {
   test("hard bounce: persists permanent suppression, marks email bounced, fires webhook", async () => {
-    const { deps, calls } = makeDeps({ email: ORIGINAL });
+    const { deps, calls } = makeDeps({});
 
-    const result = await handleBounce(HARD_BOUNCE, deps);
+    const result = await handleBounce(HARD_BOUNCE, BOUND, deps);
 
     expect(result.outcome).toBe("applied");
     expect(result.emailId).toBe("msg_orig123");
     expect(result.bounceType).toBe("hard");
 
-    expect(calls.findEmailByMessageId).toEqual(["abc-123@yourdns.example"]);
     expect(calls.isSuppressed).toEqual([
       { apiKeyId: "key_abc", email: "user@example.com" },
     ]);
@@ -125,10 +117,10 @@ describe("handleBounce: happy paths", () => {
   });
 
   test("first soft bounce: persists soft suppression with future expiresAt", async () => {
-    const { deps, calls } = makeDeps({ email: ORIGINAL });
+    const { deps, calls } = makeDeps({});
     const before = Date.now();
 
-    const result = await handleBounce(SOFT_BOUNCE, deps);
+    const result = await handleBounce(SOFT_BOUNCE, BOUND, deps);
 
     expect(result.outcome).toBe("applied");
     expect(result.bounceType).toBe("soft");
@@ -148,11 +140,10 @@ describe("handleBounce: happy paths", () => {
 describe("handleBounce: escalation", () => {
   test("second soft bounce while previous soft suppression active escalates to hard", async () => {
     const { deps, calls } = makeDeps({
-      email: ORIGINAL,
       existing: { id: "sup_existing", bounceType: "soft" },
     });
 
-    const result = await handleBounce(SOFT_BOUNCE, deps);
+    const result = await handleBounce(SOFT_BOUNCE, BOUND, deps);
 
     expect(result.outcome).toBe("escalated");
     expect(result.bounceType).toBe("hard");
@@ -164,92 +155,64 @@ describe("handleBounce: escalation", () => {
 
   test("hard bounce on top of existing hard suppression stays hard (no double-escalation)", async () => {
     const { deps } = makeDeps({
-      email: ORIGINAL,
       existing: { id: "sup_existing", bounceType: "hard" },
     });
 
-    const result = await handleBounce(HARD_BOUNCE, deps);
+    const result = await handleBounce(HARD_BOUNCE, BOUND, deps);
     /** Already hard, this is a re-confirmation, not an escalation event. */
     expect(result.outcome).toBe("applied");
     expect(result.bounceType).toBe("hard");
   });
 });
 
-describe("handleBounce: drop paths", () => {
-  test("returns dropped-no-original when the original email isn't found", async () => {
-    const { deps, calls } = makeDeps({ email: undefined });
-
-    const result = await handleBounce(HARD_BOUNCE, deps);
-
-    expect(result.outcome).toBe("dropped-no-original");
-    /** Nothing else should have run. */
-    expect(calls.isSuppressed).toEqual([]);
-    expect(calls.addFromBounce).toEqual([]);
-    expect(calls.markEmailBounced).toEqual([]);
-    expect(calls.dispatchEvent).toEqual([]);
-  });
-
-  test("drops a bounce for an address the email was not sent to", async () => {
-    const { deps, calls } = makeDeps({ email: ORIGINAL });
+describe("handleBounce: the return path decides the recipient (#236)", () => {
+  test("a DSN naming a co-recipient still affects only the bound recipient", async () => {
+    const { deps, calls } = makeDeps({});
 
     const result = await handleBounce(
-      { ...HARD_BOUNCE, recipient: "someone-else@example.com" },
-      deps,
-    );
-
-    expect(result.outcome).toBe("dropped-recipient-mismatch");
-    /** Nothing is suppressed, marked or dispatched for a forged bounce. */
-    expect(calls.isSuppressed).toEqual([]);
-    expect(calls.addFromBounce).toEqual([]);
-    expect(calls.markEmailBounced).toEqual([]);
-    expect(calls.dispatchEvent).toEqual([]);
-  });
-});
-
-describe("handleBounce: recipient matching", () => {
-  test("accepts a cc or bcc recipient of the original email", async () => {
-    const { deps, calls } = makeDeps({
-      email: { ...ORIGINAL, cc: "copy@example.com", bcc: "Hidden@Example.com" },
-    });
-
-    expect(
-      (await handleBounce({ ...HARD_BOUNCE, recipient: "copy@example.com" }, deps))
-        .outcome,
-    ).toBe("applied");
-    expect(
-      (await handleBounce({ ...HARD_BOUNCE, recipient: "hidden@example.com" }, deps))
-        .outcome,
-    ).toBe("applied");
-    expect(calls.addFromBounce.map((c) => c.email)).toEqual([
-      "copy@example.com",
-      "hidden@example.com",
-    ]);
-  });
-
-  test("accepts Original-Recipient and suppresses the address we sent to", async () => {
-    const { deps, calls } = makeDeps({ email: ORIGINAL });
-
-    const result = await handleBounce(
-      {
-        ...HARD_BOUNCE,
-        recipient: "forwarded-target@example.net",
-        originalRecipient: "user@example.com",
-      },
+      { ...HARD_BOUNCE, recipient: "co-recipient@example.com" },
+      BOUND,
       deps,
     );
 
     expect(result.outcome).toBe("applied");
-    expect(calls.addFromBounce[0]!.email).toBe("user@example.com");
+    expect(calls.isSuppressed).toEqual([
+      { apiKeyId: "key_abc", email: "user@example.com" },
+    ]);
+    expect(calls.addFromBounce.map((c) => c.email)).toEqual(["user@example.com"]);
     expect(calls.dispatchEvent[0]!.data.to).toBe("user@example.com");
   });
 
+  test("a DSN without any Original-Message-ID still applies", async () => {
+    const { deps, calls } = makeDeps({});
+    const { originalMessageId: _unused, ...withoutId } = HARD_BOUNCE;
+
+    const result = await handleBounce(withoutId, BOUND, deps);
+
+    expect(result.outcome).toBe("applied");
+    expect(calls.markEmailBounced).toEqual(["msg_orig123"]);
+  });
+
+  test("the suppression is filed for the bound recipient, not the address in the DSN", async () => {
+    const { deps, calls } = makeDeps({});
+
+    await handleBounce(
+      { ...HARD_BOUNCE, recipient: "forwarded-target@example.net" },
+      { ...BOUND, recipient: "copy@example.com" },
+      deps,
+    );
+
+    expect(calls.addFromBounce[0]!.email).toBe("copy@example.com");
+  });
+});
+
+describe("handleBounce: suppression kept (#191)", () => {
   test("a permanent suppression kept on file: still marked bounced and the webhook still fires (#191)", async () => {
     const { deps, calls } = makeDeps({
-      email: ORIGINAL,
       keptSuppressionId: "sup_complaint",
     });
 
-    const result = await handleBounce(HARD_BOUNCE, deps);
+    const result = await handleBounce(HARD_BOUNCE, BOUND, deps);
 
     expect(result.outcome).toBe("applied");
     expect(result.suppressionApplied).toBe(false);

@@ -316,7 +316,8 @@ describe("List-Unsubscribe on a queued email", () => {
         },
       };
     };
-    await runQueueCycle({ sendMail: mailer });
+    /** No DNS in tests: whether return paths are signed is not under test here. */
+    await runQueueCycle({ sendMail: mailer, signedReturnPath: async () => false });
     expect(calls).toHaveLength(1);
 
     const options = buildMailOptions({

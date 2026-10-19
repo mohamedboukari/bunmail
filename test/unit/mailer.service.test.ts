@@ -33,6 +33,8 @@ void mock.module("../../src/config.ts", () => ({
     server: { port: 3000, host: "0.0.0.0" },
     dashboard: { ownerEmail: null },
     logLevel: "error" as const,
+    /** Master for the return-path key (#236). */
+    dkimEncryptionKey: Buffer.alloc(32, 7),
   },
 }));
 
@@ -46,7 +48,9 @@ let mxResult: Array<{ exchange: string; priority: number }> | Error = [];
 let mxResolver:
   ((domain: string) => Promise<Array<{ exchange: string; priority: number }>>) | null =
   null;
-let sendBehaviour: ((mxHost: string) => Error | void | undefined) | null = null;
+let sendBehaviour:
+  ((mxHost: string, opts: Record<string, unknown>) => Error | void | undefined) | null =
+  null;
 
 /** Public test address (TEST-NET-3) every MX host resolves to by default. */
 const MX_IP = "203.0.113.10";
@@ -72,14 +76,20 @@ void mock.module("dns/promises", () => ({
   lookup: mock(async () => lookupResult),
 }));
 
+/** How many transports were closed (pooled ones are closed by the mailer, #236). */
+let closedTransports = 0;
+
 const createTransportMock = mock((cfg: Record<string, unknown>) => ({
   sendMail: mock(async (opts: Record<string, unknown>) => {
     captured.push({ transportConfig: cfg, mailOptions: opts });
     if (sendBehaviour) {
-      const result = sendBehaviour(mxOf(cfg));
+      const result = sendBehaviour(mxOf(cfg), opts);
       if (result instanceof Error) throw result;
     }
     return { messageId: "<test-msg@mx.test>" };
+  }),
+  close: mock(() => {
+    closedTransports += 1;
   }),
 }));
 
@@ -92,6 +102,8 @@ void mock.module("nodemailer", () => ({
 }));
 
 const { sendMail } = await import("../../src/modules/emails/services/mailer.service.ts");
+const { parseReturnPath, recipientOrder, returnPathMacMatches } =
+  await import("../../src/modules/bounces/services/return-path.ts");
 
 /** Canonical Message-ID used across tests. Mirrors the queue's
  *  responsibility of generating + passing it on every call (#97). */
@@ -104,6 +116,7 @@ beforeEach(() => {
   sendBehaviour = null;
   lookupResult = [{ address: MX_IP, family: 4 }];
   createTransportMock.mockClear();
+  closedTransports = 0;
 });
 
 describe("sendMail: transport configuration", () => {
@@ -720,5 +733,274 @@ describe("sendMail: outbound SSRF guard on MX hosts", () => {
     });
 
     expect(captured[0]!.transportConfig.host).toBe(MX_IP);
+  });
+});
+
+describe("sendMail: signed per-recipient return paths (#236)", () => {
+  const EMAIL_ID = "msg_0123456789abcdef01234567";
+  const TO = "alice@example.org, bob@example.org";
+  const CC = "carol@example.org";
+  const BCC = "dave@example.org";
+
+  /** The envelope of a captured send. */
+  function envelopeOf(c: CapturedSend): { from: unknown; to: unknown } {
+    const envelope = asRecord(c.mailOptions.envelope);
+    return { from: envelope.from, to: envelope.to };
+  }
+
+  /** The recipient a return path verifies for against this email, or null. */
+  function verifiedRecipient(address: unknown): string | null {
+    if (typeof address !== "string") return null;
+    const parsed = parseReturnPath(address);
+    if (!parsed || parsed.emailId !== EMAIL_ID || parsed.domain !== "example.com")
+      return null;
+    const recipient = recipientOrder(TO, CC, BCC)[parsed.index];
+    if (recipient === undefined) return null;
+    return returnPathMacMatches(
+      { emailId: EMAIL_ID, index: parsed.index, recipient },
+      parsed.mac,
+    )
+      ? recipient
+      : null;
+  }
+
+  test("each recipient is its own transaction with its own verified return path", async () => {
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      cc: CC,
+      bcc: BCC,
+      subject: "test",
+      messageId: MID,
+      dkim: { domainName: "example.com", keySelector: "bunmail", privateKey: "PEM" },
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    expect(captured).toHaveLength(4);
+    const froms = new Set<unknown>();
+    for (const c of captured) {
+      const { from, to } = envelopeOf(c);
+      /** Only its own recipient, and a return path naming exactly that recipient. */
+      expect(Array.isArray(to) && to.length === 1).toBe(true);
+      expect(verifiedRecipient(from)).toBe(Array.isArray(to) ? String(to[0]) : "");
+      froms.add(from);
+      /** Headers unchanged: From is the sender, To/Cc are the full lists, no Bcc. */
+      expect(c.mailOptions.from).toBe("hello@example.com");
+      expect(c.mailOptions.to).toBe(TO);
+      expect(c.mailOptions.cc).toBe(CC);
+      expect(c.mailOptions.bcc).toBeUndefined();
+      /** Every transaction is DKIM-signed and keeps List-Unsubscribe. */
+      expect(asRecord(c.mailOptions.dkim).domainName).toBe("example.com");
+      expect(asRecord(c.mailOptions.headers)["List-Unsubscribe"]).toBe(
+        "<mailto:unsubscribe@example.com>",
+      );
+    }
+    expect(froms.size).toBe(4);
+
+    /** One pooled single-connection transport for the MX, closed afterwards. */
+    expect(createTransportMock).toHaveBeenCalledTimes(1);
+    const cfg = captured[0]!.transportConfig;
+    expect(cfg.pool).toBe(true);
+    expect(cfg.maxConnections).toBe(1);
+    expect(cfg.maxRequeues).toBe(0);
+    expect(closedTransports).toBe(1);
+
+    /** One state entry per recipient, keyed by MX and recipient index. */
+    expect(Object.keys(result.deliveryState)).toEqual([
+      "mx.example.org#0",
+      "mx.example.org#1",
+      "mx.example.org#2",
+      "mx.example.org#3",
+    ]);
+    for (const group of Object.values(result.deliveryState)) {
+      expect(group.status).toBe("sent");
+      expect(group.mxHost).toBe("mx.example.org");
+      expect(group.recipients).toHaveLength(1);
+    }
+  });
+
+  test("a single-recipient email is one transaction, keyed by its MX as before", async () => {
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "alice@example.org",
+      subject: "test",
+      messageId: MID,
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(verifiedRecipient(envelopeOf(captured[0]!).from)).toBe("alice@example.org");
+    expect(captured[0]!.transportConfig.pool).toBeUndefined();
+    expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
+  });
+
+  test("without a return path: one transaction per MX, envelope sender is From", async () => {
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      cc: CC,
+      bcc: BCC,
+      subject: "test",
+      messageId: MID,
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(envelopeOf(captured[0]!)).toEqual({
+      from: "hello@example.com",
+      to: [
+        "alice@example.org",
+        "bob@example.org",
+        "carol@example.org",
+        "dave@example.org",
+      ],
+    });
+    expect(captured[0]!.transportConfig.pool).toBeUndefined();
+    expect(closedTransports).toBe(0);
+    expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
+  });
+
+  test("failures are classified per recipient: hard, soft and sent side by side", async () => {
+    sendBehaviour = (_host, opts) => {
+      const to = asRecord(opts.envelope).to;
+      const rcpt = Array.isArray(to) ? String(to[0]) : "";
+      if (rcpt === "bob@example.org") return new Error("550 5.1.1 user unknown");
+      if (rcpt === "carol@example.org") return new Error("451 4.7.1 try again later");
+      return undefined;
+    };
+
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      cc: CC,
+      subject: "test",
+      messageId: MID,
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    const state = result.deliveryState;
+    expect(state["mx.example.org#0"]).toMatchObject({
+      status: "sent",
+      recipients: ["alice@example.org"],
+    });
+    expect(state["mx.example.org#1"]).toMatchObject({
+      status: "failed",
+      recipients: ["bob@example.org"],
+      failureKind: "hard",
+    });
+    expect(state["mx.example.org#2"]).toMatchObject({
+      status: "retry",
+      recipients: ["carol@example.org"],
+    });
+  });
+
+  test("a retry pass resends only the pending recipient, with its own return path", async () => {
+    sendBehaviour = (_host, opts) => {
+      const to = asRecord(opts.envelope).to;
+      return Array.isArray(to) && to[0] === "bob@example.org"
+        ? new Error("421 4.4.5 too many connections")
+        : undefined;
+    };
+    const first = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      subject: "test",
+      messageId: MID,
+      returnPath: { emailId: EMAIL_ID },
+    });
+    expect(first.deliveryState["mx.example.org#1"]!.status).toBe("retry");
+    captured.length = 0;
+    sendBehaviour = null;
+
+    const second = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      subject: "test",
+      messageId: MID,
+      existingState: first.deliveryState,
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(envelopeOf(captured[0]!).to).toEqual(["bob@example.org"]);
+    expect(verifiedRecipient(envelopeOf(captured[0]!).from)).toBe("bob@example.org");
+    /** A lone transaction needs no pool. */
+    expect(captured[0]!.transportConfig.pool).toBeUndefined();
+    expect(second.deliveryState["mx.example.org#1"]).toMatchObject({
+      status: "sent",
+      attempts: 2,
+    });
+  });
+
+  test("a pending group from before return paths were on is split per recipient", async () => {
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      subject: "test",
+      messageId: MID,
+      existingState: {
+        "mx.example.org": {
+          status: "retry",
+          recipients: ["alice@example.org", "bob@example.org"],
+          attempts: 1,
+        },
+      },
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    expect(captured).toHaveLength(2);
+    expect(captured.map((c) => verifiedRecipient(envelopeOf(c).from))).toEqual([
+      "alice@example.org",
+      "bob@example.org",
+    ]);
+    expect(Object.keys(result.deliveryState)).toEqual([
+      "mx.example.org#0",
+      "mx.example.org#1",
+    ]);
+    expect(result.deliveryState["mx.example.org#1"]!.attempts).toBe(2);
+  });
+
+  test("per-recipient entries from an earlier pass still go to their MX without return paths", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: TO,
+      subject: "test",
+      messageId: MID,
+      existingState: {
+        "mx.example.org#1": {
+          status: "retry",
+          recipients: ["bob@example.org"],
+          attempts: 1,
+          mxHost: "mx.example.org",
+        },
+      },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(mxOf(captured[0]!.transportConfig)).toBe("mx.example.org");
+    expect(envelopeOf(captured[0]!)).toEqual({
+      from: "hello@example.com",
+      to: ["bob@example.org"],
+    });
+  });
+
+  test("recipients on different MXs each get their own transport and return path", async () => {
+    mxResolver = (domain) =>
+      Promise.resolve([{ exchange: `smtp.${domain}`, priority: 10 }]);
+
+    await sendMail({
+      from: "hello@example.com",
+      to: "alice@gmail.com",
+      cc: "bob@outlook.com",
+      subject: "test",
+      messageId: MID,
+      returnPath: { emailId: EMAIL_ID },
+    });
+
+    expect(captured).toHaveLength(2);
+    const fromsByHost = new Map(
+      captured.map((c) => [mxOf(c.transportConfig), envelopeOf(c).from]),
+    );
+    expect(parseReturnPath(String(fromsByHost.get("smtp.gmail.com")))?.index).toBe(0);
+    expect(parseReturnPath(String(fromsByHost.get("smtp.outlook.com")))?.index).toBe(1);
   });
 });

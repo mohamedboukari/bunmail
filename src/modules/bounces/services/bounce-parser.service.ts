@@ -13,8 +13,8 @@
  *   1. **RFC 3464** (the standard). Triggered by
  *      `Content-Type: multipart/report; report-type=delivery-status`.
  *      Parses the `message/delivery-status` MIME part for `Final-Recipient`,
- *      `Status`, `Diagnostic-Code`, and `Original-Message-ID`. Modern
- *      Gmail / Outlook / Yahoo bounces hit this path.
+ *      `Status`, `Diagnostic-Code`, and (when present) `Original-Message-ID`.
+ *      Modern Gmail / Outlook / Yahoo bounces hit this path.
  *
  *   2. **Fallback regex** for non-RFC bounces. Some old MTAs (qmail,
  *      Exim with old configs, custom mail servers) send plain-text
@@ -22,10 +22,11 @@
  *      recipient `<user@host>`, and an `In-Reply-To` / `Message-ID` to
  *      link back to the original send.
  *
- * In either case, we **require** an `originalMessageId`, without it
- * the bounce can't be safely linked to a specific tenant (per #25's
- * per-API-key scoping), and we'd rather drop a real bounce than
- * suppress under the wrong key.
+ * Since #236 the email and recipient a bounce applies to come from the
+ * signed return path it was delivered to, so the structured RFC 3464 path
+ * no longer needs an `Original-Message-ID` (Postfix, for one, does not
+ * send it). The heuristic fallback still requires a message reference: it
+ * is part of the evidence that a plain-text message is a bounce at all.
  */
 
 import type { ParsedBounce } from "../types/bounce.types.ts";
@@ -81,7 +82,7 @@ function cleanMessageId(raw: string): string {
 
 /**
  * RFC 3464 path. Looks at the raw text for the canonical `Status:` /
- * `Final-Recipient:` / `Original-Message-ID:` headers that appear
+ * `Final-Recipient:` (and optional `Original-Message-ID:`) headers that appear
  * inside the `message/delivery-status` MIME part. We don't strictly
  * walk the MIME tree: these headers live on their own lines in the
  * delivery-status part, and a line-anchored regex finds them reliably.
@@ -105,7 +106,7 @@ function parseRfc3464(raw: string): ParsedBounce | null {
   );
   const messageIdLine = raw.match(/^Original-Message-ID:\s*([^\r\n]+)/im);
 
-  if (!recipientLine || !statusLine || !messageIdLine) return null;
+  if (!recipientLine || !statusLine) return null;
 
   const status = statusLine[1]!;
   const kind = status.startsWith("5") ? "hard" : status.startsWith("4") ? "soft" : null;
@@ -113,8 +114,10 @@ function parseRfc3464(raw: string): ParsedBounce | null {
   if (!kind) return null;
 
   const recipient = cleanAddress(recipientLine[1]!);
-  const originalMessageId = cleanMessageId(messageIdLine[1]!);
-  if (!recipient || !originalMessageId) return null;
+  if (!recipient) return null;
+  const originalMessageId = messageIdLine
+    ? cleanMessageId(messageIdLine[1]!) || undefined
+    : undefined;
   const originalRecipient = originalRecipientLine
     ? cleanAddress(originalRecipientLine[1]!) || undefined
     : undefined;
@@ -149,7 +152,8 @@ function messageIdentifiersIn(text: string): Set<string> {
  * Best-effort fallback for non-RFC bounces. Scrapes:
  *   - any enhanced or basic SMTP status code from the body,
  *   - the first `<user@host>` that isn't ours (heuristic: not from MAILER-DAEMON),
- *   - any `Message-ID`/`In-Reply-To` reference back to the original.
+ *   - any `Message-ID`/`In-Reply-To` reference back to the original
+ *     (evidence that the message is a bounce; not used to link it, #236).
  *
  * Less reliable than RFC 3464: old MTAs vary wildly. We only return a
  * result when all three pieces are present, so a noisy match doesn't

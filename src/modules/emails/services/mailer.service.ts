@@ -7,6 +7,7 @@ import { redactEmail, redactEmailsInText } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByMx } from "../../../utils/recipients.ts";
 import { classifySendFailure } from "../../../utils/smtp-error.ts";
+import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { resolveMxAddress } from "./mx-address.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
 import type {
@@ -129,6 +130,12 @@ async function resolveMxForDomain(domain: string): Promise<string> {
  * a missing MX is an unrecoverable address problem, not a transient
  * one worth retrying.
  *
+ * **Signed return paths (#236):** with `returnPath`, a pending group of
+ * several recipients is split into one entry per recipient, and each is
+ * its own SMTP transaction whose `MAIL FROM` is that recipient's signed
+ * return path. The transactions of one MX share one connection. Outcomes,
+ * failure classification and retries are then per recipient.
+ *
  * **Identity:** the caller passes `messageId` so the canonical
  * `Message-ID:` header is pinned across retries. Previously the
  * mailer minted it itself, which would have produced fresh ids per
@@ -168,6 +175,14 @@ export async function sendMail(options: {
    * `X-Auto-Response-Suppress: All` so auto-responders don't reply (#250).
    */
   autoSubmitted?: boolean;
+  /**
+   * Signed per-recipient return paths (#236): set by the queue when inbound
+   * SMTP is enabled, the only setup where a DSN can reach BunMail. Each
+   * recipient then gets its own SMTP transaction with envelope sender
+   * `b+<id>.<index>.<MAC>@<sender domain>`. Absent: the envelope sender
+   * is the From address and each MX gets one transaction, as before.
+   */
+  returnPath?: { emailId: string };
 }): Promise<SendMailResult> {
   /** Build the starting state: either a fresh one from the inputs
    *  or a deep clone of the row's prior state. We always clone so the
@@ -194,50 +209,90 @@ export async function sendMail(options: {
     dkim: options.dkim ? options.dkim.domainName : "none",
     messageId: options.messageId,
     retry: options.existingState ? "yes" : "no",
+    returnPath: options.returnPath ? "signed" : "plain",
   });
 
   const customHeaders = safeCustomHeaders(options.headers, options.messageId);
 
-  /** Attempt every group still in `retry` state. Order is insertion-
-   *  order, which keeps logs stable across runs even if Maps were
-   *  rebuilt from JSONB. */
-  for (const [mxHost, group] of Object.entries(state)) {
-    if (group.status !== "retry") continue;
-    if (mxHost.startsWith("<dns:"))
-      continue; /** DNS failures don't retry: marked failed at parse time. */
+  /**
+   * Signed return paths (#236): one entry, and later one SMTP transaction,
+   * per recipient, each with its own envelope sender. Groups already
+   * `sent` or `failed` are left as they are.
+   */
+  const returnPaths = options.returnPath
+    ? returnPathsFor(
+        options.returnPath.emailId,
+        options.from,
+        options.to,
+        options.cc,
+        options.bcc,
+      )
+    : null;
+  if (returnPaths) state = splitPerRecipient(state, returnPaths);
 
-    try {
-      await sendToMxGroup({
-        mxHost,
-        recipients: group.recipients,
-        from: options.from,
-        headerTo: options.to,
-        headerCc: options.cc ?? null,
-        replyTo: options.replyTo ?? null,
-        subject: options.subject,
-        html: options.html ?? null,
-        text: options.text ?? null,
-        messageId: options.messageId,
-        headers: customHeaders,
-        dkim: options.dkim,
-        unsubscribe: options.unsubscribe,
-        feedback: options.feedback,
-        autoSubmitted: options.autoSubmitted === true,
-      });
-      state[mxHost] = {
-        ...group,
-        status: "sent",
-        attempts: group.attempts + 1,
-        deliveredAt: new Date().toISOString(),
-        messageId: options.messageId,
-      };
-      logger.info("MX group delivered", {
-        mxHost,
-        recipientCount: group.recipients.length,
-        messageId: options.messageId,
-      });
-    } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+  /**
+   * Pending entries, by the MX they go to. Without return paths an MX
+   * normally has one entry (keyed by the MX), so one transaction per MX as
+   * before. With them, the entries of one MX share its connection.
+   * Insertion order keeps logs stable across runs.
+   */
+  const byMx = new Map<string, MxTransaction[]>();
+  for (const [key, group] of Object.entries(state)) {
+    if (group.status !== "retry") continue;
+    if (key.startsWith("<dns:"))
+      continue; /** DNS failures don't retry: marked failed at parse time. */
+    const mxHost = group.mxHost ?? key;
+    const transactions = byMx.get(mxHost) ?? [];
+    transactions.push({
+      key,
+      recipients: group.recipients,
+      envelopeFrom: envelopeSenderFor(group.recipients, returnPaths, options.from),
+    });
+    byMx.set(mxHost, transactions);
+  }
+
+  for (const [mxHost, transactions] of byMx) {
+    const outcomes = await sendToMx(mxHost, transactions, {
+      from: options.from,
+      headerTo: options.to,
+      headerCc: options.cc ?? null,
+      replyTo: options.replyTo ?? null,
+      subject: options.subject,
+      html: options.html ?? null,
+      text: options.text ?? null,
+      messageId: options.messageId,
+      headers: customHeaders,
+      dkim: options.dkim,
+      unsubscribe: options.unsubscribe,
+      feedback: options.feedback,
+      autoSubmitted: options.autoSubmitted === true,
+    });
+
+    for (const { key, error: err } of outcomes) {
+      const group = state[key];
+      if (!group) continue;
+      if (err === undefined) {
+        state[key] = {
+          ...group,
+          status: "sent",
+          attempts: group.attempts + 1,
+          deliveredAt: new Date().toISOString(),
+          messageId: options.messageId,
+        };
+        logger.info("MX group delivered", {
+          mxHost,
+          group: key,
+          recipientCount: group.recipients.length,
+          messageId: options.messageId,
+        });
+        continue;
+      }
+      const error =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Unknown send failure";
       /** Hard 5xx and policy blocks → terminal `failed` (a block won't
        *  clear within the retry window). Soft errors (4xx, transport)
        *  stay `retry` and follow the queue's backoff. */
@@ -245,7 +300,7 @@ export async function sendMail(options: {
       const parsed = classifySendFailure(err);
       const nextStatus: DeliveryGroup["status"] =
         parsed?.kind === "hard" || parsed?.kind === "policy" ? "failed" : "retry";
-      state[mxHost] = {
+      state[key] = {
         ...group,
         status: nextStatus,
         attempts: group.attempts + 1,
@@ -255,6 +310,7 @@ export async function sendMail(options: {
       };
       logger.warn("MX group send failed", {
         mxHost,
+        group: key,
         recipientCount: group.recipients.length,
         nextStatus,
         /** The remote reply often quotes the recipient address (#260). */
@@ -311,11 +367,104 @@ async function buildInitialState(
   return state;
 }
 
+/** A recipient's return-path index and address (#236); `address` is null when none could be minted. */
+interface RecipientReturnPath {
+  index: number;
+  address: string | null;
+}
+
+/** Return paths of an email, by lowercased recipient (#236). */
+type ReturnPaths = Map<string, RecipientReturnPath>;
+
+/**
+ * Mints the signed return path of every recipient of an email (#236), in
+ * the documented recipient order (`recipientOrder`). A recipient that gets
+ * none (an email id not in the `msg_` shape, which the queue never sends)
+ * keeps the plain envelope sender; that is logged, since a DSN for it will
+ * have no effect.
+ */
+function returnPathsFor(
+  emailId: string,
+  from: string,
+  to: string,
+  cc: string | null | undefined,
+  bcc: string | null | undefined,
+): ReturnPaths {
+  const senderDomain = from.slice(from.lastIndexOf("@") + 1);
+  const paths: ReturnPaths = new Map();
+  let unsigned = 0;
+  recipientOrder(to, cc, bcc).forEach((recipient, index) => {
+    const address = mintReturnPath({ emailId, index, recipient }, senderDomain);
+    if (address === null) unsigned += 1;
+    paths.set(recipient, { index, address });
+  });
+  if (unsigned > 0) {
+    logger.warn("Signed return path unavailable: plain envelope sender used", {
+      emailId,
+      recipients: unsigned,
+    });
+  }
+  return paths;
+}
+
+/**
+ * Splits every pending group of several recipients into one entry per
+ * recipient (#236), keyed `<mx host>#<recipient index>` and carrying the
+ * MX in `mxHost`, so each recipient is its own SMTP transaction and keeps
+ * its own outcome and retries. Groups already `sent` or `failed`, and
+ * single-recipient groups, are kept unchanged (a single-recipient email
+ * stays one entry keyed by its MX, as without return paths).
+ */
+function splitPerRecipient(
+  state: DeliveryState,
+  returnPaths: ReturnPaths,
+): DeliveryState {
+  const next: DeliveryState = {};
+  for (const [key, group] of Object.entries(state)) {
+    if (
+      group.status !== "retry" ||
+      group.recipients.length <= 1 ||
+      key.startsWith("<dns:")
+    ) {
+      next[key] = group;
+      continue;
+    }
+    const mxHost = group.mxHost ?? key;
+    group.recipients.forEach((recipient, position) => {
+      const index = returnPaths.get(recipient.toLowerCase())?.index;
+      const entryKey =
+        index === undefined ? `${mxHost}#u${position}` : `${mxHost}#${index}`;
+      next[entryKey] = { ...group, mxHost, recipients: [recipient] };
+    });
+  }
+  return next;
+}
+
+/**
+ * The envelope sender of one transaction: the recipient's signed return
+ * path when return paths are on and the transaction has exactly one
+ * recipient (#236), else the From address.
+ */
+function envelopeSenderFor(
+  recipients: string[],
+  returnPaths: ReturnPaths | null,
+  from: string,
+): string {
+  const only = recipients.length === 1 ? recipients[0] : undefined;
+  if (!returnPaths || only === undefined) return from;
+  return returnPaths.get(only.toLowerCase())?.address ?? from;
+}
+
 /** Everything one MX group's message is built from. */
 interface MxGroupMessage {
   /** RCPT TO for this group only. */
   recipients: string[];
   from: string;
+  /**
+   * `MAIL FROM` of this transaction: the recipient's signed return path
+   * (#236). Defaults to `from`. The `From:` header is always `from`.
+   */
+  envelopeFrom?: string;
   headerTo: string;
   headerCc: string | null;
   replyTo: string | null;
@@ -403,7 +552,7 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
     text: args.text ?? undefined,
     messageId: args.messageId,
     envelope: {
-      from: args.from,
+      from: args.envelopeFrom ?? args.from,
       to: args.recipients,
     },
   };
@@ -461,25 +610,39 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
   return mailOptions;
 }
 
+/** One SMTP transaction to an MX: a delivery-state entry and its envelope. */
+interface MxTransaction {
+  /** Key of the entry in the delivery state. */
+  key: string;
+  /** RCPT TO of this transaction. */
+  recipients: string[];
+  /** MAIL FROM of this transaction. */
+  envelopeFrom: string;
+}
+
+/** The parts of the message that are the same in every transaction. */
+type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
+
+/** One transaction's outcome: no `error` means the MX accepted it. */
+interface TransactionOutcome {
+  key: string;
+  error?: unknown;
+}
+
 /**
- * Submits the message to a single destination MX. The transport is
- * built per-call (we always want the right MX for the right group)
- * and the `envelope.to` override pins RCPT TO to *only* the
- * recipients on this MX, even when `mailOptions.to` lists the full
- * original set. That's the trick that makes cross-domain CC visible
- * to all recipients without delivering to the wrong server.
+ * Builds the transport for one MX. Several transactions (one per recipient
+ * with signed return paths, #236) share one pooled connection: a single
+ * connection (`maxConnections: 1`), each message after the first sent on
+ * it after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
+ * resending a message whose connection dropped: that failure is reported,
+ * and the queue's own retry policy decides.
  */
-async function sendToMxGroup(args: MxGroupMessage & { mxHost: string }): Promise<void> {
-  /**
-   * Connect to a checked address, not the name: the name's DNS answer is
-   * controlled by whoever owns the recipient domain, and resolving it
-   * again in nodemailer would let it change after the check. The MX name
-   * still goes to TLS as SNI.
-   */
-  const address = await resolveMxAddress(args.mxHost, {
-    allowPrivate: config.mail.allowPrivateMx,
-  });
-  const transport = createTransport({
+function createMxTransport(
+  address: string,
+  mxHost: string,
+  pooled: boolean,
+): ClosableTransport {
+  const options = {
     host: address,
     port: 25,
     secure: false,
@@ -497,16 +660,77 @@ async function sendToMxGroup(args: MxGroupMessage & { mxHost: string }): Promise
     greetingTimeout: SMTP_SETUP_TIMEOUT_MS,
     tls: {
       rejectUnauthorized: false,
-      servername: args.mxHost,
+      servername: mxHost,
     },
-  });
+  };
+  return pooled
+    ? createTransport({ ...options, pool: true, maxConnections: 1, maxRequeues: 0 })
+    : createTransport(options);
+}
 
-  const mailOptions = buildMailOptions(args);
+/**
+ * Submits the message to a single destination MX, one SMTP transaction
+ * per entry. The `envelope.to` override pins RCPT TO to the entry's
+ * recipients, even when the `To:`/`Cc:` headers list the full original
+ * set: that's what makes cross-domain CC visible to all recipients without
+ * delivering to the wrong server. With signed return paths (#236) each
+ * entry is one recipient with its own `MAIL FROM`, so a co-recipient never
+ * sees another recipient's return path; the entries share one connection.
+ *
+ * Never throws: every entry gets an outcome.
+ */
+async function sendToMx(
+  mxHost: string,
+  transactions: MxTransaction[],
+  message: MessageParts,
+): Promise<TransactionOutcome[]> {
+  /**
+   * Connect to a checked address, not the name: the name's DNS answer is
+   * controlled by whoever owns the recipient domain, and resolving it
+   * again in nodemailer would let it change after the check. The MX name
+   * still goes to TLS as SNI.
+   */
+  let address: string;
+  try {
+    address = await resolveMxAddress(mxHost, {
+      allowPrivate: config.mail.allowPrivateMx,
+    });
+  } catch (error) {
+    return transactions.map((t) => ({ key: t.key, error }));
+  }
+  const pooled = transactions.length > 1;
+  const transport = createMxTransport(address, mxHost, pooled);
 
   /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
-  await withMxLock(args.mxHost, config.mail.mxConcurrency, () =>
-    sendWithDeadline(transport, mailOptions, SMTP_SESSION_DEADLINE_MS),
-  );
+  return withMxLock(mxHost, config.mail.mxConcurrency, async () => {
+    /** One deadline for the whole session, shared by its transactions. */
+    const deadlineAt = Date.now() + SMTP_SESSION_DEADLINE_MS;
+    const outcomes: TransactionOutcome[] = [];
+    try {
+      for (const transaction of transactions) {
+        const remainingMs = deadlineAt - Date.now();
+        try {
+          if (remainingMs <= 0) throw sessionDeadlineError(SMTP_SESSION_DEADLINE_MS);
+          await sendWithDeadline(
+            transport,
+            buildMailOptions({
+              ...message,
+              recipients: transaction.recipients,
+              envelopeFrom: transaction.envelopeFrom,
+            }),
+            remainingMs,
+          );
+          outcomes.push({ key: transaction.key });
+        } catch (error) {
+          outcomes.push({ key: transaction.key, error });
+        }
+      }
+    } finally {
+      /** A pooled connection stays open until closed; a plain one closes itself. */
+      if (pooled) transport.close();
+    }
+    return outcomes;
+  });
 }
 
 /** Connect and greeting timeout for outbound SMTP (#250). */
@@ -525,6 +749,13 @@ interface ClosableTransport {
   close(): void;
 }
 
+/** The error of a session that ran past its deadline: no SMTP reply, so it is retried. */
+function sessionDeadlineError(deadlineMs: number): Error {
+  return new Error(
+    `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
+  );
+}
+
 /**
  * Sends with an overall deadline (#250): past `deadlineMs` the transport
  * is closed and the attempt fails with a plain error, which carries no
@@ -539,11 +770,7 @@ export async function sendWithDeadline(
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       transport.close();
-      reject(
-        new Error(
-          `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
-        ),
-      );
+      reject(sessionDeadlineError(deadlineMs));
     }, deadlineMs);
   });
   try {

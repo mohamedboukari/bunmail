@@ -15,7 +15,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `to_address`    | varchar(255)   | NOT NULL                | Recipient email address                     |
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
 | `bcc`           | text           | nullable                | Comma-separated BCC recipients              |
-| `reply_to`      | text           | nullable                | Comma-separated Reply-To address(es) (#169). Sets the `Reply-To:` header on every MX group's message; the envelope sender stays `from_address`. |
+| `reply_to`      | text           | nullable                | Comma-separated Reply-To address(es) (#169). Sets the `Reply-To:` header on every MX group's message; the envelope sender is unaffected (`from_address`, or its signed return path with inbound SMTP on, #236). |
 | `headers`       | jsonb          | nullable                | Custom headers set on the send (#177), name to value, stored as a jsonb object. Null when none. See [Custom Headers](#custom-headers). |
 | `subject`       | varchar(500)   | NOT NULL                | Email subject line                          |
 | `html`          | text           | nullable                | HTML body                                   |
@@ -286,11 +286,11 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 
 ### mailer.service.ts
 
-#### `sendMail(options): Promise<{ messageId }>`
-Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message.
+#### `sendMail(options): Promise<{ messageId, deliveryState }>`
+Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
 #### `buildMailOptions(args): Mail.Options`
-Pure: builds one MX group's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe`, DKIM). Tests render it with a stream transport.
+Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe`, DKIM). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
 
 ### custom-headers.ts
 
@@ -371,6 +371,10 @@ Each `emails` row can address recipients across multiple domains (`to` + `cc` + 
 
 The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their MX group's envelope, never in the rendered headers.
 
+### One transaction per recipient with signed return paths (#236)
+
+With `SMTP_ENABLED=true` and the sender domain's MX pointing at this server (`MAIL_HOSTNAME` in its MX set; other domains keep the From address), the envelope sender (`MAIL FROM`) is not the From address but each recipient's signed return path, `b+<id>.<index>.<MAC>@<sender domain>`, so a DSN is bound to exactly one email and recipient (see [bounces.md](bounces.md#signed-return-paths-236)). The envelope sender belongs to a whole SMTP transaction, so step 5 changes: each recipient is its own transaction, with only that recipient in `RCPT TO` and its own return path in `MAIL FROM`, and a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection, `maxRequeues: 0` so a dropped connection is reported, not silently resent) and hold the MX's throttle slot once; the 20-minute session deadline covers all of them. The message itself (headers, DKIM signature, custom headers, `List-Unsubscribe`, `Feedback-ID`) is the same in each. A single-recipient email is one transaction, as before. With `SMTP_ENABLED=false` nothing changes: one transaction per MX, envelope sender = From.
+
 ### Per-group delivery state (`emails.delivery_state`, #97)
 
 Every multi-MX send writes a per-group outcome map into `emails.delivery_state` (JSONB, nullable). Each entry is keyed by destination MX hostname and records:
@@ -396,6 +400,8 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 **Status values:** `sent` (delivered, won't retry), `retry` (soft failure, queue may retry), `failed` (terminal: a hard 5xx that auto-suppressed the recipients, a sender policy block, or the email got too old to retry with this group still pending). A group refused for sender reasons (5.7.x, blocklist, authentication) has `"blocked": true` and its recipients are not suppressed (#246). A failure is classified from the SMTP reply only (#250): Nodemailer's `responseCode`/`response`, or a line that starts with a reply code; a connection, DNS or TLS error has no reply and stays `retry`, so an IP address, port or host name in its message is never read as a status code. The classification is stored on the group (`failureKind`: `hard`, `policy` or `soft`; `failureCode`), and the queue reads it instead of re-parsing `lastError`.
 
 **Retry semantics:** on the next queue pass, the mailer reads `delivery_state` and **skips every group already in `sent` state**. Only `retry`-state groups are re-submitted. A Gmail group that succeeded on attempt 1 never receives a duplicate on attempt 2 even if Outlook 4xx-retries multiple times.
+
+**Per-recipient entries (#236):** with signed return paths, a pending group of several recipients is split into one entry per recipient, keyed `<mx host>#<recipient index>` with the MX in `mxHost` (for example `"smtp.gmail.com#2": { "mxHost": "smtp.gmail.com", "recipients": ["carol@gmail.com"], ... }`). Each keeps its own status, attempts, classification and retries, so one recipient's `550` or `451` does not decide the others'. Single-recipient groups keep their MX as key. A row that is retried after `SMTP_ENABLED` changes is handled either way: a multi-recipient group is split when return paths are on, and a per-recipient entry still goes to its `mxHost` when they are off.
 
 **Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately: no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
 
