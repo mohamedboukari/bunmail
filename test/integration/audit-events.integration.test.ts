@@ -1291,7 +1291,8 @@ describe("no secrets in the log", () => {
     /** No metadata key is named like a secret. */
     for (const row of rows) {
       for (const field of Object.keys(row.metadata ?? {})) {
-        expect(field).not.toMatch(/password|secret|token|hash|cookie|credential|code$/i);
+        expect(field).not.toMatch(/(?:password|secret|token|hash|cookie|credential)/i);
+        expect(field).not.toMatch(/code$/i);
       }
     }
   });
