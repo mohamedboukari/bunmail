@@ -18,6 +18,20 @@ export const MAX_BODY_LENGTH = 5 * 1024 * 1024;
  */
 export const sendEmailDto = t.Object({
   from: t.String({ format: "email" }),
+  /**
+   * Sender display name (#250): `From: "<fromName>" <from>`. Only the
+   * type and a raw length cap are checked here; the rules (1 to 100
+   * characters after trimming, no control, bidi-control or `@ < > "`
+   * character) are applied by `createEmail` (`services/from-name.ts`),
+   * which answers `422 VALIDATION_ERROR` naming the field.
+   */
+  fromName: t.Optional(
+    t.String({
+      maxLength: 1000,
+      description:
+        'Sender display name, shown instead of the address by most clients. 1 to 100 characters after trimming; control and bidi-control characters and any of @ < > " are refused (422 VALIDATION_ERROR).',
+    }),
+  ),
   to: t.String({ format: "email" }),
   /**
    * `cc`/`bcc` accept a comma-separated address list, so `format: "email"`
@@ -62,6 +76,20 @@ export const sendEmailDto = t.Object({
    * the 8 KB total cap are enforced by `createEmail`
    * (`services/custom-headers.ts`), which every send path shares.
    */
+  /**
+   * What kind of mail this is (#250). `transactional`: sent without
+   * `List-Unsubscribe`. `marketing`: must carry the per-recipient
+   * one-click unsubscribe link (#249), so it is refused with
+   * `422 MARKETING_REQUIRES_ONE_CLICK` unless it has exactly one recipient
+   * (no cc or bcc) and `APP_BASE_URL` is an https URL. Unset: as before.
+   */
+  category: t.Optional(
+    t.Union([t.Literal("transactional"), t.Literal("marketing")], {
+      description:
+        "transactional: no List-Unsubscribe header. marketing: requires one recipient and an https APP_BASE_URL so the per-recipient one-click unsubscribe link can be added (else 422 MARKETING_REQUIRES_ONE_CLICK).",
+    }),
+  ),
+
   headers: t.Optional(
     t.Record(
       t.String({ pattern: "^[\\x21-\\x39\\x3b-\\x7e]{1,64}$" }),

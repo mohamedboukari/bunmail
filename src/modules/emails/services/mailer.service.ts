@@ -7,6 +7,7 @@ import { parseRecipients, groupByDomain } from "../../../utils/recipients.ts";
 import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
+import { composeMessageBody } from "./message-body.ts";
 import {
   runMxSession,
   type RejectedRecipient,
@@ -31,6 +32,7 @@ import type {
   DeliveryMtaSts,
   DeliveryState,
 } from "../models/email.schema.ts";
+import type { EmailCategory } from "../types/email.types.ts";
 
 /**
  * Result of a `sendMail` call. The `messageId` is the canonical
@@ -158,6 +160,10 @@ export interface UnsubscribeOptions {
  * `<group key>#<recipient index>`), classified from its own reply: `retry`
  * for a 4xx, `failed` for a 5xx.
  *
+ * **Body (#250):** composed once per call ({@link composeMessageBody}): an
+ * HTML fragment gets a minimal document wrapper, and HTML without a text
+ * part gets a text alternative derived from it. Neither is stored.
+ *
  * **Identity:** the caller passes `messageId` so the canonical
  * `Message-ID:` header is pinned across retries. Previously the
  * mailer minted it itself, which would have produced fresh ids per
@@ -166,6 +172,12 @@ export interface UnsubscribeOptions {
  */
 export async function sendMail(options: {
   from: string;
+  /**
+   * Display name for the `From:` header (#250), already checked
+   * (`from-name.ts`). `from` stays the bare address: envelope, DKIM
+   * domain, return path.
+   */
+  fromName?: string | null;
   to: string;
   cc?: string | null;
   bcc?: string | null;
@@ -194,9 +206,16 @@ export async function sendMail(options: {
   /**
    * BunMail's own automatic mail (inbound notifications, invitations,
    * sign-in alerts): adds `Auto-Submitted: auto-generated` and
-   * `X-Auto-Response-Suppress: All` so auto-responders don't reply (#250).
+   * `X-Auto-Response-Suppress: All` so auto-responders don't reply (#250),
+   * and never `List-Unsubscribe` ({@link carriesListUnsubscribe}).
    */
   autoSubmitted?: boolean;
+  /**
+   * `transactional` mail is sent without `List-Unsubscribe` (#250).
+   * `marketing` and unset behave as before: the queue's `unsubscribe`
+   * options decide the header.
+   */
+  category?: EmailCategory | null;
   /**
    * Signed per-recipient return paths (#236): set by the queue when inbound
    * SMTP is enabled, the only setup where a DSN can reach BunMail. Each
@@ -232,6 +251,16 @@ export async function sendMail(options: {
   });
 
   const customHeaders = safeCustomHeaders(options.headers, options.messageId);
+
+  /** Wrapper and text alternative (#250): once per call, the same for every transaction. */
+  const body = composeMessageBody(options.html ?? null, options.text ?? null);
+  if (body.wrapped || body.textDerived) {
+    logger.debug("Message body composed", {
+      messageId: options.messageId,
+      wrapped: body.wrapped,
+      textDerived: body.textDerived,
+    });
+  }
 
   /**
    * Signed return paths (#236): one entry, and later one SMTP transaction,
@@ -357,18 +386,20 @@ export async function sendMail(options: {
   for (const plan of sessions.values()) {
     const outcomes = await sendToMxHosts(plan, {
       from: options.from,
+      fromName: options.fromName ?? null,
       headerTo: options.to,
       headerCc: options.cc ?? null,
       replyTo: options.replyTo ?? null,
       subject: options.subject,
-      html: options.html ?? null,
-      text: options.text ?? null,
+      html: body.html,
+      text: body.text,
       messageId: options.messageId,
       headers: customHeaders,
       dkim: options.dkim,
       unsubscribe: options.unsubscribe,
       feedback: options.feedback,
       autoSubmitted: options.autoSubmitted === true,
+      category: options.category ?? null,
     });
     for (const outcome of outcomes) {
       const domain = state[outcome.key]?.domain;
@@ -596,6 +627,8 @@ interface MxGroupMessage {
   /** RCPT TO for this group only. */
   recipients: string[];
   from: string;
+  /** Display name of the `From:` header (#250); the address is always `from`. */
+  fromName?: string | null;
   /**
    * `MAIL FROM` of this transaction: the recipient's signed return path
    * (#236). Defaults to `from`. The `From:` header is always `from`.
@@ -616,6 +649,8 @@ interface MxGroupMessage {
   feedback?: FeedbackSource;
   /** BunMail's own automatic mail: `Auto-Submitted` and friends (#250). */
   autoSubmitted?: boolean;
+  /** `transactional`: no `List-Unsubscribe` (#250). */
+  category?: EmailCategory | null;
 }
 
 /** What a `Feedback-ID` header identifies (#250). */
@@ -670,13 +705,30 @@ function safeCustomHeaders(
 }
 
 /**
+ * Whether a message carries `List-Unsubscribe` (#250): not when it is
+ * `transactional`, and never on BunMail's own automatic mail (invitations,
+ * alerts, inbound notifications), which nobody subscribed to.
+ */
+export function carriesListUnsubscribe(
+  args: Pick<MxGroupMessage, "category" | "autoSubmitted">,
+): boolean {
+  return args.category !== "transactional" && args.autoSubmitted !== true;
+}
+
+/**
  * Builds the Nodemailer options for one MX group's message: headers,
- * envelope, the custom headers (#177), `List-Unsubscribe`, DKIM. Pure, so
- * tests can render the exact message with a stream transport.
+ * envelope, the custom headers (#177), `List-Unsubscribe`, DKIM. The body
+ * is used as given: `sendMail` composes it first ({@link composeMessageBody}).
+ * Pure, so tests can render the exact message with a stream transport.
  */
 export function buildMailOptions(args: MxGroupMessage): Mail.Options {
   const mailOptions: Mail.Options = {
-    from: args.from,
+    /**
+     * With a display name (#250), Nodemailer quotes it and RFC 2047-encodes
+     * it when it is not ASCII. The address, and the envelope below, stay
+     * the bare `from`.
+     */
+    from: args.fromName ? { name: args.fromName, address: args.from } : args.from,
     /** Headers carry the *original* recipient lists so each recipient
      *  sees who else was addressed. The actual RCPT TO list is the
      *  envelope override below. */
@@ -706,7 +758,7 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
    *  across groups: the header is about the message, not the
    *  recipient set. */
   const senderDomain = args.from.split("@")[1];
-  if (senderDomain) {
+  if (senderDomain && carriesListUnsubscribe(args)) {
     /**
      * Strip any CR/LF from the unsubscribe mailto/url before they go into a
      * header value (#133, header-injection defense-in-depth). These come
@@ -725,8 +777,9 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
       ...(url ? [`<${url}>`] : []),
     ].join(", ");
     if (url) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
-    if (args.feedback)
-      headers["Feedback-ID"] = feedbackIdHeader(args.feedback, senderDomain);
+  }
+  if (senderDomain && args.feedback) {
+    headers["Feedback-ID"] = feedbackIdHeader(args.feedback, senderDomain);
   }
   if (args.autoSubmitted) {
     headers["Auto-Submitted"] = "auto-generated";

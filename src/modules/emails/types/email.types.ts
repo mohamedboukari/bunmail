@@ -19,6 +19,27 @@ export function isEmailStatus(v: string | undefined): v is EmailStatus {
 export type EmailSource = "api" | "smtp";
 
 /**
+ * What kind of mail an email is (#250), set by the caller:
+ *   - `transactional`: a receipt, a password reset, an alert. Sent
+ *     without `List-Unsubscribe`.
+ *   - `marketing`: newsletters, promotions. Must be able to carry the
+ *     per-recipient one-click unsubscribe link (#249), so the send is
+ *     refused unless it has exactly one recipient and an https
+ *     `APP_BASE_URL`.
+ * Unset (`null` on the row): today's behaviour, `List-Unsubscribe` as
+ * the domain and the recipient count allow.
+ */
+export const EMAIL_CATEGORIES = ["transactional", "marketing"] as const;
+export type EmailCategory = (typeof EMAIL_CATEGORIES)[number];
+
+/** Narrows a stored or submitted value to a known category. */
+export function isEmailCategory(v: string | null | undefined): v is EmailCategory {
+  return (
+    v !== null && v !== undefined && (EMAIL_CATEGORIES as readonly string[]).includes(v)
+  );
+}
+
+/**
  * The shape of an email row returned from the database.
  * Inferred directly from the Drizzle schema to stay in sync automatically.
  */
@@ -31,6 +52,12 @@ export type Email = InferSelectModel<typeof emails>;
  */
 export interface SendEmailInput {
   from: string;
+  /**
+   * Display name of the sender (#250), sent as `From: "<name>" <from>`.
+   * Checked by `createEmail` (`services/from-name.ts`); `from` stays the
+   * bare address everywhere else.
+   */
+  fromName?: string;
   to: string;
   cc?: string;
   bcc?: string;
@@ -47,6 +74,8 @@ export interface SendEmailInput {
    * `InvalidCustomHeaderError`.
    */
   headers?: Record<string, string>;
+  /** Transactional or marketing (#250); see {@link EmailCategory}. */
+  category?: EmailCategory;
 }
 
 /**

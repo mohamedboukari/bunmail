@@ -73,6 +73,23 @@ export function oneClickBaseUrl(appBaseUrl: string): string | null {
   return base;
 }
 
+/**
+ * What keeps an email from carrying the per-recipient one-click link
+ * (#250, for `category: "marketing"`): `recipients` when it does not name
+ * exactly one recipient (cc and bcc included), `app_base_url` when
+ * `APP_BASE_URL` cannot carry the link (see {@link oneClickBaseUrl}),
+ * `null` when it can. The same conditions {@link listUnsubscribeOptions}
+ * mints the token under.
+ */
+export function oneClickBlocker(
+  email: Pick<ListUnsubscribeEmail, "toAddress" | "cc" | "bcc">,
+  appBaseUrl: string = config.appBaseUrl,
+): "recipients" | "app_base_url" | null {
+  if (soleRecipient(email.toAddress, email.cc, email.bcc) === null) return "recipients";
+  if (oneClickBaseUrl(appBaseUrl) === null) return "app_base_url";
+  return null;
+}
+
 /** The static options from the domain record, as before #249. */
 function staticOptions(
   domain: ListUnsubscribeDomain | undefined,

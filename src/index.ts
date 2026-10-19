@@ -10,7 +10,7 @@ import {
   UnauthorizedSenderError,
 } from "./modules/api-keys/errors.ts";
 import { TemplateTooLargeError } from "./modules/templates/errors.ts";
-import { EmailSendRejectedError } from "./modules/emails/errors.ts";
+import { EmailSendRejectedError, InvalidFromNameError } from "./modules/emails/errors.ts";
 import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
@@ -345,6 +345,20 @@ const app = new Elysia()
     if (error instanceof DkimRotationError) {
       set.status = error.status;
       return { success: false, error: error.message, code: error.code };
+    }
+
+    /**
+     * An invalid `fromName` (#250) is a validation failure: same code and
+     * `details` shape as one TypeBox reports, naming the field only.
+     */
+    if (error instanceof InvalidFromNameError) {
+      set.status = error.status;
+      return {
+        success: false,
+        error: "Request validation failed",
+        code: error.code,
+        details: [{ path: `/${error.field}`, message: error.message }],
+      };
     }
 
     if (error instanceof EmailSendRejectedError) {

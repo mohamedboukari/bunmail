@@ -133,3 +133,22 @@ describe("sendEmailDto: custom headers syntax (#177)", () => {
     expect(check.Check({ ...base, headers: { "X-A": 1 } })).toBe(false);
   });
 });
+
+describe("sendEmailDto: fromName and category (#250)", () => {
+  test("accepts both", () => {
+    expect(check.Check({ ...base, fromName: "Acme", category: "transactional" })).toBe(
+      true,
+    );
+    expect(check.Check({ ...base, category: "marketing" })).toBe(true);
+  });
+
+  test("rejects an unknown category", () => {
+    expect(check.Check({ ...base, category: "newsletter" })).toBe(false);
+    expect(check.Check({ ...base, category: "Marketing" })).toBe(false);
+  });
+
+  test("rejects a non-string or over-long raw fromName (the rules run in createEmail)", () => {
+    expect(check.Check({ ...base, fromName: 1 })).toBe(false);
+    expect(check.Check({ ...base, fromName: "a".repeat(1001) })).toBe(false);
+  });
+});

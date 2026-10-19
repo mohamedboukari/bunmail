@@ -1,4 +1,4 @@
-import type { Email } from "../types/email.types.ts";
+import { isEmailCategory, type Email, type EmailCategory } from "../types/email.types.ts";
 import type { CustomHeaders } from "../models/email.schema.ts";
 import {
   serializeDeliveryState,
@@ -13,6 +13,8 @@ import {
 export interface SerializedEmail {
   id: string;
   from: string;
+  /** Sender display name (#250); null when none. */
+  fromName: string | null;
   to: string;
   cc: string | null;
   bcc: string | null;
@@ -26,6 +28,8 @@ export interface SerializedEmail {
   status: string;
   /** Ingress channel: "api" (REST) or "smtp" (submission server) (#137) */
   source: string;
+  /** "transactional" or "marketing" as set on the send (#250); null when unset. */
+  category: EmailCategory | null;
   attempts: number;
   /**
    * When a deferred email will be retried (#180): set while `status` is
@@ -53,6 +57,7 @@ export function serializeEmail(email: Email): SerializedEmail {
   return {
     id: email.id,
     from: email.fromAddress,
+    fromName: email.fromName,
     to: email.toAddress,
     cc: email.cc,
     bcc: email.bcc,
@@ -63,6 +68,7 @@ export function serializeEmail(email: Email): SerializedEmail {
     text: email.textContent,
     status: email.status,
     source: email.source,
+    category: isEmailCategory(email.category) ? email.category : null,
     attempts: email.attempts,
     nextAttemptAt: email.status === "queued" ? email.nextAttemptAt : null,
     lastError: email.lastError,

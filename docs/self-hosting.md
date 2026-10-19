@@ -560,11 +560,11 @@ Check if your IP is blacklisted:
 
 Even with perfect DNS, bad content triggers spam filters:
 
-- **Always include a plain text version**: use both `html` and `text` fields in the API
+- **Always include a plain text version**: use both `html` and `text` fields in the API. An HTML-only send gets a text part derived from the HTML at send time (#250), but one you write reads better
 - **Avoid spam trigger words**: "free", "limited time", "act now", excessive caps/exclamation marks
-- **Include an unsubscribe link**: required by most email providers for bulk mail. With an `https://` `APP_BASE_URL`, every single-recipient email gets a one-click `List-Unsubscribe` link that BunMail turns into a suppression (#249); send bulk mail one recipient per message, without cc or bcc, so it carries one
+- **Include an unsubscribe link**: required by most email providers for bulk mail. With an `https://` `APP_BASE_URL`, every single-recipient email gets a one-click `List-Unsubscribe` link that BunMail turns into a suppression (#249); send bulk mail one recipient per message, without cc or bcc, so it carries one. Set `category: "marketing"` on such mail and BunMail refuses any that could not carry the link (#250); `category: "transactional"` leaves `List-Unsubscribe` out of receipts and alerts
 - **Use a real From address**: `hello@yourdomain.com` is better than `noreply@yourdomain.com`
-- **Don't send HTML-only**: always include a text fallback
+- **Don't send HTML-only**: always include a text fallback (BunMail derives one when you don't, #250)
 - **Keep image-to-text ratio reasonable**: don't send an email that's just one big image
 
 ### 7. Verify Your Setup

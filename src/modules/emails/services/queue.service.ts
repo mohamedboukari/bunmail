@@ -9,7 +9,8 @@ import { domains } from "../../domains/models/domain.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { sendMail } from "./mailer.service.ts";
 import type { DkimOptions } from "./mailer.service.ts";
-import { listUnsubscribeOptions } from "./list-unsubscribe.ts";
+import { listUnsubscribeOptions, oneClickBlocker } from "./list-unsubscribe.ts";
+import { isEmailCategory } from "../types/email.types.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import type { WebhookEventType } from "../../webhooks/types/webhook.types.ts";
 import {
@@ -710,7 +711,21 @@ async function sendClaimedEmail(
      * `APP_BASE_URL` is HTTPS, else the domain's static settings. Rebuilt
      * on every attempt; the token is deterministic, so retries match.
      */
-    const unsubscribe = listUnsubscribeOptions(email, domain);
+    const category = isEmailCategory(email.category) ? email.category : null;
+    const unsubscribe =
+      category === "transactional" ? undefined : listUnsubscribeOptions(email, domain);
+    /**
+     * Marketing mail was accepted because it could carry the one-click link
+     * (#250). If it no longer can, `APP_BASE_URL` changed since: the email
+     * goes out with the static header rather than being held, and the
+     * operator sees this line.
+     */
+    if (category === "marketing" && oneClickBlocker(email) !== null) {
+      logger.warn("Marketing email sent without a one-click unsubscribe link", {
+        emailId,
+        apiKeyId: email.apiKeyId,
+      });
+    }
 
     /**
      * Canonical Message-ID: locked in on first attempt, reused on
@@ -752,6 +767,8 @@ async function sendClaimedEmail(
 
     const result = await deps.sendMail({
       from: email.fromAddress,
+      /** Display name (#250): `From:` header only. */
+      fromName: email.fromName,
       to: email.toAddress,
       cc: email.cc,
       bcc: email.bcc,
@@ -765,6 +782,8 @@ async function sendClaimedEmail(
       existingState,
       dkim,
       unsubscribe,
+      /** `transactional`: no `List-Unsubscribe` (#250). */
+      category,
       /** Feedback-ID (#250): how the mail entered BunMail, and for which key. */
       feedback: {
         source: email.source === "smtp" ? "smtp" : "api",

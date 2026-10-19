@@ -114,6 +114,9 @@ bunmail/
 │   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
 │   │   │   │   ├── mta-sts.ts            ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
+│   │   │   │   ├── from-name.ts          ← From display-name rules (#250)
+│   │   │   │   ├── message-body.ts       ← Send-time HTML wrapper and text alternative (#250)
+│   │   │   │   ├── html-to-text.ts       ← Bounded, linear HTML-to-text converter (#250)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
 │   │   │   │   ├── stats.service.ts      ← Dashboard stats aggregation
 │   │   │   │   └── delivery-rates.ts     ← Success and bounce rate math (#250)
@@ -554,6 +557,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | api_key_id    | varchar(36)    | FK → api_keys.id, NOT NULL      |
 | domain_id     | varchar(36)    | FK → domains.id, nullable       |
 | from_address  | varchar(255)   | NOT NULL                        |
+| from_name     | varchar(100)   | nullable: `From:` display name, no control, bidi-control or `@ < > "` character (#250) |
 | to_address    | varchar(255)   | NOT NULL                        |
 | cc            | text           | nullable                        |
 | bcc           | text           | nullable                        |
@@ -564,6 +568,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | text_content  | text           | nullable                        |
 | status        | varchar(20)    | NOT NULL, default `'queued'`    |
 | source        | varchar(10)    | NOT NULL, default `'api'` (`api`\|`smtp`, #137) |
+| category      | varchar(20)    | nullable: `transactional` (no `List-Unsubscribe`) \| `marketing` (one-click required) (#250) |
 | attempts      | integer        | NOT NULL, default `0`           |
 | next_attempt_at | timestamptz  | NOT NULL, default `now()`: retry backoff (#180) |
 | locked_by     | varchar(64)    | nullable: worker holding a `sending` row (#180) |
@@ -1138,7 +1143,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180), then `failed`; only a recipient whose last reply was `4.2.2` (mailbox full) then gets a 24h soft suppression and a soft `email.bounced`, in the outcome transaction (#250). Other 4xx codes and failures with no SMTP reply get neither, and there is no soft → hard escalation inline.
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 
-**Unsubscribe → Suppression (#249):** single-recipient mail carries a per-recipient `List-Unsubscribe` (`<APP_BASE_URL/u/<token>>` + One-Click, and `<mailto:unsub+<token>@<domain>>` when `SMTP_ENABLED`). A one-click POST, the confirmation page or a message to that mailbox (handled before generic inbound storage) becomes a permanent `unsubscribe` suppression under the sending key and fires `email.unsubscribed` once.
+**Unsubscribe → Suppression (#249):** `transactional` mail and BunMail's own mail carry no `List-Unsubscribe`, and `marketing` mail is accepted only when it can carry the per-recipient link (#250). Single-recipient mail carries a per-recipient `List-Unsubscribe` (`<APP_BASE_URL/u/<token>>` + One-Click, and `<mailto:unsub+<token>@<domain>>` when `SMTP_ENABLED`). A one-click POST, the confirmation page or a message to that mailbox (handled before generic inbound storage) becomes a permanent `unsubscribe` suppression under the sending key and fires `email.unsubscribed` once.
 
 **Complaint → Suppression (#191):** ARF feedback reports (RFC 5965, `multipart/report; report-type=feedback-report`) from mailbox-provider feedback loops arrive at the inbound SMTP and are routed to the feedback handler before the bounce parser, never stored as inbound mail. A report counts only when its Original-Message-ID (feedback part, or the reported message's headers) exactly matches the Message-ID of an email BunMail sent; unlinkable reports are logged and dropped. `abuse` / `fraud` (or no type) → permanent `complaint` suppression for the recipient under the email's key (strongest reason: replaces any other) + `email.complained`; `opt-out` → the #249 unsubscribe path (`source: "fbl"`); `not-spam`, `virus` and the rest are dropped. DKIM on the report is checked with mailauth and logged, not required. See [docs/feedback-loops.md](docs/feedback-loops.md).
 

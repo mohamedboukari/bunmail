@@ -187,6 +187,8 @@ const EMAIL: Email = {
   textContent: "Hello",
   status: "sent",
   source: "api",
+  fromName: null,
+  category: null,
   attempts: 1,
   nextAttemptAt: new Date("2026-10-19T10:00:00Z"),
   lockedBy: null,

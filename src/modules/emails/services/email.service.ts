@@ -13,6 +13,8 @@ import { InactiveApiKeyError, UnauthorizedSenderError } from "../../api-keys/err
 import { deleteEmailsWithTombstones } from "./tombstone.service.ts";
 import { checkSenderDomain } from "./sender-domain.service.ts";
 import { validateCustomHeaders } from "./custom-headers.ts";
+import { checkFromName, describeFromNameProblem } from "./from-name.ts";
+import { oneClickBlocker } from "./list-unsubscribe.ts";
 import {
   claimIdempotencyKey,
   completeIdempotencyKey,
@@ -30,6 +32,8 @@ import {
   TemplateNotFoundError,
   BodyRequiredError,
   IdempotencyKeyReusedError,
+  InvalidFromNameError,
+  MarketingRequiresOneClickError,
 } from "../errors.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -212,8 +216,11 @@ interface PreparedEmail {
 
 /**
  * Every check `createEmail` runs before it inserts (custom headers,
- * suppression, API key and allowed senders, template, subject, body,
- * sender domain), returning the row to insert. Throws the same errors
+ * display name, marketing one-click, suppression, API key and allowed
+ * senders, template, subject, body, sender domain), returning the row to
+ * insert. The text alternative and the HTML document wrapper (#250) are
+ * not made here: the mailer adds them per send, so the row keeps what the
+ * caller sent. Throws the same errors
  * `createEmail` documents. Reads through the shared pool and writes
  * nothing.
  */
@@ -253,6 +260,51 @@ async function prepareEmail(
         });
       }
       throw error;
+    }
+  }
+
+  /**
+   * Display name (#250), checked with the other pure input rules. The log
+   * line names the rule, never the value.
+   */
+  let fromName: string | null = null;
+  if (input.fromName !== undefined) {
+    const checked = checkFromName(input.fromName);
+    if (!checked.ok) {
+      logger.warn("Send blocked: invalid fromName", {
+        id,
+        apiKeyId,
+        source,
+        field: "fromName",
+        problem: checked.problem,
+      });
+      throw new InvalidFromNameError(
+        checked.problem,
+        describeFromNameProblem(checked.problem),
+      );
+    }
+    fromName = checked.name;
+  }
+
+  /**
+   * Marketing mail must carry the per-recipient one-click link (#250,
+   * #249): one recipient and an https `APP_BASE_URL`. Refused before any
+   * database work, so nothing is queued without it.
+   */
+  if (input.category === "marketing") {
+    const blocker = oneClickBlocker({
+      toAddress: input.to,
+      cc: input.cc ?? null,
+      bcc: input.bcc ?? null,
+    });
+    if (blocker !== null) {
+      logger.warn("Send blocked: marketing email cannot carry one-click unsubscribe", {
+        id,
+        apiKeyId,
+        source,
+        reason: blocker,
+      });
+      throw new MarketingRequiresOneClickError(blocker);
     }
   }
 
@@ -349,7 +401,10 @@ async function prepareEmail(
     htmlContent = tpl.html
       ? renderTemplate(tpl.html, vars, undefined, { html: true })
       : null;
-    textContent = tpl.textContent ? renderTemplate(tpl.textContent, vars) : null;
+    /** A template without a text body keeps the caller's inline text (#250). */
+    textContent = tpl.textContent
+      ? renderTemplate(tpl.textContent, vars)
+      : (input.text ?? null);
   }
 
   if (!subject) {
@@ -381,6 +436,7 @@ async function prepareEmail(
       apiKeyId,
       domainId,
       fromAddress: input.from,
+      fromName,
       toAddress: input.to,
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
@@ -390,6 +446,7 @@ async function prepareEmail(
       html: htmlContent,
       textContent,
       source,
+      category: input.category ?? null,
     },
     warnings,
     senderDomain,

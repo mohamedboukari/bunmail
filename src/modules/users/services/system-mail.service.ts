@@ -123,9 +123,10 @@ export async function sendSystemMail(
       html: message.html,
       messageId: `<${randomBytes(16).toString("hex")}@${deps.hostname}>`,
       dkim,
-      /** BunMail's own automatic mail (#250). */
+      /** BunMail's own automatic mail (#250), never with `List-Unsubscribe`. */
       feedback: { source: "system", apiKeyId: null },
       autoSubmitted: true,
+      category: "transactional",
     });
   } catch (err) {
     return notSent("send_failed", {

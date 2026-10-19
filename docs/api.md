@@ -90,6 +90,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | Field        | Type   | Required | Description                                  |
 |--------------|--------|----------|----------------------------------------------|
 | `from`       | string | Yes      | Sender email address                         |
+| `fromName`   | string | No       | Sender display name (#250), sent as `From: "<fromName>" <from>`. Rules below. Returned as `fromName` on email responses (`null` when unset). |
 | `to`         | string | Yes      | Recipient email address                      |
 | `subject`    | string | *        | Subject line (required when not using template) |
 | `html`       | string | No       | HTML body (max 5 MB)                         |
@@ -100,8 +101,19 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `templateId` | string | No       | Template ID (overrides subject/html/text)    |
 | `variables`  | object | No       | Key-value pairs for template rendering (max 100 entries, values max 100 KB; the rendered body is capped at 5 MB and the subject at 500 characters, else `422 TEMPLATE_OUTPUT_TOO_LARGE`) |
 | `headers`    | object | No       | Custom headers, name to value (#177), e.g. `{"X-Correlation-Id": "abc", "In-Reply-To": "<parent@example.com>"}`. Rules below. Returned as `headers` on email responses (`null` when unset). |
+| `category`   | string | No       | `transactional` or `marketing` (#250). Rules below. Returned as `category` on email responses (`null` when unset). |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
+
+**Display name** (`fromName`, #250): 1 to 100 characters after trimming (the trimmed value is stored), in any script; Nodemailer RFC 2047-encodes a non-ASCII name. Refused, so a name cannot pose as an address or reorder what the client shows: control characters (CR, LF, NUL and tab included), the Unicode line and paragraph separators, the bidi controls U+202A to U+202E and U+2066 to U+2069, and any of `@`, `<`, `>`, `"`. A refused name is `422 VALIDATION_ERROR` with `details[].path` `/fromName`; the value is never echoed and nothing is queued. `from` stays the bare address everywhere else: the allowed-senders check, the DKIM domain and the envelope sender.
+
+**Body composition** (#250): when the email has HTML and no text (after the template, if any, is rendered), a `text/plain` part is derived from the HTML at send time, so the message goes out as `multipart/alternative`; HTML without an `<html>` element is wrapped in a minimal HTML5 document at send time. Neither is stored: `html` and `text` in responses are what you sent. See [emails.md](emails.md#body-composition-250).
+
+**Category** (`category`, #250):
+
+- `transactional`: sent without `List-Unsubscribe` and `List-Unsubscribe-Post`. For receipts, password resets, alerts.
+- `marketing`: must carry the per-recipient one-click unsubscribe link (#249), so it needs exactly one recipient (no `cc`, no `bcc`) and an `https://` `APP_BASE_URL` without a query. Otherwise `422 MARKETING_REQUIRES_ONE_CLICK`, and nothing is queued.
+- Unset: as before, `List-Unsubscribe` as the domain settings and the recipient count allow. Any other value is `422 VALIDATION_ERROR`.
 
 **Custom headers** (`headers`, #177): application headers (`X-*`) and threading headers (`In-Reply-To`, `References`). Header injection is blocked, and BunMail's own headers cannot be overridden:
 
@@ -121,10 +133,12 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
   "data": {
     "id": "msg_a1b2c3d4e5f6...",
     "from": "hello@example.com",
+    "fromName": "Acme Support",
     "to": "user@example.com",
     "subject": "Welcome!",
     "status": "queued",
     "source": "api",
+    "category": "transactional",
     "attempts": 0,
     "nextAttemptAt": "2026-03-15T12:00:00.000Z",
     "createdAt": "2026-03-15T12:00:00.000Z",
@@ -136,7 +150,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 
 `warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
 
-**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
+**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
 **Idempotency keys** (#188). Send an optional `Idempotency-Key` request header (the convention of [draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/), as Stripe and Resend use it) to make a send safe to retry after a timeout or a 5xx:
 
@@ -148,7 +162,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 - **Lifetime:** a key is remembered for `IDEMPOTENCY_KEY_TTL_HOURS` (default 24, 1 to 168) from its first use; after that it is reusable and a request with it sends again. The purge worker deletes expired keys.
 - **Failed requests store nothing:** a send refused for any reason (validation, suppression, unauthorized sender, rate limit, unregistered domain, a server error) leaves no trace, so retrying with the same key after fixing the cause sends the email.
 - **Concurrent duplicates:** parallel requests with the same key create exactly one email; one gets the fresh response, the others wait for it to commit and get the replay. None fails with a 500.
-- **Replays keep working after the email is gone:** the stored response is a snapshot of the email as it was queued (not its delivery status now; read that with `GET /api/v1/emails/:id`). It holds no message content: a replay fills `subject`, `html`, `text` and `headers` from the email while it exists and is not in trash; after the email is trashed or purged, the replay returns the original ids and status with those four fields `null`.
+- **Replays keep working after the email is gone:** the stored response is a snapshot of the email as it was queued (not its delivery status now; read that with `GET /api/v1/emails/:id`). It holds no message content: a replay fills `subject`, `html`, `text` and `headers` from the email while it exists and is not in trash; after the email is trashed or purged, the replay returns the original ids and status with those four fields `null`. `fromName` and `category` are kept in the snapshot: they label the send, they are not message content (#250).
 - **Rate limit:** a replay is still a request and counts toward the per-key rate limit.
 - **REST only:** the SMTP submission server has no idempotency keys.
 
@@ -847,6 +861,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a `marketing` send that cannot carry the one-click unsubscribe link (`MARKETING_REQUIRES_ONE_CLICK`, #250), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
 | 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively; a DKIM key rotation step refused on the domain's state (#250): `DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE` |
 | 429    | Rate limit exceeded, or a delivery replayed 5 times this hour (`REPLAY_LIMIT_REACHED`, #258); both send `Retry-After` |

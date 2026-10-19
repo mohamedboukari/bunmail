@@ -313,6 +313,98 @@ describe("sendMail: List-Unsubscribe header", () => {
   });
 });
 
+describe("sendMail: From display name, body and category (#250)", () => {
+  test("a display name goes in From; the envelope sender stays the bare address", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      fromName: "Acme Support",
+      to: "user@example.org",
+      subject: "test",
+      text: "x",
+      messageId: MID,
+    });
+    const options = captured[0]!.mailOptions;
+    expect(asRecord(options.from)).toEqual({
+      name: "Acme Support",
+      address: "hello@example.com",
+    });
+    expect(asRecord(options.envelope).from).toBe("hello@example.com");
+  });
+
+  test("no display name: From is the bare address", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      text: "x",
+      messageId: MID,
+    });
+    expect(captured[0]!.mailOptions.from).toBe("hello@example.com");
+  });
+
+  test("HTML only: every transaction gets the wrapped HTML and a derived text part", async () => {
+    mxResolver = async (domain) => [{ exchange: `mx.${domain}`, priority: 10 }];
+    await sendMail({
+      from: "hello@example.com",
+      to: "a@one.example, b@two.example",
+      subject: "test",
+      html: '<p>Hello <a href="https://example.com/x">there</a></p>',
+      messageId: MID,
+    });
+    expect(captured).toHaveLength(2);
+    for (const { mailOptions } of captured) {
+      expect(mailOptions.text).toBe("Hello there (https://example.com/x)");
+      expect(String(mailOptions.html)).toStartWith("<!DOCTYPE html><html><head>");
+      expect(String(mailOptions.html)).toContain(
+        '<p>Hello <a href="https://example.com/x">',
+      );
+    }
+  });
+
+  test("the caller's text and a full document are sent as given", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      html: "<html><body><p>Hi</p></body></html>",
+      text: "My text",
+      messageId: MID,
+    });
+    expect(captured[0]!.mailOptions.text).toBe("My text");
+    expect(captured[0]!.mailOptions.html).toBe("<html><body><p>Hi</p></body></html>");
+  });
+
+  test("transactional: no List-Unsubscribe, even with one-click options", async () => {
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      text: "x",
+      messageId: MID,
+      category: "transactional",
+      unsubscribe: { url: "https://example.com/u/t", mailto: null },
+    });
+    const headers = captured[0]!.mailOptions.headers;
+    const record = headers === undefined ? {} : asRecord(headers);
+    expect(record["List-Unsubscribe"]).toBeUndefined();
+    expect(record["List-Unsubscribe-Post"]).toBeUndefined();
+  });
+
+  test("BunMail's own automatic mail carries no List-Unsubscribe", async () => {
+    await sendMail({
+      from: "system@example.com",
+      to: "user@example.org",
+      subject: "Invitation",
+      text: "x",
+      messageId: MID,
+      autoSubmitted: true,
+    });
+    const record = asRecord(captured[0]!.mailOptions.headers);
+    expect(record["List-Unsubscribe"]).toBeUndefined();
+    expect(record["Auto-Submitted"]).toBe("auto-generated");
+  });
+});
+
 describe("sendMail: custom headers (#177)", () => {
   test("passes stored custom headers to nodemailer next to List-Unsubscribe", async () => {
     await sendMail({

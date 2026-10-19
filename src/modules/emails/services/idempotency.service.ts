@@ -79,6 +79,8 @@ export function toJsonObject(body: object): JsonObject {
  * `headers`). They are never stored in `response_body`: a replay fills
  * them from the live email row, or answers `null` once the email is
  * trashed or purged, so a permanent delete really removes the content.
+ * `fromName` and `category` (#250) stay in the snapshot: a sender label
+ * and the kind of send, like the addresses that also stay, not content.
  */
 const CONTENT_FIELDS = ["subject", "html", "text", "headers"] as const;
 

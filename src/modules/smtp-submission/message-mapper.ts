@@ -11,11 +11,22 @@
  */
 
 import { SubmissionRejectedError } from "./errors.ts";
-import type { SendEmailInput } from "../emails/types/email.types.ts";
+import {
+  isEmailCategory,
+  type EmailCategory,
+  type SendEmailInput,
+} from "../emails/types/email.types.ts";
 import {
   filterCustomHeaders,
   type DroppedHeader,
 } from "../emails/services/custom-headers.ts";
+import { checkFromName, type FromNameProblem } from "../emails/services/from-name.ts";
+
+/**
+ * The header a submitting client sets the send category with (#250),
+ * lowercase. Consumed by BunMail and never relayed.
+ */
+export const CATEGORY_HEADER = "x-bunmail-category";
 
 /**
  * De-duplicates a list of addresses (case-insensitive, first-occurrence
@@ -56,6 +67,60 @@ export interface SubmissionMessageParts {
   text?: string;
   /** Custom headers to relay, from {@link selectRelayHeaders} (#177). */
   headers?: Record<string, string>;
+  /** Display name of the `From:` header, from {@link submissionFromName} (#250). */
+  fromName?: string;
+  /** Category from `X-BunMail-Category`, from {@link submissionCategory} (#250). */
+  category?: EmailCategory;
+}
+
+/**
+ * The display name of a submitted `From:` header (#250), through the send
+ * API's rules (`emails/services/from-name.ts`). A name that fails is
+ * dropped, not a reason to refuse the mail (the address is still right):
+ * `problem` tells the caller what to log. An absent or blank name is
+ * simply none.
+ */
+export function submissionFromName(raw: string | undefined): {
+  fromName?: string;
+  problem?: FromNameProblem;
+} {
+  if (raw === undefined || raw.trim() === "") return {};
+  const checked = checkFromName(raw);
+  return checked.ok ? { fromName: checked.name } : { problem: checked.problem };
+}
+
+/**
+ * The category a submitted message asks for with `X-BunMail-Category:
+ * transactional|marketing` (#250), case-insensitive. Absent: none. Any
+ * other value, or the header given more than once, is refused (the
+ * caller answers 550): sending a marketing message as uncategorized, or
+ * the other way round, is worse than a clear rejection.
+ */
+export function submissionCategory(
+  lines: readonly RawHeaderLine[],
+): EmailCategory | undefined {
+  const values: string[] = [];
+  for (const { key, line } of lines) {
+    if (key.toLowerCase() !== CATEGORY_HEADER) continue;
+    const colon = line.indexOf(":");
+    values.push(
+      colon < 0
+        ? ""
+        : line
+            .slice(colon + 1)
+            .replace(/\r?\n(?=[ \t])/g, "")
+            .trim()
+            .toLowerCase(),
+    );
+  }
+  if (values.length === 0) return undefined;
+  const [value] = values;
+  if (values.length > 1 || !isEmailCategory(value)) {
+    throw new SubmissionRejectedError(
+      "X-BunMail-Category must be given once, as transactional or marketing",
+    );
+  }
+  return value;
 }
 
 /** One raw header line of a parsed message (mailparser's `headerLines`). */
@@ -99,6 +164,8 @@ export function selectRelayHeaders(lines: readonly RawHeaderLine[]): {
 } {
   const entries: [string, string][] = [];
   for (const { key, line } of lines) {
+    /** `X-BunMail-Category` is BunMail's own instruction (#250): consumed, never relayed. */
+    if (key.toLowerCase() === CATEGORY_HEADER) continue;
     if (!isRelayCandidate(key.toLowerCase())) continue;
     const colon = line.indexOf(":");
     if (colon < 0) continue;
@@ -213,5 +280,7 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     html: parts.html,
     text: parts.text,
     headers: parts.headers,
+    fromName: parts.fromName,
+    category: parts.category,
   };
 }
