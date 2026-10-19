@@ -16,6 +16,13 @@ describe("serializeDomain", () => {
       "-----BEGIN RSA PRIVATE KEY-----\nSECRET\n-----END RSA PRIVATE KEY-----",
     dkimPublicKey: "-----BEGIN PUBLIC KEY-----\nPUBLIC\n-----END PUBLIC KEY-----",
     dkimSelector: "bunmail",
+    dkimPendingSelector: null,
+    dkimPendingPrivateKey: null,
+    dkimPendingPublicKey: null,
+    dkimPendingCreatedAt: null,
+    dkimPreviousSelector: null,
+    dkimPreviousPublicKey: null,
+    dkimRotatedAt: null,
     spfVerified: true,
     dkimVerified: false,
     dmarcVerified: false,
@@ -48,6 +55,46 @@ describe("serializeDomain", () => {
   test("strips dkimPublicKey from output", () => {
     const result = serializeDomain(domain, null);
     expect("dkimPublicKey" in result).toBe(false);
+  });
+
+  test("pending and previous DKIM state (#250), never a private key", () => {
+    const rotating = {
+      ...domain,
+      dkimPendingSelector: "bm20261019",
+      dkimPendingPrivateKey: "v1:pending:private:key",
+      dkimPendingPublicKey: "-----BEGIN PUBLIC KEY-----\nNEXT\n-----END PUBLIC KEY-----",
+      dkimPendingCreatedAt: new Date("2026-10-19"),
+      dkimPreviousSelector: "old",
+      dkimPreviousPublicKey: "-----BEGIN PUBLIC KEY-----\nOLD\n-----END PUBLIC KEY-----",
+      dkimRotatedAt: new Date("2026-10-01"),
+    };
+    const result = serializeDomain(rotating, null);
+    expect(result.dkimPending).toEqual({
+      selector: "bm20261019",
+      host: "bm20261019._domainkey.example.com",
+      dnsRecord: "v=DKIM1; k=rsa; p=NEXT",
+      createdAt: new Date("2026-10-19"),
+    });
+    expect(result.dkimPrevious).toMatchObject({
+      selector: "old",
+      host: "old._domainkey.example.com",
+      dnsRecord: "v=DKIM1; k=rsa; p=OLD",
+      rotatedAt: new Date("2026-10-01"),
+    });
+    expect(result.dkimPrevious?.advice).toContain("7 days");
+    expect(result.dnsRecords.find((r) => r.pending)?.host).toBe(
+      "bm20261019._domainkey.example.com",
+    );
+    const json = JSON.stringify(result);
+    expect(json).not.toContain("v1:pending:private:key");
+    expect(json).not.toContain("SECRET");
+    expect(json).not.toContain("PRIVATE");
+  });
+
+  test("no rotation: dkimPending and dkimPrevious are null", () => {
+    const result = serializeDomain(domain, null);
+    expect(result.dkimPending).toBeNull();
+    expect(result.dkimPrevious).toBeNull();
   });
 
   test("strips updatedAt from output", () => {

@@ -18,7 +18,7 @@
  *   `v1:` ciphertext.
  */
 
-import { eq, isNotNull } from "drizzle-orm";
+import { eq, isNotNull, or } from "drizzle-orm";
 import { db } from "./index.ts";
 import { domains } from "../modules/domains/models/domain.schema.ts";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../utils/crypto.ts";
@@ -86,30 +86,53 @@ export async function encryptDomainKeys(): Promise<{
   return { encrypted, skipped };
 }
 
+/** Domains whose stored DKIM keys do not decrypt, by kind of key. */
+export interface UndecryptableDomainKeys {
+  /** Active keys: every send from these domains would be held (production). */
+  active: string[];
+  /** Pending rotation keys (#250): hold no mail, only block completing the rotation. */
+  pending: string[];
+}
+
+/** Whether a stored key is `v1:` ciphertext that does not decrypt with the current key. */
+function doesNotDecrypt(stored: string | null): boolean {
+  if (stored === null || !isEncryptedSecret(stored)) return false;
+  try {
+    decryptSecret(stored, config.dkimEncryptionKey);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Names of the domains whose stored DKIM key does not decrypt with the
  * current `DKIM_ENCRYPTION_KEY` (#244): a regenerated `.env`, or a key
  * rotation that skipped re-encryption. Run at boot after
- * {@link encryptDomainKeys}; production refuses to start on any (see
- * `src/index.ts`), since every send from those domains would otherwise be
- * held rather than signed. Never logs or returns key material.
+ * {@link encryptDomainKeys}; production refuses to start on any `active`
+ * one (see `src/index.ts`), since every send from those domains would
+ * otherwise be held rather than signed. Pending rotation keys (#250) are
+ * reported apart: mail is never signed with them, so they only warn.
+ * Never logs or returns key material.
  */
-export async function findUndecryptableDomainKeys(): Promise<string[]> {
+export async function findUndecryptableDomainKeys(): Promise<UndecryptableDomainKeys> {
   const rows = await db
-    .select({ name: domains.name, dkimPrivateKey: domains.dkimPrivateKey })
+    .select({
+      name: domains.name,
+      dkimPrivateKey: domains.dkimPrivateKey,
+      dkimPendingPrivateKey: domains.dkimPendingPrivateKey,
+    })
     .from(domains)
-    .where(isNotNull(domains.dkimPrivateKey));
+    .where(
+      or(isNotNull(domains.dkimPrivateKey), isNotNull(domains.dkimPendingPrivateKey)),
+    );
 
-  const unreadable: string[] = [];
+  const result: UndecryptableDomainKeys = { active: [], pending: [] };
   for (const row of rows) {
-    if (row.dkimPrivateKey === null || !isEncryptedSecret(row.dkimPrivateKey)) continue;
-    try {
-      decryptSecret(row.dkimPrivateKey, config.dkimEncryptionKey);
-    } catch {
-      unreadable.push(row.name);
-    }
+    if (doesNotDecrypt(row.dkimPrivateKey)) result.active.push(row.name);
+    if (doesNotDecrypt(row.dkimPendingPrivateKey)) result.pending.push(row.name);
   }
-  return unreadable;
+  return result;
 }
 
 /**

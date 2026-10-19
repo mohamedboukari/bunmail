@@ -1,8 +1,36 @@
 import type { MxStatus } from "../../bounces/services/return-path-mx.ts";
 import { getDkimDnsRecord } from "../services/domain.service.ts";
 import type { DomainDnsStatus } from "../services/domain-dns-status.service.ts";
+import {
+  PREVIOUS_DKIM_SELECTOR_ADVICE,
+  dkimRecordHost,
+  dkimRecordValue,
+} from "../services/dkim-keys.ts";
 import { getRequiredDnsRecords } from "../services/required-dns-records.ts";
 import type { DmarcCheck, Domain, RequiredDnsRecord } from "../types/domain.types.ts";
+
+/** A DKIM key rotation in progress (#250): the record to publish before completing it. */
+export interface SerializedDkimPending {
+  selector: string;
+  /** Where the pending TXT record goes: `<selector>._domainkey.<domain>`. */
+  host: string;
+  /** Its value, unsplit like `dkimDnsRecord` (`dnsRecords` has it split). */
+  dnsRecord: string;
+  /** When the rotation started. */
+  createdAt: Date | null;
+}
+
+/** The selector active before the last completed rotation (#250). BunMail no longer signs with it. */
+export interface SerializedDkimPrevious {
+  selector: string;
+  host: string;
+  /** Its TXT value, to recognise the record to keep for now; null if unknown. */
+  dnsRecord: string | null;
+  /** When the rotation switched away from it. */
+  rotatedAt: Date | null;
+  /** What to do with its record. */
+  advice: string;
+}
 
 /**
  * Shape of a domain in API responses.
@@ -14,6 +42,10 @@ export interface SerializedDomain {
   name: string;
   dkimSelector: string;
   dkimDnsRecord: string | null;
+  /** The pending key rotation (#250), or null when none is pending. */
+  dkimPending: SerializedDkimPending | null;
+  /** The previous selector after a rotation (#250), or null before the first one. */
+  dkimPrevious: SerializedDkimPrevious | null;
   spfVerified: boolean;
   dkimVerified: boolean;
   dmarcVerified: boolean;
@@ -35,7 +67,8 @@ export interface SerializedDomain {
 
 /**
  * Transforms a raw database domain row into the public API response shape.
- * Strips `dkimPrivateKey` and `dkimPublicKey`: exposes the DKIM DNS
+ * Strips every private key (active and pending, #250) and the public keys:
+ * exposes the DKIM DNS
  * record value instead so users know what TXT record to add. `dns` is the
  * domain's live DNS status, or null when the response does not look it up.
  */
@@ -48,6 +81,8 @@ export function serializeDomain(
     name: domain.name,
     dkimSelector: domain.dkimSelector,
     dkimDnsRecord: getDkimDnsRecord(domain),
+    dkimPending: serializeDkimPending(domain),
+    dkimPrevious: serializeDkimPrevious(domain),
     spfVerified: domain.spfVerified,
     dkimVerified: domain.dkimVerified,
     dmarcVerified: domain.dmarcVerified,
@@ -59,5 +94,32 @@ export function serializeDomain(
     dmarc: dns?.dmarc ?? null,
     mx: dns?.mx ?? null,
     createdAt: domain.createdAt,
+  };
+}
+
+function serializeDkimPending(domain: Domain): SerializedDkimPending | null {
+  const selector = domain.dkimPendingSelector;
+  const publicKey = domain.dkimPendingPublicKey;
+  if (selector === null || publicKey === null) return null;
+  return {
+    selector,
+    host: dkimRecordHost(selector, domain.name),
+    dnsRecord: dkimRecordValue(publicKey),
+    createdAt: domain.dkimPendingCreatedAt,
+  };
+}
+
+function serializeDkimPrevious(domain: Domain): SerializedDkimPrevious | null {
+  const selector = domain.dkimPreviousSelector;
+  if (selector === null) return null;
+  return {
+    selector,
+    host: dkimRecordHost(selector, domain.name),
+    dnsRecord:
+      domain.dkimPreviousPublicKey === null
+        ? null
+        : dkimRecordValue(domain.dkimPreviousPublicKey),
+    rotatedAt: domain.dkimRotatedAt,
+    advice: PREVIOUS_DKIM_SELECTOR_ADVICE,
   };
 }

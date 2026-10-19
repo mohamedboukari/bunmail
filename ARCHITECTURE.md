@@ -138,9 +138,11 @@ bunmail/
 │   │   │   └── types/
 │   │   │       └── api-key.types.ts
 │   │   ├── domains/
-│   │   │   ├── domains.plugin.ts         ← CRUD + verify routes
+│   │   │   ├── domains.plugin.ts         ← CRUD + verify + DKIM rotation routes
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
+│   │   │   │   ├── dkim-keys.ts          ← DKIM key pair, selector rules, dated selectors, TXT match (#250)
+│   │   │   │   ├── dkim-rotation.service.ts ← DKIM key rotation: start, complete, cancel (#250)
 │   │   │   │   ├── domain-dkim.service.ts ← DKIM options for out-of-queue mail (inbound notify, invitations, #217)
 │   │   │   │   ├── dns-verification.service.ts ← SPF/DKIM/DMARC checks
 │   │   │   │   ├── dmarc-check.service.ts ← One DMARC record, org-domain fallback, strict tags (#250)
@@ -593,7 +595,14 @@ Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `id
 | name              | varchar(255)   | NOT NULL, UNIQUE             |
 | dkim_private_key  | text           | nullable; AES-256-GCM encrypted at rest (#23) |
 | dkim_public_key   | text           | nullable                     |
-| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
+| dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`; chosen on create or set by a completed rotation (#250) |
+| dkim_pending_selector | varchar(63) | nullable; dated selector of a pending DKIM key rotation (#250) |
+| dkim_pending_private_key | text     | nullable; pending private key, AES-256-GCM encrypted at rest (#250) |
+| dkim_pending_public_key | text      | nullable; pending public key (#250) |
+| dkim_pending_created_at | timestamp | nullable; when the pending rotation started (#250) |
+| dkim_previous_selector | varchar(63) | nullable; selector active before the last rotation, informational, never signs (#250) |
+| dkim_previous_public_key | text     | nullable; its public key (#250) |
+| dkim_rotated_at   | timestamp      | nullable; when the last rotation switched keys (#250) |
 | unsubscribe_email | varchar(255)   | nullable; per-domain mailto override for `List-Unsubscribe` (#40) |
 | unsubscribe_url   | text           | nullable; per-domain URL form for `List-Unsubscribe` + One-Click POST (#40); replaced by the per-recipient `/u/<token>` link on single-recipient mail when `APP_BASE_URL` is `https://` (#249) |
 | notify_email      | varchar(255)   | nullable; address notified on inbound mail for this domain (#106) |
@@ -893,6 +902,9 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records    | Yes  |
 | PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings | Yes |
 | DELETE | /api/v1/domains/:id           | Remove domain         | Yes  |
+| POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) | Yes |
+| POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) | Yes |
+| DELETE | /api/v1/domains/:id/dkim/rotate | Cancel the pending rotation (#250) | Yes |
 
 ### Webhooks
 

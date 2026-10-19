@@ -19,7 +19,7 @@ Authorization: Bearer bm_live_<your-api-key>
 
 API keys are managed via the `/api/v1/api-keys` endpoints. The first key is created using the seed script (`bun run src/db/seed.ts`).
 
-Changes made through the API (API keys created, updated or revoked; domains added, updated, verified or deleted; webhooks created or deleted; suppressions added or removed) are recorded in the audit log (#221) with the calling key as the actor, its name, the client IP and the user agent. Admins and the owner read it on the dashboard; see [docs/audit-log.md](audit-log.md).
+Changes made through the API (API keys created, updated or revoked; domains added, updated, verified or deleted, and DKIM key rotations started, completed or cancelled; webhooks created or deleted; suppressions added or removed) are recorded in the audit log (#221) with the calling key as the actor, its name, the client IP and the user agent. Admins and the owner read it on the dashboard; see [docs/audit-log.md](audit-log.md).
 
 > **Sending over SMTP instead of REST?** Besides this HTTP API, BunMail can run an SMTP **submission** server (#120) so apps that only speak SMTP send *through* BunMail: the same `bm_live_…` key is used as the SMTP password. It has no REST endpoints of its own; see [docs/smtp-submission.md](smtp-submission.md).
 
@@ -292,6 +292,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 | `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
 | `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Single-recipient mail carries BunMail's own per-recipient `/u/<token>` link instead when `APP_BASE_URL` is `https://` (#249). |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
+| `dkimSelector`      | string | No       | DKIM selector of the domain's key (#250): one lowercase DNS label, 1 to 63 characters, `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Defaults to `bunmail`. Anything else is `422`. |
 
 **Response:**
 
@@ -303,6 +304,8 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "name": "example.com",
     "dkimSelector": "bunmail",
     "dkimDnsRecord": "v=DKIM1; k=rsa; p=MIIBIjAN...",
+    "dkimPending": null,
+    "dkimPrevious": null,
     "spfVerified": false,
     "dkimVerified": false,
     "dmarcVerified": false,
@@ -351,8 +354,9 @@ The `unsubscribeEmail` / `unsubscribeUrl` fields shape the `List-Unsubscribe` he
 
 Every domain response also carries (#250):
 
-- `dnsRecords`: the records to publish, each `{ type, host, value, purpose, optional, note? }`: SPF, DKIM (pre-split into quoted strings of at most 255 characters; `dkimDnsRecord` keeps the unsplit value), a starting DMARC record, the A/AAAA and PTR records of `MAIL_HOSTNAME`, and an `optional` MX. See [docs/domains.md](domains.md#dns-records-to-publish-dnsrecords-250).
+- `dnsRecords`: the records to publish, each `{ type, host, value, purpose, optional, note?, pending? }`: SPF, DKIM (pre-split into quoted strings of at most 255 characters; `dkimDnsRecord` keeps the unsplit value), the pending key's DKIM record while a key rotation is pending (`pending: true`), a starting DMARC record, the A/AAAA and PTR records of `MAIL_HOSTNAME`, and an `optional` MX. See [docs/domains.md](domains.md#dns-records-to-publish-dnsrecords-250).
 - `dmarc`: the current DMARC check. `status` is `pass`, `missing`, `multiple` (two or more records), `invalid` (no valid `p=`) or `error` (DNS failure); `ok` is true only for `pass`. `inherited` is true when the organizational domain's record applies, `effectivePolicy` is the policy receivers apply (`sp` when inherited and set, else `p`), `warnings` flag weak settings (`p=none`, `pct` below 100, no `rua`) and `problems` the invalid tag values. See [docs/domains.md](domains.md#dmarc-rules-250).
+- `dkimPending` and `dkimPrevious` (DKIM key rotation): see [Key rotation](#post-apiv1domainsiddkimrotate) below. Both are `null` when no rotation is pending and none was completed. No private key, active or pending, is ever returned.
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
 
 `dmarc` and `mx` come from live DNS on `GET` (list and single) and on verify, cached for an hour (five minutes after an error). Each domain's DMARC and MX lookups run in parallel under one 5 s deadline, after which a status is `error`; a DNS failure never fails the request. The list looks up at most 8 domains at once. Create (`POST`), update (`PATCH`) and `DELETE` never wait on DNS: they return `dmarc` and `mx` as `null` (not checked yet), so a new domain shows `null` until the next `GET` or verify. The example above is a `GET` response.
@@ -416,6 +420,71 @@ Returns the updated domain, or `404` if it doesn't exist.
 #### `DELETE /api/v1/domains/:id`
 
 Delete a domain (hard delete).
+
+---
+
+#### `POST /api/v1/domains/:id/dkim/rotate`
+
+Start a DKIM key rotation (#250). Generates a new 2048-bit RSA key under a dated selector `bm<YYYYMMDD>` (UTC; `-2`, `-3`, ... when that name is the current or previous selector) and stores it as pending. **Mail stays signed with the current key** until the rotation is completed.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "...domain...": "...",
+    "dkimSelector": "bunmail",
+    "dkimPending": {
+      "selector": "bm20261019",
+      "host": "bm20261019._domainkey.example.com",
+      "dnsRecord": "v=DKIM1; k=rsa; p=MIIBIjAN...",
+      "createdAt": "2026-10-19T09:00:00.000Z"
+    }
+  },
+  "dnsRecord": {
+    "type": "TXT",
+    "host": "bm20261019._domainkey.example.com",
+    "value": "\"v=DKIM1; k=rsa; p=MIIBIjAN...\" \"...\"",
+    "purpose": "DKIM (pending rotation): the next key, published before the switch",
+    "optional": false,
+    "pending": true,
+    "note": "..."
+  }
+}
+```
+
+`dnsRecord` is the TXT record to publish **next to** the current one, split into quoted strings of at most 255 characters; it is also in `data.dnsRecords`. `409 DKIM_ROTATION_PENDING` when a rotation is already pending; `404` for an unknown domain.
+
+---
+
+#### `POST /api/v1/domains/:id/dkim/rotate/complete`
+
+Switch to the pending key (#250). BunMail looks up `<pending selector>._domainkey.<domain>` and compares it with the pending public key, as verify does. When it matches, one transaction makes the pending key the active one (`dkimSelector` becomes the pending selector, `dkimVerified` becomes `true`) and returns the old selector as `dkimPrevious`:
+
+```json
+"dkimPrevious": {
+  "selector": "bunmail",
+  "host": "bunmail._domainkey.example.com",
+  "dnsRecord": "v=DKIM1; k=rsa; p=MIIBIjAN...",
+  "rotatedAt": "2026-10-19T09:30:00.000Z",
+  "advice": "Keep its DNS record published for at least 7 days after the switch, then remove it."
+}
+```
+
+`dkimPrevious` is informational: BunMail never signs with it (its private key is dropped at the switch). Otherwise nothing changes and the answer is `409` with a `code`:
+
+- `DKIM_PENDING_NOT_PUBLISHED`: the record is missing, carries another key, or the lookup failed; `error` says which.
+- `DKIM_NO_PENDING_ROTATION`: no rotation is pending.
+- `DKIM_PENDING_KEY_UNREADABLE`: the pending private key does not decrypt with `DKIM_ENCRYPTION_KEY`; cancel and start again.
+
+`POST /api/v1/domains/:id/verify` never completes a rotation on its own.
+
+---
+
+#### `DELETE /api/v1/domains/:id/dkim/rotate`
+
+Cancel the pending rotation (#250): the pending key is dropped, the active key is untouched. `409 DKIM_NO_PENDING_ROTATION` when none is pending; `404` for an unknown domain.
 
 ---
 
@@ -764,6 +833,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258) |
-| 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
+| 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively; a DKIM key rotation step refused on the domain's state (#250): `DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE` |
 | 429    | Rate limit exceeded, or a delivery replayed 5 times this hour (`REPLAY_LIMIT_REACHED`, #258); both send `Retry-After` |

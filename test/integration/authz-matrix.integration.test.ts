@@ -78,6 +78,9 @@ const ROUTES: Record<string, RouteSpec> = {
   "PATCH /api/v1/domains/:id": { access: "admin", body: { unsubscribeUrl: null } },
   "DELETE /api/v1/domains/:id": { access: "admin" },
   "POST /api/v1/domains/:id/verify": { access: "admin" },
+  "POST /api/v1/domains/:id/dkim/rotate": { access: "admin" },
+  "POST /api/v1/domains/:id/dkim/rotate/complete": { access: "admin" },
+  "DELETE /api/v1/domains/:id/dkim/rotate": { access: "admin" },
 
   "POST /api/v1/webhooks/": {
     access: "key",

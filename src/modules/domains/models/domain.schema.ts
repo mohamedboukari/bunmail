@@ -23,8 +23,44 @@ export const domains = pgTable(
     /** Corresponding public key: provided to the user for DNS TXT record setup */
     dkimPublicKey: text("dkim_public_key"),
 
-    /** DKIM selector (subdomain prefix for the TXT record, default "bunmail") */
+    /**
+     * DKIM selector of the active key (subdomain prefix for the TXT record):
+     * "bunmail" by default, or a DNS label chosen on create (#250). A
+     * completed rotation replaces it with the rotation's dated selector.
+     */
     dkimSelector: varchar("dkim_selector", { length: 63 }).notNull().default("bunmail"),
+
+    /**
+     * Key rotation in progress (#250): the selector, encrypted private key
+     * and public key of the next DKIM key, and when the rotation started.
+     * All null when no rotation is pending. Mail is never signed with the
+     * pending key: completing the rotation (once its TXT record is
+     * published) moves it into the active columns above.
+     */
+    dkimPendingSelector: varchar("dkim_pending_selector", { length: 63 }),
+
+    /** Pending private key (PEM), AES-256-GCM encrypted like `dkimPrivateKey`. */
+    dkimPendingPrivateKey: text("dkim_pending_private_key"),
+
+    /** Pending public key (PEM), the value of the pending TXT record. */
+    dkimPendingPublicKey: text("dkim_pending_public_key"),
+
+    /** When the pending rotation started. */
+    dkimPendingCreatedAt: timestamp("dkim_pending_created_at"),
+
+    /**
+     * The selector (and public key) that was active before the last
+     * completed rotation (#250). Informational only: BunMail never signs
+     * with it (its private key is dropped), it tells the operator which
+     * TXT record to keep published for a while, then remove.
+     */
+    dkimPreviousSelector: varchar("dkim_previous_selector", { length: 63 }),
+
+    /** Public key (PEM) of the previous selector. */
+    dkimPreviousPublicKey: text("dkim_previous_public_key"),
+
+    /** When the last rotation switched to the current key. */
+    dkimRotatedAt: timestamp("dkim_rotated_at"),
 
     /** Whether the SPF DNS record has been verified for this domain */
     spfVerified: boolean("spf_verified").notNull().default(false),

@@ -32,13 +32,27 @@ export function DomainsPage({ domains, flash, creators }: DomainsPageProps) {
 
       {/* Add domain form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
-        <form method="POST" action="/dashboard/domains" class="flex gap-3">
+        <form
+          method="POST"
+          action="/dashboard/domains"
+          class="flex flex-col sm:flex-row gap-3"
+        >
           <input
             type="text"
             name="name"
             required
             placeholder="Domain name (e.g. example.com)"
             class="flex-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
+          />
+          {/* Optional DKIM selector (#250): one lowercase DNS label, default bunmail */}
+          <input
+            type="text"
+            name="dkimSelector"
+            maxlength="63"
+            pattern="[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?"
+            title="One lowercase DNS label: letters, digits and inner hyphens, up to 63 characters"
+            placeholder="DKIM selector (optional, default bunmail)"
+            class="sm:w-72 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-hidden focus:ring-2 focus:ring-gray-400 dark:focus:ring-gray-500 focus:border-transparent"
           />
           <button
             type="submit"

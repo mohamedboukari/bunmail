@@ -24,6 +24,11 @@ export interface CreateDomainInput {
   /** Address notified when inbound mail arrives for this domain (#106). Optional. */
   notifyEmail?: string;
   /**
+   * DKIM selector of the domain's key (#250): one lowercase DNS label.
+   * Defaults to `bunmail`.
+   */
+  dkimSelector?: string;
+  /**
    * Who added the domain (#219): the dashboard user, or the calling key's
    * user over REST. Attribution only; null (the default) means the owner.
    */
@@ -101,4 +106,10 @@ export interface RequiredDnsRecord {
   optional: boolean;
   /** How to apply it, when it is not obvious. */
   note?: string;
+  /**
+   * True for the key of a pending DKIM rotation (#250): publish it next to
+   * the current one, then complete the rotation. Mail is not signed with
+   * it until then.
+   */
+  pending?: boolean;
 }

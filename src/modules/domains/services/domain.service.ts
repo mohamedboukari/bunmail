@@ -1,4 +1,3 @@
-import { generateKeyPair } from "crypto";
 import { DrizzleQueryError, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { domains } from "../models/domain.schema.ts";
@@ -7,7 +6,13 @@ import { logger } from "../../../utils/logger.ts";
 import { encryptSecret } from "../../../utils/crypto.ts";
 import { config } from "../../../config.ts";
 import type { Domain, CreateDomainInput } from "../types/domain.types.ts";
-import { DomainAlreadyRegisteredError } from "../errors.ts";
+import { DomainAlreadyRegisteredError, InvalidDkimSelectorError } from "../errors.ts";
+import {
+  DEFAULT_DKIM_SELECTOR,
+  dkimRecordValue,
+  generateDkimKeyPair,
+  isValidDkimSelector,
+} from "./dkim-keys.ts";
 
 /** Postgres SQLSTATE for a unique constraint violation. */
 const UNIQUE_VIOLATION = "23505";
@@ -18,38 +23,6 @@ const UNIQUE_VIOLATION = "23505";
  */
 export function domainNameIs(name: string): SQL {
   return sql`lower(${domains.name}) = ${name.trim().toLowerCase()}`;
-}
-
-/**
- * Generates a 2048-bit RSA keypair for DKIM signing.
- * Returns PEM-encoded private and public keys.
- */
-function generateDkimKeyPair(): Promise<{ privateKey: string; publicKey: string }> {
-  return new Promise((resolve, reject) => {
-    generateKeyPair(
-      "rsa",
-      {
-        modulusLength: 2048,
-        publicKeyEncoding: { type: "spki", format: "pem" },
-        privateKeyEncoding: { type: "pkcs8", format: "pem" },
-      },
-      (err, publicKey, privateKey) => {
-        if (err) return reject(err);
-        resolve({ privateKey, publicKey });
-      },
-    );
-  });
-}
-
-/**
- * Extracts the raw base64 key material from a PEM-encoded public key.
- * This is what goes into the DNS TXT record (`p=...`).
- */
-function extractPublicKeyBase64(pem: string): string {
-  return pem
-    .replace(/-----BEGIN PUBLIC KEY-----/g, "")
-    .replace(/-----END PUBLIC KEY-----/g, "")
-    .replace(/\s/g, "");
 }
 
 /**
@@ -66,6 +39,12 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
   const id = generateId("dom");
   /** Stored lowercase: DNS names are case-insensitive. */
   const name = input.name.trim().toLowerCase();
+  /** A DNS label (#250); the DTO checks it too, this covers the dashboard. */
+  const dkimSelector = input.dkimSelector ?? DEFAULT_DKIM_SELECTOR;
+  if (!isValidDkimSelector(dkimSelector)) {
+    logger.warn("Domain not created: invalid DKIM selector", { name });
+    throw new InvalidDkimSelectorError();
+  }
 
   const [existing] = await db
     .select({ id: domains.id })
@@ -80,7 +59,7 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
     throw new DomainAlreadyRegisteredError(name);
   }
 
-  logger.info("Creating domain with DKIM keys", { id, name });
+  logger.info("Creating domain with DKIM keys", { id, name, dkimSelector });
 
   const { privateKey, publicKey } = await generateDkimKeyPair();
 
@@ -101,7 +80,7 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
         name,
         dkimPrivateKey: encryptedPrivateKey,
         dkimPublicKey: publicKey,
-        dkimSelector: "bunmail",
+        dkimSelector,
         unsubscribeEmail: input.unsubscribeEmail ?? null,
         unsubscribeUrl: input.unsubscribeUrl ?? null,
         notifyEmail: input.notifyEmail ?? null,
@@ -152,8 +131,7 @@ export function spfAuthorizationTerm(hostname: string = config.mail.hostname): s
  */
 export function getDkimDnsRecord(domain: Pick<Domain, "dkimPublicKey">): string | null {
   if (!domain.dkimPublicKey) return null;
-  const b64 = extractPublicKeyBase64(domain.dkimPublicKey);
-  return `v=DKIM1; k=rsa; p=${b64}`;
+  return dkimRecordValue(domain.dkimPublicKey);
 }
 
 /**

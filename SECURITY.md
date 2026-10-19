@@ -93,7 +93,7 @@ On first boot after upgrading, [`src/db/encrypt-domain-keys.ts`](src/db/encrypt-
 Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_PREVIOUS`) is tracked as a follow-up.
 
 1. **Stop sending traffic** (drain the queue, take the API offline).
-2. With the *current* key still set, run a one-shot script that decrypts every row's `dkim_private_key` to plaintext PEM, and every `webhooks.secret` to its plaintext, writing them back unencrypted.
+2. With the *current* key still set, run a one-shot script that decrypts every row's `dkim_private_key` to plaintext PEM, and every `webhooks.secret` to its plaintext, writing them back unencrypted. Complete or cancel any pending DKIM key rotation first (#250): the boot pass does not re-encrypt `dkim_pending_private_key`, and a pending key left under the old key cannot be completed (the boot only warns about it).
 3. Generate a new key (`openssl rand -base64 32`), update `.env`, set `DKIM_ENCRYPTION_KEY=<new>`.
 4. Restart: the boot-time encrypters (DKIM keys and webhook secrets) see the now-plaintext rows and re-encrypt them under the new key. If any DKIM key was missed and is still encrypted under the old key, production refuses to start and names the domains (#244): nothing is ever sent unsigned.
 5. Resume traffic.
@@ -101,6 +101,17 @@ Rotation is a manual procedure for now; automated overlap (`DKIM_ENCRYPTION_KEY_
 A safer rolling rotation (read with old key, write with new) needs both keys to coexist briefly, see the follow-up issue for the planned design.
 
 **Unsubscribe links (#249).** The per-recipient `List-Unsubscribe` tokens are HMACs under a key derived (HKDF) from `DKIM_ENCRYPTION_KEY`, and nothing is stored to re-encrypt: rotating the key invalidates every unsubscribe link and `unsub+` address in mail already sent. Those recipients then see "This link is not valid", and mailbox providers' one-click requests fail with `404`. Rotate when no recent bulk mail is outstanding if you can, and expect some recipients to fall back to "Report spam" otherwise. The signed return paths (#236, `b+<id>.<index>.<MAC>@<domain>`, with `SMTP_ENABLED=true`) use another key derived the same way: rotation also invalidates every return path in mail already sent, with no grace window (there is no previous-key mechanism for `DKIM_ENCRYPTION_KEY`), so a DSN for mail sent before the rotation is refused and suppresses nobody. Synchronous `5xx` rejections at send time still suppress.
+
+### DKIM key rotation (#250)
+
+Rotating `DKIM_ENCRYPTION_KEY` (above) re-encrypts the same signing keys; it does not replace them. To replace a domain's DKIM key itself (a suspected leak of the private key, a departing operator, or routine hygiene), rotate it without downtime from the domain page (**Rotate DKIM key**, admin-only) or the API (`POST /api/v1/domains/:id/dkim/rotate`, admin key):
+
+1. **Start**: BunMail generates a new 2048-bit key under a dated selector (`bm<YYYYMMDD>`), encrypted at rest like the active key, and shows its TXT record. Mail stays signed with the current key.
+2. **Publish** the new record next to the current one.
+3. **Complete**: BunMail switches only after it finds the new record carrying the new key. The old key's private half is dropped at the switch; BunMail never signs with it again.
+4. **Keep the old selector's record published for at least 7 days**, so mail signed before the switch still verifies, then **remove it**. For a key you believe leaked, weigh that window against the risk: removing the old record at once makes forged mail signed with the leaked key fail DKIM immediately, at the cost of failing DKIM for your own mail still in flight.
+
+Each step is in the audit log (`domain.dkim_rotation_started`, `_completed`, `_cancelled`, with the selector only). See [docs/domains.md](docs/domains.md#key-rotation-250).
 
 ### What's *not* protected by this
 

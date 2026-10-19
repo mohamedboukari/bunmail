@@ -4,9 +4,18 @@ import { DomainsPage } from "../routes/domains.tsx";
 import { DomainDetailPage } from "../routes/domain-detail.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
 import { flashMessageFor } from "../flash-errors.ts";
-import { DomainAlreadyRegisteredError } from "../../modules/domains/errors.ts";
+import {
+  DkimRotationError,
+  DomainAlreadyRegisteredError,
+  InvalidDkimSelectorError,
+} from "../../modules/domains/errors.ts";
 import * as domainService from "../../modules/domains/services/domain.service.ts";
 import { verifyDomain } from "../../modules/domains/services/dns-verification.service.ts";
+import {
+  cancelDkimRotation,
+  completeDkimRotation,
+  startDkimRotation,
+} from "../../modules/domains/services/dkim-rotation.service.ts";
 import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
 import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
 import { toFlash } from "../lib/responses.ts";
@@ -46,7 +55,41 @@ function isDnsVerifyThrottled(domainId: string): boolean {
   return recent.length > DNS_VERIFY_MAX;
 }
 
-/** Domain pages (#291): list, add, delete, DNS verify, settings, detail. */
+/** Where a DKIM rotation step lands: the domain page with a flash. */
+function domainFlashUrl(id: string, message: string, type: "success" | "error"): string {
+  return `/dashboard/domains/${id}?flash=${encodeURIComponent(message)}&flashType=${type}`;
+}
+
+/**
+ * Runs one DKIM rotation step (#250) for the dashboard: the step's own
+ * refusal (`DkimRotationError`) becomes an error flash on the domain page,
+ * an unknown domain one on the list, anything else is logged and shown
+ * as `fallback`.
+ */
+async function dkimRotationStep(
+  id: string,
+  step: () => Promise<unknown>,
+  success: string,
+  fallback: string,
+): Promise<string> {
+  try {
+    const domain = await step();
+    if (domain === undefined) {
+      return `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+    }
+    return domainFlashUrl(id, success, "success");
+  } catch (error) {
+    if (!(error instanceof DkimRotationError)) {
+      logger.error("DKIM rotation step failed via dashboard", {
+        domainId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return domainFlashUrl(id, flashMessageFor(error, fallback), "error");
+  }
+}
+
+/** Domain pages (#291): list, add, delete, DNS verify, DKIM rotation, settings, detail. */
 export function domainPages(app: GuardedDashboard) {
   return (
     app
@@ -84,9 +127,12 @@ export function domainPages(app: GuardedDashboard) {
         async ({ body, set, auth, request, server }) => {
           try {
             /** Attributed to the signed-in account (#219). */
+            /** Empty means the default selector (#250). */
+            const selector = (body.dkimSelector ?? "").trim();
             const domain = await domainService.createDomain({
               name: body.name,
               createdByUserId: auth.user.id,
+              dkimSelector: selector === "" ? undefined : selector,
             });
             await recordAuditEvent({
               ...dashboardAudit(auth, request, server),
@@ -104,6 +150,8 @@ export function domainPages(app: GuardedDashboard) {
           } catch (error) {
             if (error instanceof DomainAlreadyRegisteredError) {
               logger.warn("Domain not added via dashboard: already registered");
+            } else if (error instanceof InvalidDkimSelectorError) {
+              logger.warn("Domain not added via dashboard: invalid DKIM selector");
             } else {
               logger.error("Failed to add domain via dashboard", {
                 error: error instanceof Error ? error.message : String(error),
@@ -119,6 +167,7 @@ export function domainPages(app: GuardedDashboard) {
           beforeHandle: adminGuard,
           body: t.Object({
             name: t.String(),
+            dkimSelector: t.Optional(t.String({ maxLength: 255 })),
           }),
         },
       )
@@ -210,6 +259,84 @@ export function domainPages(app: GuardedDashboard) {
           params: t.Object({
             id: t.String(),
           }),
+        },
+      )
+
+      /**
+       * POST /dashboard/domains/:id/dkim/rotate
+       * Starts a DKIM key rotation (#250): a new key under a dated selector,
+       * pending until completed. Mail stays signed with the active key.
+       */
+      .post(
+        "/domains/:id/dkim/rotate",
+        async ({ params, set, auth, request, server }) => {
+          set.status = 302;
+          set.headers["location"] = await dkimRotationStep(
+            params.id,
+            () => startDkimRotation(params.id, dashboardAudit(auth, request, server)),
+            "DKIM key rotation started: publish the pending DKIM record, then complete the rotation",
+            "Failed to start the DKIM key rotation",
+          );
+          return "";
+        },
+        {
+          beforeHandle: adminGuard,
+          params: t.Object({ id: t.String() }),
+        },
+      )
+
+      /**
+       * POST /dashboard/domains/:id/dkim/rotate/complete
+       * Switches to the pending key once its TXT record is published (#250).
+       * Looks up DNS, so it shares the Verify throttle.
+       */
+      .post(
+        "/domains/:id/dkim/rotate/complete",
+        async ({ params, set, auth, request, server }) => {
+          set.status = 302;
+          if (isDnsVerifyThrottled(params.id)) {
+            logger.warn("DKIM rotation complete throttled", { id: params.id });
+            set.headers["location"] = domainFlashUrl(
+              params.id,
+              "Too many DNS checks: wait a minute and try again",
+              "error",
+            );
+            return "";
+          }
+          set.headers["location"] = await dkimRotationStep(
+            params.id,
+            () => completeDkimRotation(params.id, dashboardAudit(auth, request, server)),
+            "DKIM key rotation completed: mail is now signed with the new key",
+            "Failed to complete the DKIM key rotation",
+          );
+          return "";
+        },
+        {
+          beforeHandle: adminGuard,
+          params: t.Object({ id: t.String() }),
+        },
+      )
+
+      /**
+       * POST /dashboard/domains/:id/dkim/rotate/cancel
+       * Drops the pending key (#250); the active key is untouched. A form
+       * cannot send DELETE, hence a POST route.
+       */
+      .post(
+        "/domains/:id/dkim/rotate/cancel",
+        async ({ params, set, auth, request, server }) => {
+          set.status = 302;
+          set.headers["location"] = await dkimRotationStep(
+            params.id,
+            () => cancelDkimRotation(params.id, dashboardAudit(auth, request, server)),
+            "DKIM key rotation cancelled",
+            "Failed to cancel the DKIM key rotation",
+          );
+          return "";
+        },
+        {
+          beforeHandle: adminGuard,
+          params: t.Object({ id: t.String() }),
         },
       )
 

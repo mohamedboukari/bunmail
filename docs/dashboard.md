@@ -67,7 +67,7 @@ The role is read on every request, so a role change applies on the next request.
 | Helper | Lets through | Used for |
 |---|---|---|
 | `memberGuard` | any signed-in account | home, change password (form and `POST`, #279), active sessions (the page and both sign-out actions, own sessions only, #281), two-factor authentication (the page and its four actions, own account only, #220), send (form and `POST`), emails and inbound lists and detail pages, restore from trash (single message), inbound reply form, tombstones, templates (view and create; edit and delete of the member's own templates, checked in the service, #219), API keys (#219: the page, create, allowed senders and revoke, scoped in the service to the member's own keys; a member's keys are always restricted), and the view pages (`GET`) of domains, webhooks and their deliveries, DMARC reports and suppressions |
-| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
+| `adminGuard` | admins and the owner | the Invitations page and its actions (#217; which roles an account may grant is checked in the service), the Users page and its actions (#218, including Reset password #277; the owner-only and members-only rules are checked in the service), the API key admin toggle (`POST /dashboard/api-keys/:id/admin`; admins and the owner also see and manage every key and create admin keys, #219), every domain, webhook and suppression change (create, verify, delete, edit, DKIM key rotation #250, replay a delivery), edit and delete of any template (#219), trash (single and bulk), bulk restore, permanent delete (single and bulk) and empty trash, outbound and inbound. Trash is admin-only because the purge worker hard-deletes it after `TRASH_RETENTION_DAYS` |
 | `ownerGuard` | the owner | no route: role changes and ownership transfer (#218) are owner-only inside the account service, which checks the live role in its transaction |
 
 They are thin wrappers of `requireRole(min)`, which ranks owner > admin > member. `requireAssurance(level)` is the same kind of check on the session: `requireAssurance("mfa")` refuses a `password` session. No route uses it: two-factor authentication (#220) is enforced by the login (a `pending` session until the code) and by the `REQUIRE_2FA` policy in the guard, so accounts without a second factor keep working unchanged.
@@ -284,8 +284,8 @@ per-replica.
 | GET /dashboard/invitations       | Pending invitations + invite form, one-time link reveal (admin, #217) |
 | GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
 | GET /dashboard/audit-log         | Security-relevant actions (sign-ins, account, 2FA, API key, domain, webhook, suppression changes), filter by action, actor and outcome; read-only (admin, #221) |
-| GET /dashboard/domains           | Domains list (with who added each, #219) + add form               |
-| GET /dashboard/domains/:id       | Domain detail + DNS status                                        |
+| GET /dashboard/domains           | Domains list (with who added each, #219) + add form (name, optional DKIM selector, #250) |
+| GET /dashboard/domains/:id       | Domain detail + DNS status + DKIM key panel (rotation, previous selector, #250) |
 | GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
 | GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview); read-only for a member on someone else's template (#219) |
 | GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form                 |
@@ -354,7 +354,7 @@ src/pages/
 │   ├── invitations.plugin.tsx ← Invitations
 │   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
 │   ├── audit-log.plugin.tsx  ← Audit log page (#221)
-│   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), detail
+│   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), DKIM key rotation (#250), detail
 │   ├── templates.plugin.tsx  ← Templates
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
 │   ├── inbound.plugin.tsx    ← Inbound list, trash, detail, reply
@@ -483,9 +483,12 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Turn two-factor off → `POST /dashboard/account/two-factor/disable` (form fields: `password`, `code`, #220)
 - Second login step → `POST /dashboard/login/two-factor` (public, needs a pending session; form field: `code`, #220)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
-- Add domain → `POST /dashboard/domains`
+- Add domain → `POST /dashboard/domains` (form fields: `name`, optional `dkimSelector`: one lowercase DNS label, empty for `bunmail`; an invalid one is an error flash, #250)
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)
 - Verify domain DNS → `POST /dashboard/domains/:id/verify`
+- Start a DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate` (admin, #250; the **Rotate DKIM key** button asks for confirmation). The new key's record is listed under Required DNS Records with a `pending` badge; mail stays signed with the current key
+- Complete the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/complete` (admin, #250; confirmation; switches only once the pending record resolves with the new key, else an error flash with the reason; shares the Verify throttle, 5 DNS checks per minute per domain)
+- Cancel the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/cancel` (admin, #250; confirmation; a form cannot send `DELETE`, the REST route is `DELETE /api/v1/domains/:id/dkim/rotate`)
 - Set or clear the inbound notification address → `POST /dashboard/domains/:id/notify-email` (#106)
 - Set or clear the List-Unsubscribe overrides → `POST /dashboard/domains/:id/unsubscribe` (#243)
 - Create template → `POST /dashboard/templates`

@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import { DKIM_SELECTOR_PATTERN } from "../services/dkim-keys.ts";
 
 /**
  * Validation schema for POST /api/v1/domains request body.
@@ -53,4 +54,13 @@ export const createDomainDto = t.Object({
    * dashboard. Point this at an external mailbox.
    */
   notifyEmail: t.Optional(t.String({ format: "email", minLength: 3, maxLength: 255 })),
+
+  /**
+   * DKIM selector of the domain's key (#250): one lowercase DNS label, 1 to
+   * 63 characters (letters, digits, inner hyphens). Omit for `bunmail`.
+   * Anything else is a 422.
+   */
+  dkimSelector: t.Optional(
+    t.String({ pattern: DKIM_SELECTOR_PATTERN, minLength: 1, maxLength: 63 }),
+  ),
 });

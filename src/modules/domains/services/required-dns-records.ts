@@ -1,6 +1,7 @@
 import { isIPv6 } from "net";
 import { config } from "../../../config.ts";
 import type { Domain, RequiredDnsRecord } from "../types/domain.types.ts";
+import { dkimRecordHost, dkimRecordValue } from "./dkim-keys.ts";
 import {
   getDkimDnsRecord,
   spfAuthorizationTerm,
@@ -43,10 +44,12 @@ function dmarcReportAddress(domain: string): string {
 
 /**
  * The records to publish for `domain`, in the order a new setup adds them.
- * The DKIM record is left out when the domain has no public key.
+ * The DKIM record is left out when the domain has no public key. A pending
+ * key rotation adds its record, flagged `pending`, right after it.
  */
 export function getRequiredDnsRecords(
-  domain: Pick<Domain, "name" | "dkimSelector" | "dkimPublicKey">,
+  domain: Pick<Domain, "name" | "dkimSelector" | "dkimPublicKey"> &
+    Partial<Pick<Domain, "dkimPendingSelector" | "dkimPendingPublicKey">>,
   settings: DnsRecordSettings = {
     mailHostname: config.mail.hostname,
     publicIps: config.mail.publicIps,
@@ -68,13 +71,16 @@ export function getRequiredDnsRecords(
   if (dkim !== null) {
     records.push({
       type: "TXT",
-      host: `${domain.dkimSelector}._domainkey.${domain.name}`,
+      host: dkimRecordHost(domain.dkimSelector, domain.name),
       value: splitTxtValue(dkim),
       purpose: "DKIM: the public key receivers check BunMail's signatures with",
       optional: false,
       note: "A TXT string holds at most 255 characters, so the key is split into quoted strings: paste them as they are. A provider that takes one unquoted value and splits it itself (the API's dkimDnsRecord) works too.",
     });
   }
+
+  const pending = pendingDkimDnsRecord(domain);
+  if (pending !== null) records.push(pending);
 
   const reportAddress = dmarcReportAddress(domain.name);
   records.push({
@@ -140,4 +146,27 @@ export function getRequiredDnsRecords(
   });
 
   return records;
+}
+
+/**
+ * The TXT record of a pending DKIM key rotation (#250), split like the
+ * active one, or null when no rotation is pending. Also returned by
+ * `POST /api/v1/domains/:id/dkim/rotate`.
+ */
+export function pendingDkimDnsRecord(
+  domain: Pick<Domain, "name"> &
+    Partial<Pick<Domain, "dkimPendingSelector" | "dkimPendingPublicKey">>,
+): RequiredDnsRecord | null {
+  const selector = domain.dkimPendingSelector ?? null;
+  const publicKey = domain.dkimPendingPublicKey ?? null;
+  if (selector === null || publicKey === null) return null;
+  return {
+    type: "TXT",
+    host: dkimRecordHost(selector, domain.name),
+    value: splitTxtValue(dkimRecordValue(publicKey)),
+    purpose: "DKIM (pending rotation): the next key, published before the switch",
+    optional: false,
+    pending: true,
+    note: "Add this record next to the current DKIM record: do not replace it. Mail stays signed with the current key until you complete the rotation, which checks that this record resolves first.",
+  };
 }

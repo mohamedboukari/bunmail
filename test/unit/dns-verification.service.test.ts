@@ -51,6 +51,13 @@ const baseDomain = {
   id: "dom_test",
   name: "example.com",
   dkimSelector: "bunmail",
+  dkimPendingSelector: null,
+  dkimPendingPrivateKey: null,
+  dkimPendingPublicKey: null,
+  dkimPendingCreatedAt: null,
+  dkimPreviousSelector: null,
+  dkimPreviousPublicKey: null,
+  dkimRotatedAt: null,
   dkimPublicKey:
     "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA\n-----END PUBLIC KEY-----",
   dkimPrivateKey: null,

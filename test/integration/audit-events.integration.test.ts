@@ -223,6 +223,11 @@ function asKey(): Pick<Expected, "actorType" | "actorId" | "actorLabel" | "ip"> 
   return { actorType: "api_key", actorId: adminKey.id, actorLabel: "ops key", ip: IP };
 }
 
+/** The selector a DKIM rotation started today gets (#250). */
+function datedSelectorToday(): string {
+  return `bm${new Date().toISOString().slice(0, 10).replaceAll("-", "")}`;
+}
+
 /** One case: performs the action, returns the event it must have left. */
 interface Case {
   name: string;
@@ -1048,6 +1053,68 @@ const CASES: Case[] = [
         ...asKey(),
         targetId: domain.id,
         metadata: { spf: false, dkim: true, dmarc: false },
+      };
+    },
+  },
+
+  {
+    name: "DKIM rotation started (REST)",
+    run: async () => {
+      const domain = await seed.domain({ name: "rotate.example.org" });
+      await rest("POST", `/api/v1/domains/${domain.id}/dkim/rotate`);
+      return {
+        action: "domain.dkim_rotation_started",
+        ...asKey(),
+        targetId: domain.id,
+        targetLabel: "rotate.example.org",
+        metadata: { selector: datedSelectorToday() },
+      };
+    },
+  },
+  {
+    name: "DKIM rotation cancelled (REST)",
+    run: async () => {
+      const domain = await seed.domain({ name: "rotate.example.org" });
+      await rest("POST", `/api/v1/domains/${domain.id}/dkim/rotate`);
+      await rest("DELETE", `/api/v1/domains/${domain.id}/dkim/rotate`);
+      return {
+        action: "domain.dkim_rotation_cancelled",
+        ...asKey(),
+        targetId: domain.id,
+        metadata: { selector: datedSelectorToday() },
+      };
+    },
+  },
+  {
+    name: "DKIM rotation started (dashboard)",
+    run: async () => {
+      const domain = await seed.domain({ name: "rotate.example.org" });
+      await dash("POST", `/dashboard/domains/${domain.id}/dkim/rotate`, {
+        token: tokens.admin,
+      });
+      return {
+        action: "domain.dkim_rotation_started",
+        ...asUser("admin"),
+        targetId: domain.id,
+        metadata: { selector: datedSelectorToday() },
+      };
+    },
+  },
+  {
+    name: "DKIM rotation cancelled (dashboard)",
+    run: async () => {
+      const domain = await seed.domain({ name: "rotate.example.org" });
+      await dash("POST", `/dashboard/domains/${domain.id}/dkim/rotate`, {
+        token: tokens.admin,
+      });
+      await dash("POST", `/dashboard/domains/${domain.id}/dkim/rotate/cancel`, {
+        token: tokens.admin,
+      });
+      return {
+        action: "domain.dkim_rotation_cancelled",
+        ...asUser("admin"),
+        targetId: domain.id,
+        metadata: { selector: datedSelectorToday() },
       };
     },
   },
