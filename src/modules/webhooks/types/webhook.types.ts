@@ -23,4 +23,6 @@ export type WebhookEventType =
   | "email.bounced"
   | "email.complained"
   | "email.received"
-  | "email.unsubscribed";
+  | "email.unsubscribed"
+  | "domain.verified"
+  | "domain.verification_failed";

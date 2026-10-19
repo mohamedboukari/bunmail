@@ -310,6 +310,8 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "dkimVerified": false,
     "dmarcVerified": false,
     "verifiedAt": null,
+    "lastCheckedAt": null,
+    "lastCheckResult": null,
     "unsubscribeEmail": null,
     "unsubscribeUrl": null,
     "notifyEmail": null,
@@ -357,6 +359,8 @@ Every domain response also carries (#250):
 - `dnsRecords`: the records to publish, each `{ type, host, value, purpose, optional, note?, pending? }`: SPF, DKIM (pre-split into quoted strings of at most 255 characters; `dkimDnsRecord` keeps the unsplit value), the pending key's DKIM record while a key rotation is pending (`pending: true`), a starting DMARC record, the A/AAAA and PTR records of `MAIL_HOSTNAME`, and an `optional` MX. See [docs/domains.md](domains.md#dns-records-to-publish-dnsrecords-250).
 - `dmarc`: the current DMARC check. `status` is `pass`, `missing`, `multiple` (two or more records), `invalid` (no valid `p=`) or `error` (DNS failure); `ok` is true only for `pass`. `inherited` is true when the organizational domain's record applies, `effectivePolicy` is the policy receivers apply (`sp` when inherited and set, else `p`), `warnings` flag weak settings (`p=none`, `pct` below 100, no `rua`) and `problems` the invalid tag values. See [docs/domains.md](domains.md#dmarc-rules-250).
 - `dkimPending` and `dkimPrevious` (DKIM key rotation): see [Key rotation](#post-apiv1domainsiddkimrotate) below. Both are `null` when no rotation is pending and none was completed. No private key, active or pending, is ever returned.
+- `verifiedAt`: when SPF, DKIM and DMARC all passed; kept while they keep passing (or a lookup fails), `null` when not verified or after the domain flipped to failing (two definitive failures in a row). Before #250 it was set by every verify, whatever the result.
+- `lastCheckedAt` and `lastCheckResult`: when the DNS checks last ran (by verify or the daily re-verification loop) and what each found: `{ spf, dkim, dmarc, checkedAt }`, each `{ status, reason }` with `status` `pass`, `fail` (record missing or wrong) or `unknown` (the lookup failed; it changes nothing). Both `null` before the first check. See [docs/domains.md](domains.md#scheduled-re-verification-250).
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
 
 `dmarc` and `mx` come from live DNS on `GET` (list and single) and on verify, cached for an hour (five minutes after an error). Each domain's DMARC and MX lookups run in parallel under one 5 s deadline, after which a status is `error`; a DNS failure never fails the request. The list looks up at most 8 domains at once. Create (`POST`), update (`PATCH`) and `DELETE` never wait on DNS: they return `dmarc` and `mx` as `null` (not checked yet), so a new domain shows `null` until the next `GET` or verify. The example above is a `GET` response.
@@ -380,7 +384,7 @@ Get a single domain by ID.
 
 #### `POST /api/v1/domains/:id/verify`
 
-Trigger DNS verification for SPF, DKIM, and DMARC records.
+Trigger DNS verification for SPF, DKIM, and DMARC records. The result is stored with the same rules as the re-verification loop (#250): a failed lookup is `unknown` and changes nothing, a verified record stays verified until the second failure in a row, and `verifiedAt` is set only when all three pass.
 
 **Response:**
 
@@ -393,7 +397,14 @@ Trigger DNS verification for SPF, DKIM, and DMARC records.
     "dkim": false,
     "dmarc": true,
     "spfReason": "SPF passes for 203.0.113.10",
-    "dmarcReason": "DMARC policy quarantine at _dmarc.example.com"
+    "dkimReason": "No TXT record at bunmail._domainkey.example.com",
+    "dmarcReason": "DMARC policy quarantine at _dmarc.example.com",
+    "checks": {
+      "spf": { "status": "pass", "reason": "SPF passes for 203.0.113.10" },
+      "dkim": { "status": "fail", "reason": "No TXT record at bunmail._domainkey.example.com" },
+      "dmarc": { "status": "pass", "reason": "DMARC policy quarantine at _dmarc.example.com" },
+      "checkedAt": "2026-10-19T12:00:00.000Z"
+    }
   }
 }
 ```
@@ -547,9 +558,9 @@ Register a new webhook endpoint.
 | `url`    | string   | Yes      | HTTPS endpoint URL                                 |
 | `events` | string[] | Yes      | Events to subscribe to (min 1)                     |
 
-Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`, `email.unsubscribed` (#249)
+Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`, `email.unsubscribed` (#249), `domain.verification_failed`, `domain.verified` (#250)
 
-Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) is admin-only: a restricted key subscribing to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
+Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) and the domain events are admin-only: a restricted key subscribing to one gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 
 A key may have at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (default 10, #258). One more gets `422` with `code: "WEBHOOK_LIMIT_REACHED"`; webhooks that already exceed the cap are kept.
 

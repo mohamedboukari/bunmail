@@ -8,6 +8,7 @@ import {
 } from "../services/dkim-keys.ts";
 import { getRequiredDnsRecords } from "../services/required-dns-records.ts";
 import type { DmarcCheck, Domain, RequiredDnsRecord } from "../types/domain.types.ts";
+import type { DomainCheckResult } from "../types/domain-check.types.ts";
 
 /** A DKIM key rotation in progress (#250): the record to publish before completing it. */
 export interface SerializedDkimPending {
@@ -49,7 +50,15 @@ export interface SerializedDomain {
   spfVerified: boolean;
   dkimVerified: boolean;
   dmarcVerified: boolean;
+  /**
+   * When every required check (SPF, DKIM, DMARC) passed and has kept
+   * passing (#250); null when not verified or flipped to failing.
+   */
   verifiedAt: Date | null;
+  /** When the DNS checks last ran, by Verify or the re-verification loop (#250). */
+  lastCheckedAt: Date | null;
+  /** The last check per record: `pass`, `fail` or `unknown`, with a reason (#250). */
+  lastCheckResult: DomainCheckResult | null;
   /** Mailbox used for `List-Unsubscribe`; null means the mailer falls back to `unsubscribe@<name>`. */
   unsubscribeEmail: string | null;
   /** One-click HTTPS unsubscribe endpoint; null disables `List-Unsubscribe-Post`. */
@@ -87,6 +96,8 @@ export function serializeDomain(
     dkimVerified: domain.dkimVerified,
     dmarcVerified: domain.dmarcVerified,
     verifiedAt: domain.verifiedAt,
+    lastCheckedAt: domain.lastCheckedAt,
+    lastCheckResult: domain.lastCheckResult,
     unsubscribeEmail: domain.unsubscribeEmail,
     unsubscribeUrl: domain.unsubscribeUrl,
     notifyEmail: domain.notifyEmail,

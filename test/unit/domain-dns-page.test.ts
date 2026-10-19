@@ -29,6 +29,10 @@ const domain = {
   dkimVerified: false,
   dmarcVerified: false,
   verifiedAt: null,
+  lastCheckedAt: null,
+  nextCheckAt: null,
+  consecutiveFailures: 0,
+  lastCheckResult: null,
   unsubscribeEmail: null,
   unsubscribeUrl: null,
   notifyEmail: null,
@@ -110,5 +114,55 @@ describe("DomainDetailPage: DNS panels (#250)", () => {
     expect(html).toContain("No DMARC record at _dmarc.acme.io");
     expect(html).toContain("SMTP_ENABLED=false");
     expect(html).not.toContain(">Active<");
+  });
+});
+
+describe("DomainDetailPage: re-verification (#250)", () => {
+  const noDmarc = (): ReturnType<typeof checkDmarc> =>
+    checkDmarc("acme.io", {
+      resolveTxt: () =>
+        Promise.reject(Object.assign(new Error("x"), { code: "ENOTFOUND" })),
+    });
+
+  test("a failing domain shows when it was checked, each result and the banner", async () => {
+    const failing = {
+      ...domain,
+      spfVerified: true,
+      dmarcVerified: true,
+      consecutiveFailures: 2,
+      lastCheckedAt: now,
+      lastCheckResult: {
+        spf: { status: "pass" as const, reason: "SPF passes for 203.0.113.10" },
+        dkim: { status: "fail" as const, reason: `No TXT record at ${XSS}` },
+        dmarc: { status: "unknown" as const, reason: "DNS lookup failed" },
+        checkedAt: now.toISOString(),
+      },
+    };
+    const html = await DomainDetailPage({
+      domain: failing,
+      dnsRecords: getRequiredDnsRecords(failing, settings),
+      dns: { dmarc: await noDmarc(), mx: { status: "none", hosts: [] } },
+      smtpEnabled: false,
+    });
+    expect(html).toContain("Last checked");
+    expect(html).toContain("DNS verification is failing");
+    expect(html).toContain("REQUIRE_VERIFIED_DOMAIN");
+    expect(html).toContain("Last check: passed");
+    expect(html).toContain("Last check: failed");
+    expect(html).toContain("Last check: DNS lookup failed (nothing changed)");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("No TXT record at &lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  test("a domain failing once, or never checked, shows no banner", async () => {
+    const once = { ...domain, verifiedAt: now, consecutiveFailures: 1 };
+    const html = await DomainDetailPage({
+      domain: once,
+      dnsRecords: getRequiredDnsRecords(once, settings),
+      dns: { dmarc: await noDmarc(), mx: { status: "none", hosts: [] } },
+      smtpEnabled: false,
+    });
+    expect(html).not.toContain("DNS verification is failing");
+    expect(html).toContain("Not checked yet.");
   });
 });

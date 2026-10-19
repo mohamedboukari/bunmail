@@ -86,6 +86,8 @@ Indexes:
 | `email.complained` | A mailbox provider's feedback loop reported that a recipient marked the message as spam (an ARF `abuse` or `fraud` report linked to the email by its Message-ID), and a permanent `complaint` suppression was created or strengthened (#191). Fires once per suppression change: a repeated report for an address already suppressed as `complaint` fires nothing. Needs `SMTP_ENABLED=true` and feedback-loop enrolment, see [feedback-loops.md](feedback-loops.md). |
 | `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |
 | `email.unsubscribed` | A recipient used the per-recipient one-click unsubscribe link or `unsub+` mailto, and a permanent `unsubscribe` suppression was created (#249). Fires once per suppression: repeated requests fire nothing. See [suppressions.md](suppressions.md#one-click-unsubscribe). |
+| `domain.verification_failed` | A verified domain flipped to failing: two DNS checks in a row (by the re-verification loop or Verify) found a record missing or wrong (#250). `verifiedAt` is cleared in the same transaction. A failed lookup (SERVFAIL, timeout) never counts. Fires once per flip. Admin keys only. See [domains.md](domains.md#failure-rule-250). |
+| `domain.verified` | A domain that was not verified (new, or flipped to failing) passed every check (#250). Admin keys only. |
 
 ### Who receives an event
 
@@ -93,6 +95,7 @@ Events are scoped to the API key that owns the webhook:
 
 - `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
 - `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
+- `domain.verification_failed`, `domain.verified` (#250): domains have no owning key and managing them is admin-only, so these too go to **admin** keys' webhooks only, and a restricted key that subscribes gets the same `403 INBOUND_EVENTS_REQUIRE_ADMIN`.
 - Webhooks of a **revoked** key receive nothing, and deliveries already queued for them are marked `failed` instead of sent.
 - Before dispatch was scoped, events could reach other keys' webhooks. Migration `0014` deletes any such deliveries left over in `webhook_deliveries` on upgrade.
 
@@ -145,6 +148,23 @@ Events are scoped to the API key that owns the webhook:
   }
 }
 ```
+
+`domain.verification_failed` (#250):
+
+```json
+{
+  "event": "domain.verification_failed",
+  "timestamp": "2026-10-19T12:00:00.000Z",
+  "data": {
+    "domainId": "dom_abc123...",
+    "domain": "example.com",
+    "failedChecks": ["dkim"],
+    "checkedAt": "2026-10-19T12:00:00.000Z"
+  }
+}
+```
+
+`failedChecks` lists the checks that failed definitively, from `spf`, `dkim` and `dmarc`. `domain.verified` carries `{ domainId, domain, checkedAt }`.
 
 `source` is `"one_click"` (RFC 8058 POST from the mailbox provider), `"link"` (the confirmation page's button), `"mailto"` (mail to `unsub+<token>@<domain>`) or `"fbl"` (an `opt-out` feedback-loop report, #191). `emailId` is the email whose header was used (for `"fbl"`, the email the report was about); `recipient` is lowercased.
 
@@ -330,6 +350,7 @@ What each caller does when its transaction fails:
 | Unsubscribe (`email.unsubscribed`, #249) | Suppression and event | `Unsubscribe not recorded`; the page errors, the mailto gets `451` |
 | Feedback loop (`email.complained`, #191) | Suppression and event (a complaint with no determinable recipient: the event alone) | `Complaint not recorded`, `451` |
 | Inbound mail (`email.received`) | The `inbound_emails` row and its event | `Inbound email not stored`, `451` |
+| Domain check (`domain.verification_failed`, `domain.verified`, #250) | The domain's new verification state and its event | Logged at `error` (`Domain re-verification failed`, by error name); the domain keeps its previous state and is checked again when its claim lease ends (15 minutes). From Verify, the request fails |
 
 The inbound paths stay all or nothing: their `451` makes the remote side retry later, which sends no mail and is idempotent (the suppression precedence rules make a repeated bounce, unsubscribe or complaint a no-op), and a remote MTA gives up after its own retry window. The worst case of a persistent failure there is a lost bounce, complaint or inbound message, never a loop.
 
@@ -385,7 +406,7 @@ CASCADE on the parent `webhooks` row means deleting a webhook also reaps every o
 ### webhook.service.ts
 
 #### `createWebhook(input, apiKeyId, createdByUserId = null): Promise<{ webhook, secret }>`
-Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation; only its ciphertext is stored (#259), and the delivery worker decrypts it per attempt. A secret that no longer decrypts (the key changed) fails the attempt without sending. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`, and `WebhookLimitReachedError` (`422 WEBHOOK_LIMIT_REACHED`, #258) when the key already has `WEBHOOKS_MAX_PER_API_KEY` webhooks; the count and insert hold a `FOR NO KEY UPDATE` lock on the key's row. Enforced in the service, so the API and the dashboard behave the same.
+Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation; only its ciphertext is stored (#259), and the delivery worker decrypts it per attempt. A secret that no longer decrypts (the key changed) fails the attempt without sending. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`, `domain.verification_failed` or `domain.verified`, and `WebhookLimitReachedError` (`422 WEBHOOK_LIMIT_REACHED`, #258) when the key already has `WEBHOOKS_MAX_PER_API_KEY` webhooks; the count and insert hold a `FOR NO KEY UPDATE` lock on the key's row. Enforced in the service, so the API and the dashboard behave the same.
 
 #### `listWebhooks(apiKeyId, { page, limit }): Promise<{ data: Webhook[]; total }>`
 Lists one page of the requesting API key's webhooks, oldest first, with the key's total (#258).
@@ -399,7 +420,7 @@ Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to d
 ### webhook-dispatch.service.ts
 
 #### `enqueueEvent(tx, event, data, scope): Promise<number>`
-The outbox insert (#184): in the caller's transaction `tx`, one `INSERT ... SELECT` writes a `pending` `webhook_deliveries` row for every active webhook of an active key subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` (only admin keys' webhooks). Owner and event are matched in SQL. Returns the number of rows; zero is success. Throws `WebhookEnqueueError` (SQLSTATE only) when the insert fails. See [Transactional outbox](#transactional-outbox-184).
+The outbox insert (#184): in the caller's transaction `tx`, one `INSERT ... SELECT` writes a `pending` `webhook_deliveries` row for every active webhook of an active key subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` and the domain events (only admin keys' webhooks). Owner and event are matched in SQL. Returns the number of rows; zero is success. Throws `WebhookEnqueueError` (SQLSTATE only) when the insert fails. See [Transactional outbox](#transactional-outbox-184).
 
 #### `signPayload(timestamp, body, secret): string`
 HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once per attempt.

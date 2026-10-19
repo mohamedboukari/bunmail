@@ -35,6 +35,8 @@ void mock.module("../../src/config.ts", () => ({
     logLevel: "error" as const,
     /** Master for the return-path key (#236). */
     dkimEncryptionKey: Buffer.alloc(32, 7),
+    /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
+    domainReverify: { enabled: true, intervalHours: 24 },
   },
 }));
 

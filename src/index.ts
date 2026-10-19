@@ -34,6 +34,7 @@ import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.
 import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submission.service.ts";
 import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
+import * as domainReverify from "./modules/domains/services/domain-reverify.service.ts";
 import { startRateLimitCleanup, stopRateLimitCleanup } from "./middleware/rate-limit.ts";
 import {
   startLoginRateLimitCleanup,
@@ -395,8 +396,8 @@ const app = new Elysia()
      * create time so the caller sees why the URL was refused.
      */
     /**
-     * Non-admin key subscribing to inbound events → 403. Inbound mail has
-     * no owning key and is admin-only (#130).
+     * Non-admin key subscribing to inbound or domain events → 403. Inbound
+     * mail and domains have no owning key and are admin-only (#130, #250).
      */
     if (error instanceof InboundEventsRequireAdminError) {
       set.status = 403;
@@ -542,6 +543,13 @@ trashPurge.start();
 webhookDeliveryWorker.start();
 
 /**
+ * Start the scheduled DNS re-verification of domains (#250): every few
+ * minutes, checks the domains due (daily by default) and flips one whose
+ * records keep failing. Off with DOMAIN_REVERIFY_ENABLED=false.
+ */
+domainReverify.start();
+
+/**
  * Start the periodic sweep that drops expired entries from the HTTP
  * rate-limit map (prevents unbounded growth under many distinct keys).
  */
@@ -575,6 +583,7 @@ function finishShutdown() {
   smtpSubmission.stop();
   trashPurge.stop();
   webhookDeliveryWorker.stop();
+  domainReverify.stop();
   stopRateLimitCleanup();
   stopLoginRateLimitCleanup();
   void app.stop();

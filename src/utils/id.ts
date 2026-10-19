@@ -19,7 +19,8 @@ type IdPrefix =
   | "udv" // browser an account signed in from (#282)
   | "rcv" // TOTP recovery code (#220)
   | "aud" // audit log event (#221)
-  | "idk"; // idempotency key on the send API (#188)
+  | "idk" // idempotency key on the send API (#188)
+  | "drv"; // one run of the domain DNS re-verification loop (#250)
 
 /**
  * Generates a prefixed unique ID.

@@ -102,11 +102,11 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Direct SMTP delivery**: sends straight to recipient MX servers, failing over across MX hosts (and to the implicit MX), no relay needed
 - **SMTP submission**: apps (Infisical, Netbird, Dify, any Nodemailer backend) send *through* BunMail over SMTP using an API key as the password; switch an app off SendGrid/Brevo with a credentials-only change ([docs/smtp-submission.md](docs/smtp-submission.md))
 - **DKIM signing**: auto-generates 2048-bit RSA keys per domain, under a selector you can choose, with zero-downtime key rotation
-- **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard, with the records to publish per domain, the parsed DMARC policy and where the MX points
+- **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard, with the records to publish per domain, the parsed DMARC policy and where the MX points, re-run daily in the background so a record that drifts is caught (`domain.verification_failed`)
 - **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
 - **Idempotency keys**: an optional `Idempotency-Key` header on the send API makes retries safe; a repeat with the same key and body returns the first response instead of sending twice, even under concurrent retries ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **Templates**: Mustache-style `{{variable}}` substitution
-- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`
+- **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`, `domain.verification_failed`, `domain.verified`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting; reply from the dashboard with RFC 5322 threading headers, and see which of your emails a received reply answers
 - **Inbound notifications**: per-domain "you have new mail" email on receive, DKIM-signed from the recipient domain, with no content of the inbound message by default, automatic mail skipped and per-address and per-domain throttles; opt-in via each domain's `notify_email`
 - **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting

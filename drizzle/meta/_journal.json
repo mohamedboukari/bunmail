@@ -232,6 +232,13 @@
       "when": 1792410555553,
       "tag": "0032_dkim_rotation",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792413719650,
+      "tag": "0033_domain_reverify",
+      "breakpoints": true
     }
   ]
 }

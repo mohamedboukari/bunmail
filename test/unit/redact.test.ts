@@ -29,6 +29,8 @@ void mock.module("../../src/config.ts", () => ({
     get logRedactPii() {
       return redactPiiFlag;
     },
+    /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
+    domainReverify: { enabled: true, intervalHours: 24 },
   },
 }));
 
