@@ -57,7 +57,10 @@ export interface BounceHandlerDeps {
 
   /**
    * Persist the suppression. Idempotent upsert in production, see
-   * `suppressionService.addFromBounce`.
+   * `suppressionService.addFromBounce`: it never weakens a permanent
+   * suppression (#191), so `applied` is false when one was left in place.
+   * `suppressionId` is the suppression in effect afterwards, `null` only
+   * when it vanished between the write and the read-back.
    */
   addFromBounce: (
     apiKeyId: string,
@@ -68,7 +71,7 @@ export interface BounceHandlerDeps {
       sourceEmailId?: string;
       expiresAt?: Date | null;
     },
-  ) => Promise<{ id: string }>;
+  ) => Promise<{ suppressionId: string | null; applied: boolean }>;
 
   /** Update the original email row's status column to `bounced`. */
   markEmailBounced: (emailId: string) => Promise<void>;
@@ -88,8 +91,11 @@ export interface HandleBounceResult {
   outcome: "applied" | "dropped-no-original" | "dropped-recipient-mismatch" | "escalated";
   emailId?: string;
   apiKeyId?: string;
+  /** The suppression in effect for the recipient afterwards, when known. */
   suppressionId?: string;
   bounceType?: "hard" | "soft";
+  /** False when a permanent suppression was already on file and kept (#191). */
+  suppressionApplied?: boolean;
 }
 
 /**
@@ -170,9 +176,10 @@ export async function handleBounce(
   await deps.markEmailBounced(original.id);
 
   /**
-   * Fire-and-forget webhook. Carries the suppressionId so receivers can
-   * cross-reference the just-created suppression row in the dashboard
-   * or via API without a separate lookup.
+   * Fire-and-forget webhook, whether or not the suppression write
+   * applied. Carries the suppressionId (the suppression in effect, which
+   * is the existing permanent one when the bounce left it in place) so
+   * receivers can cross-reference it without a separate lookup.
    */
   deps.dispatchEvent(
     "email.bounced",
@@ -182,7 +189,7 @@ export async function handleBounce(
       bounceType: finalKind,
       status: parsed.status,
       diagnostic: parsed.diagnostic ?? null,
-      suppressionId: suppression.id,
+      suppressionId: suppression.suppressionId,
     },
     { apiKeyId: original.apiKeyId },
   );
@@ -197,15 +204,17 @@ export async function handleBounce(
     status: parsed.status,
     source: parsed.source,
     escalated,
-    suppressionId: suppression.id,
+    suppressionId: suppression.suppressionId,
+    suppressionApplied: suppression.applied,
   });
 
   return {
     outcome: escalated ? "escalated" : "applied",
     emailId: original.id,
     apiKeyId: original.apiKeyId,
-    suppressionId: suppression.id,
+    suppressionId: suppression.suppressionId ?? undefined,
     bounceType: finalKind,
+    suppressionApplied: suppression.applied,
   };
 }
 
@@ -257,8 +266,8 @@ export async function handleParsedBounce(
       return row ? { id: row.id, bounceType: row.bounceType } : undefined;
     },
     addFromBounce: async (apiKeyId, input) => {
-      const row = await addFromBounce(apiKeyId, input);
-      return { id: row.id };
+      const result = await addFromBounce(apiKeyId, input);
+      return { suppressionId: result.suppression?.id ?? null, applied: result.applied };
     },
     markEmailBounced: async (emailId) => {
       /**

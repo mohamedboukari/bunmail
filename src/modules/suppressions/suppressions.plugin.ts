@@ -66,7 +66,7 @@ export const suppressionsPlugin = new Elysia({
         tags: ["Suppressions"],
         summary: "Add an address to the suppression list",
         description:
-          "Idempotent: re-suppressing an existing address upserts the row. Subsequent sends to this recipient under this API key will return 422.",
+          "Idempotent: re-suppressing an existing address upserts the row, except over a permanent complaint, which is left as it is and returned. Subsequent sends to this recipient under this API key will return 422.",
         security: [{ bearerAuth: [] }],
       },
     },

@@ -9,6 +9,10 @@ import { createTransport } from "nodemailer";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.service.ts";
 import { config } from "../../src/config.ts";
+import {
+  addFromBounce,
+  createSuppression,
+} from "../../src/modules/suppressions/services/suppression.service.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
 
 /** Isolated port, distinct from the other SMTP test files. */
@@ -105,8 +109,8 @@ Message-ID: <${opts.originalMessageId}>
 `;
 }
 
-/** An RFC 3464 hard bounce for `originalMessageId`. */
-function dsn(subject: string, originalMessageId: string): string {
+/** An RFC 3464 bounce for `originalMessageId`: hard (5.1.1) unless a 4.x.x status is given. */
+function dsn(subject: string, originalMessageId: string, status = "5.1.1"): string {
   return `From: MAILER-DAEMON@receiver.example
 To: hello@example.com
 Subject: ${subject}
@@ -121,8 +125,8 @@ Delivery failed.
 Content-Type: message/delivery-status
 
 Final-Recipient: rfc822; ${RECIPIENT}
-Action: failed
-Status: 5.1.1
+Action: ${status.startsWith("4") ? "delayed" : "failed"}
+Status: ${status}
 Original-Message-ID: <${originalMessageId}>
 
 --dsn_bnd--
@@ -422,5 +426,167 @@ describe("other reports", () => {
       `From: someone@example.net\nTo: fbl@example.com\nSubject: ${s}\n\nHi.\n`,
     );
     expect(await storedInbound(s)).toBe(1);
+  });
+});
+
+/**
+ * A bounce never weakens a suppression (#191): a late DSN for an email
+ * sent before a complaint, unsubscribe or manual entry leaves that
+ * permanent row exactly as it is. Only temporary rows are rewritten.
+ */
+describe("late bounces never weaken a permanent suppression", () => {
+  const HOUR_MS = 3_600_000;
+
+  async function insertRow(
+    values: Partial<typeof suppressions.$inferInsert>,
+  ): Promise<string> {
+    const id = `sup_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
+    await db.insert(suppressions).values({
+      id,
+      apiKeyId,
+      email: RECIPIENT,
+      reason: "manual",
+      ...values,
+    });
+    return id;
+  }
+
+  async function bouncedStatus(): Promise<string | undefined> {
+    const [row] = await db
+      .select({ status: emails.status })
+      .from(emails)
+      .where(eq(emails.id, emailId));
+    return row?.status;
+  }
+
+  test.each([
+    ["complaint", "4.2.2"],
+    ["complaint", "5.1.1"],
+    ["unsubscribe", "4.2.2"],
+    ["unsubscribe", "5.1.1"],
+    ["manual", "4.2.2"],
+    ["manual", "5.1.1"],
+  ])(
+    "a permanent %s row is unchanged by a %s DSN, which still fires and marks the email",
+    async (reason, status) => {
+      const id = await insertRow({ reason, expiresAt: null });
+      const [before] = await db
+        .select()
+        .from(suppressions)
+        .where(eq(suppressions.id, id));
+
+      await deliver(dsn(uniqueSubject(), messageId, status));
+
+      expect(await suppressionOf(apiKeyId)).toEqual(before);
+      const events = await deliveries("email.bounced");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ emailId, suppressionId: id });
+      expect(await bouncedStatus()).toBe("bounced");
+    },
+  );
+
+  test("a permanent hard bounce is unchanged by a later soft DSN", async () => {
+    const id = await insertRow({
+      reason: "bounce",
+      bounceType: "hard",
+      diagnosticCode: "5.1.1",
+      expiresAt: null,
+    });
+    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"));
+
+    expect(await suppressionOf(apiKeyId)).toMatchObject({
+      id,
+      reason: "bounce",
+      bounceType: "hard",
+      expiresAt: null,
+    });
+    expect(await deliveries("email.bounced")).toHaveLength(1);
+  });
+
+  test("a hard DSN upgrades a temporary soft-bounce row to a permanent bounce", async () => {
+    const id = await insertRow({
+      reason: "bounce",
+      bounceType: "soft",
+      expiresAt: new Date(Date.now() + HOUR_MS),
+    });
+    await deliver(dsn(uniqueSubject(), messageId, "5.1.1"));
+
+    expect(await suppressionOf(apiKeyId)).toMatchObject({
+      id,
+      reason: "bounce",
+      bounceType: "hard",
+      expiresAt: null,
+      sourceEmailId: emailId,
+    });
+    expect(await deliveries("email.bounced")).toHaveLength(1);
+  });
+
+  test("a soft DSN refreshes an expired temporary row with a new window", async () => {
+    const id = await insertRow({
+      reason: "bounce",
+      bounceType: "soft",
+      expiresAt: new Date(Date.now() - HOUR_MS),
+    });
+    await deliver(dsn(uniqueSubject(), messageId, "4.2.2"));
+
+    const row = await suppressionOf(apiKeyId);
+    expect(row).toMatchObject({ id, reason: "bounce", bounceType: "soft" });
+    expect(row?.expiresAt?.getTime() ?? 0).toBeGreaterThan(Date.now() + 23 * HOUR_MS);
+    expect(await deliveries("email.bounced")).toHaveLength(1);
+  });
+
+  test("a soft bounce refreshes an active temporary row (service level)", async () => {
+    const id = await insertRow({
+      reason: "bounce",
+      bounceType: "soft",
+      diagnosticCode: "4.2.2",
+      expiresAt: new Date(Date.now() + HOUR_MS),
+    });
+    const later = new Date(Date.now() + 24 * HOUR_MS);
+    const result = await addFromBounce(apiKeyId, {
+      email: RECIPIENT,
+      bounceType: "soft",
+      diagnosticCode: "4.7.0",
+      expiresAt: later,
+    });
+
+    expect(result.applied).toBe(true);
+    expect(result.suppression).toMatchObject({
+      id,
+      diagnosticCode: "4.7.0",
+      expiresAt: later,
+    });
+  });
+
+  test("the service reports a kept permanent row as not applied, and returns it", async () => {
+    const id = await insertRow({ reason: "complaint", expiresAt: null });
+    const result = await addFromBounce(apiKeyId, {
+      email: RECIPIENT,
+      bounceType: "hard",
+      expiresAt: null,
+    });
+    expect(result.applied).toBe(false);
+    expect(result.suppression).toMatchObject({ id, reason: "complaint" });
+  });
+
+  test("a manual create leaves a permanent complaint as it is and returns it", async () => {
+    const id = await insertRow({ reason: "complaint", expiresAt: null });
+    const row = await createSuppression(apiKeyId, {
+      email: RECIPIENT,
+      reason: "manual",
+      expiresAt: new Date(Date.now() + HOUR_MS),
+    });
+    expect(row).toMatchObject({ id, reason: "complaint", expiresAt: null });
+    expect(await suppressionOf(apiKeyId)).toMatchObject({ reason: "complaint" });
+  });
+
+  test("a manual create still replaces a permanent unsubscribe or bounce", async () => {
+    await insertRow({ reason: "unsubscribe", expiresAt: null });
+    const row = await createSuppression(apiKeyId, {
+      email: RECIPIENT,
+      reason: "manual",
+      expiresAt: null,
+    });
+    expect(row).toMatchObject({ reason: "manual" });
   });
 });

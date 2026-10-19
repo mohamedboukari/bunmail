@@ -1066,6 +1066,7 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - **Inline 5xx** during the SMTP transaction → caught in `processEmail`'s catch block via [`handleSendFailure`](src/modules/emails/services/queue.service.ts) + [`parseSmtpError`](src/utils/smtp-error.ts). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
+- A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180) (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
 

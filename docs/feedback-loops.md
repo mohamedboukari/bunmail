@@ -39,7 +39,7 @@ Program names, URLs and requirements change: follow each provider's current post
 5. **DKIM.** The report's own DKIM signature is verified with mailauth and the result logged (`dkim`, `dkimDomain`). It is **not required**: not every provider signs its reports. The check runs only for linked reports, makes no DNS lookup for an unsigned report, is skipped for more than five signatures or a header section over 64 KB, and gives up after 10 seconds.
 6. **Recipient.** The first `Original-Rcpt-To` that was a recipient (to, cc or bcc) of the email, compared case-insensitively; else, if the email had exactly one recipient, that one; else none.
 7. **Effect.**
-   - Complaint with a recipient: `addFromComplaint`, a permanent `complaint` suppression under the email's API key (see [precedence](suppressions.md#complaints-feedback-loops)). When the row was created or changed, `email.complained` fires to that key's webhooks. When the address already had a permanent `complaint`, nothing changes and nothing fires (logged at `debug`).
+   - Complaint with a recipient: `addFromComplaint`, a permanent `complaint` suppression under the email's API key (see [precedence](suppressions.md#precedence): complaint > unsubscribe / manual / hard bounce > temporary entries, and nothing that arrives later, a late bounce included, weakens it). When the row was created or changed, `email.complained` fires to that key's webhooks. When the address already had a permanent `complaint`, nothing changes and nothing fires (logged at `debug`).
    - Complaint without a recipient: nothing is suppressed (logged at `warn`), and `email.complained` still fires with `recipient: null` so the application can act on it.
    - Opt-out with a recipient: the one-click unsubscribe path (#249), a permanent `unsubscribe` suppression and `email.unsubscribed` with `source: "fbl"`. Without a recipient: logged at `warn` and dropped.
 8. **Acknowledgement.** The SMTP transaction is accepted whatever the outcome, so the provider does not retry. A database error answers `451` (try again later), as for any inbound message.
@@ -102,5 +102,4 @@ Parses and handles with the real database, webhook and mailauth dependencies. Ca
 ## Not handled
 
 - **Complaint counts in the dashboard stats.** Complaints are visible as `complaint` suppressions and webhook events only.
-- **A late bounce after a complaint.** `addFromBounce` overwrites whatever suppression is on file, so a DSN that arrives after the complaint for an email sent before it turns the row into a bounce (see [suppressions.md](suppressions.md#complaints-feedback-loops)).
 - **Quoted-printable feedback parts and reports forwarded inside another message** are not decoded or unwrapped; providers send the feedback part as plain 7-bit text.

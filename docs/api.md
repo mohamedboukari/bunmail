@@ -563,7 +563,7 @@ All endpoints are prefixed with `/api/v1/suppressions`.
 
 #### `POST /api/v1/suppressions`
 
-Manually add an address. Idempotent: re-suppressing an existing `(api_key, email)` upserts the row.
+Manually add an address. Idempotent: re-suppressing an existing `(api_key, email)` upserts the row, except over a permanent `complaint` (#191): that row is left as it is and returned (`reason: "complaint"` in the response). Delete it first to replace it.
 
 **Body:**
 

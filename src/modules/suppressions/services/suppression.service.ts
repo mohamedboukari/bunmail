@@ -56,82 +56,138 @@ export async function isSuppressed(
 }
 
 /**
+ * The row on file for `(apiKeyId, email)`, expired or not. Used after an
+ * upsert left an existing row in place, to report the suppression in effect.
+ */
+async function findRow(
+  apiKeyId: string,
+  email: string,
+): Promise<Suppression | undefined> {
+  const [row] = await db
+    .select()
+    .from(suppressions)
+    .where(and(eq(suppressions.apiKeyId, apiKeyId), eq(suppressions.email, email)))
+    .limit(1);
+  return row;
+}
+
+/**
  * Manual addition. Used by `POST /api/v1/suppressions`. Idempotent via
  * `ON CONFLICT (api_key_id, email) DO UPDATE`: re-suppressing an
  * address upserts the row, so a customer can update the reason or the
  * expiry without first deleting.
  *
+ * Except over a permanent `complaint` (#191): a complaint is the
+ * strongest reason, so a manual upsert leaves it exactly as it is and
+ * returns it. Lifting a complaint takes a deliberate DELETE first.
+ *
  * The bounce-specific fields (`bounceType`, `diagnosticCode`,
  * `sourceEmailId`) are intentionally not exposed here; they're set by
  * `addFromBounce` only, so manual requests can't fabricate fake DSN
  * metadata.
+ *
+ * @returns The suppression in effect: the written row, or the permanent
+ *   complaint left in place.
  */
 export async function createSuppression(
   apiKeyId: string,
   input: CreateSuppressionInput,
 ): Promise<Suppression> {
   const target = normaliseEmail(input.email);
-  const id = generateId("sup");
 
-  logger.info("Creating suppression", {
-    id,
-    apiKeyId,
-    email: redactEmail(target),
-    reason: input.reason,
-  });
+  /**
+   * Two attempts: the upsert either writes a row or finds a permanent
+   * complaint to return. Only when that complaint is deleted between the
+   * two statements does the second attempt run, and it then inserts.
+   */
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const id = generateId("sup");
 
-  const [row] = await db
-    .insert(suppressions)
-    .values({
+    logger.info("Creating suppression", {
       id,
       apiKeyId,
-      email: target,
+      email: redactEmail(target),
       reason: input.reason,
-      expiresAt: input.expiresAt ?? null,
-    })
-    .onConflictDoUpdate({
-      target: [suppressions.apiKeyId, suppressions.email],
-      set: {
+    });
+
+    const [row] = await db
+      .insert(suppressions)
+      .values({
+        id,
+        apiKeyId,
+        email: target,
         reason: input.reason,
         expiresAt: input.expiresAt ?? null,
-        /**
-         * Manual upserts clear bounce-specific metadata: they didn't
-         * come from a DSN. Leaving stale fields would mislead operators.
-         */
-        bounceType: null,
-        diagnosticCode: null,
-        sourceEmailId: null,
-      },
-    })
-    .returning();
+      })
+      .onConflictDoUpdate({
+        target: [suppressions.apiKeyId, suppressions.email],
+        set: {
+          reason: input.reason,
+          expiresAt: input.expiresAt ?? null,
+          /**
+           * Manual upserts clear bounce-specific metadata: they didn't
+           * come from a DSN. Leaving stale fields would mislead operators.
+           */
+          bounceType: null,
+          diagnosticCode: null,
+          sourceEmailId: null,
+        },
+        /** A permanent complaint is never replaced (#191). */
+        setWhere: or(
+          isNotNull(suppressions.expiresAt),
+          ne(suppressions.reason, "complaint"),
+        ),
+      })
+      .returning();
+    if (row) return row;
 
-  return row!;
+    const kept = await findRow(apiKeyId, target);
+    if (kept) {
+      logger.info("Manual suppression left a permanent complaint in place", {
+        id: kept.id,
+        apiKeyId,
+        email: redactEmail(target),
+      });
+      return kept;
+    }
+  }
+  throw new Error("Suppression could not be written");
+}
+
+/** What a bounce did to the suppression list (#191). */
+export interface BounceSuppressionResult {
+  /** True when the row was created, or a temporary one was rewritten. */
+  applied: boolean;
+  /**
+   * The suppression in effect for the address afterwards: the written
+   * row, or the permanent one left in place. `undefined` only when that
+   * row was deleted between the write and the read-back.
+   */
+  suppression: Suppression | undefined;
 }
 
 /**
- * Auto-suppression hook for the future bounce path (#24). Different
- * shape from the manual `createSuppression` because we *want* the bounce
- * metadata persisted here: operators triaging a deliverability issue
- * need the diagnostic code + source email.
+ * Auto-suppression from a bounce: the async DSN path (#24) and inline
+ * hard 5xx during the send (#68). Different shape from the manual
+ * `createSuppression` because we *want* the bounce metadata persisted
+ * here: operators triaging a deliverability issue need the diagnostic
+ * code + source email.
  *
- * Forces `reason = 'bounce'`. Idempotent: re-calling with a fresh
- * bounce updates the existing row (later bounce wins). Exported so
- * #24's DSN parser can call it directly.
+ * A bounce never weakens a suppression (#191). With no row on file it
+ * inserts one (`reason = 'bounce'`). On conflict it only touches a
+ * **temporary** row (`expires_at IS NOT NULL`, expired or not): a soft
+ * bounce refreshes the backoff window, a hard bounce makes it a permanent
+ * bounce. A **permanent** row of any reason (complaint, unsubscribe,
+ * manual, an earlier hard bounce) is left exactly as it is; otherwise a
+ * late soft bounce could turn a complaint into a 24-hour entry that
+ * lapses. The check and the write are one statement, so it is race-safe.
  */
 export async function addFromBounce(
   apiKeyId: string,
   input: AddFromBounceInput,
-): Promise<Suppression> {
+): Promise<BounceSuppressionResult> {
   const target = normaliseEmail(input.email);
   const id = generateId("sup");
-
-  logger.info("Auto-suppressing from bounce", {
-    id,
-    apiKeyId,
-    email: redactEmail(target),
-    bounceType: input.bounceType,
-    diagnosticCode: input.diagnosticCode,
-  });
 
   const [row] = await db
     .insert(suppressions)
@@ -154,10 +210,24 @@ export async function addFromBounce(
         sourceEmailId: input.sourceEmailId ?? null,
         expiresAt: input.expiresAt ?? null,
       },
+      /** Only a temporary row is rewritten; a permanent one stays. */
+      setWhere: isNotNull(suppressions.expiresAt),
     })
     .returning();
 
-  return row!;
+  const suppression = row ?? (await findRow(apiKeyId, target));
+
+  logger.info("Auto-suppressing from bounce", {
+    id: suppression?.id ?? null,
+    apiKeyId,
+    email: redactEmail(target),
+    bounceType: input.bounceType,
+    diagnosticCode: input.diagnosticCode,
+    outcome: row ? "suppressed" : "permanent-kept",
+    keptReason: row ? undefined : suppression?.reason,
+  });
+
+  return { applied: row !== undefined, suppression };
 }
 
 /**

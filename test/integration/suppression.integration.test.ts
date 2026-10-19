@@ -108,17 +108,16 @@ describe("addFromBounce: upsert", () => {
       diagnosticCode: "5.1.1",
       sourceEmailId: undefined,
     });
-    expect(result.id).toMatch(/^sup_/);
-    const [row] = await db
-      .select()
-      .from(suppressions)
-      .where(eq(suppressions.id, result.id));
+    expect(result.applied).toBe(true);
+    const id = result.suppression?.id ?? "";
+    expect(id).toMatch(/^sup_/);
+    const [row] = await db.select().from(suppressions).where(eq(suppressions.id, id));
     expect(row?.bounceType).toBe("hard");
     expect(row?.diagnosticCode).toBe("5.1.1");
     expect(row?.reason).toBe("bounce");
   });
 
-  test("upserts on the unique (api_key_id, email) constraint: second call overwrites", async () => {
+  test("upserts on the unique (api_key_id, email) constraint: a hard bounce upgrades a temporary row", async () => {
     const { id: apiKeyId } = await seed.apiKey();
     const first = await addFromBounce(apiKeyId, {
       email: "user@example.com",
@@ -133,7 +132,8 @@ describe("addFromBounce: upsert", () => {
       expiresAt: null,
     });
     /** Same row id (UPSERT path), updated fields. */
-    expect(second.id).toBe(first.id);
+    expect(second.applied).toBe(true);
+    expect(second.suppression?.id).toBe(first.suppression?.id);
     const all = await db
       .select()
       .from(suppressions)

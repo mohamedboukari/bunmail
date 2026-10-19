@@ -167,7 +167,7 @@ Events are scoped to the API key that owns the webhook:
 
 `recipient` is the lowercased address that was suppressed, or `null` when the email had several recipients and the report did not say which one complained (providers often redact `Original-Rcpt-To`); nothing is suppressed then, and the event fires on every such report. `feedbackType` is the report's `Feedback-Type` (`"abuse"` or `"fraud"`), `null` when the report had none. `reporter` is the report's `User-Agent`, else the domain of its `From` address (at most 200 characters, `null` when neither is present). `arrivalDate` is the report's `Arrival-Date` (when the provider received the original), `null` when missing or unparseable; `receivedAt` is when BunMail processed the report. Report contents are unauthenticated input: treat `reporter` as a label, not a verified identity.
 
-The `suppressionId` lets receivers cross-reference the auto-created suppression row. `bounceType` is `"hard"` (5.x.x) or `"soft"` (4.x.x). A second soft bounce for the same recipient within 24h escalates to `"hard"`: the webhook will fire with `bounceType: "hard"` even though the inbound DSN's status code was a 4.x.x.
+The `suppressionId` lets receivers cross-reference the suppression in effect for the recipient: the row the bounce created or rewrote, or the permanent one (complaint, unsubscribe, manual, earlier hard bounce) it left in place, since a bounce never weakens a suppression (#191); `null` only if that row was deleted meanwhile. `bounceType` is `"hard"` (5.x.x) or `"soft"` (4.x.x). A second soft bounce for the same recipient within 24h escalates to `"hard"`: the webhook will fire with `bounceType: "hard"` even though the inbound DSN's status code was a 4.x.x.
 
 ## Signature Verification
 

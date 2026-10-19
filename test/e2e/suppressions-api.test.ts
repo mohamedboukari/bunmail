@@ -98,7 +98,9 @@ void mock.module(
       Promise.resolve(id === "sup_test123" ? mockSuppression : undefined),
     ),
     isSuppressed: mock(() => Promise.resolve(undefined)),
-    addFromBounce: mock(() => Promise.resolve(mockBounceSuppression)),
+    addFromBounce: mock(() =>
+      Promise.resolve({ applied: true, suppression: mockBounceSuppression }),
+    ),
   }),
 );
 

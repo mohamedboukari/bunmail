@@ -88,9 +88,9 @@ When a DSN parses cleanly and links to an `emails` row, the bounce handler does 
    - Parsed kind `hard` → always `hard`.
    - Parsed kind `soft`, no existing suppression → `soft` (24h expiry).
    - Parsed kind `soft`, **existing soft suppression still active** → escalate to `hard` (permanent). Repeated transient failures are effectively permanent for IP-reputation purposes.
-3. **Persist via `suppressionService.addFromBounce`**. Idempotent upsert: a re-bounce of the same recipient updates the existing row.
+3. **Persist via `suppressionService.addFromBounce`**. A bounce never weakens a suppression (#191): with no row on file it inserts one; on conflict it only rewrites a **temporary** row (a soft bounce refreshes the window, a hard bounce makes it permanent); a **permanent** row of any reason (complaint, unsubscribe, manual, an earlier hard bounce) is left exactly as it is. Steps 4 and 5 run either way. See [suppressions.md](suppressions.md#precedence).
 4. **Mark the original email row**: `status = 'bounced'`, only if the queue has finished with it (`sent` or `failed`); a row still being retried keeps its status so its other recipients are still attempted. The dashboard / `GET /emails?status=bounced` filter then shows it correctly.
-5. **Fire `email.bounced` webhook** with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the auto-created suppression).
+5. **Fire `email.bounced` webhook** with the original email id, recipient, bounce type, status, diagnostic, and `suppressionId` (so receivers can cross-reference the suppression in effect: the one just written, or the permanent one left in place).
 
 ## Webhook payload
 
