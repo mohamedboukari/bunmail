@@ -190,7 +190,8 @@ function DetailField({ label, value }: { label: string; value: string }) {
  * recipient when signed return paths (#236) or a partial `RCPT TO`
  * rejection (#250) split the group, labelled with the MX host it ended on. Every value is escaped: the MX name comes from the
  * recipient domain's DNS and the error from the remote server. A session
- * that ran without TLS gets a visible badge.
+ * that ran without TLS gets a visible badge, and one under the recipient
+ * domain's MTA-STS policy a note.
  */
 function DeliveryTable({ groups }: { groups: SerializedDeliveryGroup[] }) {
   if (groups.length === 0) return <></>;
@@ -250,18 +251,33 @@ function DeliveryTable({ groups }: { groups: SerializedDeliveryGroup[] }) {
   );
 }
 
-/** The TLS cell: a warning badge for a plaintext session, else the recorded value. */
+/**
+ * The TLS cell: a warning badge for a plaintext session, else the recorded
+ * value, then the MTA-STS note (#250) when the domain has a policy.
+ */
 function TlsBadge({ group }: { group: SerializedDeliveryGroup }) {
-  if (group.tls === "plaintext") {
-    return (
-      <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
-        {group.status === "sent" ? "Sent without TLS" : "No TLS"}
-      </span>
-    );
-  }
   return (
-    <span class="text-gray-600 dark:text-gray-400">
-      {group.tls === "starttls" ? "STARTTLS" : "Unknown"}
+    <>
+      {group.tls === "plaintext" ? (
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+          {group.status === "sent" ? "Sent without TLS" : "No TLS"}
+        </span>
+      ) : (
+        <span class="text-gray-600 dark:text-gray-400">
+          {group.tls === "starttls" ? "STARTTLS" : "Unknown"}
+        </span>
+      )}
+      <MtaStsNote mode={group.mtaSts} />
+    </>
+  );
+}
+
+/** The MTA-STS note under the TLS cell (#250): nothing without a policy. */
+function MtaStsNote({ mode }: { mode: SerializedDeliveryGroup["mtaSts"] }) {
+  if (mode === null) return <></>;
+  return (
+    <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">
+      {mode === "enforce" ? "MTA-STS enforced" : "MTA-STS testing"}
     </span>
   );
 }

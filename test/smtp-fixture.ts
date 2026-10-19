@@ -33,12 +33,21 @@ export interface FixtureServer {
   stop: () => void;
 }
 
-/** Starts the fixture server in `mode` and waits for its port. */
-export async function startFixtureServer(mode: FixtureMode): Promise<FixtureServer> {
+/**
+ * Starts the fixture server in `mode` and waits for its port. `certName`
+ * picks its key and certificate under `test/fixtures/tls/` (the
+ * self-signed `hook.example.test` by default; the MTA-STS tests, #250,
+ * use names the test CA signed).
+ */
+export async function startFixtureServer(
+  mode: FixtureMode,
+  certName?: string,
+): Promise<FixtureServer> {
   const node = Bun.which("node");
   if (node === null)
     throw new Error("these tests need `node` on PATH to run smtp-server");
-  const proc = Bun.spawn([node, FIXTURE, mode], { stdin: "pipe", stdout: "pipe" });
+  const args = certName === undefined ? [mode] : [mode, certName];
+  const proc = Bun.spawn([node, FIXTURE, ...args], { stdin: "pipe", stdout: "pipe" });
   let messages = 0;
   let connections = 0;
   let closed = 0;

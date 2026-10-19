@@ -1,4 +1,5 @@
 import { setDomainDnsDeps } from "../../src/modules/domains/services/domain-dns-status.service.ts";
+import { setMtaStsDeps } from "../../src/modules/emails/services/mta-sts.ts";
 
 /**
  * Hermetic DNS for the integration run (#250): the domains module's DNS
@@ -15,4 +16,18 @@ function notFound(name: string): Promise<never> {
 
 export function installHermeticDomainDns(): void {
   setDomainDnsDeps({ resolveTxt: notFound, resolveMx: notFound });
+}
+
+/**
+ * No real DNS or HTTPS for MTA-STS (#250): every `_mta-sts` TXT lookup
+ * answers NXDOMAIN (no policy), and a policy fetch could neither resolve
+ * nor connect. Installed by `_preload.ts`; the MTA-STS tests install their
+ * own answers and put this back afterwards.
+ */
+export function installHermeticMtaSts(): void {
+  setMtaStsDeps({
+    resolveTxt: notFound,
+    lookup: notFound,
+    fetch: () => Promise.reject(new Error("no real HTTPS in integration tests")),
+  });
 }

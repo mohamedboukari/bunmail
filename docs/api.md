@@ -169,6 +169,7 @@ The `source` field is the ingress channel the email arrived through: `api` (this
     "failureCode": null,
     "lastError": null,
     "tls": "starttls",
+    "mtaSts": "enforce",
     "updatedAt": "2026-03-15T12:00:03.120Z"
   },
   {
@@ -180,6 +181,7 @@ The `source` field is the ingress channel the email arrived through: `api` (this
     "failureCode": "4.7.0",
     "lastError": "421 4.7.0 Try again later",
     "tls": "plaintext",
+    "mtaSts": null,
     "updatedAt": "2026-03-15T12:05:10.004Z"
   }
 ]
@@ -194,7 +196,8 @@ The `source` field is the ingress channel the email arrived through: `api` (this
 | `failureKind` | How the last failure's SMTP reply was classified: `hard`, `policy` (the receiver refused the sender, #246) or `soft`; `null` when there was no SMTP reply (connection, DNS or TLS failure) or no failure. |
 | `failureCode` | The enhanced status code of that reply, e.g. `5.1.1`; `null` without one. |
 | `lastError` | The last failure's message, as stored (the same text the email's `lastError` summarises). |
-| `tls` | The latest SMTP session's encryption: `starttls`, `plaintext` (the MX did not offer STARTTLS, or refused it), or `null` (no session got ready, or an entry from before #250). STARTTLS is opportunistic and needs TLS 1.2 or later; certificates are not verified. |
+| `tls` | The latest SMTP session's encryption: `starttls`, `plaintext` (the MX did not offer STARTTLS, or refused it), or `null` (no session got ready, or an entry from before #250). STARTTLS needs TLS 1.2 or later; it is opportunistic and certificates are not verified, unless the recipient domain's MTA-STS policy is in enforce mode. |
+| `mtaSts` | The recipient domain's MTA-STS policy mode on the latest attempt (#250): `enforce` (only the MX hosts the policy names, STARTTLS required, certificate verified; a TLS failure or no matching MX host is `retry`, never a bounce), `testing` (delivered as without a policy), or `null` (no policy, mode `none`, or an entry from before). See [emails.md](emails.md#mta-sts-250). |
 | `updatedAt` | When the latest outcome happened; `null` on entries from before #250 that were never delivered. |
 
 ---

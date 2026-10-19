@@ -49,10 +49,12 @@ if (explicit) {
 /**
  * No real DNS in integration tests (#250): the domains module's DNS seam
  * (DMARC, MX status, and the TXT lookups of Verify) answers NXDOMAIN at
- * once. Imported only now, after `DATABASE_URL` is final: the module
- * loads `config`. The queue's return-path MX check (#236) needs no stub:
+ * once, and the outbound MTA-STS lookups find no policy. Imported only
+ * now, after `DATABASE_URL` is final: the module loads `config`. The queue's return-path MX check (#236) needs no stub:
  * it returns before DNS while inbound SMTP is off, and the tests that turn
  * it on inject `signedReturnPath`.
  */
-const { installHermeticDomainDns } = await import("./_dns-stub.ts");
+const { installHermeticDomainDns, installHermeticMtaSts } =
+  await import("./_dns-stub.ts");
 installHermeticDomainDns();
+installHermeticMtaSts();

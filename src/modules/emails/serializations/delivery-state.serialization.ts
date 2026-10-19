@@ -1,6 +1,7 @@
 import type {
   DeliveryGroup,
   DeliveryGroupStatus,
+  DeliveryMtaSts,
   DeliveryState,
   DeliveryTls,
 } from "../models/email.schema.ts";
@@ -38,6 +39,12 @@ export interface SerializedDeliveryGroup {
    * entry predates the record).
    */
   tls: DeliveryTls | null;
+  /**
+   * The recipient domain's MTA-STS policy mode on that attempt (#250):
+   * `enforce` (only the MX hosts it names, over verified TLS), `testing`,
+   * or `null` (no policy, mode `none`, or an entry from before).
+   */
+  mtaSts: DeliveryMtaSts | null;
   /** When the latest outcome happened (ISO); `null` on entries from before. */
   updatedAt: string | null;
 }
@@ -69,6 +76,7 @@ function serializeGroup(key: string, group: DeliveryGroup): SerializedDeliveryGr
     failureCode: group.failureCode ?? null,
     lastError: group.lastError ?? null,
     tls: group.tls ?? null,
+    mtaSts: group.mtaSts ?? null,
     updatedAt: group.updatedAt ?? group.deliveredAt ?? null,
   };
 }

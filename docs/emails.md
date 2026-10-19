@@ -85,6 +85,7 @@ src/modules/emails/
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones
 │   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
+│   ├── mta-sts.ts                  ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
 │   ├── stats.service.ts            ← Dashboard stats aggregation
@@ -423,6 +424,7 @@ Every send writes a per-group outcome map into `emails.delivery_state` (JSONB, n
     "deliveredAt": "2026-05-25T00:00:00.000Z",
     "messageId": "<abc@mail.example.com>",
     "tls": "starttls",
+    "mtaSts": "enforce",
     "updatedAt": "2026-05-25T00:00:00.000Z"
   },
   "outlook.com": {
@@ -435,6 +437,7 @@ Every send writes a per-group outcome map into `emails.delivery_state` (JSONB, n
     "failureKind": "soft",
     "failureCode": "4.7.500",
     "tls": "plaintext",
+    "mtaSts": null,
     "updatedAt": "2026-05-25T00:00:01.000Z"
   }
 }
@@ -456,7 +459,7 @@ Every send writes a per-group outcome map into `emails.delivery_state` (JSONB, n
 
 ### TLS record (#250)
 
-Outbound STARTTLS is opportunistic: used when the MX offers it, never required (MTA-STS and DANE are not implemented), and certificates are not verified (`rejectUnauthorized: false`), since most MX certificates would fail a strict check. The transport sets `tls.minVersion: "TLSv1.2"`, so a peer that only offers TLS 1.0 or 1.1 fails the handshake; the failure has no SMTP reply, so the entry stays `retry`.
+Unless the recipient domain's MTA-STS policy is in enforce mode (see [MTA-STS](#mta-sts-250)), outbound STARTTLS is opportunistic: used when the MX offers it, never required, and certificates are not verified (`rejectUnauthorized: false`), since most MX certificates would fail a strict check. DANE is not implemented. The transport sets `tls.minVersion: "TLSv1.2"`, so a peer that only offers TLS 1.0 or 1.1 fails the handshake; the failure has no SMTP reply, so the entry stays `retry`.
 
 Each entry records `tls`, the encryption of the session behind its latest outcome: `starttls`, `plaintext` (the MX did not offer STARTTLS, or answered it with an error), or `null` (no session got ready: a connection, DNS or TLS failure). It is read from Nodemailer's own events, through a logger passed to each MX transport (`createTlsRecorder` in `mx-transport.ts`), never from the server's reply text:
 
@@ -465,9 +468,41 @@ Each entry records `tls`, the encryption of the session behind its latest outcom
 
 A transaction is `starttls` only when both happened: under Bun the TLS callback can fire for a handshake the peer refused, after which the session never answers. Such a session (upgrade reported, never ready) fails after 60 s (`STARTTLS handshake did not complete`) instead of waiting for the 20-minute session cap. Nothing from these events is logged or stored besides the three facts. A real-server test (`test/unit/mx-transport.test.ts`, `smtp-server` under Node) pins the behaviour for STARTTLS, plaintext and a TLS 1.1-only peer.
 
+### MTA-STS (#250)
+
+A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaStsPolicy`); DANE, TLS-RPT and inbound MTA-STS are not implemented.
+
+**Discovery**, for each pending recipient domain on every attempt, in parallel with its MX resolution:
+
+- TXT `_mta-sts.<domain>`: records not starting with `v=STSv1` are ignored; exactly one remaining record with a valid `id` (1 to 32 letters and digits) announces a policy. None, several, or an invalid one: no policy is announced (RFC 8461 3.1).
+- The policy, `https://mta-sts.<domain>/.well-known/mta-sts.txt`: HTTPS with the certificate verified for `mta-sts.<domain>`, no redirects (a `3xx`, like any status but `200`, is a failed fetch), a 10 s timeout over headers and body, at most 64 KB, `Content-Type: text/plain` (parameters allowed), no content encoding, no connection reuse.
+- **SSRF:** the policy host is chosen by the recipient domain, so it is resolved once and refused when any address is private, loopback, link-local or otherwise non-public (the MX address rule; `MAIL_ALLOW_PRIVATE_MX=true` lifts it, as for MX hosts). The request goes to the checked address (IPv4 first), never to the name, with `mta-sts.<domain>` as the TLS server name and `Host` header, so Bun verifies the certificate against the name during the handshake.
+- **Parsing**, strict: `version: STSv1`; `mode: enforce`, `testing` or `none`; `max_age` of 1 to 10 digits, capped at 31557600 s (about a year); one or more `mx` patterns unless the mode is `none` (a host name, optionally with one leading `*.` label). Lines end in CRLF or LF. A required field that is missing, repeated or invalid, or any invalid `mx` pattern, makes the policy invalid. Unknown keys and lines that are not `key: value` are ignored.
+
+**Cache**, in memory, per recipient domain, at most 10,000 domains (the entry stored longest ago is evicted), keyed with the policy `id`:
+
+- The TXT `id` is unchanged and `max_age` has not passed: the cached policy is used, nothing is fetched.
+- The `id` changed or the policy expired: the policy is fetched. When that fails, an unexpired cached policy is kept (RFC 8461 5.1), and the same `id` is not fetched again for 5 minutes, so a dead policy host does not cost every attempt a timeout.
+- The TXT record disappears: the cached policy is kept until its `max_age` (RFC 8461 5).
+- The TXT lookup fails (`ESERVFAIL`, a timeout, ...): the cached policy is kept; with none cached, the attempt has no policy (opportunistic, as without MTA-STS).
+- **Per replica:** each process discovers and caches on its own, and a fresh process (or replica) trusts its first fetch. A domain is first contacted without any knowledge of its policy, which is the trust-on-first-use the RFC accepts.
+
+**Enforce mode:**
+
+- Only the MX hosts matching a policy pattern are candidates (case-insensitive; `*.example.com` matches exactly one leftmost label: `mx1.example.com`, not `a.b.example.com` and not `example.com`), in their preference order, under the usual failover caps. No matching host: the entry is `retry` with `lastError` `<domain>: no MX host matches the MTA-STS policy; will retry`, and nothing is connected to.
+- Each candidate gets `requireTLS` (no plaintext fallback), `rejectUnauthorized: true` and the MX host name as `servername`: the certificate must chain to a trusted root and name the MX host. The socket stays BunMail's own and pinned to the checked address.
+- A missing STARTTLS, a refused `STARTTLS` (whose `5xx` reply is dropped), or a certificate failure is reported as `MTA-STS: no verified TLS with <mx> (<reason>)`, an error with no SMTP reply: the entry stays `retry`, never bounced or suppressed, and the attempt fails over to the next matching host (TLS failures count as connection-level). The retry window (`MAIL_RETRY_MAX_AGE_HOURS`) gives the RFC's eventual failure.
+- Enforced domains never share a session with other domains' unverified ones.
+
+**Testing mode:** delivered as without a policy (all MX hosts, opportunistic TLS). What enforce mode would have refused (no matching MX host, or a session that ended up `plaintext`) is logged at `warn`, `MTA-STS testing policy would fail in enforce mode`, once per domain and policy `id`. **Mode `none`:** as without a policy.
+
+**Recorded:** each entry's `mtaSts` is the mode its latest attempt ran under: `enforce`, `testing`, or `null` (no policy, or `none`).
+
+**Logs:** a failed fetch or TXT lookup at `warn` (`MTA-STS policy fetch failed` with the domain, policy `id` and reason; `MTA-STS TXT lookup failed` with the DNS code), each with whether a cached policy was kept; a fetched policy and skipped hosts at `debug`.
+
 ### Exposed in the API and on the detail page (#250)
 
-`deliveryState` on every email response (see [api.md](api.md#post-apiv1emailssend)) is built from this column by `serializeDeliveryState`: one entry per stored key, with `mx` (`mxHost`; `null` while no MX host was reached; on older entries keyed by their MX, `mxHost` or the key, and `null` for a `<dns:...>` entry), `recipients`, `status`, `attempts`, `failureKind`, `failureCode`, `lastError`, `tls` and `updatedAt` (falling back to `deliveredAt`), sorted by `mx` then first recipient. The internal key, `domain`, `mxHost`, `blocked`, `messageId` and `deliveredAt` are not exposed. The dashboard's email detail page renders the same entries as the **Delivery by MX** table.
+`deliveryState` on every email response (see [api.md](api.md#post-apiv1emailssend)) is built from this column by `serializeDeliveryState`: one entry per stored key, with `mx` (`mxHost`; `null` while no MX host was reached; on older entries keyed by their MX, `mxHost` or the key, and `null` for a `<dns:...>` entry), `recipients`, `status`, `attempts`, `failureKind`, `failureCode`, `lastError`, `tls`, `mtaSts` and `updatedAt` (falling back to `deliveredAt`), sorted by `mx` then first recipient. The internal key, `domain`, `mxHost`, `blocked`, `messageId` and `deliveredAt` are not exposed. The dashboard's email detail page renders the same entries as the **Delivery by MX** table, with "MTA-STS enforced" (or "MTA-STS testing") under the TLS cell of an entry delivered under a policy.
 
 ### Aggregate status semantics
 

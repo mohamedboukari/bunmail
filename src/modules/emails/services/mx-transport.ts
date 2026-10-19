@@ -148,12 +148,26 @@ export function createTlsRecorder(stallMs = SMTP_SETUP_TIMEOUT_MS): TlsRecorder 
 }
 
 /**
+ * Verified TLS for a session to an MX host named by an MTA-STS policy in
+ * enforce mode (#250, `mta-sts.ts`).
+ */
+export interface VerifiedTls {
+  /** Trust anchors (PEM) instead of the system store: tests only. */
+  ca?: string;
+}
+
+/**
  * Transport options for one destination MX (#250), without pooling.
  *
  * - Connects to the checked `address`; the MX name goes to TLS as SNI.
- * - Opportunistic STARTTLS: used when offered, never required (MTA-STS is
- *   not implemented), and certificates are not verified, as most MX
+ * - Without `verifiedTls`: opportunistic STARTTLS, used when offered,
+ *   never required, and certificates are not verified, as most MX
  *   certificates would fail a strict check.
+ * - With `verifiedTls` (the recipient domain's MTA-STS policy is in
+ *   enforce mode): STARTTLS is required (`requireTLS`, never a plaintext
+ *   fallback) and the certificate must chain to a trusted root and name
+ *   the MX host (`rejectUnauthorized`, `servername`). The connection stays
+ *   pinned to the checked `address`.
  * - TLS 1.2 at least ({@link OUTBOUND_TLS_MIN_VERSION}).
  * - Setup timeouts of {@link SMTP_SETUP_TIMEOUT_MS}: connecting and the
  *   greeting come before anything is sent, so a dead or tarpitting MX
@@ -168,22 +182,69 @@ export function mxTransportOptions(args: {
   /** EHLO name: `MAIL_HOSTNAME`. */
   heloName: string;
   logger: NodemailerLogger;
+  verifiedTls?: VerifiedTls;
 }): SMTPTransport.Options {
-  return {
+  const base = {
     host: args.address,
     port: 25,
     secure: false,
-    opportunisticTLS: true,
     name: args.heloName,
     connectionTimeout: SMTP_SETUP_TIMEOUT_MS,
     greetingTimeout: SMTP_SETUP_TIMEOUT_MS,
     logger: args.logger,
+  };
+  if (args.verifiedTls !== undefined) {
+    const ca = args.verifiedTls.ca;
+    return {
+      ...base,
+      requireTLS: true,
+      opportunisticTLS: false,
+      tls: {
+        rejectUnauthorized: true,
+        servername: args.mxHost,
+        minVersion: OUTBOUND_TLS_MIN_VERSION,
+        ...(ca === undefined ? {} : { ca }),
+      },
+    };
+  }
+  return {
+    ...base,
+    opportunisticTLS: true,
     tls: {
       rejectUnauthorized: false,
       servername: args.mxHost,
       minVersion: OUTBOUND_TLS_MIN_VERSION,
     },
   };
+}
+
+/** Error codes of a certificate or TLS failure on the socket (Node and Bun). */
+const TLS_FAILURE_CODE_RE =
+  /^(ERR_TLS|ERR_SSL|CERT_|DEPTH_ZERO|SELF_SIGNED|UNABLE_TO_|HOSTNAME_MISMATCH)/;
+
+/**
+ * An enforce-mode TLS failure as an error with no SMTP reply (#250), so it
+ * is retried and may fail over to the next matching MX host, never a
+ * bounce: an MX that refuses `STARTTLS` (nodemailer's `ETLS`, which
+ * carries the server's `5xx` refusal as `responseCode`), an `EHLO` that
+ * fails when STARTTLS is required, or a certificate the check rejected.
+ * The reason stays in the message, on one line, so no reply code starts a
+ * line of it. Any other error is returned as it is.
+ */
+export function enforcedTlsFailure(error: unknown, mxHost: string): unknown {
+  if (!(error instanceof Error)) return error;
+  const code: unknown = Reflect.get(error, "code");
+  const originalCode: unknown = Reflect.get(error, "originalCode");
+  const command: unknown = Reflect.get(error, "command");
+  const tlsFailure =
+    code === "ETLS" ||
+    command === "STARTTLS" ||
+    (command === "EHLO" && /STARTTLS/.test(error.message)) ||
+    (typeof code === "string" && TLS_FAILURE_CODE_RE.test(code)) ||
+    (typeof originalCode === "string" && TLS_FAILURE_CODE_RE.test(originalCode));
+  if (!tlsFailure) return error;
+  const reason = error.message.replace(/\s+/g, " ").trim();
+  return new Error(`MTA-STS: no verified TLS with ${mxHost} (${reason})`);
 }
 
 /** One SMTP transaction of a session: its delivery-state key and its message. */
@@ -219,6 +280,9 @@ export interface MxSessionOutcome {
  * Runs one SMTP session to one MX (#250): every transaction in turn over a
  * single pooled connection, under one deadline, with the TLS record.
  *
+ * - **Verified TLS** (`verifiedTls`, an MTA-STS enforce policy): see
+ *   {@link mxTransportOptions}; a TLS failure is reported through
+ *   {@link enforcedTlsFailure}, so it is retried, never bounced.
  * - **One pooled connection** (`maxConnections: 1`), also for a single
  *   transaction, so there is one code path. Each message after the first
  *   goes after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
@@ -245,6 +309,8 @@ export async function runMxSession(args: {
   /** EHLO name: `MAIL_HOSTNAME`. */
   heloName: string;
   transactions: MxSessionTransaction[];
+  /** Set when the recipient domain's MTA-STS policy is in enforce mode. */
+  verifiedTls?: VerifiedTls;
   port?: number;
   deadlineMs?: number;
   stallMs?: number;
@@ -262,6 +328,7 @@ export async function runMxSession(args: {
       mxHost: args.mxHost,
       heloName: args.heloName,
       logger: recorder.logger,
+      verifiedTls: args.verifiedTls,
     }),
     port,
     pool: true,
@@ -292,7 +359,14 @@ export async function runMxSession(args: {
             : { key: transaction.key, tls: recorder.result() },
         );
       } catch (error) {
-        outcomes.push({ key: transaction.key, error, tls: recorder.result() });
+        outcomes.push({
+          key: transaction.key,
+          error:
+            args.verifiedTls === undefined
+              ? error
+              : enforcedTlsFailure(error, args.mxHost),
+          tls: recorder.result(),
+        });
       }
     }
   } finally {

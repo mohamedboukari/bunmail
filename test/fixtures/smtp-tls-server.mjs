@@ -4,7 +4,7 @@
  * accepted socket to TLS on the server side, so STARTTLS needs Node here.
  * The client side (nodemailer, the code under test) still runs under Bun.
  *
- * Usage: node smtp-tls-server.mjs <mode>
+ * Usage: node smtp-tls-server.mjs <mode> [certificate name]
  *   starttls   offers STARTTLS (TLS 1.2 and up)
  *   plaintext  does not offer STARTTLS
  *   tls11      offers STARTTLS, but only TLS 1.0 and 1.1
@@ -22,17 +22,20 @@
  * each accepted message and connection, the open connections whenever
  * that number changes, and the connections closed by either side
  * (`{"message":N}`, `{"connection":N}`, `{"open":N}`, `{"closed":N}`). Exits when stdin
- * closes. The key and certificate are the test-only pair under
- * `test/fixtures/tls/`.
+ * closes. The key and certificate are a test-only pair under
+ * `test/fixtures/tls/`: `<certificate name>.key.pem` and `.cert.pem`,
+ * `hook.example.test` (self-signed) by default. The MTA-STS tests (#250)
+ * pass a name whose certificate the test CA (`test-ca.cert.pem`) signed.
  */
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { SMTPServer } from "smtp-server";
 
 const mode = process.argv[2];
+const certName = process.argv[3] ?? "hook.example.test";
 const here = new URL(".", import.meta.url);
-const key = readFileSync(new URL("tls/hook.example.test.key.pem", here));
-const cert = readFileSync(new URL("tls/hook.example.test.cert.pem", here));
+const key = readFileSync(new URL(`tls/${certName}.key.pem`, here));
+const cert = readFileSync(new URL(`tls/${certName}.cert.pem`, here));
 
 /** TLS 1.1 needs OpenSSL security level 0 in Node 17 and later. */
 const tls11 = {

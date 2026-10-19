@@ -111,8 +111,14 @@ function dnsCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-/** A DNS lookup, rejected with an `ETIMEOUT` error past `timeoutMs`. */
-async function withTimeout<T>(lookupPromise: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * A DNS lookup, rejected with an `ETIMEOUT` error past `timeoutMs`. Also
+ * bounds the MTA-STS TXT lookup (`mta-sts.ts`, #250).
+ */
+export async function withTimeout<T>(
+  lookupPromise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
