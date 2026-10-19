@@ -103,9 +103,9 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **SMTP submission**: apps (Infisical, Netbird, Dify, any Nodemailer backend) send *through* BunMail over SMTP using an API key as the password; switch an app off SendGrid/Brevo with a credentials-only change ([docs/smtp-submission.md](docs/smtp-submission.md))
 - **DKIM signing**: auto-generates 2048-bit RSA keys per domain, under a selector you can choose, with zero-downtime key rotation
 - **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard, with the records to publish per domain, the parsed DMARC policy and where the MX points, re-run daily in the background so a record that drifts is caught (`domain.verification_failed`)
-- **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and exactly-once delivery semantics
+- **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and no double sends between concurrent workers
 - **Idempotency keys**: an optional `Idempotency-Key` header on the send API makes retries safe; a repeat with the same key and body returns the first response instead of sending twice, even under concurrent retries ([docs/api.md](docs/api.md#post-apiv1emailssend))
-- **Templates**: Mustache-style `{{variable}}` substitution
+- **Templates**: Mustache-style `{{variable}}` substitution, HTML-escaped in the HTML body (`{{{variable}}}` inserts raw HTML)
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`, `domain.verification_failed`, `domain.verified`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting; reply from the dashboard with RFC 5322 threading headers, and see which of your emails a received reply answers
 - **Inbound notifications**: per-domain "you have new mail" email on receive, DKIM-signed from the recipient domain, with no content of the inbound message by default, automatic mail skipped and per-address and per-domain throttles; opt-in via each domain's `notify_email`
@@ -115,13 +115,13 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Sender display name and send category**: an optional `fromName` (checked so it cannot pose as an address) and `category` (`transactional` mail goes out without `List-Unsubscribe`, `marketing` mail is refused unless it can carry the one-click link); HTML-only mail gets a derived text part and fragments a document wrapper at send time
 - **One-click unsubscribe**: single-recipient mail carries a per-recipient RFC 8058 `List-Unsubscribe` link (and an `unsub+` mailto when inbound SMTP is on); using it suppresses that recipient for the sending key and fires `email.unsubscribed` ([docs/suppressions.md](docs/suppressions.md#one-click-unsubscribe))
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
-- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, bounce rate with a warning above 2%, queue depth), a per-MX delivery table on each email with a badge for sessions sent without TLS; owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, a Change password page for every account (signs out every other device), an Active sessions page for every account (device, IP, optional approximate location from an offline GeoIP database; sign out one device or all others), an email alert on sign-in from a new device (no links), optional TOTP two-factor authentication with recovery codes for every account (`REQUIRE_2FA` makes it mandatory for the owner or admins), an append-only audit log of security-relevant actions (sign-ins, account, two-factor, API key, domain and webhook changes, with actor, IP and user agent) for admins, and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
+- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, bounce rate with a warning above 2%, queue depth), a per-MX delivery table on each email with a badge for sessions sent without TLS; owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, a Change password page for every account (signs out every other device), an Active sessions page for every account (device, IP, optional approximate location from an offline GeoIP database; sign out one device or all others), an email alert on sign-in from a new device (no links), optional TOTP two-factor authentication with recovery codes for every account (`REQUIRE_2FA` makes it mandatory for the owner or admins), an append-only audit log of security-relevant actions (sign-ins, account, two-factor, API key, domain, webhook and suppression changes, with actor, IP and user agent) for admins, and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
 - **OpenAPI 3.0**: interactive docs at `/api/docs`
 - **Type-safe**: strict TypeScript, Drizzle ORM, no `any`
 
 ## API Endpoints
 
-All endpoints (except `/health`) require `Authorization: Bearer <api-key>`. Full reference: [docs/api.md](docs/api.md).
+All endpoints (except `/health` and the public unsubscribe pages at `/u/:token`) require `Authorization: Bearer <api-key>`. Full reference: [docs/api.md](docs/api.md).
 
 ### Emails
 
@@ -136,6 +136,8 @@ All endpoints (except `/health`) require `Authorization: Bearer <api-key>`. Full
 | POST | `/api/v1/emails/:id/restore` | Restore from trash |
 | DELETE | `/api/v1/emails/:id/permanent` | Permanently delete a trashed email |
 | POST | `/api/v1/emails/trash/empty` | Empty trash |
+| GET | `/api/v1/emails/tombstones` | List post-purge audit snapshots (optional `?messageId=`) |
+| GET | `/api/v1/emails/tombstones/:id` | Get a tombstone by the original email ID |
 
 ### Inbound
 
@@ -170,9 +172,9 @@ Sends to suppressed recipients return 422 with `code: "RECIPIENT_SUPPRESSED"` an
 
 DMARC `rua` aggregate reports that arrive at BunMail's inbound SMTP are auto-detected, decompressed (gzip / zip / raw XML), parsed, and stored. The dashboard at `/dashboard/dmarc-reports` highlights misaligned source IPs in amber. See [docs/dmarc-reports.md](docs/dmarc-reports.md).
 
-### Domains, Templates, API Keys, Webhooks
+### Domains, Templates, API Keys, Webhooks, SMTP Submission
 
-See [docs/api.md](docs/api.md) for full coverage of `/api/v1/domains`, `/api/v1/templates`, `/api/v1/api-keys`, `/api/v1/webhooks`.
+See [docs/api.md](docs/api.md) for full coverage of `/api/v1/domains`, `/api/v1/templates`, `/api/v1/api-keys`, `/api/v1/webhooks` and `/api/v1/smtp-submission/stats`.
 
 ## Send with a Template
 

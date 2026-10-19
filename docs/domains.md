@@ -7,6 +7,7 @@ Manages sender domains, auto-generates DKIM keys, and verifies DNS records (SPF,
 ```
 src/modules/domains/
 ├── domains.plugin.ts               ← Elysia plugin (route group)
+├── errors.ts                       ← DomainAlreadyRegisteredError, InvalidDkimSelectorError, DkimRotationError (#250)
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
 │   ├── dkim-keys.ts                ← Key generation, selector rules, dated selectors, TXT match (#250)
@@ -22,7 +23,8 @@ src/modules/domains/
 │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
 │   └── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
 ├── dtos/
-│   └── create-domain.dto.ts        ← POST body validation
+│   ├── create-domain.dto.ts        ← POST body validation
+│   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings)
 ├── models/
 │   └── domain.schema.ts            ← Drizzle pgTable definition
 ├── serializations/
@@ -174,7 +176,7 @@ There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 ### domain.service.ts
 
 #### `createDomain(input): Promise<Domain>`
-Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing, under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
+Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. The name is trimmed and stored lowercase; a name already registered in any case throws `DomainAlreadyRegisteredError` (`409 DOMAIN_ALREADY_REGISTERED`), and lookups by name ignore case. The key is generated under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
 
 #### `getDkimDnsRecord(domain): string | null`
 Returns the DKIM DNS TXT record value (`v=DKIM1; k=rsa; p=<base64>`) for a domain.

@@ -203,6 +203,7 @@ Turns extracted addresses + subject/body into a `SendEmailInput`: resolves the s
 ```
 src/modules/smtp-submission/
 ├── smtp-submission.plugin.ts        ← REST: GET /api/v1/smtp-submission/stats (#123)
+├── errors.ts                        ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 ├── services/
 │   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; start()/stop()
 │   └── usage.service.ts             ← per-(key,day) usage counters + quota read (#123)

@@ -54,10 +54,12 @@ Client                     Server
 ```
 src/modules/api-keys/
 ├── api-keys.plugin.ts              ← Routes: POST /, GET /, PATCH /:id, DELETE /:id
+├── errors.ts                       ← UnauthorizedSenderError, InactiveApiKeyError, ApiKeyCreatorInactiveError
 ├── models/
 │   └── api-key.schema.ts           ← Drizzle pgTable definition
 ├── dtos/
-│   └── create-api-key.dto.ts       ← Elysia t.Object validation
+│   ├── create-api-key.dto.ts       ← Elysia t.Object validation
+│   └── update-api-key.dto.ts       ← PATCH /:id body (name, allowed senders)
 ├── services/
 │   └── api-key.service.ts          ← Business logic (CRUD + hash lookup)
 ├── serializations/

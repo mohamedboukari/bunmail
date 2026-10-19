@@ -167,6 +167,15 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `WEBHOOKS_MAX_PER_API_KEY` / `WEBHOOK_DELIVERY_RETENTION_DAYS` (#258): per-key webhook limits. A key may have at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (default `10`, 1 to 100); one more is refused with `422 WEBHOOK_LIMIT_REACHED`, and webhooks already over a lowered cap are kept. Finished webhook deliveries (`delivered` and `failed`) are deleted by the hourly cleanup once their last change is older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default `30`, 1 to 365); `failed` rows used to be kept forever, so raise it if you rely on them for forensics. Pending deliveries are never deleted. Any other value refuses to boot. Replays are limited to 5 per delivery per hour (not configurable; in memory, per replica).
 
+> **Other settings** (defaults in brackets; full descriptions in [.env.example](../.env.example)):
+> - `HOST` (`0.0.0.0`) and `PORT` (`3000`): the HTTP bind address and port.
+> - `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` (`true`): `false` turns the login throttle off.
+> - `LOG_LEVEL` (`info`; `debug`, `info`, `warn` or `error`, anything else refuses to boot) and `LOG_REDACT_PII` (`true` in production, `false` in development). See [docs/logging.md](logging.md).
+> - `TOMBSTONE_RETENTION_DAYS` (`90`): how long the post-purge snapshot of a hard-deleted email is kept (#34, see [emails.md](emails.md#tombstones-34)).
+> - `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`): `true` also allows `http://` webhook URLs; private addresses stay blocked (#128).
+> - Inbound SMTP (see [docs/inbound.md](inbound.md)): `SMTP_ENABLED` (`false`), `SMTP_PORT` (`2525`; use `25` in production), `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `SMTP_RATE_LIMIT_MAX` / `SMTP_RATE_LIMIT_WINDOW` (`true`, `10` connections per `60` seconds per IP).
+> - SMTP submission (#120, see [docs/smtp-submission.md](smtp-submission.md)): `SMTP_SUBMISSION_ENABLED` (`false`), `SMTP_SUBMISSION_PORT` (`587`), `SMTP_SUBMISSION_DAILY_QUOTA` (`0`: unlimited), `SMTP_SUBMISSION_TLS_CERT` / `SMTP_SUBMISSION_TLS_KEY` (unset), `SMTP_SUBMISSION_ALLOW_INSECURE` (`false`: with neither TLS nor this flag the server refuses to start), `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` connections per `60` seconds per IP), `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failed AUTHs per `900` seconds per IP).
+
 ## 2. DNS Records
 
 Add these DNS records for `yourdomain.com` in your domain registrar (Cloudflare, Namecheap, etc.). Once the domain is registered (step 4), its dashboard page lists the exact records for it, with this server's `MAIL_HOSTNAME` and `MAIL_PUBLIC_IP` filled in, and the API returns them as `dnsRecords` (#250).
@@ -416,7 +425,7 @@ nginx -t && systemctl restart nginx
 certbot --nginx -d mail.yourdomain.com
 ```
 
-> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. **Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy**; otherwise a direct request could forge `X-Forwarded-For` and get a fresh throttle bucket per request. The default `docker-compose.yml` publishes `3000` on all interfaces, and Docker-published ports bypass UFW: change the app's `ports` line to `"127.0.0.1:${PORT:-3000}:${PORT:-3000}"` when a proxy runs on the same host. BunMail logs `Request bypassed the trusted proxy` (at most once an hour, #256) when a request arrives with fewer `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS`.
+> **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. **Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy**; otherwise a direct request could forge `X-Forwarded-For` and get a fresh throttle bucket per request. Docker-published ports bypass UFW, so the default `docker-compose.yml` publishes `3000` on `127.0.0.1` only (#205); keep it that way when the proxy runs on the same host, and publish anything else from `docker-compose.override.yml`. BunMail logs `Request bypassed the trusted proxy` (at most once an hour, #256) when a request arrives with fewer `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS`.
 
 ## Firewall Rules
 

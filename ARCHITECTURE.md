@@ -86,6 +86,9 @@ bunmail/
 │   │   ├── schema.ts                     ← Re-exports all model schemas
 │   │   ├── migrate.ts                    ← Bun-native migration runner (#56)
 │   │   ├── encrypt-domain-keys.ts        ← Boot-time pass that encrypts legacy plaintext DKIM keys (#23)
+│   │   ├── encrypt-webhook-secrets.ts    ← Boot-time pass that encrypts legacy plaintext webhook secrets (#259)
+│   │   ├── jsonb.ts                      ← jsonb column type that stores real JSON, not a JSON string (#261)
+│   │   ├── seed.ts                       ← Creates the first (admin) API key: `bun run src/db/seed.ts`
 │   │   └── reset-owner.ts                ← Shell-only recovery: prints a fresh owner setup link (#215)
 │   ├── middleware/
 │   │   ├── request-context.ts            ← Request ID, X-Request-Id and the per-request log line (#284)
@@ -101,6 +104,9 @@ bunmail/
 │   │   ├── redact.ts                     ← PII-aware email redaction for logs (#33)
 │   │   ├── db-error.ts                   ← A failed write's log text: SQLSTATE only for drizzle query errors (#184)
 │   │   ├── mx-throttle.ts                ← Outbound session semaphore, keyed by provider bucket (#91, #250)
+│   │   ├── recipients.ts                 ← Recipient parsing and grouping per recipient domain (#87)
+│   │   ├── smtp-error.ts                 ← Classifies an SMTP reply as hard, policy or soft (#68, #246, #250)
+│   │   ├── ssrf-guard.ts                 ← Non-public address checks for webhook URLs, MX hosts and other outbound lookups (#128)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
 │   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
@@ -109,6 +115,9 @@ bunmail/
 │   │   │   ├── errors.ts                 ← Typed send rejections with status + code (#245)
 │   │   │   ├── services/
 │   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
+│   │   │   │   ├── idempotency.service.ts ← Idempotency keys of the send API (#188)
+│   │   │   │   ├── tombstone.service.ts  ← Post-purge audit snapshots: hard delete with tombstone, retention (#34)
+│   │   │   │   ├── custom-headers.ts     ← Custom header rules shared by REST, SMTP submission and the mailer (#177)
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
 │   │   │   │   ├── mx-route.ts           ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
@@ -122,24 +131,30 @@ bunmail/
 │   │   │   │   ├── message-body.ts       ← Send-time HTML wrapper and text alternative (#250)
 │   │   │   │   ├── html-to-text.ts       ← Bounded, linear HTML-to-text converter (#250)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
+│   │   │   │   ├── retry-schedule.ts     ← Retry backoff of temporary failures (#180)
 │   │   │   │   ├── stats.service.ts      ← Dashboard stats aggregation
 │   │   │   │   └── delivery-rates.ts     ← Success and bounce rate math (#250)
 │   │   │   ├── dtos/
 │   │   │   │   ├── send-email.dto.ts
 │   │   │   │   └── list-emails.dto.ts
 │   │   │   ├── models/
-│   │   │   │   └── email.schema.ts       ← emails pgTable
+│   │   │   │   ├── email.schema.ts       ← emails pgTable
+│   │   │   │   ├── email-tombstone.schema.ts ← email_tombstones pgTable (#34)
+│   │   │   │   └── idempotency-key.schema.ts ← idempotency_keys pgTable (#188)
 │   │   │   ├── serializations/
 │   │   │   │   ├── email.serialization.ts
+│   │   │   │   ├── email-tombstone.serialization.ts (#34)
 │   │   │   │   └── delivery-state.serialization.ts ← Public per-MX delivery state (#250)
 │   │   │   └── types/
 │   │   │       └── email.types.ts
 │   │   ├── api-keys/
 │   │   │   ├── api-keys.plugin.ts        ← CRUD routes
+│   │   │   ├── errors.ts                 ← Unauthorized sender, revoked key, inactive creator (#126, #219)
 │   │   │   ├── services/
 │   │   │   │   └── api-key.service.ts
 │   │   │   ├── dtos/
-│   │   │   │   └── create-api-key.dto.ts
+│   │   │   │   ├── create-api-key.dto.ts
+│   │   │   │   └── update-api-key.dto.ts
 │   │   │   ├── models/
 │   │   │   │   └── api-key.schema.ts     ← api_keys pgTable
 │   │   │   ├── serializations/
@@ -148,6 +163,7 @@ bunmail/
 │   │   │       └── api-key.types.ts
 │   │   ├── domains/
 │   │   │   ├── domains.plugin.ts         ← CRUD + verify + DKIM rotation routes
+│   │   │   ├── errors.ts                 ← Already registered, invalid DKIM selector, rotation refused (#250)
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
 │   │   │   │   ├── dkim-keys.ts          ← DKIM key pair, selector rules, dated selectors, TXT match (#250)
@@ -160,15 +176,18 @@ bunmail/
 │   │   │   │   ├── dmarc-check.service.ts ← One DMARC record, org-domain fallback, strict tags (#250)
 │   │   │   │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status per domain (#250)
 │   │   │   │   ├── required-dns-records.ts ← The DNS records to publish (`dnsRecords`, #250)
-│   │   │   │   └── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
+│   │   │   │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
+│   │   │   │   └── sending-ips.service.ts ← Sending IPs and the reverse DNS check (#247, #248)
 │   │   │   ├── dtos/
-│   │   │   │   └── create-domain.dto.ts
+│   │   │   │   ├── create-domain.dto.ts
+│   │   │   │   └── update-domain.dto.ts
 │   │   │   ├── models/
 │   │   │   │   └── domain.schema.ts      ← domains pgTable
 │   │   │   ├── serializations/
 │   │   │   │   └── domain.serialization.ts
 │   │   │   └── types/
-│   │   │       └── domain.types.ts
+│   │   │       ├── domain.types.ts
+│   │   │       └── domain-check.types.ts ← Check outcome and result (#250)
 │   │   ├── webhooks/
 │   │   │   ├── webhooks.plugin.ts                 ← CRUD + deliveries inspection + replay
 │   │   │   ├── services/
@@ -210,6 +229,9 @@ bunmail/
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
 │   │   │   │   ├── inbound-notify.service.ts ← "New email for <address>" notifications: plain text, no inbound content by default, automatic mail skipped (#106, #250)
 │   │   │   │   ├── notify-throttle.ts    ← Notification budgets: 5 per address, 30 per domain, per 10 min, in memory (#250)
+│   │   │   │   ├── threading.ts          ← Pure Message-ID extraction and reply chain rules (#192)
+│   │   │   │   ├── reply-threading.service.ts ← Threading columns, reply headers, reply link (#192)
+│   │   │   │   ├── smtp-listen.ts        ← Port bind failures of both SMTP servers: explain and exit (#167)
 │   │   │   │   └── inbound.service.ts    ← Reads + trash/restore/permanent
 │   │   │   ├── models/
 │   │   │   │   └── inbound-email.schema.ts ← inbound_emails pgTable
@@ -220,6 +242,7 @@ bunmail/
 │   │   │       └── feedback-report.types.ts ← Parsed report, action and outcome (#191)
 │   │   ├── smtp-submission/                ← AUTH-required SMTP relay for apps to send THROUGH BunMail (#120)
 │   │   │   ├── smtp-submission.plugin.ts    ← Route: GET /stats (usage + quota, #123)
+│   │   │   ├── errors.ts                    ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 │   │   │   ├── services/
 │   │   │   │   ├── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
 │   │   │   │   └── usage.service.ts         ← per-(key,day) usage counters + quota read (#123)
@@ -260,7 +283,7 @@ bunmail/
 │   │   │   └── types/
 │   │   │       └── bounce.types.ts
 │   │   ├── users/                        ← Dashboard accounts schema (#214), owner bootstrap (#215), login + sessions (#216), invitations (#217), account management (#218), reset links (#277), password change (#279), active sessions (#281), new-device alerts (#282), TOTP two-factor (#220), record ownership (#219)
-│   │   │   ├── models/                   ← users, user_credentials, sessions, user_tokens, user_devices (#282), user_recovery_codes (#220)
+│   │   │   ├── models/                   ← users, user_credentials, sessions, session_token_history (#216), user_tokens, user_devices (#282), user_recovery_codes (#220)
 │   │   │   ├── services/                 ← password.service.ts (argon2id), token.service.ts (SHA-256 tokens),
 │   │   │   │                               owner.service.ts (bootstrap / reset / setup, advisory lock),
 │   │   │   │                               owner-setup-policy.service.ts (pure: TTL, token format, password policy, URL),
@@ -314,6 +337,9 @@ bunmail/
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
+│       ├── flash-errors.ts               ← Error flash text that never carries an internal error message
+│       ├── send-warnings.ts              ← Send-flash sentence for unverified DNS records (#245)
+│       ├── favicon.ts                    ← Inline SVG favicon
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── unsubscribe.plugin.tsx        ← Public one-click unsubscribe at /u/:token, rate limited (#249)
 │       ├── static-assets.tsx             ← Serves dashboard.css / dashboard.js with a content-hash ?v= and a 1-year cache (#255)
@@ -365,6 +391,10 @@ bunmail/
 │           ├── pagination.tsx            ← Prev/Next page links
 │           ├── flash-message.tsx         ← Success/error banner
 │           ├── qr-code.tsx               ← QR code as server-drawn inline SVG from the `uqr` matrix (#220)
+│           ├── created-by.tsx            ← "Created by" display names (#219)
+│           ├── email-chip-input.tsx      ← Multi-recipient chip input
+│           ├── html-preview.tsx          ← HTML preview in a sandboxed iframe
+│           ├── time-display.tsx          ← Timestamps rendered in the viewer's time zone (#104)
 │           └── empty-state.tsx           ← "No data yet" placeholder
 ├── test/
 │   ├── setup.ts                          ← Global preload (env vars, mocks)
@@ -964,7 +994,6 @@ Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.co
 | GET    | /api/v1/suppressions                | List, paginated, optional `?email=` filter | Yes  |
 | GET    | /api/v1/suppressions/:id            | Get a suppression by ID                    | Yes  |
 | DELETE | /api/v1/suppressions/:id            | Remove (recipient eligible immediately)    | Yes  |
-| GET    | /api/v1/smtp-submission/stats       | SMTP submission usage + quota (calling key) | Yes  |
 
 `POST /api/v1/emails/send` returns HTTP 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` when the recipient is on the calling key's list (`suppressionId: null` for a shared hard suppression of another key, `SUPPRESSIONS_SHARED_HARD`, #250). No row inserted, no queue entry, no SMTP attempt. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md).
 
@@ -982,8 +1011,19 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /api/v1/inbound/:id/restore         | Restore from trash                         | Yes  |
 | DELETE | /api/v1/inbound/:id/permanent       | Permanently delete a trashed inbound       | Yes  |
 | POST   | /api/v1/inbound/trash/empty         | Permanently delete all trashed inbound     | Yes  |
+
+### DMARC Reports
+
+| Method | Path                                | Description                                | Auth |
+|--------|-------------------------------------|--------------------------------------------|------|
 | GET    | /api/v1/dmarc-reports               | List DMARC aggregate reports (filter by `?domain=`) | Yes |
 | GET    | /api/v1/dmarc-reports/:id           | Single report + per-source-IP records      | Yes  |
+
+### SMTP Submission
+
+| Method | Path                                | Description                                | Auth |
+|--------|-------------------------------------|--------------------------------------------|------|
+| GET    | /api/v1/smtp-submission/stats       | SMTP submission usage + quota (calling key) | Yes  |
 
 ### Dashboard (HTML)
 
@@ -1047,6 +1087,9 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/domains                 | Add domain              | Admin |
 | POST   | /dashboard/domains/:id/delete      | Delete domain           | Admin |
 | POST   | /dashboard/domains/:id/verify      | Verify domain DNS       | Admin |
+| POST   | /dashboard/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) | Admin |
+| POST   | /dashboard/domains/:id/dkim/rotate/complete | Switch to the pending key once its record is published (#250) | Admin |
+| POST   | /dashboard/domains/:id/dkim/rotate/cancel | Cancel the pending rotation (#250) | Admin |
 | POST   | /dashboard/domains/:id/notify-email | Set/clear inbound notification address (#106) | Admin |
 | POST   | /dashboard/domains/:id/unsubscribe | Set/clear List-Unsubscribe overrides (#243) | Admin |
 | GET    | /dashboard/domains/:id             | Domain detail           | Member |
@@ -1150,7 +1193,7 @@ Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Goo
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
 - **Inline 5xx** during the SMTP transaction → classified per group, or per refused recipient when the MX accepted others (#250) ([`classifySendFailure`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue.service.ts](src/modules/emails/services/queue.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24). Only a DSN delivered to a verified **signed return path** counts (#236): with `SMTP_ENABLED=true` and the sender domain's MX naming `MAIL_HOSTNAME` (cached per domain; other domains keep the From address as envelope sender), each recipient is sent in its own SMTP transaction with envelope sender `b+<email id hex>.<recipient index>.<MAC>@<sender domain>` (HMAC under a key derived from `DKIM_ENCRYPTION_KEY`), the receiver refuses (`550`) a `b+` address that does not verify, and the DSN then applies to exactly that email and recipient, whatever its body says. A DSN to any other address (the Message-ID link of before #236) has no effect; non-DSN mail to a return path (auto-replies) is dropped. Same sender domain as before, so SPF and DMARC alignment are unchanged. See [docs/bounces.md](docs/bounces.md#signed-return-paths-236).
-- Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
+- Hard bounces (5.x.x) → permanent per-API-key suppression in either path. On the inline path a sender policy block (5.7.x, or a reply naming a blocklist, reputation or SPF/DKIM/DMARC failure, #246) suppresses nobody: the group fails with `blocked: true` and `email.failed` carries `blocked: true`.
 - A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180), then `failed`; only a recipient whose last reply was `4.2.2` (mailbox full) then gets a 24h soft suppression and a soft `email.bounced`, in the outcome transaction (#250). Other 4xx codes and failures with no SMTP reply get neither, and there is no soft → hard escalation inline.
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
@@ -1164,7 +1207,7 @@ Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Goo
 ## Deployment
 
 ```yaml
-# docker-compose.yml (abridged: the SMTP port lines are commented out until enabled)
+# docker-compose.yml (abridged: SMTP ports are published from docker-compose.override.yml, #205)
 x-logging: &default-logging          # log rotation (#284): 5 files of 10 MB per container
   driver: json-file
   options:
@@ -1176,7 +1219,7 @@ services:
     logging: *default-logging
     build: .
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"   # HTTP API + Dashboard
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"   # HTTP API + Dashboard, loopback only (#205)
     env_file: .env                     # DKIM_ENCRYPTION_KEY, MAIL_HOSTNAME, BUNMAIL_OWNER_EMAIL, ...
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-bunmail}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-bunmail}
@@ -1208,7 +1251,7 @@ volumes:
   pgdata:
 ```
 
-Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `IDEMPOTENCY_KEY_TTL_HOURS` (#188, 1 to 168, default 24) sets how long an `Idempotency-Key` on the send API is remembered; anything else refuses to boot. Optional: `INBOUND_NOTIFY_PREVIEW=true` (#250) adds the original subject and a link-stripped preview to the body of inbound notifications (default `false`: no inbound content; only `true` or `false`, anything else refuses to boot). Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional (#250): `DOMAIN_REVERIFY_ENABLED` (default `true`) and `DOMAIN_REVERIFY_INTERVAL_HOURS` (6 to 168, default 24) control the scheduled DNS re-verification of domains; anything invalid refuses to boot. Optional: `SUPPRESSIONS_SHARED_HARD=true` (#250) also refuses addresses any API key holds a permanent hard-bounce or complaint suppression for (default `false`; only `true` or `false`, anything else refuses to boot). Optional: `SENDING_IP_DNSBL_CHECK=false` (#250) turns off the daily DNSBL self-check of the sending IPs (default `true`; only `true` or `false`, anything else refuses to boot). Optional tuning: `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`, `MAIL_RETRY_MAX_AGE_HOURS`, `MAIL_ALLOW_PRIVATE_MX` and the rest of [.env.example](.env.example). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
+Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start until `.env` has `POSTGRES_PASSWORD`, `DKIM_ENCRYPTION_KEY` (#23, `openssl rand -base64 32`), a real `MAIL_HOSTNAME` (#242) and `BUNMAIL_OWNER_EMAIL` (#215, the dashboard login account since #216). `DASHBOARD_PASSWORD` and `SESSION_SECRET` are no longer read (#216). Optional for invitations (#217): `SYSTEM_MAIL_FROM` (sender of invitation emails and new-device sign-in alerts (#282), on a DKIM-verified domain registered in BunMail; malformed refuses to boot) and `INVITE_EXPIRY_DAYS` (1 to 90, default 7); set `APP_BASE_URL` too, or invitation and password reset links point at `localhost`. Optional for the Active sessions page (#281): `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or `GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN` (online, sends every sign-in IP to ipinfo.io) for an approximate location per session; unset, no location is shown, and a bad combination refuses to boot. Optional: `REQUIRE_2FA` (#220): `none` (default), `owner` or `admin` (admins and the owner) must set up two-factor authentication before using the dashboard; anything else refuses to boot. Optional: `AUDIT_LOG_RETENTION_DAYS` (#221, 30 to 3650, default 365) sets how long audit log entries are kept; anything else refuses to boot. Optional (#258): `WEBHOOKS_MAX_PER_API_KEY` (1 to 100, default 10) caps webhooks per API key, and `WEBHOOK_DELIVERY_RETENTION_DAYS` (1 to 365, default 30) sets how long finished webhook deliveries are kept; anything else refuses to boot. Optional: `IDEMPOTENCY_KEY_TTL_HOURS` (#188, 1 to 168, default 24) sets how long an `Idempotency-Key` on the send API is remembered; anything else refuses to boot. Optional: `INBOUND_NOTIFY_PREVIEW=true` (#250) adds the original subject and a link-stripped preview to the body of inbound notifications (default `false`: no inbound content; only `true` or `false`, anything else refuses to boot). Optional: `REQUIRE_VERIFIED_DOMAIN=true` (#245) refuses sends from a domain whose DKIM record is not verified (default `false`: queued, with `warnings` in the send response). Optional (#250): `DOMAIN_REVERIFY_ENABLED` (default `true`) and `DOMAIN_REVERIFY_INTERVAL_HOURS` (6 to 168, default 24) control the scheduled DNS re-verification of domains; anything invalid refuses to boot. Optional: `SUPPRESSIONS_SHARED_HARD=true` (#250) also refuses addresses any API key holds a permanent hard-bounce or complaint suppression for (default `false`; only `true` or `false`, anything else refuses to boot). Optional: `SENDING_IP_DNSBL_CHECK=false` (#250) turns off the daily DNSBL self-check of the sending IPs (default `true`; only `true` or `false`, anything else refuses to boot). Optional tuning, with defaults: `PORT` (`3000`) and `HOST` (`0.0.0.0`); `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW` (`100` requests per `60` seconds, positive integers); `DASHBOARD_TRUSTED_PROXY_HOPS` (`0`) and `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `5` from 1 to 100, `900` seconds from 60 to 86400); `MAIL_PUBLIC_IP` (unset: the A/AAAA records of `MAIL_HOSTNAME`), `MAIL_MX_CONCURRENCY` (`1`), `MAIL_MX_RATE_PER_MIN` (unset, 1 to 100000), `MAIL_IP_FAMILY` (`4` or `6`, default `4`), `MAIL_RETRY_MAX_AGE_HOURS` (`48`, a positive integer) and `MAIL_ALLOW_PRIVATE_MX` (`false`); `QUEUE_BATCH_SIZE` (`5`, 1 to 100), `QUEUE_POLL_INTERVAL_MS` (`2000`, 250 to 60000) and `QUEUE_MAX_CONCURRENT_SENDS` (`10`, 1 to 500); `INBOUND_NOTIFY_ENABLED` (`true`) and `INBOUND_NOTIFY_FROM_LOCAL` (`notifications`); `TRASH_RETENTION_DAYS` (`7`) and `TOMBSTONE_RETENTION_DAYS` (`90`); `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`); `LOG_LEVEL` (`info`: `debug`, `info`, `warn` or `error`) and `LOG_REDACT_PII` (`true` in production, `false` in development). The SMTP listeners' variables are listed below. Out-of-range values of the bounded variables refuse to boot. Descriptions: [.env.example](.env.example) and [docs/self-hosting.md](docs/self-hosting.md). Upgrading from 0.9.x: see the upgrade guide in the 0.10.0 entry of [CHANGELOG.md](CHANGELOG.md). For local development, `docker-compose.override.example.yml` (copy it to the untracked `docker-compose.override.yml`, #205) publishes Postgres on `127.0.0.1:5432` (#209).
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
@@ -1216,12 +1259,12 @@ Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start u
 
 ### Optional SMTP listeners
 
-Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners as background services (both off by default; each has a port line in `docker-compose.yml` that's commented out until enabled):
+Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners as background services (both off by default; publish each port from `docker-compose.override.yml`, see `docker-compose.override.example.yml`, #205):
 
 | Listener | Toggle / port env | Purpose |
 |---|---|---|
-| **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (25) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). See [docs/inbound.md](docs/inbound.md). |
-| **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (587) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`; per-IP connection + failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_*` / `SMTP_SUBMISSION_AUTH_RATE_LIMIT_*`. See [docs/smtp-submission.md](docs/smtp-submission.md). |
+| **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (default `2525`; use `25` in production) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). Spam protection: `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` connections per `60` seconds). See [docs/inbound.md](docs/inbound.md). |
+| **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (587) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`, or `SMTP_SUBMISSION_ALLOW_INSECURE=true` for plaintext AUTH on a trusted network (default `false`: with neither TLS nor this flag the server refuses to start); per-IP connection and failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` per `60` seconds) and `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failures per `900` seconds); `SMTP_SUBMISSION_DAILY_QUOTA` per key per UTC day (`0`: unlimited). See [docs/smtp-submission.md](docs/smtp-submission.md). |
 
 Both are started from [src/index.ts](src/index.ts) after the queue processor and stopped in the graceful shutdown handler.
 
@@ -1234,6 +1277,8 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
   - Request validation failure → 422 with `{ code: "VALIDATION_ERROR", details: [{ path, message }] }` (submitted values never echoed); malformed JSON → 400 `INVALID_BODY`
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
+  - `EmailSendRejectedError` subclasses (`src/modules/emails/errors.ts`) → their own status and code: 404 `TEMPLATE_NOT_FOUND`; 422 `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (#245), `SUBJECT_REQUIRED`, `BODY_REQUIRED` (#250), `INVALID_CUSTOM_HEADER` (#177), `IDEMPOTENCY_KEY_REUSED` (#188), `MARKETING_REQUIRES_ONE_CLICK` (#250); an invalid `fromName` (`InvalidFromNameError`, #250) is 422 `VALIDATION_ERROR` with `details` naming `/fromName`
+  - `DomainAlreadyRegisteredError` → 409 `DOMAIN_ALREADY_REGISTERED`; `InvalidDkimSelectorError` → 422 `INVALID_DKIM_SELECTOR`; `DkimRotationError` → 409 with its code (`DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE`, #250)
   - `TemplateTooLargeError` → 422 `TEMPLATE_OUTPUT_TOO_LARGE`
   - `InactiveApiKeyError` → 401 `API_KEY_REVOKED`
   - `ApiKeyCreatorInactiveError` → 403 `API_KEY_CREATOR_INACTIVE` (#219)

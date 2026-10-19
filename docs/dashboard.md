@@ -225,7 +225,7 @@ Recorded from the dashboard: sign-in (success, each failure with its reason, a l
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
-an in-memory sliding window (`src/middleware/login-rate-limit.ts`). Every kind
+an in-memory fixed window (`src/middleware/login-rate-limit.ts`). Every kind
 of failure counts (unknown email, no password, disabled account, wrong
 password, over-long input), and the check runs before any database or argon2id
 work. After `DASHBOARD_LOGIN_RATE_LIMIT_MAX` failures within

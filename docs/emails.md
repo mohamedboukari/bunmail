@@ -1,6 +1,6 @@
 # Emails Module
 
-Handles email queuing, delivery, and retrieval. Emails are queued via the REST API and delivered asynchronously using Nodemailer's direct SMTP mode with DKIM signing.
+Handles email queuing, delivery, and retrieval. Emails are queued via the REST API (or SMTP submission) and delivered asynchronously, straight to each recipient domain's MX on port 25 over a Nodemailer transport per MX session, with DKIM signing.
 
 ## Schema
 
@@ -29,6 +29,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
 | `lease_until`   | timestamptz    | nullable                | Claim expiry while `sending`; renewed by the worker, reclaimable once passed (#180) |
 | `last_error`    | text           | nullable                | Error message from last failed attempt      |
+| `delivery_state` | jsonb         | nullable                | Per-group outcomes: one entry per recipient domain, or per recipient once split (#97, #236, #250). See [Per-group delivery state](#per-group-delivery-state-emailsdelivery_state-97). |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
 | `created_at`    | timestamp      | NOT NULL, default now   | When the email was queued                   |
@@ -74,6 +75,7 @@ src/modules/emails/
 ├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
 │   ├── email.schema.ts             ← Drizzle pgTable + indexes
+│   ├── email-tombstone.schema.ts   ← Post-purge audit snapshots (#34)
 │   └── idempotency-key.schema.ts   ← Idempotency keys of the send API (#188)
 ├── dtos/
 │   ├── send-email.dto.ts           ← Send email validation (direct + template), Idempotency-Key header
@@ -81,12 +83,13 @@ src/modules/emails/
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
+│   ├── tombstone.service.ts        ← Hard delete with a tombstone, tombstone reads and retention (#34)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── from-name.ts                ← Pure display-name rules shared by REST and SMTP submission (#250)
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
-│   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
+│   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones, MAIL_IP_FAMILY order
 │   ├── provider-bucket.ts          ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
@@ -95,10 +98,12 @@ src/modules/emails/
 │   ├── mta-sts.ts                  ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
+│   ├── retry-schedule.ts           ← Pure retry backoff of temporary failures (#180)
 │   ├── stats.service.ts            ← Dashboard stats aggregation
 │   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
 ├── serializations/
 │   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
+│   ├── email-tombstone.serialization.ts ← Tombstone response mapper (#34)
 │   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
     └── email.types.ts               ← Email, SendEmailInput, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
@@ -133,6 +138,10 @@ Provide `templateId` and `variables`: subject/body are rendered from the templat
 ```
 
 A template without a text body keeps the send's inline `text`, if any (#250); a template text body replaces it.
+
+A message needs a body: with neither `html` nor `text` (after trimming, inline or from the template) the send is refused with `422 BODY_REQUIRED` (SMTP `550`, #250).
+
+**Attachments are not supported.** The send API has no attachments field, and SMTP submission refuses a message with an attachment (`550`, #250) instead of delivering it without (see [smtp-submission.md](smtp-submission.md#what-gets-relayed)).
 
 ## From display name (#250)
 
@@ -179,7 +188,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - An unregistered domain is rejected in every environment.
 - SPF and DMARC never block: they only warn.
 
-**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)). Messages never echo submitted content other than the sender domain name or a valid custom header name.
+**Other typed rejections** (`errors.ts`, mapped by the global `onError` from each class's `status` and `code`, SMTP `550`): `404 TEMPLATE_NOT_FOUND` when `templateId` is not a template of the calling key, `422 SUBJECT_REQUIRED` when neither the request nor the template gives a subject, `422 BODY_REQUIRED` when neither gives an `html` or `text` body (#250), `422 INVALID_CUSTOM_HEADER` when a custom header breaks a rule (see [Custom Headers](#custom-headers)). Messages never echo submitted content other than the sender domain name or a valid custom header name.
 
 ## Custom Headers
 
@@ -406,7 +415,7 @@ queued ──→ sending ──→ sent ✓        → webhook: email.sent
   │           │  │                     set by bounce handler (#24)
   │           │  │
   │           │  └───→ bounced ✗     → webhook: email.bounced (source: inline)
-  │           │       (inline 5xx)     set by handleSendFailure (#68)
+  │           │       (inline 5xx)     set by recordSendOutcome (#68)
   │           │                        on attempt 1: stops retrying
   │           │
   └───────────┴───→ queued (retry after backoff, soft 4xx or infra error)
@@ -421,7 +430,7 @@ queued ──→ sending ──→ failed ✗ (still failing when MAIL_RETRY_MAX
 | `sending` | Mid-SMTP-transaction |
 | `sent` | SMTP transaction succeeded; recipient's MX accepted |
 | `bounced` | The recipient is permanently unreachable. Set either when an inline 5xx came back during the SMTP transaction (#68) **or** when a DSN arrived later (#24). Auto-suppression fires in both cases. |
-| `failed` | All retries exhausted on a transient (4xx) or infrastructure error, or the recipient domain cannot receive mail (it does not exist, publishes a null MX, or has neither MX nor address records, #250). We never confirmed whether the recipient is reachable. |
+| `failed` | All retries exhausted on a transient (4xx) or infrastructure error, or the recipient domain cannot receive mail (it does not exist, publishes a null MX, or has neither MX nor address records, #250), or the receiver refused the sender (a 5.7.x or blocklist policy block, #246: `email.failed` with `blocked: true`, nobody suppressed). We never confirmed whether the recipient is reachable. |
 
 See [docs/bounces.md](bounces.md) for both bounce paths.
 
@@ -635,7 +644,7 @@ The `email.sent` webhook fires **once** when the row first transitions to having
 - **Per-provider throttle (#91, #250):** SMTP sessions are throttled per provider bucket (all Microsoft MX hosts are one bucket, all Google ones another, any other MX its registrable domain, see [Throttle, provider buckets and rate budget](#throttle-provider-buckets-and-rate-budget-250)) via a module-level semaphore (`src/utils/mx-throttle.ts`). Default is **one parallel session per bucket** (configurable via `MAIL_MX_CONCURRENCY`). Sends to different buckets run in parallel; sends to the same bucket serialize, whichever of its host names they use. The semaphore holds across poll cycles, so back-to-back batches that share a destination can't pile up either. The optional `MAIL_MX_RATE_PER_MIN` adds a per-bucket message rate on top. This is what stops strict receivers (Outlook, Yahoo) from `421`ing parallel sessions from the same source IP. Operators with established IP reputation can raise the cap to 2-3; values above 3 are rarely worth it.
 - **Crash recovery:** lease expiry (see Leases above); nothing runs at startup
 - **DKIM:** Automatically signs with domain's RSA key when available
-- **Webhooks:** Dispatches `email.sent` and `email.failed` events
+- **Webhooks:** Enqueues `email.sent`, `email.failed` and the inline `email.bounced` events through the outbox (#184)
 
 ## Tombstones (#34)
 

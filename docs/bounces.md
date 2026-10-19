@@ -4,6 +4,21 @@ Parses Delivery Status Notifications (DSNs) that arrive at BunMail's inbound SMT
 
 Repeatedly sending to bouncing addresses is the **single fastest way to kill IP reputation**. Gmail / Yahoo / Outlook track sender bounce rates per-IP and per-domain; a few hundred sends to non-existent mailboxes is enough to start landing legitimate mail in spam. This module closes the loop.
 
+## Module Layout
+
+```
+src/modules/bounces/
+├── services/
+│   ├── bounce-parser.service.ts    ← Pure RFC 3464 + heuristic-gated regex fallback parser
+│   ├── bounce-handler.service.ts   ← Escalation, suppression, email status and email.bounced in one transaction
+│   ├── return-path.ts              ← Signed per-recipient return path: mint, parse, MAC (#236)
+│   └── return-path-mx.ts           ← Sign only when the sender domain's MX points here, cached; MX status (#236, #250)
+└── types/
+    └── bounce.types.ts             ← ParsedBounce: the parser's output
+```
+
+No REST plugin: the module is reached from the inbound SMTP receiver and the queue.
+
 ## What is a bounce?
 
 When BunMail's outbound SMTP delivers a message, the recipient's MX server **accepts the SMTP transaction** at handoff: that's why the email row's `status` becomes `sent`. The recipient's mail system then tries to land the message in the actual mailbox. If that fails (mailbox doesn't exist, full, blocked, etc.), the receiver sends a **Delivery Status Notification** back to the envelope sender.
@@ -16,10 +31,10 @@ Receivers handle "address doesn't exist" / "address rejects mail" in **two disti
 
 | Flavour | When the receiver does this | Caught by |
 |---|---|---|
-| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's send-failure path: [queue.service.ts → `handleSendFailure`](../src/modules/emails/services/queue.service.ts) (#68) |
+| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's outcome path: [queue.service.ts → `recordSendOutcome`](../src/modules/emails/services/queue.service.ts) (#68) |
 | **Async DSN** | The MX accepts at 250, tries to deliver later, fails, sends a Delivery Status Notification back to the envelope sender. | The bounce module: [bounce-parser](../src/modules/bounces/services/bounce-parser.service.ts) + [bounce-handler](../src/modules/bounces/services/bounce-handler.service.ts) (#24) |
 
-Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook. From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
+Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook (an inline sender policy block, #246, suppresses nobody and fires `email.failed` instead, see [Inline 5xx flow](#inline-5xx-flow-68)). From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
 
 Modern Gmail / Outlook / Yahoo prefer **inline 5xx** for obvious-nonexistence cases. Async DSNs are more common for "address used to exist" / "mailbox full" / "domain temporarily unreachable" cases.
 
@@ -195,8 +210,8 @@ The async-DSN path doesn't emit a `source` field today (consumers can treat its 
 | `queued` | Waiting for the queue processor |
 | `sending` | Mid-SMTP-transaction |
 | `sent` | SMTP transaction succeeded; recipient's MX accepted |
-| `failed` | All retries exhausted; never reached an MX |
-| `bounced` | Was `sent`, then a DSN came back. Set by this module |
+| `failed` | All retries exhausted on temporary failures, the recipient domain cannot receive mail, or a sender policy block (#246); see [emails.md](emails.md#status-flow) |
+| `bounced` | An inline hard `5xx` at send time (#68), or a DSN came back after `sent` (set by this module) |
 
 ## Testing
 

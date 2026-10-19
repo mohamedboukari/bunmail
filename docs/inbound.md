@@ -58,6 +58,7 @@ src/modules/inbound/
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
+│   ├── smtp-listen.ts               ← Port bind failures of both SMTP servers: explain and exit (#167)
 │   ├── notify-throttle.ts           ← Notification budgets: 5 per address, 30 per domain, per 10 min (#250)
 │   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
 │   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
@@ -116,7 +117,7 @@ Then `docker compose up -d --build`. From outside the host, verify with `nc -zv 
 
 ## Spam Protection
 
-Three layers of protection run before any email is processed. All are enabled by default.
+Four layers of protection run before any email is processed. Layers 1 to 3 are enabled by default and can be turned off; layer 4 is always on.
 
 ### Layer 1: DNSBL IP Check
 
@@ -131,7 +132,7 @@ Addresses that aren't publicly routable skip the DNSBL check: private (`10/8`, `
 
 ### Layer 2: Connection Rate Limiting
 
-Per-IP sliding window rate limit on SMTP connections. Exceeding the limit returns SMTP 421 (temporary rejection).
+Per-IP fixed-window rate limit on SMTP connections. Exceeding the limit returns SMTP 421 (temporary rejection).
 
 | Env Variable            | Default | Description                       |
 |-------------------------|---------|-----------------------------------|
@@ -157,7 +158,7 @@ Always-on protections (no env toggles):
 
 ### Fail-Open Design
 
-All three layers fail open on errors (DNS timeout, DB unreachable). This means legitimate mail is never silently dropped due to transient failures.
+Layers 1 to 3 fail open on errors (DNS timeout, DB unreachable). This means legitimate mail is never silently dropped due to transient failures. Layer 4 needs neither DNS nor the database, so it has nothing to fail open on.
 
 ## How It Works
 
