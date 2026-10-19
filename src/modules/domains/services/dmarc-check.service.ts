@@ -29,7 +29,12 @@ import type {
 /** A DMARC record: `v=DMARC1` first, then `;` or the end. */
 export const DMARC_RECORD = /^v\s*=\s*DMARC1\s*(;|$)/i;
 
-/** Longest a `_dmarc` lookup may take before it counts as an error (same as #236). */
+/**
+ * Longest a DMARC check may take before it counts as an error (same as
+ * #236's lookup timeout). The organizational-domain fallback runs after
+ * the domain's own lookup and shares this one budget, so a check never
+ * takes longer than one timeout.
+ */
 const DMARC_LOOKUP_TIMEOUT_MS = 5_000;
 
 /** DNS answers meaning "no such record", as opposed to a failed lookup. */
@@ -60,6 +65,7 @@ const QUOTE_MAX = 64;
 /** The DNS lookup, injectable for tests. */
 export interface DmarcLookupDeps {
   resolveTxt: (hostname: string) => Promise<string[][]>;
+  /** Budget for the whole check: the domain's lookup and the fallback share it. */
   timeoutMs: number;
 }
 
@@ -301,7 +307,8 @@ function logged(domain: string, check: DmarcCheck, recordCount: number): DmarcCh
 /**
  * Checks the DMARC record of `domain` (#250): exactly one `v=DMARC1` record
  * at `_dmarc.<domain>`, else at the organizational domain, with a valid
- * `p=`. Never rejects: a failed or timed out lookup gives `error`.
+ * `p=`. Never rejects: a failed lookup, or one past the shared budget,
+ * gives `error`.
  */
 export async function checkDmarc(
   domain: string,
@@ -313,10 +320,15 @@ export async function checkDmarc(
   };
   const name = normalizeName(domain);
   const org = organizationalDomain(name);
+  const deadline = Date.now() + lookupDeps.timeoutMs;
 
   for (const recordDomain of org === name ? [name] : [name, org]) {
     const inherited = recordDomain !== name;
-    const result = await lookupDmarcRecords(`_dmarc.${recordDomain}`, lookupDeps);
+    /** What is left of the budget: the fallback gets only the remainder. */
+    const result = await lookupDmarcRecords(`_dmarc.${recordDomain}`, {
+      ...lookupDeps,
+      timeoutMs: Math.max(0, deadline - Date.now()),
+    });
     if ("errorCode" in result) {
       logger.warn("DMARC lookup failed", {
         domain: name,

@@ -68,9 +68,14 @@ export const domainsPlugin = new Elysia({
         target: { type: "domain", id: domain.id, label: domain.name },
       });
 
+      /**
+       * Never waits on DNS (#250): `dmarc` and `mx` are null (not checked
+       * yet) until the next GET or Verify. A slow resolver must not hold
+       * up registering a domain.
+       */
       return {
         success: true,
-        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
+        data: serializeDomain(domain, null),
       };
     },
     {
@@ -168,10 +173,8 @@ export const domainsPlugin = new Elysia({
         });
       }
 
-      return {
-        success: true,
-        data: serializeDomain(domain, await getDomainDnsStatus(domain.name)),
-      };
+      /** A settings change never waits on DNS either: `dmarc` and `mx` are null. */
+      return { success: true, data: serializeDomain(domain, null) };
     },
     {
       params: t.Object({ id: t.String() }),

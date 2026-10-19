@@ -1,4 +1,3 @@
-import { resolveTxt as dnsResolveTxt } from "dns/promises";
 import { eq } from "drizzle-orm";
 import { spf as mailauthSpf } from "mailauth/lib/spf";
 import { db } from "../../../db/index.ts";
@@ -8,7 +7,7 @@ import type { Domain } from "../types/domain.types.ts";
 import { config } from "../../../config.ts";
 import { resolveSendingIps, type SendingIps } from "./sending-ips.service.ts";
 import { checkDmarc } from "./dmarc-check.service.ts";
-import { rememberDmarcCheck } from "./domain-dns-status.service.ts";
+import { rememberDmarcCheck, resolveDomainTxt } from "./domain-dns-status.service.ts";
 
 export interface VerificationResult {
   spf: boolean;
@@ -46,7 +45,8 @@ async function evaluateSpfWithMailauth(domain: string, ip: string): Promise<stri
 }
 
 const defaultDeps: VerificationDeps = {
-  resolveTxt: dnsResolveTxt,
+  /** The domains module's DNS seam (`setDomainDnsDeps` replaces it in tests). */
+  resolveTxt: resolveDomainTxt,
   evaluateSpf: evaluateSpfWithMailauth,
   sendingIps: () => resolveSendingIps(),
 };

@@ -136,6 +136,9 @@ void mock.module(
       Promise.resolve(names.map(() => dnsStatus)),
     ),
     DNS_STATUS_CONCURRENCY: 8,
+    resolveDomainTxt: mock(() =>
+      Promise.reject(Object.assign(new Error("nx"), { code: "ENOTFOUND" })),
+    ),
     rememberDmarcCheck: mock(() => {}),
     setDomainDnsDeps: mock(() => {}),
     mailFlowFeatures: mock(() => []),

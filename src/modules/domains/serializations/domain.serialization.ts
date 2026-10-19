@@ -26,9 +26,9 @@ export interface SerializedDomain {
   notifyEmail: string | null;
   /** The DNS records to publish for this domain (#250). */
   dnsRecords: RequiredDnsRecord[];
-  /** The current DMARC check (#250); null when not looked up (delete). */
+  /** The current DMARC check (#250); null when not looked up (create, update, delete). */
   dmarc: DmarcCheck | null;
-  /** Where the domain's MX points (#250), informational; null when not looked up (delete). */
+  /** Where the domain's MX points (#250), informational; null when not looked up (create, update, delete). */
   mx: MxStatus | null;
   createdAt: Date;
 }

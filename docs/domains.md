@@ -73,7 +73,7 @@ Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Ver
 `dmarc-check.service.ts` follows RFC 7489 6.6.3:
 
 - The TXT records at `_dmarc.<domain>` are read with their chunks joined, and only those matching `/^v\s*=\s*DMARC1\s*(;|$)/i` count (`xv=DMARC1` or `v=DMARC10` do not).
-- No such record: the organizational domain's record applies (`inherited`). More than one, at either name: the check fails (`multiple`), since receivers then apply no policy. A DNS error or a lookup over 5 s is `error`, without a fallback; NXDOMAIN and "no TXT" count as no record.
+- No such record: the organizational domain's record applies (`inherited`). More than one, at either name: the check fails (`multiple`), since receivers then apply no policy. A DNS error, or the 5 s budget the two lookups share running out, is `error`, without a further fallback; NXDOMAIN and "no TXT" count as no record.
 - The tags `p`, `sp`, `pct`, `adkim`, `aspf` and `rua` are parsed strictly: names and values case-insensitive, unknown tags ignored, an invalid value reported in `problems` and replaced by its default (`pct` 100, alignment `r`); `rua` keeps only `mailto:` URIs.
 - The check passes when exactly one record has a valid `p=` (`none`, `quarantine` or `reject`). The effective policy is `sp` when the record is inherited and `sp` is set, else `p`. `p=none` (or an inherited `sp=none`) passes with a warning that it only monitors; `pct` below 100 and a missing `rua` warn too.
 
@@ -83,7 +83,7 @@ The result is returned as `dmarc` (below). `verifyDomain` stores `dmarc_verified
 
 ### Live DNS status: `dmarc` and `mx` (#250)
 
-`domain-dns-status.service.ts` gives each domain's current DMARC check and MX status, for the API and the domain page. Lookups use `dns/promises` with a 5 s timeout, are cached in memory (an hour, five minutes after an error, at most 10,000 domains) and never fail a request: a DNS failure is an `error` status. The MX answer shares the cache of the signed return path (`resolveMxStatus` in `bounces/services/return-path-mx.ts`, #236), so the page shows what the mailer does. `setDomainDnsDeps()` replaces the lookups in tests.
+`domain-dns-status.service.ts` gives each domain's current DMARC check and MX status, for the API (`GET` and verify) and the domain page. Lookups use `dns/promises`, are cached in memory (an hour, five minutes after an error, at most 10,000 domains) and never fail a request: a DNS failure is an `error` status. The DMARC check and the MX lookup run in parallel under one overall 5 s deadline per domain; the DMARC fallback to the organizational domain runs after the domain's own lookup but within the same budget, so a request waits at most one timeout. A part still pending at the deadline is reported as `error` and its lookup keeps filling the cache. Create, update and delete never wait on DNS (`dmarc` and `mx` are `null`). `resolveDomainTxt()` is the TXT lookup `verifyDomain` uses by default, so one seam covers both. The MX answer shares the cache of the signed return path (`resolveMxStatus` in `bounces/services/return-path-mx.ts`, #236), so the page shows what the mailer does. `setDomainDnsDeps()` replaces the lookups in tests; the integration run installs an NXDOMAIN stub for everything in `test/integration/_preload.ts`, so no integration test does real DNS.
 
 `mx` is `{ status, hosts }`: `here` (the MX set names `MAIL_HOSTNAME`), `elsewhere` (other hosts only), `none` (NXDOMAIN, no MX or a null MX) or `error`, with the host names lowercased. It is informational and never required: a domain whose MX serves mailboxes elsewhere (Google Workspace, Microsoft 365) sends normally. With `SMTP_ENABLED`, `mailFlowFeatures()` says on the page whether signed return paths, async bounces, DMARC reports and inbound mail are active for the domain: all four need inbound SMTP on and the MX `here`.
 
@@ -141,7 +141,7 @@ Runs SPF, DKIM, and DMARC checks in parallel, updates the database, and returns 
 
 ### dmarc-check.service.ts
 
-- `checkDmarc(domain, { resolveTxt, timeoutMs? }): Promise<DmarcCheck>`: the DMARC check described above. Never rejects. Logs the status and record count at `debug` (never the TXT values) and a failed lookup at `warn`.
+- `checkDmarc(domain, { resolveTxt, timeoutMs? }): Promise<DmarcCheck>`: the DMARC check described above, within one budget (`timeoutMs`, 5 s) for both lookups. Never rejects. Logs the status and record count at `debug` (never the TXT values) and a failed lookup at `warn`.
 - `parseDmarcRecord(record): ParsedDmarcRecord`: strict tag parsing of one record.
 - `organizationalDomain(domain): string`: the heuristic above.
 

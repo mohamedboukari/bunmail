@@ -354,6 +354,29 @@ describe("checkDmarc: discovery", () => {
     expect(hung.reason).toContain("ETIMEOUT");
   });
 
+  test("the fallback lookup shares the budget of the first one", async () => {
+    const answers: Record<string, number> = { "_dmarc.mail.example.com": 70 };
+    const started = performance.now();
+    const check = await checkDmarc("mail.example.com", {
+      timeoutMs: 100,
+      resolveTxt: (hostname) => {
+        const delay = answers[hostname];
+        /** The own record answers NODATA late; the fallback never answers. */
+        if (delay === undefined) return new Promise<never>(() => {});
+        return new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(Object.assign(new Error("x"), { code: "ENODATA" })),
+            delay,
+          );
+        });
+      },
+    });
+    expect(check.status).toBe("error");
+    expect(check.reason).toContain("_dmarc.example.com");
+    /** About 100 ms in all, not 70 + 100. */
+    expect(performance.now() - started).toBeLessThan(150);
+  });
+
   test("NODATA counts as no record", async () => {
     const check = await checkDmarc(
       "mail.example.com",

@@ -12,6 +12,7 @@ import { setDomainDnsDeps } from "../../src/modules/domains/services/domain-dns-
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { truncateAll, seed } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
+import { installHermeticDomainDns } from "./_dns-stub.ts";
 
 interface DomainData {
   id: string;
@@ -83,8 +84,9 @@ beforeEach(async () => {
   restrictedKey = (await seed.apiKey({ isAdmin: false })).rawKey;
 });
 
+/** Back to the run-wide hermetic stub, never to real DNS. */
 afterAll(() => {
-  setDomainDnsDeps(null);
+  installHermeticDomainDns();
 });
 
 describe("domain API: dmarc, dnsRecords and mx (#250)", () => {
@@ -146,6 +148,40 @@ describe("domain API: dmarc, dnsRecords and mx (#250)", () => {
     const { id } = await createDomain("acme.io");
     const res = await api("GET", `/${id}`, adminKey);
     expect(res.status).toBe(200);
+    const { data } = await readJson<{ data: DomainData }>(res);
+    expect(data.dmarc?.status).toBe("error");
+    expect(data.mx?.status).toBe("error");
+  });
+
+  test("create never waits on DNS: dmarc and mx are null even when DNS hangs", async () => {
+    const hang = (): Promise<never> => new Promise<never>(() => {});
+    setDomainDnsDeps({ resolveTxt: hang, resolveMx: hang, timeoutMs: 60_000 });
+    const started = performance.now();
+    const res = await api("POST", "", adminKey, { name: "slow-dns.example" });
+    expect(res.status).toBe(200);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    const { data } = await readJson<{ data: DomainData }>(res);
+    expect(data.dmarc).toBeNull();
+    expect(data.mx).toBeNull();
+    /** The records to publish need no DNS and are there. */
+    expect(data.dnsRecords.length).toBeGreaterThan(0);
+
+    /** A settings change does not wait either. */
+    const patched = await api("PATCH", `/${data.id}`, adminKey, { unsubscribeUrl: null });
+    expect(patched.status).toBe(200);
+    expect((await readJson<{ data: DomainData }>(patched)).data.mx).toBeNull();
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  test("a single GET waits at most one overall deadline, then reports errors", async () => {
+    const hang = (): Promise<never> => new Promise<never>(() => {});
+    setDomainDnsDeps({ resolveTxt: hang, resolveMx: hang, timeoutMs: 300 });
+    const { id } = await createDomain("mail.slow-dns.example");
+    const started = performance.now();
+    const res = await api("GET", `/${id}`, adminKey);
+    expect(res.status).toBe(200);
+    /** One budget for DMARC (own record plus fallback) and MX together. */
+    expect(performance.now() - started).toBeLessThan(1_000);
     const { data } = await readJson<{ data: DomainData }>(res);
     expect(data.dmarc?.status).toBe("error");
     expect(data.mx?.status).toBe("error");

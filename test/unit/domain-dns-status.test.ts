@@ -148,6 +148,20 @@ describe("getDomainDnsStatus", () => {
   });
 });
 
+describe("getDomainDnsStatus: one overall deadline", () => {
+  test("lookups that never answer give error statuses after the deadline", async () => {
+    const hang = (): Promise<never> => new Promise<never>(() => {});
+    setDomainDnsDeps({ resolveTxt: hang, resolveMx: hang, timeoutMs: 80 });
+    const started = performance.now();
+    const status = await getDomainDnsStatus("mail.acme.io");
+    const elapsed = performance.now() - started;
+    expect(status.dmarc.status).toBe("error");
+    expect(status.mx).toEqual({ status: "error", hosts: [] });
+    /** DMARC (own record, then the fallback) and MX share one budget. */
+    expect(elapsed).toBeLessThan(150);
+  });
+});
+
 describe("mailFlowFeatures", () => {
   const here = { status: "here" as const, hosts: [HOST] };
 

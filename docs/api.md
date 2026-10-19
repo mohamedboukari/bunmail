@@ -307,13 +307,13 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 
 The `unsubscribeEmail` / `unsubscribeUrl` fields shape the `List-Unsubscribe` header BunMail adds to every outbound message sent from this domain. See [docs/emails.md](emails.md#list-unsubscribe) for the resolution rules.
 
-Every domain response (create, list, get, verify, update) also carries (#250):
+Every domain response also carries (#250):
 
 - `dnsRecords`: the records to publish, each `{ type, host, value, purpose, optional, note? }`: SPF, DKIM (pre-split into quoted strings of at most 255 characters; `dkimDnsRecord` keeps the unsplit value), a starting DMARC record, the A/AAAA and PTR records of `MAIL_HOSTNAME`, and an `optional` MX. See [docs/domains.md](domains.md#dns-records-to-publish-dnsrecords-250).
 - `dmarc`: the current DMARC check. `status` is `pass`, `missing`, `multiple` (two or more records), `invalid` (no valid `p=`) or `error` (DNS failure); `ok` is true only for `pass`. `inherited` is true when the organizational domain's record applies, `effectivePolicy` is the policy receivers apply (`sp` when inherited and set, else `p`), `warnings` flag weak settings (`p=none`, `pct` below 100, no `rua`) and `problems` the invalid tag values. See [docs/domains.md](domains.md#dmarc-rules-250).
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
 
-`dmarc` and `mx` come from live DNS, cached for an hour (five minutes after an error); a DNS failure never fails the request. The list looks up at most 8 domains at once. `DELETE` returns them as `null`.
+`dmarc` and `mx` come from live DNS on `GET` (list and single) and on verify, cached for an hour (five minutes after an error). Each domain's DMARC and MX lookups run in parallel under one 5 s deadline, after which a status is `error`; a DNS failure never fails the request. The list looks up at most 8 domains at once. Create (`POST`), update (`PATCH`) and `DELETE` never wait on DNS: they return `dmarc` and `mx` as `null` (not checked yet), so a new domain shows `null` until the next `GET` or verify. The example above is a `GET` response.
 
 ---
 

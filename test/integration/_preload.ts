@@ -45,3 +45,14 @@ if (explicit) {
   process.env["DATABASE_URL"] =
     `postgres://${user}:${password}@${host}:${port}/bunmail_test`;
 }
+
+/**
+ * No real DNS in integration tests (#250): the domains module's DNS seam
+ * (DMARC, MX status, and the TXT lookups of Verify) answers NXDOMAIN at
+ * once. Imported only now, after `DATABASE_URL` is final: the module
+ * loads `config`. The queue's return-path MX check (#236) needs no stub:
+ * it returns before DNS while inbound SMTP is off, and the tests that turn
+ * it on inject `signedReturnPath`.
+ */
+const { installHermeticDomainDns } = await import("./_dns-stub.ts");
+installHermeticDomainDns();

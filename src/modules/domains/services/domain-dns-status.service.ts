@@ -37,8 +37,9 @@ export interface DomainDnsDeps {
 }
 
 const realDeps: DomainDnsDeps = {
-  resolveTxt,
-  resolveMx,
+  /** Called through, so a replaced `dns/promises` export is honoured. */
+  resolveTxt: (hostname) => resolveTxt(hostname),
+  resolveMx: (domain) => resolveMx(domain),
   now: () => Date.now(),
   timeoutMs: 5_000,
 };
@@ -68,6 +69,15 @@ export function setDomainDnsDeps(override: Partial<DomainDnsDeps> | null): void 
   dmarcCache.clear();
   inflight.clear();
   clearMxCache();
+}
+
+/**
+ * A TXT lookup through the current DNS seam: `verifyDomain` uses it by
+ * default, so a test stub installed with `setDomainDnsDeps` covers
+ * verification too.
+ */
+export function resolveDomainTxt(hostname: string): Promise<string[][]> {
+  return deps.resolveTxt(hostname);
 }
 
 function cacheKey(name: string): string {
@@ -109,13 +119,49 @@ async function cachedDmarcCheck(name: string): Promise<DmarcCheck> {
   return lookup;
 }
 
-/** The DMARC check and MX status of a domain. Never rejects. */
+/** The DMARC check reported when the overall deadline passes first. */
+function timedOutDmarc(name: string): DmarcCheck {
+  return {
+    status: "error",
+    ok: false,
+    reason: `DNS lookups for _dmarc.${cacheKey(name)} took too long: try again later`,
+    warnings: [],
+    problems: [],
+    recordDomain: null,
+    inherited: false,
+    policy: null,
+    subdomainPolicy: null,
+    effectivePolicy: null,
+    pct: null,
+    adkim: null,
+    aspf: null,
+    rua: [],
+  };
+}
+
+/**
+ * The DMARC check and MX status of a domain. Never rejects. Both run in
+ * parallel under one overall deadline (`timeoutMs`, 5 s): a part still
+ * pending then is reported as `error` (its lookup goes on and fills the
+ * cache for the next request), so a request waits at most one timeout.
+ */
 export async function getDomainDnsStatus(name: string): Promise<DomainDnsStatus> {
-  const [dmarc, mx] = await Promise.all([
-    cachedDmarcCheck(name),
-    resolveMxStatus(name, config.mail.hostname, deps),
-  ]);
-  return { dmarc, mx };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), deps.timeoutMs);
+  });
+  try {
+    const [dmarc, mx] = await Promise.all([
+      Promise.race([cachedDmarcCheck(name), deadline]),
+      Promise.race([resolveMxStatus(name, config.mail.hostname, deps), deadline]),
+    ]);
+    return {
+      dmarc: dmarc === "deadline" ? timedOutDmarc(name) : dmarc,
+      mx: mx === "deadline" ? { status: "error", hosts: [] } : mx,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Most domains whose DNS status is looked up at once by one list request. */
