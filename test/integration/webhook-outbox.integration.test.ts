@@ -12,7 +12,9 @@
  *
  *   - the state change and its delivery row commit together, the stored
  *     body is a JSON object, another key's webhook gets nothing;
- *   - an outbox insert that fails rolls the state change back too;
+ *   - an outbox insert that fails rolls the state change back too, except
+ *     after a send, where the queue saves the status without the events so
+ *     the mail is never sent twice;
  *   - a transaction that fails at COMMIT (a deferred trigger, the last
  *     moment before both writes are durable) leaves neither;
  *   - a state change that fails writes no delivery rows;
@@ -85,6 +87,12 @@ interface Case {
   throwsOnFailure: boolean;
   /** The `error` line the entry point writes when its transaction fails. */
   failureLog: string;
+  /**
+   * What a failing outbox insert does. `rollback`: nothing is kept.
+   * `degraded`: the queue after a send, where the status is saved without
+   * the events so the mail is never sent twice.
+   */
+  enqueueFailure: "rollback" | "degraded";
   /** Whether the state change is stored. */
   stored: (ctx: Ctx) => Promise<boolean>;
   /** The row the state change writes, to make it fail. */
@@ -194,6 +202,7 @@ const CASES: Case[] = [
     throwsOnFailure: false,
     failureLog:
       "Email outcome not saved: transaction rolled back, retried after the lease",
+    enqueueFailure: "degraded",
     stored: async (ctx) => (await emailStatus(ctx)) === "sent",
     stateRow: (ctx) => ({ table: "emails", match: { id: ctx.emailId, status: "sent" } }),
   },
@@ -214,6 +223,7 @@ const CASES: Case[] = [
     throwsOnFailure: false,
     failureLog:
       "Email outcome not saved: transaction rolled back, retried after the lease",
+    enqueueFailure: "degraded",
     stored: async (ctx) => (await emailStatus(ctx)) === "failed",
     stateRow: (ctx) => ({
       table: "emails",
@@ -230,6 +240,7 @@ const CASES: Case[] = [
       }),
     throwsOnFailure: false,
     failureLog: "Email send attempt crashed",
+    enqueueFailure: "rollback",
     stored: async (ctx) => (await emailStatus(ctx)) === "failed",
     stateRow: (ctx) => ({
       table: "emails",
@@ -252,6 +263,7 @@ const CASES: Case[] = [
     throwsOnFailure: false,
     failureLog:
       "Email outcome not saved: transaction rolled back, retried after the lease",
+    enqueueFailure: "degraded",
     stored: async (ctx) =>
       (await suppressionReason(ctx)) === "bounce" &&
       (await emailStatus(ctx)) === "bounced",
@@ -273,6 +285,7 @@ const CASES: Case[] = [
     },
     throwsOnFailure: true,
     failureLog: "Bounce not recorded: transaction rolled back",
+    enqueueFailure: "rollback",
     stored: async (ctx) =>
       (await suppressionReason(ctx)) === "bounce" &&
       (await emailStatus(ctx)) === "bounced",
@@ -295,6 +308,7 @@ const CASES: Case[] = [
     },
     throwsOnFailure: true,
     failureLog: "Unsubscribe not recorded: transaction rolled back",
+    enqueueFailure: "rollback",
     stored: async (ctx) => (await suppressionReason(ctx)) === "unsubscribe",
     stateRow: () => ({ table: "suppressions", match: { email: RECIPIENT } }),
   },
@@ -309,6 +323,7 @@ const CASES: Case[] = [
     },
     throwsOnFailure: true,
     failureLog: "Complaint not recorded: transaction rolled back",
+    enqueueFailure: "rollback",
     stored: async (ctx) => (await suppressionReason(ctx)) === "complaint",
     stateRow: () => ({ table: "suppressions", match: { email: RECIPIENT } }),
   },
@@ -328,6 +343,7 @@ const CASES: Case[] = [
       }),
     throwsOnFailure: true,
     failureLog: "Inbound email not stored: transaction rolled back",
+    enqueueFailure: "rollback",
     stored: async (ctx) =>
       (
         await db
@@ -389,9 +405,10 @@ async function setup(
 /**
  * Runs the case, expecting its transaction to fail and the failure to
  * surface: thrown by the entry points that throw, and logged at `error` by
- * all of them. A swallowed enqueue error would fail this.
+ * all of them (`errorLog`, the case's own line by default). A swallowed
+ * enqueue error would fail this.
  */
-async function runFailing(c: Case, ctx: Ctx): Promise<void> {
+async function runFailing(c: Case, ctx: Ctx, errorLog = c.failureLog): Promise<void> {
   const errors: string[] = [];
   const spy = spyOn(logger, "error").mockImplementation((message: string) => {
     errors.push(message);
@@ -406,7 +423,7 @@ async function runFailing(c: Case, ctx: Ctx): Promise<void> {
   } finally {
     spy.mockRestore();
   }
-  expect(errors).toContain(c.failureLog);
+  expect(errors).toContain(errorLog);
 }
 
 /** All delivery rows, with their stored body's JSON type. */
@@ -444,15 +461,24 @@ describe.each(CASES)("outbox: $name", (c) => {
     });
   });
 
-  test("an outbox insert that fails rolls the state change back", async () => {
-    const ctx = await setup(c);
-    await failWritesWhere("webhook_deliveries", { webhook_id: ctx.ownHook ?? "" });
+  test(
+    c.enqueueFailure === "rollback"
+      ? "an outbox insert that fails rolls the state change back"
+      : "an outbox insert that keeps failing: the status is saved without events",
+    async () => {
+      const ctx = await setup(c);
+      await failWritesWhere("webhook_deliveries", { webhook_id: ctx.ownHook ?? "" });
 
-    await runFailing(c, ctx);
-
-    expect(await c.stored(ctx)).toBe(false);
-    expect(await deliveries()).toEqual([]);
-  });
+      if (c.enqueueFailure === "rollback") {
+        await runFailing(c, ctx);
+        expect(await c.stored(ctx)).toBe(false);
+      } else {
+        await runFailing(c, ctx, "Webhook events not recorded for a sent email");
+        expect(await c.stored(ctx)).toBe(true);
+      }
+      expect(await deliveries()).toEqual([]);
+    },
+  );
 
   test("a transaction that fails at commit leaves neither", async () => {
     const ctx = await setup(c);
@@ -486,29 +512,118 @@ describe.each(CASES)("outbox: $name", (c) => {
   });
 });
 
-describe("outbox: the queue after a rolled-back outcome", () => {
-  test("the row keeps its lease, and the next claim sends and enqueues once", async () => {
+describe("outbox: the queue never sends a delivered email twice", () => {
+  /** A mailer that delivers to `RECIPIENT` and counts its calls. */
+  function countingMailer(): { send: typeof sendMail; calls: () => number } {
+    let calls = 0;
+    const deliver = mailer({ status: "sent" });
+    return {
+      send: async (options) => {
+        calls += 1;
+        return deliver(options);
+      },
+      calls: () => calls,
+    };
+  }
+
+  /** Expires any lease on the email, then runs one more queue cycle. */
+  async function cycleAfterLease(ctx: Ctx, send: typeof sendMail): Promise<void> {
+    await db
+      .update(emails)
+      .set({
+        leaseUntil: sql`NOW() - interval '1 second'`,
+        updatedAt: new Date(Date.now() - 60 * 60_000),
+      })
+      .where(eq(emails.id, ctx.emailId));
+    await queueCycle(send);
+  }
+
+  /** Runs `work` with `logger.error` captured; returns each call's arguments. */
+  async function errorsDuring(work: () => Promise<void>): Promise<unknown[][]> {
+    const calls: unknown[][] = [];
+    const spy = spyOn(logger, "error").mockImplementation((...args: unknown[]) => {
+      calls.push(args);
+    });
+    try {
+      await work();
+    } finally {
+      spy.mockRestore();
+    }
+    return calls;
+  }
+
+  test("an enqueue that always fails: status saved as sent, event lost and logged, no second send", async () => {
     const [sentCase] = CASES;
     if (!sentCase) throw new Error("expected the email.sent case");
     const ctx = await setup(sentCase);
     await failWritesWhere("webhook_deliveries", { webhook_id: ctx.ownHook ?? "" });
+    const mail = countingMailer();
 
-    await sentCase.run(ctx);
+    const errors = await errorsDuring(() => queueCycle(mail.send));
+
+    expect(await emailStatus(ctx)).toBe("sent");
+    expect(await deliveries()).toEqual([]);
+    expect(errors).toContainEqual([
+      "Webhook events not recorded for a sent email",
+      expect.objectContaining({
+        emailId: ctx.emailId,
+        attempt: 1,
+        events: ["email.sent"],
+        sqlState: "P0001",
+      }),
+    ]);
+
+    /** Past the lease, nothing is claimable: the recipient got it once. */
+    await cycleAfterLease(ctx, mail.send);
+    expect(mail.calls()).toBe(1);
+    expect(await emailStatus(ctx)).toBe("sent");
+  });
+
+  test("an enqueue that fails once: the retry commits the status and its event", async () => {
+    const [sentCase] = CASES;
+    if (!sentCase) throw new Error("expected the email.sent case");
+    const ctx = await setup(sentCase);
+    await failWritesWhere(
+      "webhook_deliveries",
+      { webhook_id: ctx.ownHook ?? "" },
+      { times: 1 },
+    );
+    const mail = countingMailer();
+
+    const errors = await errorsDuring(() => queueCycle(mail.send));
+
+    expect(await emailStatus(ctx)).toBe("sent");
+    expect((await deliveries()).map((r) => r.event)).toEqual(["email.sent"]);
+    expect(errors).toEqual([]);
+    expect(mail.calls()).toBe(1);
+  });
+
+  test("the status cannot be saved either: the lease sends it again (at-least-once)", async () => {
+    const [sentCase] = CASES;
+    if (!sentCase) throw new Error("expected the email.sent case");
+    const ctx = await setup(sentCase);
+    await failWritesWhere(
+      "emails",
+      { id: ctx.emailId, status: "sent" },
+      { deferred: true },
+    );
+    const mail = countingMailer();
+
+    const errors = await errorsDuring(() => queueCycle(mail.send));
 
     /** Nothing of the outcome was kept: still `sending` under the lease. */
     const [held] = await db.select().from(emails).where(eq(emails.id, ctx.emailId));
     expect(held?.status).toBe("sending");
     expect(held?.lockedBy).not.toBeNull();
     expect(await deliveries()).toEqual([]);
+    expect(errors.map((args) => args[0])).toContain(
+      "Email outcome not saved: transaction rolled back, retried after the lease",
+    );
 
-    /** The outbox recovers and the lease expires: the next claim records it all. */
+    /** The database recovers and the lease expires: sent again, recorded once. */
     await removeInjectedFailures();
-    await db
-      .update(emails)
-      .set({ leaseUntil: sql`NOW() - interval '1 second'` })
-      .where(eq(emails.id, ctx.emailId));
-    await sentCase.run(ctx);
-
+    await cycleAfterLease(ctx, mail.send);
+    expect(mail.calls()).toBe(2);
     expect(await emailStatus(ctx)).toBe("sent");
     expect((await deliveries()).map((r) => r.event)).toEqual(["email.sent"]);
   });

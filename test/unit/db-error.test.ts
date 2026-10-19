@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { DrizzleQueryError } from "drizzle-orm";
-import { loggableError } from "../../src/utils/db-error.ts";
+import { loggableError, sqlStateOf } from "../../src/utils/db-error.ts";
 
 /**
  * `loggableError` (#184): a failed write's log line never carries a
@@ -25,5 +25,21 @@ describe("loggableError", () => {
   test("other errors keep their message", () => {
     expect(loggableError(new Error("injected failure"))).toBe("injected failure");
     expect(loggableError("plain")).toBe("plain");
+  });
+});
+
+describe("sqlStateOf", () => {
+  test("reads the SQLSTATE of a drizzle error's cause, a Postgres error, or a sanitized error", () => {
+    const cause = Object.assign(new Error("injected failure"), { errno: "P0001" });
+    expect(sqlStateOf(new DrizzleQueryError("select 1", [], cause))).toBe("P0001");
+    expect(sqlStateOf(cause)).toBe("P0001");
+    expect(sqlStateOf(Object.assign(new Error("x"), { sqlState: "40001" }))).toBe(
+      "40001",
+    );
+  });
+
+  test("null when there is none", () => {
+    expect(sqlStateOf(new Error("plain"))).toBeNull();
+    expect(sqlStateOf(undefined)).toBeNull();
   });
 });

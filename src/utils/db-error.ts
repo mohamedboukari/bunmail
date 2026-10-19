@@ -1,6 +1,18 @@
 import { DrizzleQueryError } from "drizzle-orm";
 
 /**
+ * The Postgres SQLSTATE of a failed write, or `null`: from a drizzle query
+ * error's cause or a Postgres error (`errno`), or from an error that
+ * already carries only its `sqlState` (`WebhookEnqueueError`).
+ */
+export function sqlStateOf(error: unknown): string | null {
+  const source: unknown = error instanceof DrizzleQueryError ? error.cause : error;
+  if (typeof source !== "object" || source === null) return null;
+  const code: unknown = Reflect.get(source, "sqlState") ?? Reflect.get(source, "errno");
+  return typeof code === "string" ? code : null;
+}
+
+/**
  * Describes a failed write for a log line (#184). A drizzle query error's
  * message embeds the query and its parameters (recipients, subjects), so
  * it is reduced to the Postgres SQLSTATE (Bun's `PostgresError` exposes it

@@ -14,7 +14,7 @@ import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.t
 import type { WebhookEventType } from "../../webhooks/types/webhook.types.ts";
 import { addFromBounce } from "../../suppressions/services/suppression.service.ts";
 import { logger } from "../../../utils/logger.ts";
-import { loggableError } from "../../../utils/db-error.ts";
+import { loggableError, sqlStateOf } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
@@ -809,10 +809,12 @@ async function sendClaimedEmail(
   /**
    * The send happened. Its outcome (inline bounce suppressions, the row's
    * status, and every webhook event they raise) is one transaction (#184),
-   * with no network call inside. When it fails nothing of it is kept: the
-   * row stays `sending` under this claim's lease, so once the lease
-   * expires the email is claimed and sent again, the same as when the
-   * status update alone failed before the outbox.
+   * with no network call inside, retried and then saved without its events
+   * (see {@link recordSendOutcome}), so a webhook problem never sends the
+   * mail twice. Only when even the status cannot be saved (the database is
+   * unavailable) does the row stay `sending` under this claim's lease, to
+   * be claimed and sent again once the lease expires: at-least-once, as
+   * when the status update failed before the outbox.
    */
   try {
     await recordSendOutcome(email, claim, sent);
@@ -843,11 +845,29 @@ interface OutcomeEvent {
 }
 
 /**
- * Records the outcome of an attempt that reached `sendMail`, in one
- * transaction (#184): the inline hard-bounce suppressions with their
- * `email.bounced` events, then the row's status with `email.sent` /
- * `email.failed`. Log lines are written after the commit, so they only
- * report what was stored. Throws when the transaction fails.
+ * Waits before each retry of a failed outcome transaction (#184): two
+ * retries, 100 ms then 500 ms, enough to ride out a deadlock or a
+ * serialization failure without holding a send slot for long.
+ */
+const OUTCOME_RETRY_DELAYS_MS = [100, 500] as const;
+
+/**
+ * Records the outcome of an attempt that reached `sendMail` (#184).
+ *
+ * 1. One transaction: the inline hard-bounce suppressions with their
+ *    `email.bounced` events, then the row's status with `email.sent` /
+ *    `email.failed`. Retried twice on failure ({@link OUTCOME_RETRY_DELAYS_MS}).
+ * 2. Still failing: a degraded transaction saves the status and the
+ *    suppressions WITHOUT the webhook events, logged at `error` as
+ *    `Webhook events not recorded for a sent email`. The mail went out, so
+ *    a webhook problem (a bug, an oversized payload, a constraint) must not
+ *    leave the row to its lease and send it again on every lease, forever:
+ *    those events are lost instead.
+ * 3. The degraded write failing too (the database is unavailable) is
+ *    thrown; the caller leaves the row to its lease (at-least-once).
+ *
+ * Log lines are written after the commit, so they only report what was
+ * stored.
  */
 async function recordSendOutcome(
   email: ClaimedEmail,
@@ -883,57 +903,93 @@ async function recordSendOutcome(
 
   const outcome = decideRowOutcome(email, sent);
 
-  const { bounced, saved } = await db.transaction(async (tx) => {
-    const filed: Array<{
-      recipient: string;
-      code: string;
-      suppressionId: string | null;
-      applied: boolean;
-    }> = [];
-    for (const bounce of hardBounces) {
-      /** Never weakens a permanent suppression already on file (#191). */
-      const { suppression, applied } = await addFromBounce(
-        email.apiKeyId,
-        {
-          email: bounce.recipient,
-          bounceType: "hard",
-          diagnosticCode: bounce.code,
-          sourceEmailId: emailId,
-          expiresAt: null,
-        },
-        tx,
-      );
-      await enqueueEvent(
-        tx,
-        "email.bounced",
-        {
-          emailId,
-          to: email.toAddress,
+  /** The outcome in one transaction; `withEvents: false` is the degraded write. */
+  const write = (withEvents: boolean) =>
+    db.transaction(async (tx) => {
+      const filed: Array<{
+        recipient: string;
+        code: string;
+        suppressionId: string | null;
+        applied: boolean;
+      }> = [];
+      for (const bounce of hardBounces) {
+        /** Never weakens a permanent suppression already on file (#191). */
+        const { suppression, applied } = await addFromBounce(
+          email.apiKeyId,
+          {
+            email: bounce.recipient,
+            bounceType: "hard",
+            diagnosticCode: bounce.code,
+            sourceEmailId: emailId,
+            expiresAt: null,
+          },
+          tx,
+        );
+        if (withEvents) {
+          await enqueueEvent(
+            tx,
+            "email.bounced",
+            {
+              emailId,
+              to: email.toAddress,
+              recipient: bounce.recipient,
+              bounceType: "hard",
+              status: bounce.code,
+              diagnostic: bounce.diagnostic,
+              suppressionId: suppression?.id ?? null,
+              source: "inline",
+            },
+            { apiKeyId: email.apiKeyId },
+          );
+        }
+        filed.push({
           recipient: bounce.recipient,
-          bounceType: "hard",
-          status: bounce.code,
-          diagnostic: bounce.diagnostic,
+          code: bounce.code,
           suppressionId: suppression?.id ?? null,
-          source: "inline",
-        },
-        { apiKeyId: email.apiKeyId },
+          applied,
+        });
+      }
+      const rowSaved = await releaseRowWithEvents(
+        tx,
+        email,
+        claim,
+        outcome.values,
+        withEvents ? outcome.events : [],
       );
-      filed.push({
-        recipient: bounce.recipient,
-        code: bounce.code,
-        suppressionId: suppression?.id ?? null,
-        applied,
+      return { bounced: filed, saved: rowSaved };
+    });
+
+  let recorded: Awaited<ReturnType<typeof write>> | undefined;
+  let lastError: unknown;
+  for (const delayMs of [0, ...OUTCOME_RETRY_DELAYS_MS]) {
+    if (delayMs > 0) await Bun.sleep(delayMs);
+    try {
+      recorded = await write(true);
+      break;
+    } catch (error) {
+      lastError = error;
+      logger.warn("Email outcome transaction failed", {
+        emailId,
+        attempt,
+        error: loggableError(error),
       });
     }
-    const rowSaved = await releaseRowWithEvents(
-      tx,
-      email,
-      claim,
-      outcome.values,
-      outcome.events,
-    );
-    return { bounced: filed, saved: rowSaved };
-  });
+  }
+  if (recorded === undefined) {
+    /** Throws when the database is unavailable: the caller leaves it to the lease. */
+    recorded = await write(false);
+    logger.error("Webhook events not recorded for a sent email", {
+      emailId,
+      attempt,
+      events: [
+        ...hardBounces.map(() => "email.bounced"),
+        ...(recorded.saved ? outcome.events.map((e) => e.event) : []),
+      ],
+      sqlState: sqlStateOf(lastError),
+      error: loggableError(lastError),
+    });
+  }
+  const { bounced, saved } = recorded;
 
   for (const bounce of bounced) {
     logger.warn("Multi-MX recipient hard-bounced: auto-suppressed", {

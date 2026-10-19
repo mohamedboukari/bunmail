@@ -324,11 +324,14 @@ What each caller does when its transaction fails:
 
 | Caller | Transaction | On failure |
 |---|---|---|
-| Email queue (`email.sent`, `email.failed`, inline `email.bounced`) | The row's outcome, the inline hard-bounce suppressions and their events. The SMTP send happens before it, never inside | `Email outcome not saved: transaction rolled back, retried after the lease`. The row stays `sending` under its lease; once the lease expires the email is claimed and sent again, as when the status update alone failed before. When the lease was lost to another claim, the row's events are not enqueued: the claim that holds the row raises them |
+| Email queue after a send (`email.sent`, `email.failed`, inline `email.bounced`) | The row's outcome, the inline hard-bounce suppressions and their events. The SMTP send happens before it, never inside | The mail already went out, so a webhook problem must never send it twice. The transaction is retried twice (after 100 ms, then 500 ms; a `warn` per failure). Still failing, a degraded transaction saves the status and the suppressions **without the events**, logged at `error` as `Webhook events not recorded for a sent email` (`emailId`, `attempt`, the lost `events`, `sqlState`): those events are lost, the mail is not re-sent. Only when that write fails too (the database is unavailable) does the row stay `sending` under its lease, logged as `Email outcome not saved: transaction rolled back, retried after the lease`, and get claimed and sent again once the lease expires (at-least-once, as before). When the lease was lost to another claim, the row's events are not enqueued: the claim that holds the row raises them |
+| Email queue before a send (input error, unreadable DKIM key: `email.failed`) | The status and `email.failed` | Nothing was sent, so all or nothing: the row is left to its lease |
 | DSN bounce (`email.bounced`, #236) | Suppression, email marked `bounced`, event | `Bounce not recorded`, the receiver answers `451`, the sending MTA retries |
 | Unsubscribe (`email.unsubscribed`, #249) | Suppression and event | `Unsubscribe not recorded`; the page errors, the mailto gets `451` |
 | Feedback loop (`email.complained`, #191) | Suppression and event (a complaint with no determinable recipient: the event alone) | `Complaint not recorded`, `451` |
 | Inbound mail (`email.received`) | The `inbound_emails` row and its event | `Inbound email not stored`, `451` |
+
+The inbound paths stay all or nothing: their `451` makes the remote side retry later, which sends no mail and is idempotent (the suppression precedence rules make a repeated bounce, unsubscribe or complaint a no-op), and a remote MTA gives up after its own retry window. The worst case of a persistent failure there is a lost bounce, complaint or inbound message, never a loop.
 
 ## Delivery Behavior
 

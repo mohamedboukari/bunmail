@@ -406,13 +406,16 @@ const injectedTriggers: Array<{ table: FailableTable; name: string }> = [];
  *   statement succeeds and the transaction fails at COMMIT, the last
  *   moment before the state change and its events would be durable.
  *
+ * `times` limits the failures to the first N matching writes (counted by
+ * a sequence, which a rollback does not undo): a transient failure.
+ *
  * Matching one row's values keeps other rows unaffected. Remove the
  * triggers with {@link removeInjectedFailures} (in `afterEach`).
  */
 export async function failWritesWhere(
   table: FailableTable,
   match: Record<string, string>,
-  opts: { deferred?: boolean } = {},
+  opts: { deferred?: boolean; times?: number } = {},
 ): Promise<void> {
   assertWipeableDatabase();
   const conditions = Object.entries(match).map(([column, value]) => {
@@ -421,16 +424,23 @@ export async function failWritesWhere(
   });
   if (conditions.length === 0) throw new Error("failWritesWhere needs a match");
   const name = `test_fail_${generateId("wdl").slice(4)}`;
+  const limit =
+    opts.times === undefined
+      ? ""
+      : `IF nextval('${name}_seq') > ${Math.floor(opts.times)} THEN RETURN NEW; END IF;`;
+  if (opts.times !== undefined) {
+    await db.execute(drizzleSql.raw(`CREATE SEQUENCE ${name}_seq`));
+  }
   await db.execute(
-    drizzleSql.raw(`CREATE OR REPLACE FUNCTION bunmail_test_injected_failure() RETURNS trigger
-      LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected failure'; END $$`),
+    drizzleSql.raw(`CREATE FUNCTION ${name}_fn() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN ${limit} RAISE EXCEPTION 'injected failure'; END $$`),
   );
   const timing = opts.deferred
     ? `CREATE CONSTRAINT TRIGGER ${name} AFTER INSERT OR UPDATE ON ${table} DEFERRABLE INITIALLY DEFERRED`
     : `CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON ${table}`;
   await db.execute(
     drizzleSql.raw(
-      `${timing} FOR EACH ROW WHEN (${conditions.join(" AND ")}) EXECUTE FUNCTION bunmail_test_injected_failure()`,
+      `${timing} FOR EACH ROW WHEN (${conditions.join(" AND ")}) EXECUTE FUNCTION ${name}_fn()`,
     ),
   );
   injectedTriggers.push({ table, name });
@@ -440,6 +450,8 @@ export async function failWritesWhere(
 export async function removeInjectedFailures(): Promise<void> {
   for (const { table, name } of injectedTriggers.splice(0)) {
     await db.execute(drizzleSql.raw(`DROP TRIGGER IF EXISTS ${name} ON ${table}`));
+    await db.execute(drizzleSql.raw(`DROP FUNCTION IF EXISTS ${name}_fn()`));
+    await db.execute(drizzleSql.raw(`DROP SEQUENCE IF EXISTS ${name}_seq`));
   }
 }
 
