@@ -1255,7 +1255,7 @@ services:
       db:
         condition: service_healthy
     sysctls:
-      net.ipv4.ip_unprivileged_port_start: 0   # non-root user may bind 25/587 (#167)
+      net.ipv4.ip_unprivileged_port_start: 0   # non-root user may bind 25/465/587 (#167)
     restart: unless-stopped
 
   db:
@@ -1291,7 +1291,7 @@ Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners
 | Listener | Toggle / port env | Purpose |
 |---|---|---|
 | **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (default `2525`; use `25` in production) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). Spam protection: `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` connections per `60` seconds). See [docs/inbound.md](docs/inbound.md). |
-| **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (587) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`, or `SMTP_SUBMISSION_ALLOW_INSECURE=true` for plaintext AUTH on a trusted network (default `false`: with neither TLS nor this flag the server refuses to start); per-IP connection and failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` per `60` seconds) and `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failures per `900` seconds); `SMTP_SUBMISSION_DAILY_QUOTA` per key per UTC day (`0`: unlimited). See [docs/smtp-submission.md](docs/smtp-submission.md). |
+| **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (`465` with a TLS cert, `587` without) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`: implicit TLS from the first byte, terminated by Bun's TLS server (`SMTP_SUBMISSION_TLS_MODE`, default `implicit`; `starttls` refuses to boot on Bun, which cannot upgrade a connection server-side, #349), or `SMTP_SUBMISSION_ALLOW_INSECURE=true` for plaintext AUTH on a trusted network (default `false`: with neither TLS nor this flag the server refuses to start); per-IP connection and failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` per `60` seconds) and `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failures per `900` seconds); `SMTP_SUBMISSION_DAILY_QUOTA` per key per UTC day (`0`: unlimited). See [docs/smtp-submission.md](docs/smtp-submission.md). |
 
 Both are started from [src/index.ts](src/index.ts) after the queue processor and stopped in the graceful shutdown handler.
 

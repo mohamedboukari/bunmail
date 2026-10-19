@@ -11,7 +11,7 @@ BunMail runs (up to) two independent SMTP listeners. They are **not** the same t
 | | **Submission** (this module) | **Inbound** ([docs/inbound.md](inbound.md)) |
 |---|---|---|
 | Direction | Apps send **out** through BunMail | BunMail **receives** mail for your domains |
-| Default port | `587` | `25` (prod) / `2525` (dev) |
+| Default port | `465` with a TLS cert (implicit TLS), `587` without | `25` (prod) / `2525` (dev) |
 | `AUTH` | **Required** (API key) | Disabled |
 | Recipient domains | **Any** (it's a relay for authenticated clients) | Only registered domains (open-relay guard) |
 | What it does | Parses the message → `createEmail` → outbound queue → DKIM → direct-to-MX | Parses → stores in `inbound_emails` (+ bounce/DMARC branching) |
@@ -26,8 +26,8 @@ Point the app's SMTP settings at BunMail:
 | Setting | Value |
 |---|---|
 | **Host** | your BunMail host (e.g. `mail.yourdomain.com`, or `localhost` on the same box) |
-| **Port** | `587` (or your `SMTP_SUBMISSION_PORT`) |
-| **Encryption** | STARTTLS if you configured a cert (below); otherwise none / plaintext |
+| **Port** | `465` with a cert, `587` without (or your `SMTP_SUBMISSION_PORT`) |
+| **Encryption** | **SSL/TLS** (implicit TLS, nodemailer `secure: true`) if you configured a cert (below); otherwise none / plaintext. Not STARTTLS: it is not available on Bun (#349) |
 | **Username** | anything: `apikey` is conventional (mirrors SendGrid) |
 | **Password** | a BunMail API key, `bm_live_…` |
 | **From** | an address on a domain **registered** in BunMail, with its DKIM record published and verified (see below) |
@@ -62,11 +62,12 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | Env Variable | Default | Description |
 |---|---|---|
 | `SMTP_SUBMISSION_ENABLED` | `false` | Start the submission server. |
-| `SMTP_SUBMISSION_PORT` | `587` | Listen port. |
+| `SMTP_SUBMISSION_PORT` | `465` with a cert, `587` without | Listen port, a whole number from 1 to 65535 (anything else refuses to boot). |
 | `SMTP_SUBMISSION_DAILY_QUOTA` | `0` | Per-API-key messages accepted per UTC day; over-quota → SMTP `452`. `0` = unlimited. See [Quotas](#per-key-daily-quotas-123). |
-| `SMTP_SUBMISSION_TLS_CERT` | _(empty)_ | PEM cert path. When set with the key, STARTTLS is advertised. |
+| `SMTP_SUBMISSION_TLS_CERT` | _(empty)_ | PEM cert path. Set with the key for TLS (#349). One without the other refuses to boot. |
 | `SMTP_SUBMISSION_TLS_KEY` | _(empty)_ | PEM private-key path. |
-| `SMTP_SUBMISSION_ALLOW_INSECURE` | `false` | Allow AUTH over plaintext (no TLS). The password is a full-privilege key, so this exposes it to link sniffers. With neither TLS nor this flag the server **refuses to start**. Set `true` only on a trusted network. |
+| `SMTP_SUBMISSION_TLS_MODE` | `implicit` with a cert | `implicit` (TLS from the first byte) or `starttls`. `starttls` refuses to boot on Bun, a mode without a cert refuses to boot, and so does any other value. See [TLS modes](#tls-modes-349). |
+| `SMTP_SUBMISSION_ALLOW_INSECURE` | `false` | Allow AUTH over plaintext (no TLS). The password is a full-privilege key, so this exposes it to link sniffers. With neither TLS nor this flag the server **refuses to start**. Set `true` only on a trusted network. Ignored with a cert: AUTH is then only accepted over TLS. |
 | `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting. |
 | `SMTP_SUBMISSION_RATE_LIMIT_MAX` | `30` | Max connections per IP per window. |
 | `SMTP_SUBMISSION_RATE_LIMIT_WINDOW` | `60` | Connection window (seconds). |
@@ -74,9 +75,27 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | `SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX` | `10` | Failed AUTHs per IP before lockout. |
 | `SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW` | `900` | Failed-AUTH window (seconds). |
 
+### TLS modes (#349)
+
+| Mode | When | Port (unless `SMTP_SUBMISSION_PORT`) | Client setting |
+|---|---|---|---|
+| `implicit` | a cert and key are set (the default then) | `465` | **SSL/TLS** (nodemailer `secure: true`) |
+| `starttls` | `SMTP_SUBMISSION_TLS_MODE=starttls`, **Node only** | `587` | STARTTLS (nodemailer `secure: false, requireTLS: true`) |
+| `none` | no cert; needs `SMTP_SUBMISSION_ALLOW_INSECURE=true` | `587` | none / plaintext |
+
+The start line says which one runs: `SMTP submission server started` with `tls: "implicit" | "starttls" | "none"` and the `port`. Each `SMTP submission client authenticated` line carries `secure` (whether the session is TLS).
+
+**Why not STARTTLS.** STARTTLS turns an accepted plaintext connection into a TLS one on the server side. Under Bun (1.3.14) that never works: `new tls.TLSSocket(socket, { isServer: true })` on an accepted socket never runs the handshake (the client sees a timeout or an unexpected EOF), and Bun's own `socket.upgradeTLS()` refuses server-side upgrades. smtp-server's own implicit TLS does the same upgrade, so it fails under Bun too. So `starttls` refuses to boot under Bun rather than advertise a STARTTLS that cannot complete; it only exists for running on Node.
+
+**How implicit TLS works.** Bun's own TLS server (`tls.createServer`, which handshakes fine) listens on the port and terminates TLS from the first byte. Each decrypted connection is handed to smtp-server (`SMTPServer#connect`), which runs with `secure: true, secured: true` ("TLS done upstream"): every session is TLS before its first SMTP byte, STARTTLS is not offered, AUTH is allowed, and the per-IP limits see the real client address. `connect` is public in smtp-server but missing from `@types/smtp-server`, so the module declares it, and `smtp-server` is pinned to the exact version 3.19.23 in `package.json`: `test/integration/smtp-submission-tls.integration.test.ts` fails if an upgrade breaks the handover. A client that has not finished its handshake after 60 s is disconnected (Bun ignores `handshakeTimeout`, so the limit is set on the socket by hand), and a failed handshake is logged at `warn` (`SMTP submission TLS handshake failed`, with the IP and the error code).
+
+**A Bun quirk on failed handshakes.** A plaintext client that connects to the implicit-TLS port gets a TLS alert, but Bun can still report the connection as established. Nothing the client sent is read as SMTP and nothing written to it reaches the wire, but it opens a session that closes at once: one `SMTP session closed` line with `messages: 0`, and one connection counted against its IP's connection limit (`SMTP_SUBMISSION_RATE_LIMIT_*`). That is the same count any plaintext client gets (one per TCP connection, never more), so it cannot use the limit up faster, and the count only affects that client's own IP.
+
+**Inbound STARTTLS on port 25 (#345) hits the same limitation.** The inbound receiver offers no STARTTLS today (`disabledCommands`), and adding it is what #345 tracks: MX-to-MX mail uses TLS on port 25 only through STARTTLS, which cannot complete under Bun for the same reason. Terminating TLS in Bun first only works for implicit TLS, which port 25 does not use, so this approach does not carry over there.
+
 ### TLS / security posture
 
-- **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): STARTTLS is advertised so clients can encrypt before sending the API key. This is the recommended posture whenever the port isn't strictly loopback.
+- **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): every connection is TLS from the first byte (implicit TLS, port 465) and AUTH is only accepted over TLS, so the API key never travels in the clear. This is the recommended posture whenever the port isn't strictly loopback.
 - **Without a cert**: plaintext `AUTH` is **refused by default** (#133): the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
 - **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. Failures expire only with their window: a successful AUTH does not clear them (#190), so holding one valid key does not buy more guesses at others.
 
@@ -84,9 +103,9 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 
 Submission is **off by default**. To enable it:
 
-1. **`.env`**: set `SMTP_SUBMISSION_ENABLED=true` (and, for TLS, the cert/key paths).
-2. **`docker-compose.override.yml`**: publish the submission port, using the submission examples in `docker-compose.override.example.yml` (#205): public `587` with STARTTLS, or `127.0.0.1` only for plaintext on a trusted host. The base `docker-compose.yml` publishes no submission port.
-3. **Firewall**: allow inbound TCP on 587 from the networks your apps live on.
+1. **`.env`**: set `SMTP_SUBMISSION_ENABLED=true` (and, for TLS, the cert/key paths; the port is then 465 unless `SMTP_SUBMISSION_PORT` says otherwise).
+2. **`docker-compose.override.yml`**: publish the submission port, using the submission examples in `docker-compose.override.example.yml` (#205): public `465` with implicit TLS, or `127.0.0.1` only for plaintext on a trusted host. The base `docker-compose.yml` publishes no submission port.
+3. **Firewall**: allow inbound TCP on the submission port (465 with TLS) from the networks your apps live on.
 
 Then `docker compose up -d --build`. When submission is off, the app logs `SMTP submission server disabled: set SMTP_SUBMISSION_ENABLED=true …` at startup.
 
@@ -108,8 +127,8 @@ MailerModule.forRootAsync({
   useFactory: (config: ConfigService) => ({
     transport: {
       host: config.get("EMAIL_HOST"),
-      port: 587,
-      secure: false, // STARTTLS if a cert is configured; plaintext otherwise
+      port: 465,
+      secure: true, // SSL/TLS (implicit TLS). Without a cert: port 587, secure: false
       auth: { user: config.get("EMAIL_USER"), pass: config.get("EMAIL_PASSWORD") },
     },
     defaults: { from: config.get("EMAIL_SENDER") },
@@ -123,11 +142,12 @@ These expose SMTP settings in their config/env. Set:
 
 ```
 SMTP host      = mail.yourdomain.com   (or the BunMail container hostname)
-SMTP port      = 587
+SMTP port      = 465   (587 without a cert)
 SMTP username  = apikey
 SMTP password  = bm_live_...
 SMTP from      = notifications@yourdomain.com   (registered, DKIM record verified)
-TLS/STARTTLS   = on if you configured a cert, off on a trusted private network
+Encryption     = SSL/TLS (implicit TLS) if you configured a cert, none on a trusted
+                 private network. Not STARTTLS: it is not available on Bun.
 ```
 
 ## Per-key daily quotas (#123)
@@ -173,7 +193,7 @@ When quotas are disabled (`SMTP_SUBMISSION_DAILY_QUOTA=0`), `quota.daily` and `q
 ### smtp-submission.service.ts
 
 #### `start(portOverride?: number): void`
-Starts the submission server on `SMTP_SUBMISSION_PORT` (or `portOverride`, used by tests). Requires AUTH; authenticates the password against the API-keys table via `findByHash`.
+Starts the submission server on `SMTP_SUBMISSION_PORT` (or `portOverride`, used by tests), in the TLS mode of `config.smtpSubmission.tls.mode` (#349): in `implicit` mode behind a Bun TLS listener that hands each decrypted connection to smtp-server. Requires AUTH; authenticates the password against the API-keys table via `findByHash`. Refuses to start without TLS unless `SMTP_SUBMISSION_ALLOW_INSECURE=true` (#133).
 
 #### `stop(): void`
 Gracefully shuts the server down (called from the app's shutdown handler).
@@ -207,7 +227,7 @@ src/modules/smtp-submission/
 ├── smtp-submission.plugin.ts        ← REST: GET /api/v1/smtp-submission/stats (#123)
 ├── errors.ts                        ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 ├── services/
-│   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; start()/stop()
+│   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; implicit-TLS listener (#349); start()/stop()
 │   └── usage.service.ts             ← per-(key,day) usage counters + quota read (#123)
 ├── message-mapper.ts                ← pure message → SendEmailInput mapping
 ├── dtos/
