@@ -110,7 +110,7 @@ bunmail/
 │   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
-│   │   │   │   ├── mx-transport.ts       ← Per-MX transport options (TLS 1.2 minimum) + STARTTLS recorder (#250)
+│   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
 │   │   │   │   ├── stats.service.ts      ← Dashboard stats aggregation

@@ -12,7 +12,7 @@ BunMail's test suite has three tiers, each catching a different class of bug. Pr
 
 Run all three together: `bun run test:all`.
 
-One unit file needs `node` on `PATH`: `test/unit/mx-transport.test.ts` (#250) runs a real `smtp-server` under Node (`test/fixtures/smtp-tls-server.mjs`), because Bun cannot upgrade an accepted socket to TLS and so cannot serve STARTTLS. The client side, the code under test, still runs under Bun. GitHub's `ubuntu-latest` runners ship Node.
+Two files need `node` on `PATH`: `test/unit/mx-transport.test.ts` and `test/integration/mx-session.integration.test.ts` (#250) run a real receiving MX under Node (`test/smtp-fixture.ts` starts `test/fixtures/smtp-tls-server.mjs`: `smtp-server` for STARTTLS, plaintext, TLS 1.1 and a stall after DATA, a raw server for one that never answers or stops after STARTTLS), because Bun cannot upgrade an accepted socket to TLS and so cannot serve STARTTLS. The client side, the code under test, still runs under Bun. GitHub's `ubuntu-latest` runners ship Node.
 
 ## Running
 

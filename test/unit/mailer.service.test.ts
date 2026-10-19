@@ -172,6 +172,12 @@ describe("sendMail: transport configuration", () => {
     expect(asRecord(cfg.tls).minVersion).toBe("TLSv1.2");
     expect(cfg.requireTLS).toBeUndefined();
     expect(typeof asRecord(cfg.logger).info).toBe("function");
+    /** One pooled connection per session, BunMail's own socket, closed after (#250). */
+    expect(cfg.pool).toBe(true);
+    expect(cfg.maxConnections).toBe(1);
+    expect(cfg.maxRequeues).toBe(0);
+    expect(typeof cfg.getSocket).toBe("function");
+    expect(closedTransports).toBe(1);
   });
 });
 
@@ -931,7 +937,9 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
 
     expect(captured).toHaveLength(1);
     expect(verifiedRecipient(envelopeOf(captured[0]!).from)).toBe("alice@example.org");
-    expect(captured[0]!.transportConfig.pool).toBeUndefined();
+    /** Every session is one pooled connection, closed afterwards (#250). */
+    expect(captured[0]!.transportConfig.pool).toBe(true);
+    expect(closedTransports).toBe(1);
     expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
   });
 
@@ -955,8 +963,8 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
         "dave@example.org",
       ],
     });
-    expect(captured[0]!.transportConfig.pool).toBeUndefined();
-    expect(closedTransports).toBe(0);
+    expect(captured[0]!.transportConfig.pool).toBe(true);
+    expect(closedTransports).toBe(1);
     expect(Object.keys(result.deliveryState)).toEqual(["mx.example.org"]);
   });
 
@@ -1024,8 +1032,8 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     expect(captured).toHaveLength(1);
     expect(envelopeOf(captured[0]!).to).toEqual(["bob@example.org"]);
     expect(verifiedRecipient(envelopeOf(captured[0]!).from)).toBe("bob@example.org");
-    /** A lone transaction needs no pool. */
-    expect(captured[0]!.transportConfig.pool).toBeUndefined();
+    /** One code path: a lone transaction is a pooled session too (#250). */
+    expect(captured[0]!.transportConfig.pool).toBe(true);
     expect(second.deliveryState["mx.example.org#1"]).toMatchObject({
       status: "sent",
       attempts: 2,

@@ -1,3 +1,6 @@
+import { connect, type Socket } from "node:net";
+import { createTransport } from "nodemailer";
+import type Mail from "nodemailer/lib/mailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import type { DeliveryTls } from "../models/email.schema.ts";
 
@@ -10,6 +13,13 @@ export const OUTBOUND_TLS_MIN_VERSION = "TLSv1.2";
 
 /** Connect, greeting and STARTTLS setup timeout for outbound SMTP (#250). */
 export const SMTP_SETUP_TIMEOUT_MS = 60_000;
+
+/**
+ * Longest one outbound SMTP session may take (#250). Every step has its
+ * own timeout, but a peer that keeps answering slowly could still hold
+ * the MX lock for hours; this caps the whole attempt.
+ */
+const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
 
 /**
  * Nodemailer's own log line for a completed STARTTLS upgrade, written by
@@ -174,4 +184,195 @@ export function mxTransportOptions(args: {
       minVersion: OUTBOUND_TLS_MIN_VERSION,
     },
   };
+}
+
+/** One SMTP transaction of a session: its delivery-state key and its message. */
+interface MxSessionTransaction {
+  key: string;
+  mail: Mail.Options;
+}
+
+/** One transaction's outcome: no `error` means the MX accepted it. */
+export interface MxSessionOutcome {
+  key: string;
+  error?: unknown;
+  /** The session's encryption, see {@link TlsRecorder} (#250). */
+  tls: DeliveryTls | null;
+}
+
+/**
+ * Runs one SMTP session to one MX (#250): every transaction in turn over a
+ * single pooled connection, under one deadline, with the TLS record.
+ *
+ * - **One pooled connection** (`maxConnections: 1`), also for a single
+ *   transaction, so there is one code path. Each message after the first
+ *   goes after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
+ *   resending a message whose connection dropped: that failure is
+ *   reported, and the queue's retry policy decides.
+ * - **BunMail opens the socket** (nodemailer's `getSocket` hook), to the
+ *   checked `address`, and keeps it. Closing the pool only ends connections
+ *   that are idle: one stuck mid-session (a peer that never answers, a
+ *   STARTTLS handshake that never completes) would stay open, possibly
+ *   spinning, after the attempt was given up. So when the session ends,
+ *   whatever the outcome, the pool is closed and every socket it used is
+ *   destroyed. An unfriendly receiver cannot pile up open connections.
+ * - **Deadline** {@link SMTP_SESSION_DEADLINE_MS} for the whole session,
+ *   shared by its transactions, and the STARTTLS stall limit of the
+ *   {@link TlsRecorder}. Both fail the attempt with an error that has no
+ *   SMTP reply, so it is retried.
+ *
+ * The caller holds the MX lock around it. Never throws: every transaction
+ * gets an outcome. `port` and the timeouts are only overridden by tests.
+ */
+export async function runMxSession(args: {
+  address: string;
+  mxHost: string;
+  /** EHLO name: `MAIL_HOSTNAME`. */
+  heloName: string;
+  transactions: MxSessionTransaction[];
+  port?: number;
+  deadlineMs?: number;
+  stallMs?: number;
+  setupTimeoutMs?: number;
+}): Promise<MxSessionOutcome[]> {
+  const port = args.port ?? 25;
+  const deadlineMs = args.deadlineMs ?? SMTP_SESSION_DEADLINE_MS;
+  const setupTimeoutMs = args.setupTimeoutMs ?? SMTP_SETUP_TIMEOUT_MS;
+  /** Learns each transaction's encryption from nodemailer's own events. */
+  const recorder = createTlsRecorder(args.stallMs ?? setupTimeoutMs);
+  const sockets = new Set<Socket>();
+  const transport = createTransport({
+    ...mxTransportOptions({
+      address: args.address,
+      mxHost: args.mxHost,
+      heloName: args.heloName,
+      logger: recorder.logger,
+    }),
+    port,
+    pool: true,
+    maxConnections: 1,
+    maxRequeues: 0,
+    getSocket: openSocket(args.address, port, setupTimeoutMs, sockets),
+  });
+
+  /** One deadline for the whole session, shared by its transactions. */
+  const deadlineAt = Date.now() + deadlineMs;
+  const outcomes: MxSessionOutcome[] = [];
+  try {
+    for (const transaction of args.transactions) {
+      const remainingMs = deadlineAt - Date.now();
+      recorder.beginTransaction();
+      try {
+        if (remainingMs <= 0) throw sessionDeadlineError(deadlineMs);
+        await sendWithDeadline(
+          transport,
+          transaction.mail,
+          remainingMs,
+          recorder.stalled,
+        );
+        outcomes.push({ key: transaction.key, tls: recorder.result() });
+      } catch (error) {
+        outcomes.push({ key: transaction.key, error, tls: recorder.result() });
+      }
+    }
+  } finally {
+    recorder.dispose();
+    /**
+     * Sockets first: under Bun, nodemailer's own close ends the plain socket
+     * a STARTTLS session was upgraded from, which no longer carries the
+     * connection, so a TLS session would stay open. Destroying the socket
+     * before nodemailer touches it closes the connection, TLS or not, idle
+     * or stuck. The pool is closed after, to release its state.
+     */
+    for (const socket of sockets) socket.destroy();
+    transport.close();
+  }
+  return outcomes;
+}
+
+/**
+ * nodemailer's `getSocket` hook (#250): connects to `address` itself,
+ * within `timeoutMs`, and records the socket in `sockets` so the session
+ * can destroy it. An `error` listener stays on the socket for its whole
+ * life: an error during teardown must never become an uncaught exception.
+ */
+function openSocket(
+  address: string,
+  port: number,
+  timeoutMs: number,
+  sockets: Set<Socket>,
+): NonNullable<SMTPTransport.Options["getSocket"]> {
+  return (_options, callback) => {
+    const socket = connect({ host: address, port });
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    let settled = false;
+    const settle = (error: Error | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        socket.destroy();
+        callback(error);
+        return;
+      }
+      callback(null, { connection: socket });
+    };
+    const timer = setTimeout(
+      () => settle(new Error(`Connection to ${address} timed out`)),
+      timeoutMs,
+    );
+    socket.on("error", (error: Error) => settle(error));
+    socket.once("connect", () => settle(null));
+  };
+}
+
+/** The part of a Nodemailer transport {@link sendWithDeadline} uses. */
+interface ClosableTransport {
+  sendMail(options: Mail.Options): Promise<unknown>;
+  close(): void;
+}
+
+/** The error of a session that ran past its deadline: no SMTP reply, so it is retried. */
+function sessionDeadlineError(deadlineMs: number): Error {
+  return new Error(
+    `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
+  );
+}
+
+/**
+ * Sends with an overall deadline (#250): past `deadlineMs` the transport
+ * is closed and the attempt fails with a plain error, which carries no
+ * SMTP reply and is therefore retried later, not treated as a bounce.
+ * `abort` (a stalled STARTTLS upgrade, see `TlsRecorder.stalled`) ends the
+ * attempt the same way, earlier. {@link runMxSession} then destroys the
+ * session's sockets.
+ */
+export async function sendWithDeadline(
+  transport: ClosableTransport,
+  options: Mail.Options,
+  deadlineMs: number,
+  abort?: Promise<never>,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      transport.close();
+      reject(sessionDeadlineError(deadlineMs));
+    }, deadlineMs);
+  });
+  const racers: Array<Promise<unknown>> = [transport.sendMail(options), deadline];
+  if (abort) {
+    racers.push(
+      abort.catch((error: unknown) => {
+        transport.close();
+        throw error;
+      }),
+    );
+  }
+  try {
+    await Promise.race(racers);
+  } finally {
+    clearTimeout(timer);
+  }
 }

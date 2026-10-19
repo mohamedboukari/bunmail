@@ -9,14 +9,19 @@ import {
   type TlsRecorder,
 } from "../../src/modules/emails/services/mx-transport.ts";
 import { classifySendFailure } from "../../src/utils/smtp-error.ts";
+import {
+  startFixtureServer,
+  type FixtureMode,
+  type FixtureServer,
+} from "../smtp-fixture.ts";
 
 /**
  * Outbound TLS record (#250) against a real `smtp-server`: the recorder
  * reads nodemailer's own events, so these tests run the real nodemailer
  * client (under Bun, as in production) against a real receiving server.
  *
- * The server runs under Node (`test/fixtures/smtp-tls-server.mjs`): Bun
- * cannot upgrade an accepted socket to TLS, so it cannot serve STARTTLS.
+ * The server runs under Node (`test/smtp-fixture.ts`): Bun cannot upgrade
+ * an accepted socket to TLS, so it cannot serve STARTTLS.
  *
  * nodemailer is imported through its `lib/` entry points, not the package
  * root: `mailer.service.test.ts` mocks the package root with
@@ -27,67 +32,15 @@ import { classifySendFailure } from "../../src/utils/smtp-error.ts";
  * set; the options test (and the mailer's transport test) pin that.
  */
 
-const FIXTURE = new URL("../fixtures/smtp-tls-server.mjs", import.meta.url).pathname;
-
-/** A running fixture server and what it reported on stdout. */
-interface FixtureServer {
-  port: number;
-  /** Messages the server accepted so far. */
-  messages: () => number;
-  /** Connections the server accepted so far. */
-  connections: () => number;
-  stop: () => void;
-}
-
 const running: FixtureServer[] = [];
 
 afterAll(() => {
   for (const server of running) server.stop();
 });
 
-/** Starts the fixture server in `mode` and waits for its port. */
-async function startServer(
-  mode: "starttls" | "plaintext" | "tls11",
-): Promise<FixtureServer> {
-  const node = Bun.which("node");
-  if (node === null)
-    throw new Error("these tests need `node` on PATH to run smtp-server");
-  const proc = Bun.spawn([node, FIXTURE, mode], { stdin: "pipe", stdout: "pipe" });
-  let messages = 0;
-  let connections = 0;
-  let resolvePort: (port: number) => void = () => undefined;
-  const port = new Promise<number>((resolve) => {
-    resolvePort = resolve;
-  });
-  void (async () => {
-    const decoder = new TextDecoder();
-    let buffered = "";
-    for await (const chunk of proc.stdout) {
-      buffered += decoder.decode(chunk, { stream: true });
-      let newline = buffered.indexOf("\n");
-      while (newline >= 0) {
-        const line: unknown = JSON.parse(buffered.slice(0, newline));
-        buffered = buffered.slice(newline + 1);
-        newline = buffered.indexOf("\n");
-        if (typeof line !== "object" || line === null) continue;
-        const reported: unknown = Reflect.get(line, "port");
-        const message: unknown = Reflect.get(line, "message");
-        const connection: unknown = Reflect.get(line, "connection");
-        if (typeof reported === "number") resolvePort(reported);
-        if (typeof message === "number") messages = message;
-        if (typeof connection === "number") connections = connection;
-      }
-    }
-  })();
-  const server: FixtureServer = {
-    port: await port,
-    messages: () => messages,
-    connections: () => connections,
-    stop: () => {
-      void proc.stdin.end();
-      proc.kill();
-    },
-  };
+/** Starts the fixture server in `mode`, stopped after the file. */
+async function startServer(mode: FixtureMode): Promise<FixtureServer> {
+  const server = await startFixtureServer(mode);
   running.push(server);
   return server;
 }

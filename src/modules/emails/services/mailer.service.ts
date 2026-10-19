@@ -1,4 +1,3 @@
-import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
@@ -10,16 +9,11 @@ import { classifySendFailure } from "../../../utils/smtp-error.ts";
 import { mintReturnPath, recipientOrder } from "../../bounces/services/return-path.ts";
 import { resolveMxAddress } from "./mx-address.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
-import {
-  createTlsRecorder,
-  mxTransportOptions,
-  type TlsRecorder,
-} from "./mx-transport.ts";
+import { runMxSession, type MxSessionOutcome } from "./mx-transport.ts";
 import type {
   CustomHeaders,
   DeliveryGroup,
   DeliveryState,
-  DeliveryTls,
 } from "../models/email.schema.ts";
 
 /**
@@ -638,41 +632,6 @@ interface MxTransaction {
 /** The parts of the message that are the same in every transaction. */
 type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
 
-/** One transaction's outcome: no `error` means the MX accepted it. */
-interface TransactionOutcome {
-  key: string;
-  error?: unknown;
-  /** The session's encryption, see {@link TlsRecorder} (#250). */
-  tls: DeliveryTls | null;
-}
-
-/**
- * Builds the transport for one MX (options in {@link mxTransportOptions},
- * TLS 1.2 at least, #250). Several transactions (one per recipient with
- * signed return paths, #236) share one pooled connection: a single
- * connection (`maxConnections: 1`), each message after the first sent on
- * it after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
- * resending a message whose connection dropped: that failure is reported,
- * and the queue's own retry policy decides. The whole session is capped by
- * {@link sendWithDeadline}.
- */
-function createMxTransport(
-  address: string,
-  mxHost: string,
-  pooled: boolean,
-  recorder: TlsRecorder,
-): ClosableTransport {
-  const options = mxTransportOptions({
-    address,
-    mxHost,
-    heloName: config.mail.hostname,
-    logger: recorder.logger,
-  });
-  return pooled
-    ? createTransport({ ...options, pool: true, maxConnections: 1, maxRequeues: 0 })
-    : createTransport(options);
-}
-
 /**
  * Submits the message to a single destination MX, one SMTP transaction
  * per entry. The `envelope.to` override pins RCPT TO to the entry's
@@ -681,6 +640,8 @@ function createMxTransport(
  * delivering to the wrong server. With signed return paths (#236) each
  * entry is one recipient with its own `MAIL FROM`, so a co-recipient never
  * sees another recipient's return path; the entries share one connection.
+ * The session itself (one pooled connection, TLS record, deadline, and
+ * closing the connection however it ends) is {@link runMxSession}.
  *
  * Never throws: every entry gets an outcome.
  */
@@ -688,7 +649,7 @@ async function sendToMx(
   mxHost: string,
   transactions: MxTransaction[],
   message: MessageParts,
-): Promise<TransactionOutcome[]> {
+): Promise<MxSessionOutcome[]> {
   /**
    * Connect to a checked address, not the name: the name's DNS answer is
    * controlled by whoever owns the recipient domain, and resolving it
@@ -704,98 +665,21 @@ async function sendToMx(
     /** Never connected: no session, so nothing known about TLS. */
     return transactions.map((t) => ({ key: t.key, error, tls: null }));
   }
-  const pooled = transactions.length > 1;
-  /** Learns each transaction's encryption from nodemailer's own events (#250). */
-  const recorder = createTlsRecorder();
-  const transport = createMxTransport(address, mxHost, pooled, recorder);
 
   /** Per-MX throttle (#91). Disjoint locks across MXs run in parallel. */
-  return withMxLock(mxHost, config.mail.mxConcurrency, async () => {
-    /** One deadline for the whole session, shared by its transactions. */
-    const deadlineAt = Date.now() + SMTP_SESSION_DEADLINE_MS;
-    const outcomes: TransactionOutcome[] = [];
-    try {
-      for (const transaction of transactions) {
-        const remainingMs = deadlineAt - Date.now();
-        recorder.beginTransaction();
-        try {
-          if (remainingMs <= 0) throw sessionDeadlineError(SMTP_SESSION_DEADLINE_MS);
-          await sendWithDeadline(
-            transport,
-            buildMailOptions({
-              ...message,
-              recipients: transaction.recipients,
-              envelopeFrom: transaction.envelopeFrom,
-            }),
-            remainingMs,
-            recorder.stalled,
-          );
-          outcomes.push({ key: transaction.key, tls: recorder.result() });
-        } catch (error) {
-          outcomes.push({ key: transaction.key, error, tls: recorder.result() });
-        }
-      }
-    } finally {
-      recorder.dispose();
-      /** A pooled connection stays open until closed; a plain one closes itself. */
-      if (pooled) transport.close();
-    }
-    return outcomes;
-  });
-}
-
-/**
- * Longest one outbound SMTP session may take (#250). Every step has its
- * own timeout, but a peer that keeps answering slowly could still hold
- * the MX lock for hours; this caps the whole attempt.
- */
-const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
-
-/** The part of a Nodemailer transport {@link sendWithDeadline} uses. */
-interface ClosableTransport {
-  sendMail(options: Mail.Options): Promise<unknown>;
-  close(): void;
-}
-
-/** The error of a session that ran past its deadline: no SMTP reply, so it is retried. */
-function sessionDeadlineError(deadlineMs: number): Error {
-  return new Error(
-    `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
+  return withMxLock(mxHost, config.mail.mxConcurrency, () =>
+    runMxSession({
+      address,
+      mxHost,
+      heloName: config.mail.hostname,
+      transactions: transactions.map((transaction) => ({
+        key: transaction.key,
+        mail: buildMailOptions({
+          ...message,
+          recipients: transaction.recipients,
+          envelopeFrom: transaction.envelopeFrom,
+        }),
+      })),
+    }),
   );
-}
-
-/**
- * Sends with an overall deadline (#250): past `deadlineMs` the transport
- * is closed and the attempt fails with a plain error, which carries no
- * SMTP reply and is therefore retried later, not treated as a bounce.
- * `abort` (a stalled STARTTLS upgrade, see `TlsRecorder.stalled`) ends the
- * attempt the same way, earlier.
- */
-export async function sendWithDeadline(
-  transport: ClosableTransport,
-  options: Mail.Options,
-  deadlineMs: number,
-  abort?: Promise<never>,
-): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      transport.close();
-      reject(sessionDeadlineError(deadlineMs));
-    }, deadlineMs);
-  });
-  const racers: Array<Promise<unknown>> = [transport.sendMail(options), deadline];
-  if (abort) {
-    racers.push(
-      abort.catch((error: unknown) => {
-        transport.close();
-        throw error;
-      }),
-    );
-  }
-  try {
-    await Promise.race(racers);
-  } finally {
-    clearTimeout(timer);
-  }
 }
