@@ -293,8 +293,8 @@ per-replica.
 | GET /dashboard/webhooks/deliveries/:deliveryId | Delivery detail: payload, last response, Replay (#30) |
 | GET /dashboard/inbound           | Inbound emails list: bulk-select, per-row trash                  |
 | GET /dashboard/inbound/trash     | Trashed inbound: bulk Restore / Delete-forever / Empty trash     |
-| GET /dashboard/inbound/:id       | Inbound email detail + HTML preview                               |
-| GET /dashboard/inbound/:id/reply | Send form pre-filled as a reply (#86)                             |
+| GET /dashboard/inbound/:id       | Inbound email detail + HTML preview; "In reply to" links the email of ours it answers, when linked (#192) |
+| GET /dashboard/inbound/:id/reply | Send form pre-filled as a reply (#86), carrying the inbound id so the send sets `In-Reply-To` / `References` (#192) |
 | GET /dashboard/dmarc-reports     | DMARC aggregate reports list + domain filter (#41)                |
 | GET /dashboard/dmarc-reports/:id | DMARC report detail, per source IP (#41)                          |
 | GET /dashboard/suppressions      | Suppressions across every API key (#89)                           |
@@ -460,7 +460,7 @@ directly in JSX: those run on the server and bake in the server's tz/locale.
 Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash message in query params. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
 
 **General**
-- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219). The success flash names the sender domain's DNS records that are not verified (DKIM, SPF, DMARC) or says the domain is unregistered (development), #245; a send refused on its sender domain or subject shows the reason as an error flash
+- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219). The success flash names the sender domain's DNS records that are not verified (DKIM, SPF, DMARC) or says the domain is unregistered (development), #245; a send refused on its sender domain or subject shows the reason as an error flash. A reply form also posts `inboundId` (the inbound email's id, never header text): the server sets `In-Reply-To` and `References` from that email's stored, validated ids (#192, see [inbound.md](inbound.md#threading-192))
 - Create API key → `POST /dashboard/api-keys` (form fields: `name`, `allowedSenders`, `isAdmin`; `isAdmin` is ignored for members, #219)
 - Promote / demote API key → `POST /dashboard/api-keys/:id/admin` (admins and the owner)
 - Set allowed senders → `POST /dashboard/api-keys/:id/senders`

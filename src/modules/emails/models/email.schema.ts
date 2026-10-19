@@ -235,6 +235,11 @@ export const emails = pgTable(
     index("idx_emails_due_per_key")
       .on(table.apiKeyId, table.nextAttemptAt, table.createdAt)
       .where(sql`status = 'queued' AND deleted_at IS NULL`),
+    /**
+     * Message-ID lookups (#192): linking an inbound reply to the email it
+     * answers, and the bounce and complaint handlers' joins.
+     */
+    index("idx_emails_message_id").on(table.messageId),
     index("idx_emails_lease")
       .on(table.leaseUntil)
       .where(sql`status = 'sending'`),

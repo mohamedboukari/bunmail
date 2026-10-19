@@ -69,6 +69,10 @@ const inboundEmail = {
   receivedAt: now,
   deletedAt: now,
   deliveryState: null,
+  messageId: null,
+  inReplyTo: null,
+  references: null,
+  inReplyToEmailId: null,
 };
 
 const apiKey = {

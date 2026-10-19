@@ -139,6 +139,10 @@ const inboundEmail = {
   receivedAt: now,
   deletedAt: null,
   deliveryState: null,
+  messageId: null,
+  inReplyTo: null,
+  references: null,
+  inReplyToEmailId: null,
 };
 
 const template = {

@@ -14,7 +14,15 @@ Inbound email detail pages have a **Reply** button that opens the compose form w
 
 The reply route is `GET /dashboard/inbound/:id/reply`: a normal navigation, no side effects until the operator clicks Send. The operator can edit any field before sending, including swapping the From domain or rewriting the quoted body.
 
-**Out of scope (Phase 2):** RFC 5322 threading headers (`In-Reply-To`, `References`). Phase 1 ships the compose UX; proper threading needs new columns on `emails` and is deferred.
+## Threading (#192)
+
+Replies thread in the recipient's mail client, and replies to BunMail's own mail are linked back to it.
+
+- **Capture on receipt.** The receiver reads the first `Message-ID`, `In-Reply-To` and `References` field of every stored message (from mailparser's raw header lines, unfolded) into `inbound_emails.message_id`, `in_reply_to` and `references`. The values are attacker-controlled, so only syntactically valid msg-ids are kept: `<id-left@id-right>`, printable ASCII without spaces (a dot-atom left part, a dot-atom or `[literal]` right part), at most 250 characters each, brackets included. Comments, junk, quoted or obsolete forms, overlong ids and anything with CR, LF or NUL are dropped; ids are deduplicated and kept in order, space-separated. `in_reply_to` and `references` hold at most 20 ids (for a longer chain, the first id, the thread root, and the newest 19). A field without a valid id stores `null`. Rules: `services/threading.ts` (pure, linear time).
+- **Reply headers.** The reply form carries the inbound email's id (a hidden `inboundId` field), never header text. `POST /dashboard/send` computes `In-Reply-To: <original Message-ID>` and `References: <original References> <original Message-ID>` (RFC 5322 section 3.6.4: appended, never replaced; an original without `References` whose `In-Reply-To` holds a single id starts the chain with it). Stored values are parsed again before use. The chain is capped to 20 ids and to 998 characters, dropping the oldest ids after the first. The pair goes through the custom-header rules (#177) like any other `headers`, so it is validated, stored on `emails.headers` and DKIM-signed. An original without a valid `Message-ID` is answered without threading headers (logged at `debug`). The subject keeps the `Re: ` rule above.
+- **Rows received before #192** have null columns. On the first reply the ids are recovered from `raw_message` (the header section only, at most 64 KB, through mailparser) and stored on the row; there is no backfill job.
+- **Linking a reply to our email.** When a received message's `In-Reply-To` or `References` (most direct first) names the `Message-ID` of an email BunMail sent, the receiver stores that email's id in `inbound_emails.in_reply_to_email_id` (`ON DELETE SET NULL`). The match only counts when the email's sender domain is one of the domains the message was received for (the envelope `RCPT TO` domains, never the `To:` header), so one tenant's inbound mail never links to another tenant's outbound mail. The inbound detail page shows "In reply to: <subject> sent <date>", linking to the email's page (every role that may open the inbound page may open the email page). A failed lookup is logged at `warn` (SQLSTATE only) and the message is stored without a link.
+- **Manual check:** confirm threading once in a real client (Gmail or Apple Mail): reply from the dashboard to a received message and check the reply lands in the same conversation. The automated tests check the headers, not a client's grouping.
 
 ## Bounce branching
 
@@ -44,6 +52,8 @@ src/modules/inbound/
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
+│   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
+│   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
 ├── models/
 │   └── inbound-email.schema.ts      ← Drizzle pgTable definition
@@ -67,12 +77,16 @@ Table: `inbound_emails`
 | html         | text           | nullable                   |
 | text_content | text           | nullable                   |
 | raw_message  | text           | nullable (full RFC 822)    |
+| message_id   | text           | nullable, valid msg-id (#192) |
+| in_reply_to  | text           | nullable, up to 20 valid msg-ids (#192) |
+| references   | text           | nullable, up to 20 valid msg-ids (#192) |
+| in_reply_to_email_id | varchar(36) | nullable, FK `emails.id` `ON DELETE SET NULL` (#192) |
 | received_at  | timestamp      | NOT NULL, default `now()`  |
 | deleted_at   | timestamp      | nullable                   |
 
 `deleted_at` is the soft-delete marker: set when an inbound email is moved to trash. Auto-purged after `TRASH_RETENTION_DAYS`.
 
-**Indexes:** `idx_inbound_received_at`, `idx_inbound_deleted_at`
+**Indexes:** `idx_inbound_received_at`, `idx_inbound_deleted_at`, `idx_inbound_in_reply_to_email_id`. The reply link looks emails up through `idx_emails_message_id` (migration `0031`).
 
 ## Configuration
 
@@ -143,7 +157,7 @@ All three layers fail open on errors (DNS timeout, DB unreachable). This means l
 1. Client connects → rate limit check (instant) → DNSBL check (DNS lookup)
 2. RCPT TO command → `unsub+<token>` addresses verified (#249), others validated against registered domains
 3. DATA command → `unsub+` recipients suppressed (#249), feedback-loop reports handled (#191), then the message is parsed with `mailparser`
-4. Sender, recipient, subject, HTML, text, and raw message stored in `inbound_emails`
+4. Sender, recipient, subject, HTML, text, raw message, the validated threading ids and the link to the email it replies to (#192) stored in `inbound_emails`
 5. `email.received` webhook event fired to all subscribed webhooks
 6. If the recipient domain has a `notify_email` set, a summary notification email is sent (fire-and-forget), see below
 
@@ -189,6 +203,28 @@ Starts the SMTP server on the configured port.
 
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
+
+### threading.ts (#192, pure)
+
+#### `extractMessageIds(value): string[]`
+The valid msg-ids of a header field value, in order, deduplicated (unfolds, skips comments, drops invalid or overlong ids).
+
+#### `threadingIdsFromHeaderLines(lines): ThreadingIds`
+The first `Message-ID`, `In-Reply-To` and `References` of a message from its raw header lines, chains capped to 20.
+
+#### `buildReplyHeaders(stored): ReplyThreadingHeaders | null`
+`In-Reply-To` and `References` of a reply (append, In-Reply-To fallback, 20 ids, 998 characters), or `null` without a valid `Message-ID`.
+
+### reply-threading.service.ts (#192)
+
+#### `threadingColumnsFor(headerLines, recipients)`
+The receiver's threading columns, with the link to our email scoped to the recipients' domains.
+
+#### `replyHeadersForInbound(inboundId)`
+The reply headers for a dashboard reply, recovering the ids from `raw_message` once for older rows.
+
+#### `getRepliedEmail(inbound)`
+The linked email (id, subject, sent time) for the detail page.
 
 ### arf-parser.service.ts / feedback-handler.service.ts
 

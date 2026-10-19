@@ -13,6 +13,7 @@ import { handleParsedBounce } from "../../bounces/services/bounce-handler.servic
 import { persistDmarcReportFromInbound } from "../../dmarc-reports/services/dmarc-handler.service.ts";
 import { isFeedbackReport } from "./arf-parser.service.ts";
 import { handleInboundFeedbackReport } from "./feedback-handler.service.ts";
+import { threadingColumnsFor } from "./reply-threading.service.ts";
 import { config } from "../../../config.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -523,6 +524,16 @@ export function start(): void {
 
                 const id = generateId("inb");
 
+                /**
+                 * Threading ids (#192), validated, and the email of ours this
+                 * replies to, scoped to the envelope recipients' domains
+                 * (never the spoofable `To:` header).
+                 */
+                const threading = await threadingColumnsFor(
+                  parsed.headerLines,
+                  otherRecipients,
+                );
+
                 await db.insert(inboundEmails).values({
                   id,
                   fromAddress: from,
@@ -531,6 +542,7 @@ export function start(): void {
                   html: typeof parsed.html === "string" ? parsed.html : null,
                   textContent: parsed.text ?? null,
                   rawMessage,
+                  ...threading,
                 });
 
                 logger.info("Inbound email received and stored", {

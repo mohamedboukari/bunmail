@@ -25,6 +25,12 @@ interface SendEmailPageProps {
     subject?: string;
     html?: string;
     text?: string;
+    /**
+     * The inbound email this is a reply to (#192): posted back as an opaque
+     * id, from which the server computes `In-Reply-To` and `References`.
+     * Header values never come from the form.
+     */
+    inboundId?: string;
   };
 }
 
@@ -47,6 +53,9 @@ export function SendEmailPage({
       {/* Compose form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
         <form method="POST" action="/dashboard/send" class="space-y-4">
+          {prefill?.inboundId !== undefined && (
+            <input type="hidden" name="inboundId" value={prefill.inboundId} />
+          )}
           {/* "Sending as": explicit api-key picker (#89). Pre-#89 the
               dashboard picked the first active key silently, which made
               auto-suppressions get filed against an invisible key. The

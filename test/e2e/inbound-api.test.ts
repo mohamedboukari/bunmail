@@ -78,6 +78,10 @@ const mockInbound = {
   rawMessage: "raw...",
   receivedAt: new Date("2024-01-01"),
   deletedAt: null as Date | null,
+  messageId: null,
+  inReplyTo: null,
+  references: null,
+  inReplyToEmailId: null,
 };
 
 const mockTrashedInbound = {
