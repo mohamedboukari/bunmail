@@ -16,6 +16,8 @@ interface StatsCardProps {
   hint?: string;
   /** Optional accent color class for the left border (e.g. "border-emerald-500") */
   accent?: string;
+  /** Optional warning line, shown in red under the value (e.g. a high bounce rate, #250). */
+  warning?: string;
 }
 
 /**
@@ -28,6 +30,7 @@ export function StatsCard({
   displayValue,
   hint,
   accent = "border-gray-300 dark:border-gray-700",
+  warning,
 }: StatsCardProps) {
   return (
     <div
@@ -42,6 +45,15 @@ export function StatsCard({
       {!!hint && (
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" safe>
           {hint}
+        </p>
+      )}
+      {!!warning && (
+        <p
+          class="text-xs font-medium text-red-600 dark:text-red-400 mt-1"
+          role="alert"
+          safe
+        >
+          {warning}
         </p>
       )}
     </div>

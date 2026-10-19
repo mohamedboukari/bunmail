@@ -82,11 +82,14 @@ src/modules/emails/
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
+│   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
-│   └── stats.service.ts            ← Dashboard stats aggregation
+│   ├── stats.service.ts            ← Dashboard stats aggregation
+│   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
 ├── serializations/
-│   └── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
+│   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
+│   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
     └── email.types.ts               ← Email, SendEmailInput, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
 ```
@@ -289,6 +292,8 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
+Each transaction's outcome records `tls` and `updatedAt` on its delivery-state entry (#250, see [TLS record](#tls-record-250)). The SMTP session to each MX runs in `runMxSession` (`mx-transport.ts`), see [One session per MX](#one-session-per-mx-250).
+
 #### `buildMailOptions(args): Mail.Options`
 Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, `List-Unsubscribe`, DKIM). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
 
@@ -376,6 +381,15 @@ The `To:` / `Cc:` headers on the rendered message always carry the **original fu
 
 With `SMTP_ENABLED=true` and the sender domain's MX pointing at this server (`MAIL_HOSTNAME` in its MX set; other domains keep the From address), the envelope sender (`MAIL FROM`) is not the From address but each recipient's signed return path, `b+<id>.<index>.<MAC>@<sender domain>`, so a DSN is bound to exactly one email and recipient (see [bounces.md](bounces.md#signed-return-paths-236)). The envelope sender belongs to a whole SMTP transaction, so step 5 changes: each recipient is its own transaction, with only that recipient in `RCPT TO` and its own return path in `MAIL FROM`, and a co-recipient never sees another recipient's return path. The transactions to one MX share one connection (a nodemailer pool of one connection, `maxRequeues: 0` so a dropped connection is reported, not silently resent) and hold the MX's throttle slot once; the 20-minute session deadline covers all of them. The message itself (headers, DKIM signature, custom headers, `List-Unsubscribe`, `Feedback-ID`) is the same in each. A single-recipient email is one transaction, as before. With `SMTP_ENABLED=false` nothing changes: one transaction per MX, envelope sender = From.
 
+### One session per MX (#250)
+
+Every MX gets one SMTP session (`runMxSession` in `mx-transport.ts`), run under that MX's throttle slot:
+
+- **One pooled connection** (`pool: true`, `maxConnections: 1`, `maxRequeues: 0`), also for a single transaction, so there is one code path. The transactions of the session (one per recipient with signed return paths, else one) go over it in turn, each after `RSET`.
+- **BunMail opens the socket.** Nodemailer's `getSocket` hook connects to the checked MX address (60 s connect timeout) and BunMail keeps the socket.
+- **One deadline** of 20 minutes for the whole session, and the 60 s STARTTLS stall limit of the TLS record. Either fails the attempt with an error that has no SMTP reply, so the entry is retried.
+- **Always closed.** When the session ends (delivered, refused, timed out or stalled), its sockets are destroyed and the pool closed. Closing a Nodemailer transport or pool alone does not end a connection that is still busy, so a receiver that accepts and never answers, or stops mid-session (before or after STARTTLS), would otherwise leave the connection open after the attempt was given up. `test/integration/mx-session.integration.test.ts` checks, against a real receiver, that the server sees no open connection right after each kind of session.
+
 ### Per-group delivery state (`emails.delivery_state`, #97)
 
 Every multi-MX send writes a per-group outcome map into `emails.delivery_state` (JSONB, nullable). Each entry is keyed by destination MX hostname and records:
@@ -387,13 +401,19 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
     "recipients": ["alice@gmail.com"],
     "attempts": 1,
     "deliveredAt": "2026-05-25T00:00:00.000Z",
-    "messageId": "<abc@mail.bunmail.xyz>"
+    "messageId": "<abc@mail.bunmail.xyz>",
+    "tls": "starttls",
+    "updatedAt": "2026-05-25T00:00:00.000Z"
   },
   "smtp-mail.outlook.com": {
     "status": "retry",
     "recipients": ["bob@outlook.com"],
     "attempts": 1,
-    "lastError": "421 4.4.5 too many connections"
+    "lastError": "421 4.4.5 too many connections",
+    "failureKind": "soft",
+    "failureCode": "4.4.5",
+    "tls": "plaintext",
+    "updatedAt": "2026-05-25T00:00:01.000Z"
   }
 }
 ```
@@ -405,6 +425,23 @@ Every multi-MX send writes a per-group outcome map into `emails.delivery_state` 
 **Per-recipient entries (#236):** with signed return paths, a pending group of several recipients is split into one entry per recipient, keyed `<mx host>#<recipient index>` with the MX in `mxHost` (for example `"smtp.gmail.com#2": { "mxHost": "smtp.gmail.com", "recipients": ["carol@gmail.com"], ... }`). Each keeps its own status, attempts, classification and retries, so one recipient's `550` or `451` does not decide the others'. Single-recipient groups keep their MX as key. A row that is retried after `SMTP_ENABLED` changes is handled either way: a multi-recipient group is split when return paths are on, and a per-recipient entry still goes to its `mxHost` when they are off.
 
 **Synthetic DNS failures:** domains whose MX lookup fails are recorded under a synthetic key `<dns:<domain>>` and marked `failed` immediately: no MX exists to retry against. The recipients are visible in the operator-facing state for triage.
+
+**`updatedAt`** (#250): when the entry's latest outcome happened (an attempt, a DNS failure, or recipients suppressed before a retry). Absent on entries written before #250.
+
+### TLS record (#250)
+
+Outbound STARTTLS is opportunistic: used when the MX offers it, never required (MTA-STS and DANE are not implemented), and certificates are not verified (`rejectUnauthorized: false`), since most MX certificates would fail a strict check. The transport sets `tls.minVersion: "TLSv1.2"`, so a peer that only offers TLS 1.0 or 1.1 fails the handshake; the failure has no SMTP reply, so the entry stays `retry`.
+
+Each entry records `tls`, the encryption of the session behind its latest outcome: `starttls`, `plaintext` (the MX did not offer STARTTLS, or answered it with an error), or `null` (no session got ready: a connection, DNS or TLS failure). It is read from Nodemailer's own events, through a logger passed to each MX transport (`createTlsRecorder` in `mx-transport.ts`), never from the server's reply text:
+
+- the STARTTLS upgrade line of the connection (`Connection upgraded with STARTTLS`), per connection id, reset when a new connection starts;
+- the transport's `send` line, written once the greeting, EHLO and any STARTTLS restart are done.
+
+A transaction is `starttls` only when both happened: under Bun the TLS callback can fire for a handshake the peer refused, after which the session never answers. Such a session (upgrade reported, never ready) fails after 60 s (`STARTTLS handshake did not complete`) instead of waiting for the 20-minute session cap. Nothing from these events is logged or stored besides the three facts. A real-server test (`test/unit/mx-transport.test.ts`, `smtp-server` under Node) pins the behaviour for STARTTLS, plaintext and a TLS 1.1-only peer.
+
+### Exposed in the API and on the detail page (#250)
+
+`deliveryState` on every email response (see [api.md](api.md#post-apiv1emailssend)) is built from this column by `serializeDeliveryState`: one entry per stored key, with `mx` (`mxHost`, or the key; `null` for a `<dns:...>` entry), `recipients`, `status`, `attempts`, `failureKind`, `failureCode`, `lastError`, `tls` and `updatedAt` (falling back to `deliveredAt`), sorted by `mx` then first recipient. The internal key, `mxHost`, `blocked`, `messageId` and `deliveredAt` are not exposed. The dashboard's email detail page renders the same entries as the **Delivery by MX** table.
 
 ### Aggregate status semantics
 

@@ -7,6 +7,7 @@ import { templates } from "../../templates/models/template.schema.ts";
 import { webhooks } from "../../webhooks/models/webhook.schema.ts";
 import { inboundEmails } from "../../inbound/models/inbound-email.schema.ts";
 import { logger } from "../../../utils/logger.ts";
+import { deliveryRates } from "./delivery-rates.ts";
 
 /**
  * Dashboard stats: aggregated counts for the home page.
@@ -24,15 +25,26 @@ export interface DashboardStats {
   failedCount: number;
   /** Outbound emails currently with status "queued" */
   queuedCount: number;
+  /** Outbound emails currently with status "bounced" (#250) */
+  bouncedCount: number;
   /** Outbound emails sent within the last 24h (status = sent) */
   sentLast24h: number;
   /** Outbound emails that failed within the last 24h */
   failedLast24h: number;
+  /** Outbound emails that bounced within the last 24h (#250) */
+  bouncedLast24h: number;
   /**
-   * Success rate as a fraction in [0, 1]. Sent / (sent + failed). When no
-   * email has reached a terminal state yet, this is `null`.
+   * Success rate as a fraction in [0, 1]: sent / (sent + failed + bounced)
+   * (#250; bounced rows were left out before). When no email has reached a
+   * terminal state yet, this is `null`.
    */
   successRate: number | null;
+  /**
+   * Bounce rate as a fraction in [0, 1]: bounced / (sent + bounced) (#250),
+   * the share of delivered-or-bounced mail that bounced. 0 when there is
+   * neither.
+   */
+  bounceRate: number;
   /** Total inbound emails (non-trashed) */
   inboundTotal: number;
   /** Inbound emails received within the last 24h */
@@ -77,8 +89,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       sent: sql<number>`count(*) filter(where ${emails.status} = 'sent')::int`,
       failed: sql<number>`count(*) filter(where ${emails.status} = 'failed')::int`,
       queued: sql<number>`count(*) filter(where ${emails.status} = 'queued')::int`,
+      bounced: sql<number>`count(*) filter(where ${emails.status} = 'bounced')::int`,
       sentLast24h: sql<number>`count(*) filter(where ${emails.status} = 'sent' and ${emails.sentAt} >= ${since24h})::int`,
       failedLast24h: sql<number>`count(*) filter(where ${emails.status} = 'failed' and ${emails.updatedAt} >= ${since24h})::int`,
+      bouncedLast24h: sql<number>`count(*) filter(where ${emails.status} = 'bounced' and ${emails.updatedAt} >= ${since24h})::int`,
     })
     .from(emails)
     .where(isNull(emails.deletedAt));
@@ -142,19 +156,20 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
   const sent = emailStats[0]?.sent ?? 0;
   const failed = emailStats[0]?.failed ?? 0;
-  const terminalCount = sent + failed;
-
-  /** Avoid divide-by-zero: surface as null when nothing terminal yet */
-  const successRate = terminalCount > 0 ? sent / terminalCount : null;
+  const bounced = emailStats[0]?.bounced ?? 0;
+  const { successRate, bounceRate } = deliveryRates({ sent, failed, bounced });
 
   const stats: DashboardStats = {
     totalEmails: emailStats[0]?.total ?? 0,
     sentCount: sent,
     failedCount: failed,
     queuedCount: emailStats[0]?.queued ?? 0,
+    bouncedCount: bounced,
     sentLast24h: emailStats[0]?.sentLast24h ?? 0,
     failedLast24h: emailStats[0]?.failedLast24h ?? 0,
+    bouncedLast24h: emailStats[0]?.bouncedLast24h ?? 0,
     successRate,
+    bounceRate,
     inboundTotal: inboundStats?.total ?? 0,
     inboundLast24h: inboundStats?.last24h ?? 0,
     emailsInTrash: emailsTrashRow?.count ?? 0,

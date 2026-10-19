@@ -4,7 +4,7 @@
  * mailer module reads the real config, which unit tests stub.
  */
 import { describe, test, expect } from "bun:test";
-import { sendWithDeadline } from "../../src/modules/emails/services/mailer.service.ts";
+import { sendWithDeadline } from "../../src/modules/emails/services/mx-transport.ts";
 import { classifySendFailure } from "../../src/utils/smtp-error.ts";
 
 function fakeTransport(send: () => Promise<unknown>) {

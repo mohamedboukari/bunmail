@@ -174,6 +174,14 @@ describe("classifySendFailure (#250)", () => {
     new Error("Connection closed by mx2.5.7.10.example after greeting"),
     new Error("Greeting never received from 45.2.1.9"),
     Object.assign(new Error("Client network socket disconnected"), { code: "ESOCKET" }),
+    /** A peer offering only TLS below 1.2 (#250): retried, never a bounce. */
+    Object.assign(
+      new Error(
+        "Error initiating TLS - error:0A000102:SSL routines::unsupported protocol",
+      ),
+      { code: "ETLS", command: "STARTTLS" },
+    ),
+    new Error("STARTTLS handshake did not complete within 60 s"),
   ])("no SMTP reply, nothing to classify: %p", (error) => {
     expect(classifySendFailure(error)).toBeNull();
   });

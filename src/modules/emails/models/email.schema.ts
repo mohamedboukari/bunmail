@@ -54,7 +54,24 @@ export interface DeliveryGroup {
    * entries keyed by their MX.
    */
   mxHost?: string;
+  /**
+   * Whether the SMTP session of the attempt behind this entry's latest
+   * outcome was encrypted (#250): `starttls` or `plaintext` once the
+   * session got as far as being ready to send, `null` when it never did (a
+   * connection or TLS failure). Absent on entries written before, and on
+   * entries never attempted.
+   */
+  tls?: DeliveryTls | null;
+  /** ISO timestamp of this entry's latest outcome (#250). Absent on entries written before. */
+  updatedAt?: string;
 }
+
+/**
+ * Encryption of an outbound SMTP session (#250): upgraded with STARTTLS,
+ * or plaintext because the receiving MX did not offer STARTTLS (or
+ * refused it). Opportunistic: plaintext is allowed, and now recorded.
+ */
+export type DeliveryTls = "starttls" | "plaintext";
 
 /**
  * Shape of `emails.delivery_state`: a map keyed by destination MX

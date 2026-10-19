@@ -110,16 +110,19 @@ bunmail/
 │   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
+│   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
-│   │   │   │   └── stats.service.ts      ← Dashboard stats aggregation
+│   │   │   │   ├── stats.service.ts      ← Dashboard stats aggregation
+│   │   │   │   └── delivery-rates.ts     ← Success and bounce rate math (#250)
 │   │   │   ├── dtos/
 │   │   │   │   ├── send-email.dto.ts
 │   │   │   │   └── list-emails.dto.ts
 │   │   │   ├── models/
 │   │   │   │   └── email.schema.ts       ← emails pgTable
 │   │   │   ├── serializations/
-│   │   │   │   └── email.serialization.ts
+│   │   │   │   ├── email.serialization.ts
+│   │   │   │   └── delivery-state.serialization.ts ← Public per-MX delivery state (#250)
 │   │   │   └── types/
 │   │   │       └── email.types.ts
 │   │   ├── api-keys/
@@ -555,6 +558,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | locked_by     | varchar(64)    | nullable: worker holding a `sending` row (#180) |
 | lease_until   | timestamptz    | nullable: claim expiry while `sending` (#180) |
 | last_error    | text           | nullable                        |
+| delivery_state | jsonb         | nullable: per-MX (or per-recipient, #236) outcomes with attempts, failure class, `tls` and `updatedAt` (#97, #250) |
 | message_id    | varchar(255)   | nullable (SMTP Message-ID)      |
 | sent_at       | timestamp      | nullable                        |
 | created_at    | timestamp      | NOT NULL, default `now()`       |
@@ -861,7 +865,7 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188) | Yes  |
 | GET    | /api/v1/emails                      | List sent emails (excludes trash)          | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
-| GET    | /api/v1/emails/:id                  | Get email by ID                            | Yes  |
+| GET    | /api/v1/emails/:id                  | Get email by ID, with its per-MX `deliveryState` (#250) | Yes  |
 | DELETE | /api/v1/emails/:id                  | Move email to trash                        | Yes  |
 | POST   | /api/v1/emails/bulk-delete          | Bulk move to trash (`{ ids: [] }`)         | Yes  |
 | POST   | /api/v1/emails/:id/restore          | Restore from trash                         | Yes  |
@@ -1089,7 +1093,7 @@ Both maps reset on server restart and are per-replica (single-instance only; opt
 
 ## Email Delivery
 
-BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX host itself, refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to the checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS).
+BunMail sends emails directly to recipient MX servers: no SMTP relay or third-party provider. For each recipient domain the mailer resolves the MX host itself, refuses private or loopback addresses (unless `MAIL_ALLOW_PRIVATE_MX=true`), and builds a Nodemailer transport to the checked address on port 25 with the MX name as TLS SNI (opportunistic STARTTLS, TLS 1.2 at least, certificates not verified). Each delivery-state entry records whether its latest session used STARTTLS or plaintext (`tls`, read from Nodemailer's connection events, #250); the API returns it in `deliveryState`, and the email detail page badges a plaintext delivery. See [docs/emails.md](docs/emails.md#tls-record-250).
 
 **What this means:**
 - The server's IP reputation directly affects deliverability
