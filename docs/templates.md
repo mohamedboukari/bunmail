@@ -10,7 +10,8 @@ src/modules/templates/
 ├── services/
 │   └── template.service.ts          ← CRUD + renderTemplate()
 ├── dtos/
-│   └── create-template.dto.ts       ← POST/PUT body validation
+│   ├── create-template.dto.ts       ← POST/PUT body validation
+│   └── list-templates.dto.ts        ← GET / pagination (default limit 100)
 ├── models/
 │   └── template.schema.ts           ← Drizzle pgTable definition
 ├── serializations/
@@ -75,8 +76,8 @@ Replaces `{{key}}` and `{{{key}}}` placeholders with values from the variables o
 #### `createTemplate(input, apiKeyId, createdByUserId = null): Promise<Template>`
 Creates a new template scoped to the API key, recording who created it (#219).
 
-#### `listTemplates(apiKeyId): Promise<Template[]>`
-Lists all templates for the requesting API key.
+#### `listTemplates(apiKeyId, { page, limit }): Promise<{ data: Template[]; total }>`
+Lists one page of the requesting API key's templates, oldest first, with the key's total (#258). `GET /api/v1/templates` takes optional `page` and `limit` (default and maximum 100, so a client that never pages sees the same first 100 templates) and returns `pagination: { page, limit, total }`.
 
 #### `getTemplateById(id, apiKeyId): Promise<Template | undefined>`
 Returns a template by ID, scoped to the API key.
@@ -101,7 +102,7 @@ All routes require Bearer token auth and are rate-limited.
 | Method | Path                     | Description        |
 |--------|--------------------------|--------------------|
 | POST   | /api/v1/templates        | Create template    |
-| GET    | /api/v1/templates        | List templates     |
+| GET    | /api/v1/templates        | List templates (`?page`, `?limit`, default 100) |
 | GET    | /api/v1/templates/:id    | Get template       |
 | PUT    | /api/v1/templates/:id    | Update template    |
 | DELETE | /api/v1/templates/:id    | Delete template    |

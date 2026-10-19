@@ -226,9 +226,14 @@ export const emails = pgTable(
     /** Index for trash list and purge queries (api_key + deleted_at) */
     index("idx_emails_api_key_deleted").on(table.apiKeyId, table.deletedAt),
 
-    /** Queue claim (#180): due queued rows, and expired leases. */
-    index("idx_emails_due")
-      .on(table.nextAttemptAt)
+    /**
+     * Queue claim: queued rows per API key in due order (#258, replaces
+     * the global `idx_emails_due` of #180). The fair claim walks each key's
+     * first due rows through this index, so one key's backlog costs the
+     * other keys nothing. Expired leases use `idx_emails_lease`.
+     */
+    index("idx_emails_due_per_key")
+      .on(table.apiKeyId, table.nextAttemptAt, table.createdAt)
       .where(sql`status = 'queued' AND deleted_at IS NULL`),
     index("idx_emails_lease")
       .on(table.leaseUntil)

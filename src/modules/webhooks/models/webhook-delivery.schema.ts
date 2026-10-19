@@ -91,10 +91,12 @@ export const webhookDeliveries = pgTable(
   },
   (table) => ({
     /** Worker hot path: partial index on the only rows the poll loop
-     *  will ever scan. Keeps it tiny even when `delivered` rows
-     *  accumulate. */
-    duePendingIdx: index("webhook_deliveries_due_pending_idx")
-      .on(table.nextAttemptAt)
+     *  will ever scan, per webhook in due order (#258, replaces the
+     *  global `webhook_deliveries_due_pending_idx`). The fair claim reads
+     *  each webhook's first due rows through it, so one webhook's backlog
+     *  costs the others nothing. Stays small as `delivered` rows pile up. */
+    duePerWebhookIdx: index("webhook_deliveries_due_per_webhook_idx")
+      .on(table.webhookId, table.nextAttemptAt)
       .where(sql`status = 'pending'`),
 
     /** Inspection page hot path: "show me the latest deliveries for

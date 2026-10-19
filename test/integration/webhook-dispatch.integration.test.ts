@@ -117,11 +117,11 @@ describe("createWebhook + listWebhooks + deleteWebhook (DB CRUD)", () => {
     });
     /** Wrong key: no-op. */
     expect(await deleteWebhook(hookId, keyB)).toBeUndefined();
-    expect(await listWebhooks(keyA)).toHaveLength(1);
+    expect((await listWebhooks(keyA, { page: 1, limit: 100 })).data).toHaveLength(1);
     /** Right key: deletes. */
     const deleted = await deleteWebhook(hookId, keyA);
     expect(deleted?.id).toBe(hookId);
-    expect(await listWebhooks(keyA)).toHaveLength(0);
+    expect((await listWebhooks(keyA, { page: 1, limit: 100 })).data).toHaveLength(0);
   });
 });
 

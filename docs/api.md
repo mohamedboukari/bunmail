@@ -42,6 +42,8 @@ Every list endpoint takes the same query params:
 
 A value outside the range, or one that isn't a number, returns **422** (#172). Responses carry `pagination: { page, limit, total }`. The page cap keeps the underlying `OFFSET` well inside PostgreSQL's integer range.
 
+`GET /api/v1/webhooks` and `GET /api/v1/templates` (paginated since #258) default `limit` to **100**, the maximum, so a client that never pages still gets the same first 100 rows as before; both are ordered oldest first.
+
 ## Endpoints
 
 ### Health Check
@@ -339,7 +341,7 @@ Create a new email template.
 
 #### `GET /api/v1/templates`
 
-List templates for the authenticated API key.
+List templates for the authenticated API key, oldest first. Paginated (#258): optional `page` and `limit` (default and maximum `100`, see [Pagination](#pagination)); the response carries `pagination: { page, limit, total }`.
 
 ---
 
@@ -380,13 +382,15 @@ Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `
 
 Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) is admin-only: a restricted key subscribing to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 
+A key may have at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (default 10, #258). One more gets `422` with `code: "WEBHOOK_LIMIT_REACHED"`; webhooks that already exceed the cap are kept.
+
 **Response includes `secret`**: shown once, used for HMAC signature verification.
 
 ---
 
 #### `GET /api/v1/webhooks`
 
-List webhooks for the authenticated API key. Secrets are not included.
+List webhooks for the authenticated API key, oldest first. Secrets are not included. Paginated (#258): optional `page` and `limit` (default and maximum `100`, see [Pagination](#pagination)); the response carries `pagination: { page, limit, total }`.
 
 ---
 
@@ -411,6 +415,8 @@ A single delivery with its payload and the last response (status and a 2 KB body
 #### `POST /api/v1/webhooks/deliveries/:deliveryId/replay`
 
 Replay a delivery: it goes back to `pending` with its attempts reset, and the worker sends it on its next tick. See [docs/webhooks.md](webhooks.md#delivery-behavior).
+
+At most 5 replays per delivery per hour (#258): one more gets `429` with a `Retry-After` header (seconds) and `code: "REPLAY_LIMIT_REACHED"`.
 
 ---
 
@@ -658,6 +664,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than 12 MB (rejected before it is read) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177) |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender or subject (#245): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`) or `SUBJECT_REQUIRED`, or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258) |
 | 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively |
-| 429    | Rate limit exceeded                             |
+| 429    | Rate limit exceeded, or a delivery replayed 5 times this hour (`REPLAY_LIMIT_REACHED`, #258); both send `Retry-After` |

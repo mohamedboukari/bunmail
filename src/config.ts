@@ -367,6 +367,53 @@ export function readAuditLogRetentionDays(
   );
 }
 
+/** Default and bounds of `WEBHOOKS_MAX_PER_API_KEY` (#258). */
+export const DEFAULT_WEBHOOKS_MAX_PER_API_KEY = 10;
+export const MIN_WEBHOOKS_MAX_PER_API_KEY = 1;
+export const MAX_WEBHOOKS_MAX_PER_API_KEY = 100;
+
+/**
+ * Reads `WEBHOOKS_MAX_PER_API_KEY`, how many webhooks one API key may have
+ * (#258). Every event fans out to each of a key's subscribed webhooks, so
+ * the cap bounds that fan-out. Unset or blank: 10. Anything other than a
+ * whole number from 1 to 100 refuses to boot.
+ */
+export function readWebhooksMaxPerApiKey(
+  raw: string | undefined = process.env["WEBHOOKS_MAX_PER_API_KEY"],
+): number {
+  return optionalBoundedInt(
+    "WEBHOOKS_MAX_PER_API_KEY",
+    DEFAULT_WEBHOOKS_MAX_PER_API_KEY,
+    MIN_WEBHOOKS_MAX_PER_API_KEY,
+    MAX_WEBHOOKS_MAX_PER_API_KEY,
+    raw,
+  );
+}
+
+/** Default and bounds of `WEBHOOK_DELIVERY_RETENTION_DAYS` (#258), in days. */
+export const DEFAULT_WEBHOOK_DELIVERY_RETENTION_DAYS = 30;
+export const MIN_WEBHOOK_DELIVERY_RETENTION_DAYS = 1;
+export const MAX_WEBHOOK_DELIVERY_RETENTION_DAYS = 365;
+
+/**
+ * Reads `WEBHOOK_DELIVERY_RETENTION_DAYS`, how long finished webhook
+ * deliveries (`delivered` and `failed`) are kept (#258). Unset or blank:
+ * 30. Anything other than a whole number of days from 1 to 365 refuses to
+ * boot: a bare `parseInt` turned a typo into `NaN`, and a `NaN` cutoff
+ * silently purged nothing.
+ */
+export function readWebhookDeliveryRetentionDays(
+  raw: string | undefined = process.env["WEBHOOK_DELIVERY_RETENTION_DAYS"],
+): number {
+  return optionalBoundedInt(
+    "WEBHOOK_DELIVERY_RETENTION_DAYS",
+    DEFAULT_WEBHOOK_DELIVERY_RETENTION_DAYS,
+    MIN_WEBHOOK_DELIVERY_RETENTION_DAYS,
+    MAX_WEBHOOK_DELIVERY_RETENTION_DAYS,
+    raw,
+  );
+}
+
 /**
  * Reads `SYSTEM_MAIL_FROM`, the address BunMail's own mail (invitations,
  * #217) is sent from. Trimmed and lower-cased; unset or empty means no
@@ -905,12 +952,20 @@ export const config = {
    */
   webhookDelivery: {
     /**
-     * How many days `delivered` rows are retained before the cleanup
-     * task deletes them. `failed` rows are kept indefinitely for
-     * forensics: operators want to answer "did this event ever land?"
-     * months after the fact.
+     * How many days finished deliveries (`delivered` and `failed`) are
+     * kept, counted from their last change, before the hourly cleanup
+     * deletes them (`WEBHOOK_DELIVERY_RETENTION_DAYS`, default 30, a whole
+     * number from 1 to 365, #258). `failed` rows used to be kept forever.
      */
-    retentionDays: parseInt(optionalEnv("WEBHOOK_DELIVERY_RETENTION_DAYS", "30"), 10),
+    retentionDays: readWebhookDeliveryRetentionDays(),
+
+    /**
+     * Most webhooks one API key may have (`WEBHOOKS_MAX_PER_API_KEY`,
+     * default 10, a whole number from 1 to 100, #258). Creating one more
+     * is refused with 422 `WEBHOOK_LIMIT_REACHED`; webhooks that already
+     * exceed a lowered cap are kept.
+     */
+    maxPerApiKey: readWebhooksMaxPerApiKey(),
 
     /**
      * SSRF guard (#128). Webhook URLs must be `https` and must not resolve

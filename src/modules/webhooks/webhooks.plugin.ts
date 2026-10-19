@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 import { createWebhookDto } from "./dtos/create-webhook.dto.ts";
 import { listDeliveriesQueryDto } from "./dtos/list-deliveries.dto.ts";
+import { listWebhooksQueryDto } from "./dtos/list-webhooks.dto.ts";
 import { serializeWebhook } from "./serializations/webhook.serialization.ts";
 import {
   serializeWebhookDelivery,
@@ -20,7 +21,7 @@ import { restAuditContext } from "../audit/services/audit-context.service.ts";
  *
  * Routes:
  * - POST /        → Register a new webhook endpoint
- * - GET /         → List webhooks for the current API key
+ * - GET /         → List webhooks for the current API key (paginated)
  * - DELETE /:id   → Delete a webhook
  */
 export const webhooksPlugin = new Elysia({
@@ -74,19 +75,27 @@ export const webhooksPlugin = new Elysia({
 
   .get(
     "/",
-    async ({ apiKeyId }) => {
-      const hooks = await webhookService.listWebhooks(apiKeyId);
+    async ({ query, apiKeyId }) => {
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 100;
+      const { data, total } = await webhookService.listWebhooks(apiKeyId, {
+        page,
+        limit,
+      });
 
       return {
         success: true,
-        data: hooks.map(serializeWebhook),
+        data: data.map(serializeWebhook),
+        pagination: { page, limit, total },
       };
     },
     {
+      query: listWebhooksQueryDto,
       detail: {
         tags: ["Webhooks"],
         summary: "List webhooks",
-        description: "Returns all webhooks for the current API key.",
+        description:
+          "Returns the current API key's webhooks, oldest first, paginated with `?page` and `?limit` (default and maximum 100).",
         security: [{ bearerAuth: [] }],
       },
     },

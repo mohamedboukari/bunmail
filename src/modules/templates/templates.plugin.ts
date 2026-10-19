@@ -1,5 +1,6 @@
 import { Elysia, t } from "elysia";
 import { createTemplateDto, updateTemplateDto } from "./dtos/create-template.dto.ts";
+import { listTemplatesQueryDto } from "./dtos/list-templates.dto.ts";
 import { serializeTemplate } from "./serializations/template.serialization.ts";
 import * as templateService from "./services/template.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
@@ -11,7 +12,7 @@ import { logger } from "../../utils/logger.ts";
  *
  * Routes:
  * - POST /        → Create a template
- * - GET /         → List templates for the current API key
+ * - GET /         → List templates for the current API key (paginated)
  * - GET /:id      → Get a single template
  * - PUT /:id      → Update a template
  * - DELETE /:id   → Delete a template
@@ -57,16 +58,27 @@ export const templatesPlugin = new Elysia({
 
   .get(
     "/",
-    async ({ apiKeyId }) => {
-      const list = await templateService.listTemplates(apiKeyId);
+    async ({ query, apiKeyId }) => {
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 100;
+      const { data, total } = await templateService.listTemplates(apiKeyId, {
+        page,
+        limit,
+      });
 
-      return { success: true, data: list.map(serializeTemplate) };
+      return {
+        success: true,
+        data: data.map(serializeTemplate),
+        pagination: { page, limit, total },
+      };
     },
     {
+      query: listTemplatesQueryDto,
       detail: {
         tags: ["Templates"],
         summary: "List templates",
-        description: "Returns all templates for the current API key.",
+        description:
+          "Returns the current API key's templates, oldest first, paginated with `?page` and `?limit` (default and maximum 100).",
         security: [{ bearerAuth: [] }],
       },
     },

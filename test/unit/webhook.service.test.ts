@@ -39,7 +39,7 @@ void mock.module("../../src/config.ts", () => ({
     server: { port: 3000, host: "0.0.0.0" },
     mail: { hostname: "localhost", publicIps: [] },
     dashboard: { ownerEmail: null },
-    webhookDelivery: { retentionDays: 30, allowInsecureHttp: false },
+    webhookDelivery: { retentionDays: 30, allowInsecureHttp: false, maxPerApiKey: 10 },
     /** `createWebhook` encrypts the signing secret at rest (#259). */
     dkimEncryptionKey: Buffer.alloc(32, 7),
     logLevel: "error",
@@ -47,13 +47,15 @@ void mock.module("../../src/config.ts", () => ({
   },
 }));
 
-void mock.module("../../src/db/index.ts", () => ({
-  db: {
-    select: mock(() => chainable(selectResult)),
-    insert: mock(() => chainable(insertResult)),
-    delete: mock(() => chainable(deleteResult)),
-  },
-}));
+/** The fake db; `transaction` hands it to the callback as the transaction. */
+const fakeDb = {
+  select: mock(() => chainable(selectResult)),
+  insert: mock(() => chainable(insertResult)),
+  delete: mock(() => chainable(deleteResult)),
+  transaction: <T>(run: (tx: unknown) => Promise<T>): Promise<T> => run(fakeDb),
+};
+
+void mock.module("../../src/db/index.ts", () => ({ db: fakeDb }));
 
 const { createWebhook, listWebhooks, listAllWebhooks, deleteWebhook } =
   await import("../../src/modules/webhooks/services/webhook.service.ts");
@@ -90,8 +92,8 @@ describe("createWebhook", () => {
 describe("listWebhooks / listAllWebhooks", () => {
   test("listWebhooks returns the rows the chain resolves to", async () => {
     selectResult = [baseHook, { ...baseHook, id: "whk_2" }];
-    const list = await listWebhooks("key_owner");
-    expect(list).toHaveLength(2);
+    const list = await listWebhooks("key_owner", { page: 1, limit: 100 });
+    expect(list.data).toHaveLength(2);
   });
 
   test("listAllWebhooks returns rows unscoped", async () => {

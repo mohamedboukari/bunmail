@@ -102,8 +102,8 @@ describe("createTemplate", () => {
 describe("listTemplates / listAllTemplates", () => {
   test("listTemplates returns the rows the chain resolves to", async () => {
     fixture.selectResult = [tplFixture, { ...tplFixture, id: "tpl_2" }];
-    const list = await listTemplates("key_owner");
-    expect(list).toHaveLength(2);
+    const list = await listTemplates("key_owner", { page: 1, limit: 100 });
+    expect(list.data).toHaveLength(2);
   });
 
   test("listAllTemplates returns the rows (unscoped)", async () => {

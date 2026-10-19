@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { templates } from "../models/template.schema.ts";
 import { generateId } from "../../../utils/id.ts";
@@ -108,9 +108,29 @@ export async function createTemplate(
   return template!;
 }
 
-/** Lists all templates belonging to the given API key. */
-export async function listTemplates(apiKeyId: string): Promise<Template[]> {
-  return db.select().from(templates).where(eq(templates.apiKeyId, apiKeyId));
+/**
+ * Lists one page of the given API key's templates, oldest first (#258),
+ * with the key's total for the pagination meta.
+ */
+export async function listTemplates(
+  apiKeyId: string,
+  pagination: { page: number; limit: number },
+): Promise<{ data: Template[]; total: number }> {
+  const owned = eq(templates.apiKeyId, apiKeyId);
+  const [data, [counted]] = await Promise.all([
+    db
+      .select()
+      .from(templates)
+      .where(owned)
+      .orderBy(asc(templates.createdAt), asc(templates.id))
+      .limit(pagination.limit)
+      .offset((pagination.page - 1) * pagination.limit),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(templates)
+      .where(owned),
+  ]);
+  return { data, total: counted?.count ?? 0 };
 }
 
 /** Returns all templates across all API keys (dashboard use). */

@@ -1,9 +1,9 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { db } from "../../../db/index.ts";
 import { webhooks } from "../models/webhook.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
-import { InboundEventsRequireAdminError } from "../errors.ts";
+import { InboundEventsRequireAdminError, WebhookLimitReachedError } from "../errors.ts";
 import { encryptSecret } from "../../../utils/crypto.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -35,52 +35,97 @@ export async function createWebhook(
    */
   await assertPublicWebhookUrl(input.url, config.webhookDelivery.allowInsecureHttp);
 
+  const id = generateId("whk");
+  const secret = randomBytes(32).toString("hex");
+  const maxPerKey = config.webhookDelivery.maxPerApiKey;
+
   /**
-   * Inbound events are admin-only: `email.received` has no owning API key,
-   * so only admin keys may subscribe to it. Checked here (not in the route)
-   * so the REST API and the dashboard enforce it alike.
+   * The count and the insert run in one transaction holding a lock on the
+   * owning key's row (#258), so parallel creates for one key queue up
+   * behind each other and cannot all pass the count. `FOR NO KEY UPDATE`
+   * leaves foreign-key checks (`FOR KEY SHARE`: this insert, emails sent
+   * with the key) unblocked; an update of the key row waits for the
+   * few milliseconds the transaction takes.
    */
-  if (input.events.includes("email.received")) {
-    const [key] = await db
+  const webhook = await db.transaction(async (tx) => {
+    const [key] = await tx
       .select({ isAdmin: apiKeys.isAdmin })
       .from(apiKeys)
       .where(eq(apiKeys.id, apiKeyId))
-      .limit(1);
-    if (!key?.isAdmin) throw new InboundEventsRequireAdminError();
-  }
+      .for("no key update");
 
-  const id = generateId("whk");
-  const secret = randomBytes(32).toString("hex");
+    /**
+     * Inbound events are admin-only: `email.received` has no owning API key,
+     * so only admin keys may subscribe to it. Checked here (not in the route)
+     * so the REST API and the dashboard enforce it alike.
+     */
+    if (input.events.includes("email.received") && !key?.isAdmin) {
+      throw new InboundEventsRequireAdminError();
+    }
 
-  logger.info("Creating webhook", {
-    id,
-    url: redactUrl(input.url),
-    events: input.events,
-    apiKeyId,
-    createdByUserId,
-  });
+    const [counted] = await tx
+      .select({ count: sql<number>`count(*)::int` })
+      .from(webhooks)
+      .where(eq(webhooks.apiKeyId, apiKeyId));
+    const existing = counted?.count ?? 0;
+    if (existing >= maxPerKey) {
+      logger.warn("Webhook not created: API key at its webhook limit", {
+        apiKeyId,
+        existing,
+        limit: maxPerKey,
+      });
+      throw new WebhookLimitReachedError(maxPerKey);
+    }
 
-  const [webhook] = await db
-    .insert(webhooks)
-    .values({
+    logger.info("Creating webhook", {
       id,
-      apiKeyId,
-      url: input.url,
+      url: redactUrl(input.url),
       events: input.events,
-      /** Only the ciphertext is stored (#259); the caller gets the raw secret once. */
-      secret: encryptSecret(secret, config.dkimEncryptionKey),
+      apiKeyId,
       createdByUserId,
-    })
-    .returning();
+    });
+
+    const [created] = await tx
+      .insert(webhooks)
+      .values({
+        id,
+        apiKeyId,
+        url: input.url,
+        events: input.events,
+        /** Only the ciphertext is stored (#259); the caller gets the raw secret once. */
+        secret: encryptSecret(secret, config.dkimEncryptionKey),
+        createdByUserId,
+      })
+      .returning();
+    return created;
+  });
 
   return { webhook: webhook!, secret };
 }
 
 /**
- * Lists webhooks scoped to an API key.
+ * Lists one page of an API key's webhooks, oldest first (#258), with the
+ * key's total for the pagination meta.
  */
-export async function listWebhooks(apiKeyId: string): Promise<Webhook[]> {
-  return db.select().from(webhooks).where(eq(webhooks.apiKeyId, apiKeyId));
+export async function listWebhooks(
+  apiKeyId: string,
+  pagination: { page: number; limit: number },
+): Promise<{ data: Webhook[]; total: number }> {
+  const owned = eq(webhooks.apiKeyId, apiKeyId);
+  const [data, [counted]] = await Promise.all([
+    db
+      .select()
+      .from(webhooks)
+      .where(owned)
+      .orderBy(asc(webhooks.createdAt), asc(webhooks.id))
+      .limit(pagination.limit)
+      .offset((pagination.page - 1) * pagination.limit),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(webhooks)
+      .where(owned),
+  ]);
+  return { data, total: counted?.count ?? 0 };
 }
 
 /**

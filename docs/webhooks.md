@@ -18,11 +18,17 @@ A rejected URL at create time returns **HTTP 422** `{ "code": "WEBHOOK_URL_BLOCK
 ```
 src/modules/webhooks/
 ├── webhooks.plugin.ts               ← Elysia plugin (route group)
+├── errors.ts                        ← Typed errors (inbound admin-only, webhook cap, replay limit)
 ├── services/
-│   ├── webhook.service.ts           ← CRUD operations
-│   └── webhook-dispatch.service.ts  ← Event delivery with retries
+│   ├── webhook.service.ts           ← CRUD operations, per-key webhook cap
+│   ├── webhook-dispatch.service.ts  ← Enqueues one delivery per subscribed webhook
+│   ├── webhook-delivery.service.ts  ← Fair claim, attempts, replay, retention purge
+│   ├── webhook-delivery-worker.service.ts ← Poll loop and hourly cleanup
+│   └── replay-limit.service.ts      ← Replay budget per delivery (in memory)
 ├── dtos/
-│   └── create-webhook.dto.ts        ← POST body validation
+│   ├── create-webhook.dto.ts        ← POST body validation
+│   ├── list-webhooks.dto.ts         ← GET / pagination (default limit 100)
+│   └── list-deliveries.dto.ts       ← GET /:id/deliveries pagination + status
 ├── models/
 │   └── webhook.schema.ts            ← Drizzle pgTable definition
 ├── serializations/
@@ -66,7 +72,7 @@ Table: `webhook_deliveries` (#30): persisted retry queue.
 | updated_at            | timestamptz    | NOT NULL, default `now()`                         |
 
 Indexes:
-- `webhook_deliveries_due_pending_idx`: partial index on `next_attempt_at` filtered to `status='pending'` (worker hot path stays small even with millions of `delivered` rows accumulated).
+- `webhook_deliveries_due_per_webhook_idx`: partial index on `(webhook_id, next_attempt_at)` filtered to `status='pending'` (#258, replaces `webhook_deliveries_due_pending_idx`). The fair claim reads each webhook's first due rows through it, so the worker hot path stays one short probe per webhook even with a large backlog or millions of finished rows.
 - `webhook_deliveries_per_webhook_idx` on `(webhook_id, created_at)`: dashboard inspection page.
 
 ## Event Types
@@ -286,6 +292,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Timeout** | 10 seconds per request |
 | **Fire-and-forget enqueue** | `dispatchEvent` returns synchronously after INSERTing rows; the actual POST happens on the worker tick |
 | **Concurrency-safe** | Worker claim uses `FOR UPDATE SKIP LOCKED`; multiple replicas safe by construction |
+| **Fair across API keys** | Each batch (25 rows) is shared round-robin across the API keys owning the webhooks (#258): every key's oldest due delivery first, then each key's next one. A key whose receiver is down and collecting retries cannot delay other keys' events. A key's webhooks share its turn, and a single key keeps FIFO order by due time |
 | **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
 | **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
 | **Connection** | Sent to the address the SSRF guard validated for this attempt (see [URL requirements](#url-requirements--ssrf-guard-128)), one fresh connection per attempt; `Host`, SNI and the certificate check use the configured host name |
@@ -306,9 +313,15 @@ failed   ── operator replay ─→ pending (attempts reset to 0)
 
 Operators replay a `failed` row via `POST /api/v1/webhooks/deliveries/:deliveryId/replay` or the **Replay** button on the dashboard's delivery detail page. Replay flips `status` back to `pending`, resets `attempts` to 0, and sets `next_attempt_at = now()` so the worker picks it up on the next tick.
 
+A delivery can be replayed at most **5 times per hour** (#258; a fixed one-hour window from the first replay). One more is refused with `429`, a `Retry-After` header and `code: "REPLAY_LIMIT_REACHED"` over REST, and with a 429 on the delivery page in the dashboard. The budget is counted only after the ownership check, so another key's attempts are plain 404s. Like the API and login limiters it lives in memory, per replica: it resets on restart, and with several replicas each keeps its own count (#185).
+
+### Webhooks per API key
+
+A key may have at most `WEBHOOKS_MAX_PER_API_KEY` webhooks (default 10, a whole number from 1 to 100, #258). Every event fans out to each of the key's subscribed webhooks, so the cap bounds that fan-out. One more is refused over REST with `422` and `code: "WEBHOOK_LIMIT_REACHED"`, and on the dashboard with an error message. The count and the insert run in one transaction holding a lock on the key's row, so parallel creates cannot overshoot. Webhooks that already exceed the cap (created before it existed, or kept after lowering it) are kept and keep receiving events; the key cannot add another until it is below the cap.
+
 ### Retention
 
-`delivered` rows are deleted by an hourly cleanup task once they're older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default 30). `failed` rows are kept **indefinitely**: operators want them for forensic "did event X ever land?" queries months after the fact. Override the retention window in `.env`:
+Finished rows, `delivered` **and** `failed`, are deleted by an hourly cleanup task once their last change (delivery, final failure: `updated_at`) is older than `WEBHOOK_DELIVERY_RETENTION_DAYS` (default 30, a whole number from 1 to 365; anything else refuses to boot). The delete runs in batches of 5,000 (at most 100 batches a pass, the rest at the next one) and logs one line with the count when it removed anything. `pending` rows, including the ones in flight, are never deleted, however old. A replayed row is `pending` again, so its clock restarts when it finishes. Before #258, `failed` rows were kept forever; raise the retention if you need them longer for forensics:
 
 ```bash
 WEBHOOK_DELIVERY_RETENTION_DAYS=90
@@ -321,10 +334,10 @@ CASCADE on the parent `webhooks` row means deleting a webhook also reaps every o
 ### webhook.service.ts
 
 #### `createWebhook(input, apiKeyId, createdByUserId = null): Promise<{ webhook, secret }>`
-Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation; only its ciphertext is stored (#259), and the delivery worker decrypts it per attempt. A secret that no longer decrypts (the key changed) fails the attempt without sending. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`. Enforced in the service, so the API and the dashboard behave the same.
+Creates a webhook with a random 32-byte hex signing secret. The secret is returned once at creation; only its ciphertext is stored (#259), and the delivery worker decrypts it per attempt. A secret that no longer decrypts (the key changed) fails the attempt without sending. `createdByUserId` (#219) records who created it: the dashboard user, or over REST the calling key's user (null = the owner); attribution only. Throws `InboundEventsRequireAdminError` (`src/modules/webhooks/errors.ts`, mapped to `403 INBOUND_EVENTS_REQUIRE_ADMIN`) when a non-admin key subscribes to `email.received`, and `WebhookLimitReachedError` (`422 WEBHOOK_LIMIT_REACHED`, #258) when the key already has `WEBHOOKS_MAX_PER_API_KEY` webhooks; the count and insert hold a `FOR NO KEY UPDATE` lock on the key's row. Enforced in the service, so the API and the dashboard behave the same.
 
-#### `listWebhooks(apiKeyId): Promise<Webhook[]>`
-Lists webhooks scoped to the requesting API key.
+#### `listWebhooks(apiKeyId, { page, limit }): Promise<{ data: Webhook[]; total }>`
+Lists one page of the requesting API key's webhooks, oldest first, with the key's total (#258).
 
 #### `deleteWebhook(id, apiKeyId): Promise<Webhook | undefined>`
 Deletes a webhook, scoped to the requesting API key. CASCADE removes its deliveries.
@@ -349,16 +362,16 @@ HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once
 INSERTs one `pending` row at `next_attempt_at = now()`.
 
 #### `claimDueDeliveries(n, now?): Promise<Array<...>>`
-Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED` and increments their `attempts` (each row's returned `attempts` is the count before this attempt). Inactive webhooks' rows are flipped to `failed` rather than delivered, and so are rows over `MAX_DELIVERY_ATTEMPTS` (attempts that never reached `recordAttempt` because the process died).
+Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED`, shared round-robin across the API keys owning their webhooks (#258: a `LATERAL` per webhook takes its first `n` due rows, ranked within the owning key, lowest ranks first), and increments their `attempts` (each row's returned `attempts` is the count before this attempt). Inactive webhooks' rows are flipped to `failed` rather than delivered, and so are rows over `MAX_DELIVERY_ATTEMPTS` (attempts that never reached `recordAttempt` because the process died).
 
 #### `recordAttempt({ deliveryId, outcome, priorAttempts, now? }): Promise<void>`
 Persists the result of one HTTP attempt: `delivered` on 2xx, reschedule per the backoff table on failure, `failed` once the cap is hit.
 
 #### `replayDelivery({ deliveryId, apiKeyId, now? }): Promise<WebhookDelivery | undefined>`
-Operator-driven retry: flips a row back to `pending`, resets `attempts` to 0, sets `next_attempt_at` to now.
+Operator-driven retry: flips a row back to `pending`, resets `attempts` to 0, sets `next_attempt_at` to now. After the ownership check, counts the replay against `REPLAYS_PER_DELIVERY_PER_HOUR` (5, `replay-limit.service.ts`) and throws `ReplayLimitReachedError` (429, `retryAfterSec`) past it (#258).
 
-#### `purgeOldDeliveries({ olderThan }): Promise<{ deleted }>`
-Deletes `delivered` rows older than the cutoff. Called hourly by the worker.
+#### `purgeOldDeliveries({ olderThan, batchSize? }): Promise<{ deleted }>`
+Deletes `delivered` and `failed` rows whose `updated_at` is before the cutoff, in batches (default 5,000, at most 100 per call), never `pending` ones (#258). Called hourly by the worker's `runCleanupCycle`, which runs in its own log context (`job: "webhook-delivery-cleanup"`).
 
 ### webhook-delivery-worker.service.ts (#30)
 
@@ -375,8 +388,8 @@ All routes require Bearer token auth and are rate-limited.
 | Method | Path                                                | Description                            |
 |--------|-----------------------------------------------------|----------------------------------------|
 | POST   | /api/v1/webhooks                                    | Register webhook                       |
-| GET    | /api/v1/webhooks                                    | List webhooks                          |
+| GET    | /api/v1/webhooks                                    | List webhooks (`?page`, `?limit`, default 100) |
 | DELETE | /api/v1/webhooks/:id                                | Delete webhook (cascades to deliveries)|
 | GET    | /api/v1/webhooks/:id/deliveries                     | List deliveries for a webhook (`?status=pending\|delivered\|failed`) |
 | GET    | /api/v1/webhooks/deliveries/:deliveryId             | Single delivery + payload + last response |
-| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay      | Replay a delivery, resets to `pending` |
+| POST   | /api/v1/webhooks/deliveries/:deliveryId/replay      | Replay a delivery, resets to `pending` (5 per delivery per hour) |
