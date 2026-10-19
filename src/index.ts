@@ -18,6 +18,7 @@ import { pagesPlugin } from "./pages/pages.plugin.tsx";
 import { withRequestContext } from "./middleware/request-context.ts";
 import { securityHeadersPlugin } from "./middleware/security-headers.ts";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
+import { unsubscribePlugin } from "./pages/unsubscribe.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
 import { notFoundResponse } from "./pages/routes/not-found.tsx";
 import * as queueService from "./modules/emails/services/queue.service.ts";
@@ -402,6 +403,8 @@ const app = new Elysia()
   .use(faviconPlugin)
   /** Root: developer-focused landing page */
   .use(landingPlugin)
+  /** Public one-click unsubscribe pages at /u/:token (#249): no auth, token-verified */
+  .use(unsubscribePlugin())
   /** Health check: used by Docker, load balancers, and uptime monitors */
   .get(
     "/health",

@@ -16,6 +16,12 @@ import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { tokenFromUnsubscribeAddress } from "../../suppressions/services/unsubscribe-token.ts";
+import {
+  resolveUnsubscribeToken,
+  unsubscribe,
+  type UnsubscribeTarget,
+} from "../../suppressions/services/unsubscribe.service.ts";
 
 /**
  * Maximum size (bytes) of any single inbound message: RFC 5321 SIZE
@@ -108,6 +114,20 @@ const sessionStats = new Map<string, { startedAt: number; messages: number }>();
 /** The log context of one inbound SMTP connection (#284). */
 function sessionContext(session: { id: string }): LogContext {
   return { smtpSessionId: session.id, listener: "inbound" };
+}
+
+/**
+ * Verifies an `unsub+<token>@<domain>` recipient (#249): the token must be
+ * valid and the domain must be the sender domain of the email it names.
+ * `null` for anything else.
+ */
+async function resolveUnsubscribeRecipient(
+  token: string,
+  address: string,
+): Promise<UnsubscribeTarget | null> {
+  const target = await resolveUnsubscribeToken(token);
+  const domain = address.split("@")[1]?.trim().toLowerCase();
+  return target && domain === target.senderDomain ? target : null;
 }
 
 /**
@@ -248,6 +268,34 @@ export function start(): void {
           );
         }
 
+        /**
+         * Per-recipient unsubscribe mailbox (#249), `unsub+<token>@<domain>`,
+         * whatever recipient validation says. The token is checked here: an
+         * invalid one is refused in the SMTP session (550), so nothing is
+         * stored and no bounce of ours goes to a possibly forged sender (the
+         * sending MTA tells its own user). A valid one is accepted and acted
+         * on once the message is in (see `onData`).
+         */
+        const unsubscribeToken = tokenFromUnsubscribeAddress(address.address);
+        if (unsubscribeToken !== null) {
+          resolveUnsubscribeRecipient(unsubscribeToken, address.address)
+            .then((target) => {
+              if (target) return callback();
+              logger.warn("SMTP RCPT TO rejected: unsubscribe address not valid", {
+                domain: address.address.split("@")[1] ?? null,
+                ip: session.remoteAddress,
+              });
+              callback(smtpError("No such recipient", 550));
+            })
+            .catch((error: unknown) => {
+              logger.error("Unsubscribe address check failed during RCPT TO", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+              callback(smtpError("Temporary failure, try again later", 451));
+            });
+          return;
+        }
+
         if (!spamProtection.recipientValidationEnabled) {
           return callback();
         }
@@ -342,6 +390,32 @@ export function start(): void {
             void (async () => {
               if (aborted) return;
               try {
+                /**
+                 * Unsubscribe branch (#249): every `unsub+<token>` recipient
+                 * (already verified at RCPT TO, checked again here) is
+                 * suppressed. Such a message is never stored as inbound mail
+                 * and triggers no notification; when it was also addressed
+                 * to other mailboxes, only those carry on below.
+                 */
+                const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
+                  (r) => r.address,
+                );
+                const otherRecipients: string[] = [];
+                for (const recipient of envelopeRecipients) {
+                  const token = tokenFromUnsubscribeAddress(recipient);
+                  if (token === null) {
+                    otherRecipients.push(recipient);
+                    continue;
+                  }
+                  const target = await resolveUnsubscribeRecipient(token, recipient);
+                  if (target) await unsubscribe(target, "mailto");
+                  else logger.warn("Unsubscribe mail dropped: address not valid");
+                }
+                if (otherRecipients.length === 0 && envelopeRecipients.length > 0) {
+                  callback();
+                  return;
+                }
+
                 const rawBytes = Buffer.concat(chunks);
                 const rawMessage = rawBytes.toString("utf-8");
                 /**
@@ -466,13 +540,11 @@ export function start(): void {
                  * `.catch` is a redundant belt.
                  */
                 if (config.inboundNotify.enabled) {
-                  const envelopeRecipients = (session.envelope.rcptTo ?? []).map(
-                    (r) => r.address,
-                  );
                   void notifyInboundReceived({
                     inboundId: id,
                     from,
-                    recipients: envelopeRecipients,
+                    /** Without the unsubscribe addresses handled above (#249). */
+                    recipients: otherRecipients,
                     subject: parsed.subject ?? null,
                     text: parsed.text ?? null,
                   }).catch((err) => {

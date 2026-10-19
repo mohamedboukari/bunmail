@@ -119,6 +119,14 @@ export function assetResponse(name: AssetName): Response {
 }
 
 /**
+ * The stylesheet alone, for the public unsubscribe pages (#249), which run
+ * no script at all.
+ */
+export function PageStylesheet() {
+  return <link rel="stylesheet" href={assetUrl("dashboard.css")} />;
+}
+
+/**
  * The `<head>` tags every page carries: the stylesheet, then the script.
  *
  * The script is loaded synchronously (no `defer`) on purpose: its first

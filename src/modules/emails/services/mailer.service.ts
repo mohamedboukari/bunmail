@@ -80,13 +80,15 @@ export interface DkimOptions {
 
 /**
  * Inputs for the `List-Unsubscribe` header. Both fields optional:
- * the mailer always emits at least the mailto form (defaulting to
- * `unsubscribe@<from-domain>` when `mailto` is omitted), and adds
- * the HTTPS / `List-Unsubscribe-Post: One-Click` form whenever a
- * URL is provided.
+ * the mailer emits the mailto form (defaulting to
+ * `unsubscribe@<from-domain>` when `mailto` is omitted, left out when it
+ * is `null`), and adds the HTTPS / `List-Unsubscribe-Post: One-Click`
+ * form whenever a URL is provided. The queue builds them per email
+ * (`list-unsubscribe.ts`, #249).
  */
 export interface UnsubscribeOptions {
-  mailto?: string;
+  /** `null`: no mailto form (only valid together with `url`). */
+  mailto?: string | null;
   url?: string;
 }
 
@@ -427,10 +429,16 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
      * a stray newline must never split the header.
      */
     const stripCrlf = (v: string): string => v.replace(/[\r\n]/g, "");
-    const mailto = stripCrlf(args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`);
     const url = args.unsubscribe?.url ? stripCrlf(args.unsubscribe.url) : undefined;
-    const headerValue = url ? `<mailto:${mailto}>, <${url}>` : `<mailto:${mailto}>`;
-    headers["List-Unsubscribe"] = headerValue;
+    /** No mailto only when asked for and a URL is there: the header is never empty. */
+    const mailto =
+      args.unsubscribe?.mailto === null && url
+        ? null
+        : stripCrlf(args.unsubscribe?.mailto ?? `unsubscribe@${senderDomain}`);
+    headers["List-Unsubscribe"] = [
+      ...(mailto === null ? [] : [`<mailto:${mailto}>`]),
+      ...(url ? [`<${url}>`] : []),
+    ].join(", ");
     if (url) headers["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
     if (args.feedback)
       headers["Feedback-ID"] = feedbackIdHeader(args.feedback, senderDomain);

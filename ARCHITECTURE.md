@@ -109,6 +109,7 @@ bunmail/
 │   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
+│   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── queue.service.ts      ← Queue processor + retries
 │   │   │   │   └── stats.service.ts      ← Dashboard stats aggregation
 │   │   │   ├── dtos/
@@ -209,7 +210,9 @@ bunmail/
 │   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
 │   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
 │   │   │   ├── services/
-│   │   │   │   └── suppression.service.ts ← isSuppressed gate + create/list/delete + addFromBounce hook
+│   │   │   │   ├── suppression.service.ts ← isSuppressed gate + create/list/delete + addFromBounce / addFromUnsubscribe hooks
+│   │   │   │   ├── unsubscribe-token.ts  ← Stateless per-recipient unsubscribe token: HMAC mint/parse/verify (#249)
+│   │   │   │   └── unsubscribe.service.ts ← Verify a token against its email row, suppress, fire email.unsubscribed (#249)
 │   │   │   ├── dtos/                     ← create-suppression.dto, list-suppressions.dto
 │   │   │   ├── models/
 │   │   │   │   └── suppression.schema.ts ← suppressions pgTable
@@ -280,6 +283,7 @@ bunmail/
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218)
 │       ├── landing.plugin.tsx            ← Public landing page at /
+│       ├── unsubscribe.plugin.tsx        ← Public one-click unsubscribe at /u/:token, rate limited (#249)
 │       ├── static-assets.tsx             ← Serves dashboard.css / dashboard.js with a content-hash ?v= and a 1-year cache (#255)
 │       ├── assets/
 │       │   ├── dashboard.input.css       ← Tailwind v4 source; `bun run build:css` writes dashboard.css (gitignored, built in Docker) (#255)
@@ -301,6 +305,7 @@ bunmail/
 │       │   ├── account-two-factor.tsx    ← Two-factor page: QR code enrolment, recovery codes, disable (#220)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
+│       │   ├── unsubscribe.tsx           ← Unsubscribe confirm / done / invalid pages, no script (#249)
 │       │   ├── not-found.tsx             ← Custom 404 page
 │       │   ├── forbidden.tsx             ← 403 page for a role or session assurance too low (#222)
 │       │   ├── send-email.tsx            ← Compose & send email form
@@ -559,7 +564,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | dkim_public_key   | text           | nullable                     |
 | dkim_selector     | varchar(63)    | NOT NULL, default `'bunmail'`|
 | unsubscribe_email | varchar(255)   | nullable; per-domain mailto override for `List-Unsubscribe` (#40) |
-| unsubscribe_url   | text           | nullable; per-domain URL form for `List-Unsubscribe` + One-Click POST (#40) |
+| unsubscribe_url   | text           | nullable; per-domain URL form for `List-Unsubscribe` + One-Click POST (#40); replaced by the per-recipient `/u/<token>` link on single-recipient mail when `APP_BASE_URL` is `https://` (#249) |
 | notify_email      | varchar(255)   | nullable; address notified on inbound mail for this domain (#106) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
@@ -666,7 +671,7 @@ Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `cre
 | id                | varchar(36)    | PK, prefixed `sup_`          |
 | api_key_id        | varchar(36)    | FK → api_keys.id, NOT NULL, `ON DELETE CASCADE` |
 | email             | varchar(255)   | NOT NULL; stored lower-cased + trimmed |
-| reason            | text           | NOT NULL; one of `bounce | complaint | manual | unsubscribe` (validated at API boundary; column stays text for forward compat) |
+| reason            | text           | NOT NULL; one of `bounce | complaint | manual | unsubscribe` (validated at API boundary; column stays text for forward compat). `unsubscribe` is set by the one-click unsubscribe flow (#249) |
 | bounce_type       | varchar(20)    | nullable; `hard | soft | null` |
 | diagnostic_code   | text           | nullable; SMTP enhanced status (e.g. `5.1.1`) |
 | source_email_id   | varchar(36)    | FK → emails.id, `ON DELETE SET NULL` |
@@ -843,6 +848,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 | GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
 | POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` | Yes |
 
+Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.unsubscribed` (#249), all scoped to the sending key; `email.received` to admin keys only; `email.complained` reserved. See [docs/webhooks.md](docs/webhooks.md#event-types).
+
 ### Templates
 
 | Method | Path                          | Description           | Auth |
@@ -984,6 +991,15 @@ Roles (#222): the session guard (an Elysia `resolve`) exposes the signed-in acco
 |--------|----------|----------------|------|
 | GET    | /health  | Health check   | No   |
 
+### Unsubscribe (public, #249)
+
+| Method | Path       | Description | Auth |
+|--------|------------|-------------|------|
+| GET    | /u/:token  | Confirmation page; never suppresses (prefetch-safe). Invalid token: `404` | Token |
+| POST   | /u/:token  | RFC 8058 one-click (`List-Unsubscribe=One-Click`) or the confirmation form: permanent `unsubscribe` suppression for the sending key, `email.unsubscribed` on first creation | Token |
+
+Not under `/api/v1` and outside the auth middleware: the token (an HMAC over email id, recipient and API key) is the credential. Rate limited to 30 requests a minute per client IP; `no-store`, `no-referrer`, `noindex`, page CSP with no script. The inbound receiver also turns mail to `unsub+<token>@<sender domain>` into the same suppression. See [docs/suppressions.md](docs/suppressions.md#one-click-unsubscribe).
+
 ---
 
 ## Authentication
@@ -1038,6 +1054,8 @@ BunMail sends emails directly to recipient MX servers: no SMTP relay or third-pa
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path.
 - Soft bounces (4.x.x): async DSN path applies a 24h windowed suppression with escalation to permanent on a second soft bounce. Inline 4xx path retries with backoff until the email is `MAIL_RETRY_MAX_AGE_HOURS` old (#180) (the catch-block doesn't have enough signal to make a per-recipient soft → hard call safely).
 - Subsequent sends to suppressed recipients return HTTP 422 with `code: "RECIPIENT_SUPPRESSED"` from the gate at `createEmail`.
+
+**Unsubscribe → Suppression (#249):** single-recipient mail carries a per-recipient `List-Unsubscribe` (`<APP_BASE_URL/u/<token>>` + One-Click, and `<mailto:unsub+<token>@<domain>>` when `SMTP_ENABLED`). A one-click POST, the confirmation page or a message to that mailbox (handled before generic inbound storage) becomes a permanent `unsubscribe` suppression under the sending key and fires `email.unsubscribed` once.
 
 ---
 
@@ -1132,7 +1150,6 @@ Both are started from [src/index.ts](src/index.ts) after the queue processor and
 - SDK packages (`npm i bunmail`)
 - CLI tool (`bunx bunmail init`)
 - Scheduled emails
-- One-click unsubscribe endpoint (Gmail Feb-2024 List-Unsubscribe-Post)
 - Bun-native SMTP client (subsumes #37, #42, see #60)
 - Optional Redis backing for the per-replica in-memory state (rate limits, one-time reveal store) (#185)
 - Dashboard account follow-ups: passkeys (#223), SSO (#224)

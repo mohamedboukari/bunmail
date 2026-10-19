@@ -301,13 +301,13 @@ per-replica.
 
 ## Security headers (#255)
 
-Every response (dashboard, landing page, API, error pages) carries a `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` response is `Cache-Control: no-store` (except the static assets below). `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves.
+Every response (dashboard, landing page, API, error pages) carries a `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` and `/u/...` response is `Cache-Control: no-store` (except the static assets below). `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves.
 
 The CSP depends on the path:
 
 | Where | Policy |
 |-------|--------|
-| `/`, `/dashboard`, `/dashboard/...`, and the HTML 404 page on any path | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
+| `/`, `/dashboard`, `/dashboard/...`, the public unsubscribe pages `/u/...` (#249), and the HTML 404 page on any path | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
 | Everything else (API, `/api/docs`, `/health`, `/favicon.svg`) | `object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` |
 
 `script-src 'self'` with no `'unsafe-inline'`: the pages load no third-party code and carry no inline script or `on*=` attribute (#255, part 2), so an injected script does not run. `style-src` keeps `'unsafe-inline'` because the email preview is a `srcdoc` iframe, which inherits the page's policy, and email HTML relies on inline styles; `img-src https: data:` keeps remote images in previews working. A previewed email's plain `http:` images, remote fonts and remote stylesheets no longer load. The OpenAPI reference at `/api/docs` (Scalar, from a CDN with inline scripts) keeps the baseline policy.
@@ -376,6 +376,7 @@ src/pages/
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
 ├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
 ├── landing.plugin.tsx        ← Public landing page at /
+├── unsubscribe.plugin.tsx    ← Public one-click unsubscribe pages at /u/:token (#249, see suppressions.md)
 ├── static-assets.tsx         ← Serves dashboard.css / dashboard.js, content-hash URLs, 1-year cache (#255)
 ├── assets/
 │   ├── dashboard.input.css   ← Tailwind v4 source of dashboard.css (`bun run build:css`, output gitignored)
@@ -397,6 +398,7 @@ src/pages/
 │   ├── account-two-factor.tsx ← Two-factor page for the signed-in user: QR code, recovery codes, disable (#220)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
+│   ├── unsubscribe.tsx       ← Unsubscribe confirm / done / invalid / rate-limited pages: stylesheet only, no script (#249)
 │   ├── not-found.tsx         ← Custom 404 page
 │   ├── forbidden.tsx         ← 403 page for a role or session assurance too low (#222)
 │   ├── send-email.tsx        ← Compose & send email form

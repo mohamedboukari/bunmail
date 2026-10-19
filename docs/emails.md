@@ -61,6 +61,7 @@ src/modules/emails/
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
 │   ├── custom-headers.ts           ← Pure custom-header rules shared by REST, SMTP submission and the mailer (#177)
 │   ├── mailer.service.ts           ← Nodemailer direct SMTP + DKIM signing
+│   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
 │   └── stats.service.ts            ← Dashboard stats aggregation
 ├── serializations/
@@ -144,7 +145,22 @@ When an email is created, the sender's domain (from `from` address) is looked up
 
 ## List-Unsubscribe
 
-Every outbound message carries an RFC 2369 `List-Unsubscribe` header. Resolution rules:
+Every outbound message carries an RFC 2369 `List-Unsubscribe` header, built per email by `listUnsubscribeOptions` (`services/list-unsubscribe.ts`) on every send attempt.
+
+**Per-recipient one-click (#249).** When the email has exactly one recipient (one `to` address, **no cc and no bcc**) and `APP_BASE_URL` is an `https://` URL, the header names that recipient with a token (see [suppressions.md](suppressions.md#one-click-unsubscribe)):
+
+| Inbound SMTP (`SMTP_ENABLED`) | Domain `unsubscribe_email` | Header(s) emitted |
+|---|---|---|
+| on | any | `List-Unsubscribe: <mailto:unsub+{token}@{from-domain}>, <{APP_BASE_URL}/u/{token}>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
+| off | set | `List-Unsubscribe: <mailto:{unsubscribe_email}>, <{APP_BASE_URL}/u/{token}>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
+| off | `NULL` | `List-Unsubscribe: <{APP_BASE_URL}/u/{token}>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
+
+- The per-recipient URL **takes precedence over the domain's `unsubscribe_url`**: RFC 8058's POST body is only `List-Unsubscribe=One-Click`, so a static URL cannot tell who clicked. A POST to `/u/{token}` (or a message to `unsub+{token}@...`) becomes a permanent `unsubscribe` suppression for the sending key and fires `email.unsubscribed`.
+- **Why not with cc or bcc?** Every recipient of a message gets the same header, so a token there would let a cc or bcc recipient unsubscribe the `to` address. Such messages keep the static header below.
+- The token is deterministic, so retries carry the same header.
+- The `unsub+` mailto only works when the sending domain's MX points at this BunMail's inbound receiver; with `SMTP_ENABLED=true` and the MX elsewhere, that mailbox goes to your other mail host instead. Set `unsubscribe_email` and leave `SMTP_ENABLED` off in that case.
+
+**Static (every other case: cc or bcc, more than one `to`, no `https://` `APP_BASE_URL`):**
 
 | Domain config (in `domains` table) | Header(s) emitted |
 |---|---|
@@ -153,7 +169,7 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header. Resolution
 | `unsubscribe_url = "https://x.com/u/abc"` | `List-Unsubscribe: <mailto:unsubscribe@{from-domain}>, <https://x.com/u/abc>`<br>`List-Unsubscribe-Post: List-Unsubscribe=One-Click` |
 | Both set | Both forms in the same `List-Unsubscribe`, plus the `One-Click` POST header |
 
-**Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders need the URL form too: Gmail's "high volume" thresholds (>5k/day to gmail) require RFC 8058 one-click via the URL + POST headers.
+**Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders (Gmail's "high volume" threshold, more than 5k a day to Gmail) need RFC 8058 one-click that is **honored within 2 days**: send each such message to one recipient and set an `https://` `APP_BASE_URL`, so it carries the per-recipient link. A static `unsubscribe_url` only meets that requirement if your own handler can identify the recipient from the URL itself.
 
 **Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
 
@@ -223,6 +239,14 @@ Applies the same rules but keeps what passes and reports the rest (`{ name, prob
 
 #### `isReservedHeaderName(name): boolean`
 Reserved name or prefix, case-insensitive.
+
+### list-unsubscribe.ts
+
+#### `listUnsubscribeOptions(email, domain, settings?): UnsubscribeOptions | undefined`
+The `List-Unsubscribe` inputs for one email (see [List-Unsubscribe](#list-unsubscribe)): the per-recipient one-click URL (and `unsub+` mailto when inbound SMTP runs) for a single-recipient email when `APP_BASE_URL` is `https://`, else the domain's static settings. Pure apart from reading `config` when no settings are passed.
+
+#### `oneClickBaseUrl(appBaseUrl): string | null`
+`APP_BASE_URL` without a trailing slash when it is an `https://` URL with no query or fragment, else `null`.
 
 ### queue.service.ts
 

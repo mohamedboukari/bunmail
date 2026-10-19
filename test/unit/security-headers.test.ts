@@ -36,6 +36,7 @@ describe("securityHeaders", () => {
     "/dashboard/",
     "/dashboard/api-keys",
     "/dashboard/login",
+    "/u/0123456789abcdef01234567.0123456789abcdef0123456789abcdef",
   ])("%p gets the page CSP (#255, part 2)", (path) => {
     expect(
       securityHeaders(path, { httpsBaseUrl: false })["content-security-policy"],
@@ -49,6 +50,7 @@ describe("securityHeaders", () => {
     "/favicon.svg",
     "/health",
     "/dashboardx",
+    "/unsubscribe",
   ])("%p keeps the baseline CSP", (path) => {
     expect(
       securityHeaders(path, { httpsBaseUrl: false })["content-security-policy"],
@@ -61,7 +63,7 @@ describe("securityHeaders", () => {
     expect(PAGE_CSP).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   });
 
-  test.each(["/dashboard", "/dashboard/", "/dashboard/api-keys"])(
+  test.each(["/dashboard", "/dashboard/", "/dashboard/api-keys", "/u/token"])(
     "%p is never cached",
     (path) => {
       expect(securityHeaders(path, { httpsBaseUrl: false })["cache-control"]).toBe(

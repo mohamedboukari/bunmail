@@ -154,6 +154,18 @@ Because outbound mail is DKIM-signed by its sender domain, an API key that can s
 - **Cleanup interval** (#22): the in-memory rate-limit maps (per-API-key and per-IP login) are pruned every 5 minutes so distinct keys / IPs can't grow them unbounded.
 - **CORS:** none configured by default: the API is intended for server-to-server use. Operators that need browser-side access should add CORS deliberately.
 
+### Public unsubscribe endpoint (#249)
+
+`GET` and `POST /u/:token` are the only unauthenticated routes that change data (`src/pages/unsubscribe.plugin.tsx`), plus the `unsub+<token>@<domain>` mailbox on the inbound receiver. Each suppresses one recipient under one API key.
+
+- **Forgery is bounded by the HMAC.** The token is `<email id>.<MAC>`, the MAC an HMAC-SHA256 (128 bits) over email id, recipient and API key, keyed by HKDF from `DKIM_ENCRYPTION_KEY`, compared in constant time against values recomputed from the email row. Without the key, nobody can mint a token for an address, and a valid token unsubscribes only the one recipient it was sent to, under the key that sent it. Mail with cc or bcc gets no token (all recipients see one header).
+- **Enumeration and guessing** are rate limited per client IP (30 a minute, IPv6 per /64) and every failure (malformed, unknown or purged email, wrong MAC) gives the same `404` page; the token is never echoed and the address is shown masked.
+- **Prefetch and link scanners** cannot unsubscribe anyone: `GET` only renders a confirmation page; only `POST` (RFC 8058 one-click or the confirmation button) suppresses.
+- **No CSRF check on the POST**, by design: mailbox providers POST cross-origin from their servers. A forged cross-site POST needs the token and can do nothing the token holder could not.
+- **Inbound mailto:** an invalid token or a domain other than the email's sender domain is refused at `RCPT TO` (`550`), so nothing is stored and BunMail sends no bounce to a possibly forged sender; a valid one is never stored as inbound mail.
+- **Responses:** `Cache-Control: no-store`, `Referrer-Policy: no-referrer` (keeps the token out of `Referer`), `X-Robots-Tag: noindex`, the page CSP with no script, every interpolation escaped.
+- **Key rotation:** rotating `DKIM_ENCRYPTION_KEY` invalidates every link already sent (SECURITY.md, Rotation).
+
 ### Webhooks
 
 - Outgoing webhook payloads are HMAC-SHA256 signed using the per-webhook secret. The signature covers `<unix-timestamp>.<raw-body>`; the timestamp is shipped in the `X-BunMail-Timestamp` header and the signature in `X-BunMail-Signature` (#43). Each retry attempt is signed with a fresh timestamp, so a replayed delivery from yesterday fails the freshness check on the receiver. Recommended consumer check: `|now - timestamp| < 5 min`.

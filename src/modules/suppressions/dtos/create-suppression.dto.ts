@@ -17,8 +17,8 @@ export const createSuppressionDto = t.Object({
 
   /**
    * Why. `bounce` and `unsubscribe` are typically populated by automated
-   * paths (auto-suppression in #24, one-click unsubscribe endpoint in a
-   * future ticket); manual additions usually come in as `manual`.
+   * paths (auto-suppression in #24, one-click unsubscribe in #249);
+   * manual additions usually come in as `manual`.
    */
   reason: t.Union(
     SUPPRESSION_REASONS.map((r) => t.Literal(r)),

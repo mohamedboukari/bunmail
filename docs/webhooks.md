@@ -79,12 +79,13 @@ Indexes:
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification: DSN parsed by the bounce module, original `emails` row marked `bounced`, recipient auto-suppressed (#24). See [docs/bounces.md](bounces.md). |
 | `email.complained` | A recipient marked the message as spam. Reserved for future Feedback Loop (FBL) processing: wiring TBD. |
 | `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |
+| `email.unsubscribed` | A recipient used the per-recipient one-click unsubscribe link or `unsub+` mailto, and a permanent `unsubscribe` suppression was created (#249). Fires once per suppression: repeated requests fire nothing. See [suppressions.md](suppressions.md#one-click-unsubscribe). |
 
 ### Who receives an event
 
 Events are scoped to the API key that owns the webhook:
 
-- `email.queued`, `email.sent`, `email.failed`, `email.bounced`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
+- `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.unsubscribed`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
 - `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 - Webhooks of a **revoked** key receive nothing, and deliveries already queued for them are marked `failed` instead of sent.
 - Before dispatch was scoped, events could reach other keys' webhooks. Migration `0014` deletes any such deliveries left over in `webhook_deliveries` on upgrade.
@@ -123,6 +124,23 @@ Events are scoped to the API key that owns the webhook:
   }
 }
 ```
+
+`email.unsubscribed` (#249):
+
+```json
+{
+  "event": "email.unsubscribed",
+  "timestamp": "2026-10-19T09:30:00.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "recipient": "user@example.com",
+    "source": "one_click",
+    "unsubscribedAt": "2026-10-19T09:30:00.000Z"
+  }
+}
+```
+
+`source` is `"one_click"` (RFC 8058 POST from the mailbox provider), `"link"` (the confirmation page's button) or `"mailto"` (mail to `unsub+<token>@<domain>`). `emailId` is the email whose header was used; `recipient` is lowercased.
 
 The `suppressionId` lets receivers cross-reference the auto-created suppression row. `bounceType` is `"hard"` (5.x.x) or `"soft"` (4.x.x). A second soft bounce for the same recipient within 24h escalates to `"hard"`: the webhook will fire with `bounceType: "hard"` even though the inbound DSN's status code was a 4.x.x.
 

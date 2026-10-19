@@ -49,3 +49,18 @@ export interface AddFromBounceInput {
   /** Soft-bounce backoff window. Defaults to permanent for hard bounces. */
   expiresAt?: Date | null;
 }
+
+/** How an unsubscribe request arrived (#249); also the webhook's `source`. */
+export type UnsubscribeSource = "one_click" | "link" | "mailto";
+
+/**
+ * Input of the unsubscribe path (#249). Built only from a verified
+ * unsubscribe token, never from request fields.
+ */
+export interface AddFromUnsubscribeInput {
+  apiKeyId: string;
+  email: string;
+  /** The email whose `List-Unsubscribe` link or mailto was used. */
+  emailId: string;
+  source: UnsubscribeSource;
+}

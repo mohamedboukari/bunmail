@@ -11,7 +11,8 @@ import { Elysia } from "elysia";
  * Two Content-Security-Policies, chosen by path:
  *
  * - {@link PAGE_CSP} on the pages BunMail renders itself: the landing page
- *   (`/`) and the dashboard (`/dashboard...`), plus the HTML 404 page,
+ *   (`/`), the dashboard (`/dashboard...`) and the unsubscribe pages
+ *   (`/u/...`, #249), plus the HTML 404 page,
  *   which sets it on its own response (any path can 404). Since #255 part
  *   2 those pages load only BunMail's own stylesheet and script (no
  *   Tailwind CDN, no inline script, no `on*=` attribute), so
@@ -51,6 +52,11 @@ function isDashboardPath(pathname: string): boolean {
   return pathname === "/dashboard" || pathname.startsWith("/dashboard/");
 }
 
+/** True for the public unsubscribe pages (`/u/<token>`, #249). */
+function isUnsubscribePath(pathname: string): boolean {
+  return pathname.startsWith("/u/");
+}
+
 /** One year: the usual HSTS lifetime. No `includeSubDomains`: other subdomains may not serve HTTPS. */
 const HSTS = "max-age=31536000";
 
@@ -62,7 +68,8 @@ const HSTS = "max-age=31536000";
  *   HTTP anyway, and it must not pin a host that has no certificate.
  * - `Cache-Control: no-store` on the dashboard (`/dashboard/...`): its
  *   pages show mail, keys and one-time secrets and must not stay in a
- *   browser or proxy cache. The landing page, favicon and API keep their
+ *   browser or proxy cache. Same for the unsubscribe pages (`/u/...`,
+ *   #249), whose URL carries a token. The landing page, favicon and API keep their
  *   own caching, and so do the dashboard's static assets, whose handler
  *   overrides it (`static-assets.tsx`).
  */
@@ -72,14 +79,16 @@ export function securityHeaders(
 ): Record<string, string> {
   const headers: Record<string, string> = {
     "content-security-policy":
-      pathname === "/" || isDashboardPath(pathname) ? PAGE_CSP : BASELINE_CSP,
+      pathname === "/" || isDashboardPath(pathname) || isUnsubscribePath(pathname)
+        ? PAGE_CSP
+        : BASELINE_CSP,
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     /** Not `no-referrer`: that makes browsers send `Origin: null` on same-origin POSTs (#215). */
     "referrer-policy": "same-origin",
   };
   if (opts.httpsBaseUrl) headers["strict-transport-security"] = HSTS;
-  if (isDashboardPath(pathname)) {
+  if (isDashboardPath(pathname) || isUnsubscribePath(pathname)) {
     headers["cache-control"] = "no-store";
   }
   return headers;
