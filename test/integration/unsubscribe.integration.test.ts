@@ -56,7 +56,7 @@ beforeEach(async () => {
       status: "sent",
     })
   ).id;
-  token = mintUnsubscribeToken({ emailId, recipient: RECIPIENT, apiKeyId }) ?? "";
+  token = mintUnsubscribeToken({ emailId, recipient: RECIPIENT }) ?? "";
   expect(token).not.toBe("");
 });
 
@@ -242,22 +242,17 @@ describe("invalid tokens", () => {
       cc: "boss@example.org",
     });
     const ccToken =
-      mintUnsubscribeToken({ emailId: ccEmail.id, recipient: RECIPIENT, apiKeyId }) ?? "";
+      mintUnsubscribeToken({ emailId: ccEmail.id, recipient: RECIPIENT }) ?? "";
     const unknown =
       mintUnsubscribeToken({
         emailId: "msg_ffffffffffffffffffffffff",
         recipient: RECIPIENT,
-        apiKeyId,
       }) ?? "";
-    const otherKey =
-      mintUnsubscribeToken({ emailId, recipient: RECIPIENT, apiKeyId: "key_other" }) ??
-      "";
 
     const invalid = [
       flip(token, 3),
       flip(token, 40),
       unknown,
-      otherKey,
       ccToken,
       "not-a-token",
       "a".repeat(5000),
@@ -343,7 +338,7 @@ describe("List-Unsubscribe on a queued email", () => {
     const block = info.message.toString().split("\r\n\r\n")[0] ?? "";
 
     const queuedToken =
-      mintUnsubscribeToken({ emailId: queued.id, recipient: RECIPIENT, apiKeyId }) ?? "";
+      mintUnsubscribeToken({ emailId: queued.id, recipient: RECIPIENT }) ?? "";
     expect(block).toContain(`<${BASE}/u/${queuedToken}>`);
     expect(block).toContain(`unsub+${queuedToken}@acme.io`);
     expect(block).not.toContain("https://acme.io/static");

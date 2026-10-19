@@ -16,7 +16,6 @@ import { mintUnsubscribeToken } from "../../src/modules/suppressions/services/un
 
 const email: ListUnsubscribeEmail = {
   id: "msg_0123456789abcdef01234567",
-  apiKeyId: "key_aaaaaaaaaaaaaaaaaaaaaaaa",
   fromAddress: "hello@acme.io",
   toAddress: "user@example.org",
   cc: null,
@@ -30,7 +29,6 @@ const withoutSmtp: ListUnsubscribeSettings = { appBaseUrl: BASE, inboundSmtp: fa
 const token = mintUnsubscribeToken({
   emailId: email.id,
   recipient: email.toAddress,
-  apiKeyId: email.apiKeyId,
 });
 
 /** The extra headers the mailer would write for these options. */

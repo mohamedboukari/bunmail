@@ -16,9 +16,11 @@ import { parseRecipients } from "../../../utils/recipients.ts";
  * - The email id is `msg_` plus 24 lowercase hex characters
  *   (`generateId`); the token carries the hex part only.
  * - The MAC is HMAC-SHA256 over
- *   `unsubscribe:v1:<email id>:<lowercased recipient>:<api key id>`,
- *   truncated to 128 bits (32 hex characters). The prefix separates it
- *   from any other HMAC made with a key from the same master.
+ *   `unsubscribe:v1:<email id>:<lowercased recipient>`, truncated to 128
+ *   bits (32 hex characters). The prefix separates it from any other HMAC
+ *   made with a key from the same master. The sending API key is not part
+ *   of it: the token verifies only against its own email row, and that row
+ *   fixes the key, so the key adds nothing an attacker could vary.
  * - Lowercase hex only: a receiving MTA may fold the case of a local part,
  *   and a token read back in any case still verifies.
  * - `unsub+` plus the token is 63 characters, inside the 64 a local part
@@ -54,11 +56,10 @@ export const UNSUBSCRIBE_LOCAL_PREFIX = "unsub+";
 /** `unsub+<token>@domain`, case-insensitive; captures the token. */
 const UNSUBSCRIBE_ADDRESS_RE = /^unsub\+([^@]+)@/i;
 
-/** What a token names: one email, its one recipient, and the sending key. */
+/** What a token names: one email and its one recipient. */
 export interface UnsubscribeTokenSubject {
   emailId: string;
   recipient: string;
-  apiKeyId: string;
 }
 
 /** Derives the token key from a master key (exported for the rotation test). */
@@ -80,7 +81,6 @@ function computeMac(subject: UnsubscribeTokenSubject, key: Buffer): Buffer {
     MAC_CONTEXT,
     subject.emailId,
     subject.recipient.trim().toLowerCase(),
-    subject.apiKeyId,
   ].join(":");
   return createHmac("sha256", key).update(input).digest().subarray(0, MAC_BYTES);
 }

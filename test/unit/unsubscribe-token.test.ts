@@ -22,7 +22,6 @@ import { generateId } from "../../src/utils/id.ts";
 const subject: UnsubscribeTokenSubject = {
   emailId: "msg_0123456789abcdef01234567",
   recipient: "user@example.org",
-  apiKeyId: "key_aaaaaaaaaaaaaaaaaaaaaaaa",
 };
 
 /** Mints a token, failing the test if none comes back. */
@@ -79,12 +78,12 @@ describe("unsubscribe token", () => {
     }
   });
 
-  test("a different recipient or API key fails", () => {
+  test("a different recipient or email fails", () => {
     const token = mint();
     expect(verifies(token, { ...subject, recipient: "other@example.org" })).toBe(false);
-    expect(
-      verifies(token, { ...subject, apiKeyId: "key_bbbbbbbbbbbbbbbbbbbbbbbb" }),
-    ).toBe(false);
+    expect(verifies(token, { ...subject, emailId: "msg_ffffffffffffffffffffffff" })).toBe(
+      false,
+    );
   });
 
   test("a token minted under another key (DKIM_ENCRYPTION_KEY rotated) fails", () => {

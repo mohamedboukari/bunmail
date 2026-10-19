@@ -116,7 +116,7 @@ Unsubscribe requests become suppressions (#249). Outgoing mail with exactly one 
 
 **Token** (`services/unsubscribe-token.ts`): `<email id hex>.<MAC>`, stateless (no table).
 
-- MAC: HMAC-SHA256 over `unsubscribe:v1:<email id>:<lowercased recipient>:<api key id>`, truncated to 128 bits.
+- MAC: HMAC-SHA256 over `unsubscribe:v1:<email id>:<lowercased recipient>`, truncated to 128 bits. The sending API key is not part of it: the token verifies only against its own email row, which fixes the key.
 - Key: HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` with a fixed label, so there is no new secret to configure. **Rotating `DKIM_ENCRYPTION_KEY` invalidates every unsubscribe link already sent** (SECURITY.md, Rotation).
 - Lowercase hex, 57 characters; `unsub+<token>` is 63, inside RFC 5321's 64-character local part. Verification is case-insensitive (an MTA may fold the case of a local part).
 - Verification loads the email row by id, recomputes the MAC from the row (recipient and key) and compares in constant time. Malformed, unknown or purged email, an email with cc or bcc, a wrong MAC: all the same "not valid" result. No expiry other than the email row's existence (soft-deleted emails still work until purged).

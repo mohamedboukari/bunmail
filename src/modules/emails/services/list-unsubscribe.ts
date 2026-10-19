@@ -35,7 +35,6 @@ import type { UnsubscribeOptions } from "./mailer.service.ts";
 /** The parts of an email row the header is built from. */
 export interface ListUnsubscribeEmail {
   id: string;
-  apiKeyId: string;
   fromAddress: string;
   toAddress: string;
   cc: string | null;
@@ -99,10 +98,7 @@ export function listUnsubscribeOptions(
   const senderDomain = email.fromAddress.split("@")[1]?.trim().toLowerCase();
   if (base === null || recipient === null || !senderDomain) return staticOptions(domain);
 
-  const token = mintUnsubscribeToken(
-    { emailId: email.id, recipient, apiKeyId: email.apiKeyId },
-    settings.tokenKey,
-  );
+  const token = mintUnsubscribeToken({ emailId: email.id, recipient }, settings.tokenKey);
   if (token === null) return staticOptions(domain);
 
   return {

@@ -57,13 +57,13 @@ export async function resolveUnsubscribeToken(
   const recipient = soleRecipient(row.toAddress, row.cc, row.bcc);
   if (recipient === null) return null;
 
-  const subject = { emailId: parsed.emailId, recipient, apiKeyId: row.apiKeyId };
+  const subject = { emailId: parsed.emailId, recipient };
   if (!unsubscribeMacMatches(subject, parsed.mac, key)) return null;
 
   const senderDomain = row.fromAddress.split("@")[1]?.trim().toLowerCase();
   if (!senderDomain) return null;
 
-  return { ...subject, senderDomain };
+  return { ...subject, apiKeyId: row.apiKeyId, senderDomain };
 }
 
 /**
