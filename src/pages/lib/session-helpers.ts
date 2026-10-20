@@ -1,7 +1,12 @@
 import type { Context } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
-import { clearSessionCookie, deviceSetCookie, sessionSetCookie } from "../session.ts";
+import {
+  clearSessionCookie,
+  deviceSetCookie,
+  sessionSetCookie,
+  webAuthnSetCookie,
+} from "../session.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { SESSION_ABSOLUTE_SECONDS } from "../../modules/users/services/session-policy.service.ts";
 import { DEVICE_COOKIE_MAX_AGE_SECONDS } from "../../modules/users/services/device-policy.service.ts";
@@ -40,7 +45,14 @@ export function issueSession(
  * every password sign-in.
  */
 export function issueDeviceCookie(set: Context["set"], value: string): void {
-  const cookie = deviceSetCookie(value, secureCookies(), DEVICE_COOKIE_MAX_AGE_SECONDS);
+  appendSetCookie(
+    set,
+    deviceSetCookie(value, secureCookies(), DEVICE_COOKIE_MAX_AGE_SECONDS),
+  );
+}
+
+/** Adds one `Set-Cookie` next to whatever the response already carries. */
+function appendSetCookie(set: Context["set"], cookie: string): void {
   const current = set.headers["set-cookie"];
   if (current === undefined) {
     set.headers["set-cookie"] = cookie;
@@ -50,6 +62,24 @@ export function issueDeviceCookie(set: Context["set"], value: string): void {
       cookie,
     ];
   }
+}
+
+/**
+ * Sets the `bm_wa` cookie (#223) that binds a passwordless passkey
+ * challenge to this browser, for `maxAgeSec` (the challenge's lifetime).
+ * Appended, so a session cookie set on the same response stays.
+ */
+export function issueWebAuthnCookie(
+  set: Context["set"],
+  value: string,
+  maxAgeSec: number,
+): void {
+  appendSetCookie(set, webAuthnSetCookie(value, secureCookies(), maxAgeSec));
+}
+
+/** Removes the `bm_wa` cookie (#223): its challenge is spent. Appended. */
+export function clearWebAuthnCookie(set: Context["set"]): void {
+  appendSetCookie(set, webAuthnSetCookie("", secureCookies(), 0));
 }
 
 /** Removes the `bm_session` cookie from the browser (same attributes, Max-Age=0). */

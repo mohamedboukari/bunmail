@@ -1,0 +1,2 @@
+ALTER TABLE "user_credentials" ADD COLUMN "transports" varchar(255);--> statement-breakpoint
+CREATE UNIQUE INDEX "user_credentials_passkey_id_unique" ON "user_credentials" USING btree ("provider_account_id") WHERE type = 'passkey';

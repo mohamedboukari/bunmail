@@ -3,6 +3,7 @@ import {
   LOGIN_PASSWORD_MAX_LENGTH,
 } from "../../modules/users/services/session-policy.service.ts";
 import { PageAssets } from "../static-assets.tsx";
+import { PasskeyCeremony } from "../components/passkey-ceremony.tsx";
 
 /**
  * Login page: standalone (no sidebar navigation).
@@ -16,8 +17,19 @@ import { PageAssets } from "../static-assets.tsx";
  * @param disabled When true (login rate-limited, #109), both inputs and
  *                 the submit button are disabled so it's clear that
  *                 retrying won't help until the lockout window passes.
+ * @param passkey  When true (passkeys are on, `APP_BASE_URL` set, #223),
+ *                 a "Sign in with a passkey" button: a discoverable
+ *                 passkey, so no email is typed.
  */
-export function LoginPage({ error, disabled }: { error?: string; disabled?: boolean }) {
+export function LoginPage({
+  error,
+  disabled,
+  passkey,
+}: {
+  error?: string;
+  disabled?: boolean;
+  passkey?: boolean;
+}) {
   return (
     <html lang="en" class="h-full">
       <head>
@@ -98,6 +110,23 @@ export function LoginPage({ error, disabled }: { error?: string; disabled?: bool
                 Sign in
               </button>
             </form>
+
+            {passkey && !disabled && (
+              <PasskeyCeremony
+                mode="get"
+                optionsUrl="/dashboard/login/passkey/options"
+                finishUrl="/dashboard/login/passkey"
+                class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800"
+              >
+                <button
+                  type="button"
+                  data-passkey-start
+                  class="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                >
+                  Sign in with a passkey
+                </button>
+              </PasskeyCeremony>
+            )}
           </div>
 
           {/* First sign-in hint: static text, no lookup behind it */}

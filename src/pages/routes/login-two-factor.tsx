@@ -1,3 +1,4 @@
+import { PasskeyCeremony } from "../components/passkey-ceremony.tsx";
 import { SetupShell, INPUT_CLASS, LABEL_CLASS } from "./setup.tsx";
 
 /** Longest value the code field takes: a recovery code with spaces to spare. */
@@ -5,15 +6,27 @@ export const TWO_FACTOR_CODE_MAX_LENGTH = 64;
 
 /**
  * The second login step (#220): standalone like the login page, reached
- * only with a `pending` session (the password was right). One field takes
- * either the six-digit code from the authenticator app or one of the
- * account's recovery codes. "Use another account" signs the pending
- * session out (`POST /dashboard/logout`).
+ * only with a `pending` session (the password was right). It offers the
+ * factors the account has: the code form (one field takes either the
+ * six-digit code from the authenticator app or one of the account's
+ * recovery codes) when it has TOTP, and "Use a passkey" (#223) when it
+ * has a passkey and passkeys are on. "Use another account" signs the
+ * pending session out (`POST /dashboard/logout`).
  *
- * @param error Optional message shown above the form (the same for every
- *              wrong, expired or reused code).
+ * @param error   Optional message shown above the form (the same for every
+ *                wrong, expired or reused code).
+ * @param totp    The account has TOTP: show the code form.
+ * @param passkey The account has a passkey and passkeys are on: show the button.
  */
-export function LoginTwoFactorPage({ error }: { error?: string }) {
+export function LoginTwoFactorPage({
+  error,
+  totp,
+  passkey,
+}: {
+  error?: string;
+  totp: boolean;
+  passkey: boolean;
+}) {
   return (
     <SetupShell title="Two-factor authentication" subtitle="One more step to sign in">
       {!!error && (
@@ -25,35 +38,61 @@ export function LoginTwoFactorPage({ error }: { error?: string }) {
         </div>
       )}
 
-      <form method="POST" action="/dashboard/login/two-factor">
-        <label for="code" class={LABEL_CLASS}>
-          Authentication code
-        </label>
-        <input
-          type="text"
-          id="code"
-          name="code"
-          inputmode="text"
-          autocomplete="one-time-code"
-          autocapitalize="none"
-          spellcheck="false"
-          maxlength={String(TWO_FACTOR_CODE_MAX_LENGTH)}
-          required
-          autofocus
-          class={INPUT_CLASS}
-          placeholder="123456"
-        />
-        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
-          The 6-digit code from your authenticator app. Lost your phone? Enter one of your
-          recovery codes instead.
-        </p>
-        <button
-          type="submit"
-          class="w-full mt-4 px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+      {passkey && (
+        <PasskeyCeremony
+          mode="get"
+          optionsUrl="/dashboard/login/two-factor/passkey/options"
+          finishUrl="/dashboard/login/two-factor/passkey"
+          class={totp ? "mb-4 pb-4 border-b border-gray-200 dark:border-gray-800" : ""}
         >
-          Verify
-        </button>
-      </form>
+          <button
+            type="button"
+            data-passkey-start
+            class="w-full px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+          >
+            Use a passkey
+          </button>
+        </PasskeyCeremony>
+      )}
+
+      {!totp && !passkey && (
+        <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          This account signs in with a passkey, but passkeys are switched off on this
+          server (APP_BASE_URL is not set). Ask an administrator.
+        </p>
+      )}
+
+      {totp && (
+        <form method="POST" action="/dashboard/login/two-factor">
+          <label for="code" class={LABEL_CLASS}>
+            Authentication code
+          </label>
+          <input
+            type="text"
+            id="code"
+            name="code"
+            inputmode="text"
+            autocomplete="one-time-code"
+            autocapitalize="none"
+            spellcheck="false"
+            maxlength={String(TWO_FACTOR_CODE_MAX_LENGTH)}
+            required
+            autofocus
+            class={INPUT_CLASS}
+            placeholder="123456"
+          />
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
+            The 6-digit code from your authenticator app. Lost your phone? Enter one of
+            your recovery codes instead.
+          </p>
+          <button
+            type="submit"
+            class="w-full mt-4 px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+          >
+            Verify
+          </button>
+        </form>
+      )}
 
       <form method="POST" action="/dashboard/logout" class="mt-3 text-center">
         <button

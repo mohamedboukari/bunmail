@@ -2,18 +2,11 @@ import { t, type Context } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
 import type {
-  AttemptLimiter,
   DashboardAuth,
   PasswordChangeRefusal,
   TwoFactorRefusal,
 } from "../../modules/users/types/user.types.ts";
-import {
-  resolveClientIp,
-  isLoginRateLimited,
-  recordFailedLogin,
-  clearLoginAttempts,
-  rateLimitBucket,
-} from "../../middleware/login-rate-limit.ts";
+import { resolveClientIp } from "../../middleware/login-rate-limit.ts";
 import { AccountPasswordPage } from "../routes/account-password.tsx";
 import { AccountSessionsPage } from "../routes/account-sessions.tsx";
 import { AccountTwoFactorPage } from "../routes/account-two-factor.tsx";
@@ -31,6 +24,7 @@ import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { passwordChangeLimiter } from "../lib/password-limiter.ts";
 import {
   twoFactorSessionLimiter,
   type TwoFactorLimiter,
@@ -68,33 +62,6 @@ const REFUSAL: Record<
     status: 409,
   },
 };
-
-/**
- * Failed-attempt budget for the current password check (#279): the login
- * limiter's primitives and settings (`DASHBOARD_LOGIN_RATE_LIMIT_*`), like
- * the ownership transfer's `transferLimiter`, with keys of its own, one
- * per account and one per client IP, so neither a stolen session nor one
- * address can guess faster than a login could. The `password:` prefix
- * keeps them apart from the login and transfer keys. No-op when the
- * limiter is off.
- */
-function passwordChangeLimiter(userId: string, ip: string): AttemptLimiter {
-  const { enabled, maxAttempts, windowSec } = config.dashboard.loginRateLimit;
-  const windowMs = windowSec * 1000;
-  /** IPv6 clients by /64, like the login (#256). */
-  const keys = [`password:user:${userId}`, `password:ip:${rateLimitBucket(ip)}`];
-  return {
-    isLimited: () =>
-      enabled &&
-      keys.some((key) => isLoginRateLimited(key, maxAttempts, windowMs).limited),
-    record: () => {
-      if (enabled) for (const key of keys) recordFailedLogin(key, windowMs);
-    },
-    clear: () => {
-      for (const key of keys) clearLoginAttempts(key);
-    },
-  };
-}
 
 /* ─── Active sessions helpers (#281) ─── */
 

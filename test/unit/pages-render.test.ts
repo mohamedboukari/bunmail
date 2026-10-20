@@ -51,6 +51,7 @@ import { AccountPasswordPage } from "../../src/pages/routes/account-password.tsx
 import { AccountSessionsPage } from "../../src/pages/routes/account-sessions.tsx";
 import { AccountTwoFactorPage } from "../../src/pages/routes/account-two-factor.tsx";
 import { LoginTwoFactorPage } from "../../src/pages/routes/login-two-factor.tsx";
+import { AccountPasskeysPage } from "../../src/pages/routes/account-passkeys.tsx";
 import { QrCode } from "../../src/pages/components/qr-code.tsx";
 import { FlashMessage } from "../../src/pages/components/flash-message.tsx";
 import {
@@ -766,7 +767,11 @@ describe("Two-factor pages (#220)", () => {
   const uri = `otpauth://totp/BunMail:owner%40example.com?secret=${secret}&issuer=BunMail`;
 
   test("LoginTwoFactorPage: the code form, a cancel that signs out, the error escaped", async () => {
-    const html = await LoginTwoFactorPage({ error: "<img src=x onerror=alert(1)>" });
+    const html = await LoginTwoFactorPage({
+      error: "<img src=x onerror=alert(1)>",
+      totp: true,
+      passkey: false,
+    });
     expect(html).toContain('action="/dashboard/login/two-factor"');
     expect(html).toContain('name="code"');
     expect(html).toContain('autocomplete="one-time-code"');
@@ -997,5 +1002,78 @@ describe("API keys page: the Make admin button (#219)", () => {
     expect(html).not.toContain("/dashboard/api-keys/key_members/admin");
     /** Making an admin key restricted always stays possible. */
     expect(html).toContain("/dashboard/api-keys/key_member_admin/admin");
+  });
+});
+
+describe("Passkey pages (#223)", () => {
+  test("LoginPage: the passkey button only when passkeys are on, bound by data attributes", async () => {
+    const off = await LoginPage({});
+    expect(off).not.toContain("Sign in with a passkey");
+    const on = await LoginPage({ passkey: true });
+    expect(on).toContain("Sign in with a passkey");
+    expect(on).toContain('data-passkey="get"');
+    expect(on).toContain('data-passkey-options="/dashboard/login/passkey/options"');
+    expect(on).toContain('action="/dashboard/login/passkey"');
+    expect(on).toContain('name="credential"');
+    expect(on).not.toMatch(/\son[a-z]+=/i);
+    /** Rate-limited: no passkey button either. */
+    expect(await LoginPage({ passkey: true, disabled: true })).not.toContain(
+      "Sign in with a passkey",
+    );
+  });
+
+  test("LoginTwoFactorPage offers exactly the account's factors", async () => {
+    const both = await LoginTwoFactorPage({ totp: true, passkey: true });
+    expect(both).toContain("Use a passkey");
+    expect(both).toContain('name="code"');
+    const passkeyOnly = await LoginTwoFactorPage({ totp: false, passkey: true });
+    expect(passkeyOnly).toContain("Use a passkey");
+    expect(passkeyOnly).not.toContain('name="code"');
+    expect(passkeyOnly).toContain('action="/dashboard/login/two-factor/passkey"');
+    const totpOnly = await LoginTwoFactorPage({ totp: true, passkey: false });
+    expect(totpOnly).not.toContain("Use a passkey");
+    const neither = await LoginTwoFactorPage({ totp: false, passkey: false });
+    expect(neither).toContain("passkeys are switched off on this");
+    expect(neither).toContain('action="/dashboard/logout"');
+  });
+
+  test("AccountPasskeysPage: names escaped, dates, the add form, off and required notices", async () => {
+    const passkeys = [
+      {
+        id: "crd_a",
+        name: "<img src=x onerror=alert(1)>",
+        createdAt: new Date(Date.UTC(2026, 9, 1)),
+        lastUsedAt: null,
+      },
+      {
+        id: "crd_b",
+        name: "YubiKey",
+        createdAt: new Date(Date.UTC(2026, 9, 2)),
+        lastUsedAt: new Date(Date.UTC(2026, 9, 3)),
+      },
+    ];
+    const html = await AccountPasskeysPage({ passkeys, enabled: true, required: false });
+    expect(html).toContain(">&lt;img src=x onerror=alert(1)&gt;</p>");
+    expect(html).not.toContain("<img src=x onerror=alert(1)></p>");
+    /** In the rename field's value only `"` and `&` matter: the value is a quoted attribute. */
+    expect(html).toContain('value="<img src=x onerror=alert(1)>"');
+    expect(html).toContain("Last used never");
+    expect(html).toContain('datetime="2026-10-03T00:00:00.000Z"');
+    expect(html).toContain('action="/dashboard/account/passkeys/crd_a/rename"');
+    expect(html).toContain('action="/dashboard/account/passkeys/crd_b/delete"');
+    expect(html).toContain('data-passkey="create"');
+    expect(html).toContain('data-passkey-options="/dashboard/account/passkeys/options"');
+    expect(html).not.toContain("Your role requires");
+    expect(html).not.toContain("switched off");
+
+    const off = await AccountPasskeysPage({
+      passkeys: [],
+      enabled: false,
+      required: true,
+    });
+    expect(off).toContain("Passkeys are switched off on this server");
+    expect(off).toContain("Your role requires a second factor");
+    expect(off).not.toContain('data-passkey="create"');
+    expect(off).toContain("No passkeys yet.");
   });
 });

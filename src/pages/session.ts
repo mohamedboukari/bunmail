@@ -21,6 +21,13 @@ export const SESSION_COOKIE = "bm_session";
 export const DEVICE_COOKIE = "bm_device";
 
 /**
+ * Name of the passwordless passkey cookie (#223): a short random value
+ * binding a sign-in challenge to this browser. Not a credential: it opens
+ * nothing by itself, and its challenge is single-use.
+ */
+export const WEBAUTHN_COOKIE = "bm_wa";
+
+/**
  * Cookie attributes shared by every `Set-Cookie` of the session (#133):
  * `HttpOnly` (no JS access), `SameSite=Lax` (baseline CSRF defense),
  * `Secure` when requested (production: never over plaintext HTTP), and
@@ -102,4 +109,30 @@ export function deviceSetCookie(
   maxAgeSec: number,
 ): string {
   return `${DEVICE_COOKIE}=${value}; ${attributes(secure)}; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
+}
+
+/**
+ * Reads the passkey challenge cookie (#223) from a `Cookie` header. The
+ * value is returned as sent; the caller checks its shape.
+ */
+export function readWebAuthnCookie(cookieHeader: string | null): string | undefined {
+  return readCookie(cookieHeader, WEBAUTHN_COOKIE);
+}
+
+/**
+ * `Set-Cookie` value of the passkey challenge cookie (#223): `HttpOnly`,
+ * `SameSite=Strict` (only this site's own form post carries it back),
+ * `Secure` when asked, `Path=/dashboard`, and as long as the challenge
+ * lives.
+ *
+ * @param value     - The binding (43 base64url characters).
+ * @param secure    - Add `Secure` (production).
+ * @param maxAgeSec - Cookie lifetime in seconds.
+ */
+export function webAuthnSetCookie(
+  value: string,
+  secure: boolean,
+  maxAgeSec: number,
+): string {
+  return `${WEBAUTHN_COOKIE}=${value}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}; Path=/dashboard; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
 }

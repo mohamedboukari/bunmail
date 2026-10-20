@@ -38,6 +38,7 @@ export type AuditActor =
 export type AuditTargetType =
   | "user"
   | "session"
+  | "passkey"
   | "invitation"
   | "password_reset"
   | "owner_setup"
@@ -78,10 +79,13 @@ export type AuditLoginFailureReason =
   | "wrong_password"
   | "input_too_long"
   | "credential_replaced"
-  | "wrong_code";
+  | "wrong_code"
+  | "passkey_rejected"
+  | "unknown_passkey"
+  | "passkey_counter_regressed";
 
-/** How a sign-in was completed. */
-type AuditSignInMethod = "password" | "totp" | "recovery_code";
+/** How a sign-in was completed (`passkey`: WebAuthn, alone or as the second step, #223). */
+type AuditSignInMethod = "password" | "totp" | "recovery_code" | "passkey";
 
 /** The role an account or invitation carries. */
 type AuditRole = "owner" | "admin" | "member";
@@ -93,7 +97,8 @@ type AuditRole = "owner" | "admin" | "member";
 export interface AuditMetadataByAction {
   "auth.login.succeeded": { method: AuditSignInMethod; recoveryCodesLeft?: number };
   "auth.login.failed": {
-    step: "password" | "two_factor";
+    /** `passkey`: a passwordless sign-in with a passkey (#223). */
+    step: "password" | "two_factor" | "passkey";
     reason: AuditLoginFailureReason;
   };
   "auth.login.rate_limited": { retryAfterSec: number };
@@ -106,7 +111,15 @@ export interface AuditMetadataByAction {
   "auth.two_factor.enabled": { sessionsRevoked: number };
   "auth.two_factor.disabled": { method: "totp" | "recovery_code" };
   "auth.two_factor.recovery_codes_regenerated": null;
-  "auth.two_factor.removed": { via: "password_reset" | "owner_setup" };
+  "auth.two_factor.removed": {
+    via: "password_reset" | "owner_setup";
+    /** Whether the TOTP credential went, and how many passkeys (#223). */
+    totp: boolean;
+    passkeys: number;
+  };
+  "auth.passkey.added": { sessionsRevoked: number };
+  "auth.passkey.removed": null;
+  "auth.passkey.counter_regressed": { storedCounter: number; receivedCounter: number };
   "auth.password.changed": { sessionsRevoked: number };
   "auth.password_reset.issued": { expiresAt: string; linksReplaced: number };
   "auth.password_reset.completed": { issuedBy: string; sessionsRevoked: number };
@@ -160,7 +173,11 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "auth.two_factor.enabled": "Two-factor authentication enabled",
   "auth.two_factor.disabled": "Two-factor authentication disabled",
   "auth.two_factor.recovery_codes_regenerated": "Recovery codes regenerated",
-  "auth.two_factor.removed": "Two-factor authentication removed by a reset",
+  "auth.two_factor.removed": "Second factors removed by a reset",
+  "auth.passkey.added": "Passkey added",
+  "auth.passkey.removed": "Passkey removed",
+  "auth.passkey.counter_regressed":
+    "Passkey refused: signature counter went back (possible clone)",
   "auth.password.changed": "Password changed",
   "auth.password_reset.issued": "Password reset link issued",
   "auth.password_reset.completed": "Password reset completed",

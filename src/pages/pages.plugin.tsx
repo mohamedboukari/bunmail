@@ -5,6 +5,7 @@ import { withSessionGuard } from "./lib/session-guard.ts";
 import { authPages } from "./plugins/auth.plugin.tsx";
 import { homePages } from "./plugins/home.plugin.tsx";
 import { accountPages } from "./plugins/account.plugin.tsx";
+import { passkeyAccountPages, passkeyLoginPages } from "./plugins/passkeys.plugin.tsx";
 import { emailPages } from "./plugins/emails.plugin.tsx";
 import { apiKeyPages } from "./plugins/api-keys.plugin.tsx";
 import { invitationPages } from "./plugins/invitations.plugin.tsx";
@@ -28,6 +29,10 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  *                                    (`pending`, then the second step, for a 2FA account, #220)
  * - GET  /dashboard/login/two-factor → second step form (public, needs a pending session, #220)
  * - POST /dashboard/login/two-factor → check the TOTP or recovery code, mfa session (public, #220)
+ * - POST /dashboard/login/passkey/options → passwordless passkey options, bm_wa cookie (public, #223)
+ * - POST /dashboard/login/passkey   → verify the passkey, open an mfa session (public, #223)
+ * - POST /dashboard/login/two-factor/passkey/options → second-step passkey options (public, pending session, #223)
+ * - POST /dashboard/login/two-factor/passkey → second step with a passkey, mfa session (public, #223)
  * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
@@ -48,6 +53,11 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/account/two-factor/confirm → first code: 2FA on, recovery codes, other sessions out (any role, #220)
  * - POST /dashboard/account/two-factor/recovery-codes → ten new recovery codes, app code needed (any role, #220)
  * - POST /dashboard/account/two-factor/disable → 2FA off, password and code needed (any role, #220)
+ * - GET  /dashboard/account/passkeys → own passkeys, add / rename / remove forms (any role, #223)
+ * - POST /dashboard/account/passkeys/options → password, then creation options (any role, #223)
+ * - POST /dashboard/account/passkeys → verify and store the new passkey (any role, #223)
+ * - POST /dashboard/account/passkeys/:id/rename → rename an own passkey (any role, #223)
+ * - POST /dashboard/account/passkeys/:id/delete → remove an own passkey, password needed (any role, #223)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -79,8 +89,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * Auth (#216): account login with email and password against
  * `user_credentials`, then a server-side session in the `sessions` table
  * whose opaque token rides in the `bm_session` cookie and rotates every
- * minute. An account with TOTP two-factor (#220) gets a `pending` session
- * that only the second step opens; `REQUIRE_2FA` holds accounts that must
+ * minute. An account with a second factor (#220: TOTP; #223: a passkey)
+ * gets a `pending` session that only the second step opens; a passkey
+ * also signs in on its own (passwordless, #223); `REQUIRE_2FA` holds accounts that must
  * enrol on their Two-factor page. The owner setup, invitation accept and password reset routes
  * are authorized by their one-time token.
  *
@@ -126,6 +137,9 @@ export const pagesPlugin = new Elysia({
   /** Login, logout, owner setup, invitation accept, password reset. */
   .use(authPages)
 
+  /** Passwordless passkey sign-in and the passkey second step (#223). */
+  .use(passkeyLoginPages)
+
   /* ─── Session Guard ─── */
 
   /** Every route registered after it needs a live session (#216). */
@@ -135,6 +149,7 @@ export const pagesPlugin = new Elysia({
 
   .use(homePages)
   .use(accountPages)
+  .use(passkeyAccountPages)
   .use(emailPages)
   .use(apiKeyPages)
   .use(invitationPages)

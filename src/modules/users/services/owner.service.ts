@@ -19,7 +19,7 @@ import { setupTokenExpiry } from "./owner-setup-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { assignUnownedRecords } from "./record-ownership.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
-import { removeTwoFactor } from "./two-factor.service.ts";
+import { removeSecondFactors, removedAny } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { normalizeLoginEmail, sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -472,7 +472,8 @@ export async function completeOwnerSetup(
       type: PASSWORD_CREDENTIAL,
       secretHash,
     });
-    const twoFactorRemoved = await removeTwoFactor(tx, userId);
+    const secondFactorsRemoved = await removeSecondFactors(tx, userId);
+    const twoFactorRemoved = removedAny(secondFactorsRemoved);
 
     await tx
       .update(userTokens)
@@ -517,13 +518,20 @@ export async function completeOwnerSetup(
           actor,
           ...client,
           target,
-          metadata: { via: "owner_setup" },
+          metadata: {
+            via: "owner_setup",
+            totp: secondFactorsRemoved.totp,
+            passkeys: secondFactorsRemoved.passkeys,
+          },
         },
         tx,
       );
     }
     return owner
-      ? { owner: { ...owner, sessionToken, twoFactorRemoved }, sessionId }
+      ? {
+          owner: { ...owner, sessionToken, twoFactorRemoved, secondFactorsRemoved },
+          sessionId,
+        }
       : null;
   });
   if (!completed) return null;

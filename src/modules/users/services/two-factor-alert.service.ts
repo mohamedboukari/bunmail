@@ -1,5 +1,6 @@
 import { logger } from "../../../utils/logger.ts";
 import { maskEmail, redactEmail } from "../../../utils/redact.ts";
+import type { RemovedSecondFactors } from "../types/user.types.ts";
 import { formatAlertTime } from "./new-device-alert.service.ts";
 import {
   escapeHtml,
@@ -16,8 +17,10 @@ import {
  * `SYSTEM_MAIL_FROM`, DKIM-signed, never unsigned, and **no links of any
  * kind**. A change the account holder did not make is the signal: a
  * stolen session or password turning 2FA on (to lock them out) or off,
- * replacing the recovery codes, an admin-issued reset or `reset-owner`
- * removing it, or a correct password followed by a run of wrong codes.
+ * replacing the recovery codes, adding or removing a passkey (#223), an
+ * admin-issued reset or `reset-owner` removing the second factors, a
+ * correct password followed by a run of wrong codes, or a passkey whose
+ * signature counter went back (a possible cloned authenticator, #223).
  *
  * Callers never await it on the request path (`void`): a slow or failing
  * send never delays or breaks the action. It never throws.
@@ -29,7 +32,10 @@ export type TwoFactorAlertEvent =
   | "disabled"
   | "recovery_codes_regenerated"
   | "removed_by_reset"
-  | "login_codes_exhausted";
+  | "login_codes_exhausted"
+  | "passkey_added"
+  | "passkey_removed"
+  | "passkey_counter_regressed";
 
 /** Subject and first line per event: static text, nothing to inject. */
 const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }> = {
@@ -51,24 +57,50 @@ const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }
   removed_by_reset: {
     subject: "Two-factor authentication removed from your BunMail account",
     intro:
-      "Your BunMail password was reset with a one-time reset link, and two-factor authentication was removed from the account with it. Signing in now needs only the new password.",
+      "Your BunMail password was reset with a one-time reset link, and the account's second factors were removed with it. Signing in now needs only the new password.",
   },
   login_codes_exhausted: {
     subject: "Failed two-factor sign-in attempts on your BunMail account",
     intro:
       "Someone entered your BunMail password correctly, then several wrong two-factor codes, and the sign-in was blocked for a while. Whoever it was may know your password.",
   },
+  passkey_added: {
+    subject: "A passkey was added to your BunMail account",
+    intro:
+      "A new passkey was just added to your BunMail account. It can sign in without the password, and it counts as a second factor.",
+  },
+  passkey_removed: {
+    subject: "A passkey was removed from your BunMail account",
+    intro:
+      "A passkey was just removed from your BunMail account. It no longer signs in, and the sessions opened with it were signed out.",
+  },
+  passkey_counter_regressed: {
+    subject: "A passkey sign-in on your BunMail account was refused",
+    intro:
+      "A sign-in with one of your passkeys was refused: the passkey reported a signature counter that did not go up, which can mean the passkey was copied. If you did not just sign in, remove that passkey.",
+  },
 };
 
 /** What to do about it: the same words for every event. */
 const ADVICE =
   "If this was you, you can ignore this email. If it wasn't, sign in and change " +
-  "your password, check Account > Two-factor, use Account > Active sessions > " +
+  "your password, check Account > Two-factor and Account > Passkeys, use " +
+  "Account > Active sessions > " +
   "Sign out all other devices, and tell an administrator.";
 
 /** Why there is no link. */
 const NO_LINK_NOTE =
   "This email has no links on purpose: open your BunMail dashboard yourself.";
+
+/** "authenticator app and 2 passkeys": what a reset removed (#223). */
+function describeRemoved(removed: RemovedSecondFactors): string {
+  const parts: string[] = [];
+  if (removed.totp) parts.push("authenticator app (and its recovery codes)");
+  if (removed.passkeys > 0) {
+    parts.push(`${removed.passkeys} ${removed.passkeys === 1 ? "passkey" : "passkeys"}`);
+  }
+  return parts.length === 0 ? "nothing" : parts.join(" and ");
+}
 
 /** A composed alert. */
 export interface TwoFactorAlertContent {
@@ -87,10 +119,18 @@ export function buildTwoFactorAlertEmail(input: {
   email: string;
   ip: string | null;
   at: Date;
+  passkeyName?: string;
+  removed?: RemovedSecondFactors;
 }): TwoFactorAlertContent {
   const { subject, intro } = EVENT_TEXT[input.event];
   const facts: Array<[string, string]> = [
     ["Account", oneLine(maskEmail(input.email))],
+    ...(input.passkeyName === undefined
+      ? []
+      : [["Passkey", oneLine(input.passkeyName)] satisfies [string, string]]),
+    ...(input.removed === undefined
+      ? []
+      : [["Removed", describeRemoved(input.removed)] satisfies [string, string]]),
     ["IP address", input.ip ? oneLine(input.ip) : "unknown"],
     ["Time", formatAlertTime(input.at)],
   ];
@@ -133,6 +173,10 @@ export interface SendTwoFactorAlertInput {
   /** Client IP of the action, or null. */
   ip: string | null;
   at?: Date;
+  /** The passkey's label (#223 events): escaped in the email. */
+  passkeyName?: string;
+  /** What a reset removed (`removed_by_reset`, #223). */
+  removed?: RemovedSecondFactors;
 }
 
 /**
@@ -153,6 +197,8 @@ export async function sendTwoFactorAlert(
       email: input.email,
       ip: input.ip,
       at: input.at ?? new Date(),
+      passkeyName: input.passkeyName,
+      removed: input.removed,
     });
     const result = await sendSystemMail(
       { to: input.email, ...content },

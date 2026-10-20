@@ -372,8 +372,8 @@ const findActiveSession = mock((token: string): Promise<ActiveSession | null> =>
       email: s.email,
       role: s.role,
       assurance: s.assurance,
-      /** No second factor (#220): its SQL and the 2FA flows are integration-tested. */
-      hasTotp: false,
+      /** No second factor (#220, #223): its SQL and the 2FA flows are integration-tested. */
+      hasSecondFactor: false,
       matched: current === token ? "current" : "previous",
       rotationDue: s.rotationDue,
       graceOver: s.graceOver,
@@ -456,6 +456,8 @@ void mock.module("../../src/modules/users/services/session.service.ts", () => ({
   setTotpPendingSecret: mock(() => Promise.resolve(false)),
   totpPendingSecretOf: mock(() => Promise.resolve(null)),
   markSessionMfa: mock(() => Promise.resolve()),
+  /** Passkeys (#223); covered by the integration test. */
+  raiseSessionToMfa: mock(() => Promise.resolve()),
 }));
 
 /** The one account the fake login service knows. */
@@ -521,6 +523,7 @@ const completeOwnerSetup = mock(
       ...OWNER,
       sessionToken: lastSetupSessionToken,
       twoFactorRemoved: false,
+      secondFactorsRemoved: { totp: false, passkeys: 0 },
     });
   },
 );
@@ -705,6 +708,7 @@ const completePasswordReset = mock(
       tokensRevoked: 0,
       issuedTokensRevoked: 1,
       twoFactorRemoved: false,
+      secondFactorsRemoved: { totp: false, passkeys: 0 },
       sessionId: `ses_${fakeCounter}`,
       sessionToken,
     });
