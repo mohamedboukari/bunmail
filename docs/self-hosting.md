@@ -179,7 +179,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > - `TOMBSTONE_RETENTION_DAYS` (`90`): how long the post-purge snapshot of a hard-deleted email is kept (#34, see [emails.md](emails.md#tombstones-34)).
 > - `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`): `true` also allows `http://` webhook URLs; private addresses stay blocked (#128).
 > - Inbound SMTP (see [docs/inbound.md](inbound.md)): `SMTP_ENABLED` (`false`), `SMTP_PORT` (`2525`; use `25` in production), `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `SMTP_RATE_LIMIT_MAX` / `SMTP_RATE_LIMIT_WINDOW` (`true`, `10` connections per `60` seconds per IP).
-> - SMTP submission (#120, see [docs/smtp-submission.md](smtp-submission.md)): `SMTP_SUBMISSION_ENABLED` (`false`), `SMTP_SUBMISSION_PORT` (`587`), `SMTP_SUBMISSION_DAILY_QUOTA` (`0`: unlimited), `SMTP_SUBMISSION_TLS_CERT` / `SMTP_SUBMISSION_TLS_KEY` (unset), `SMTP_SUBMISSION_ALLOW_INSECURE` (`false`: with neither TLS nor this flag the server refuses to start), `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` connections per `60` seconds per IP), `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failed AUTHs per `900` seconds per IP).
+> - SMTP submission (#120, see [docs/smtp-submission.md](smtp-submission.md)): `SMTP_SUBMISSION_ENABLED` (`false`), `SMTP_SUBMISSION_PORT` (`465` with a TLS cert, `587` without), `SMTP_SUBMISSION_DAILY_QUOTA` (`0`: unlimited), `SMTP_SUBMISSION_TLS_CERT` / `SMTP_SUBMISSION_TLS_KEY` (unset; set both for implicit TLS, #349), `SMTP_SUBMISSION_TLS_MODE` (`implicit` with a cert; `starttls` refuses to boot on Bun, anything else refuses to boot), `SMTP_SUBMISSION_ALLOW_INSECURE` (`false`: with neither TLS nor this flag the server refuses to start; ignored with TLS), `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` connections per `60` seconds per IP), `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failed AUTHs per `900` seconds per IP).
 
 ## 2. DNS Records
 
@@ -438,24 +438,25 @@ certbot --nginx -d mail.yourdomain.com
 |------|----------|-----------|----------------------------|
 | 25   | TCP      | Outbound  | Send emails to MX servers  |
 | 25   | TCP      | Inbound   | Receive inbound emails     |
-| 587  | TCP      | Inbound   | SMTP submission: apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true`; restrict to the networks your apps live on) |
+| 465  | TCP      | Inbound   | SMTP submission over implicit TLS: apps sending *through* BunMail (only if `SMTP_SUBMISSION_ENABLED=true` with a TLS cert; restrict to the networks your apps live on) |
+| 587  | TCP      | Inbound   | SMTP submission without TLS (no cert, `SMTP_SUBMISSION_ALLOW_INSECURE=true`): trusted networks only, never public |
 | 443  | TCP      | Inbound   | HTTPS (reverse proxy)      |
 | 3000 | TCP      | (none)    | HTTP API + dashboard, loopback only; reached through the proxy on 443 |
 
-> **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, publish the submission port in your `docker-compose.override.yml` (see `docker-compose.override.example.yml`), and open port 587 to those apps only. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
+> **SMTP submission (#120).** To let other apps (Infisical, Netbird, Dify, a Nodemailer backend, …) send through BunMail over SMTP, set `SMTP_SUBMISSION_ENABLED=true`, publish the submission port in your `docker-compose.override.yml` (see `docker-compose.override.example.yml`), and open the port to those apps only: `465` with a TLS cert (implicit TLS, clients use "SSL/TLS"; STARTTLS is not available on Bun, #349), or `587` for plaintext on a trusted network. They authenticate with a `bm_live_…` API key as the password. Full setup and integration snippets: [docs/smtp-submission.md](smtp-submission.md).
 
 ## Runs as non-root
 
 The container runs as the unprivileged `bun` user (uid 1000), not root (#167). The app only reads from disk, so a compromise can't modify its own code.
 
-**Low ports (25, 587).** A non-root process can only bind ports below 1024 when the kernel setting `net.ipv4.ip_unprivileged_port_start` is `0` inside the container. `docker-compose.yml` pins it:
+**Low ports (25, 465, 587).** A non-root process can only bind ports below 1024 when the kernel setting `net.ipv4.ip_unprivileged_port_start` is `0` inside the container. `docker-compose.yml` pins it:
 
 ```yaml
 sysctls:
   net.ipv4.ip_unprivileged_port_start: 0
 ```
 
-It's scoped to the container's own network namespace and changes nothing on the host. Docker 20.10+ already defaults to it; the pin makes it explicit. On Kubernetes it's an allowed "safe" sysctl (set it in the pod's `securityContext.sysctls`). If your platform forbids it, run the servers on high ports inside the container instead (`SMTP_PORT=2525`, `SMTP_SUBMISSION_PORT=2587`) and publish them as `25:2525` and `587:2587`.
+It's scoped to the container's own network namespace and changes nothing on the host. Docker 20.10+ already defaults to it; the pin makes it explicit. On Kubernetes it's an allowed "safe" sysctl (set it in the pod's `securityContext.sysctls`). If your platform forbids it, run the servers on high ports inside the container instead (`SMTP_PORT=2525`, `SMTP_SUBMISSION_PORT=2465`) and publish them as `25:2525` and `465:2465`.
 
 **If an SMTP server can't bind its port, BunMail exits** with a message naming the port, the cause and the fix, for example:
 

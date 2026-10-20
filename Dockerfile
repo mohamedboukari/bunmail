@@ -117,7 +117,7 @@ COPY --from=css /app/src/pages/assets/dashboard.css ./src/pages/assets/dashboard
 # Drop root (#167). `bun` (uid 1000) ships with the oven/bun image. The app
 # only READS from disk (source, migrations, optional TLS cert/key), so the
 # root-owned, world-readable /app files need no chown, and a compromised
-# process can't modify its own code. Binding 25/587 as non-root relies on
+# process can't modify its own code. Binding 25/465/587 as non-root relies on
 # net.ipv4.ip_unprivileged_port_start=0, pinned in docker-compose.yml.
 # A mounted TLS private key must be readable by uid 1000.
 USER bun

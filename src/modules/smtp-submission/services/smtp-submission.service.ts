@@ -1,4 +1,7 @@
+import { randomBytes } from "crypto";
 import { readFileSync } from "fs";
+import type { Socket } from "net";
+import { createServer as createTlsServer, type Server as TlsServer } from "tls";
 import { SMTPServer } from "smtp-server";
 import type {
   SMTPServerAuthentication,
@@ -49,6 +52,31 @@ import {
  * guard here is authentication, not recipient-domain validation).
  */
 
+/**
+ * `SMTPServer#connect` (#349): the method smtp-server itself calls with each
+ * accepted socket, public in smtp-server 3.19.23 but missing from
+ * `@types/smtp-server`. Implicit TLS hands it the sockets of a TLS server
+ * the runtime terminates itself, because smtp-server's own implicit TLS
+ * (and STARTTLS) wraps an accepted socket with `new tls.TLSSocket(socket,
+ * { isServer: true })`, which never handshakes under Bun. `smtp-server` is
+ * pinned to that exact version in package.json, and
+ * `test/integration/smtp-submission-tls.integration.test.ts` fails if an
+ * upgrade breaks the handover.
+ */
+declare module "smtp-server" {
+  interface SMTPServer {
+    connect(socket: Socket, socketOptions: { id: string }): void;
+  }
+}
+
+/**
+ * How long a connection to the implicit-TLS port may take to finish its
+ * TLS handshake (#349), the idle limit smtp-server gives any session
+ * (60 s). Bun's TLS server ignores `handshakeTimeout`, so it is armed on
+ * the socket by hand.
+ */
+const TLS_HANDSHAKE_TIMEOUT_MS = 60_000;
+
 /** The size cap of a submitted message without attachments (the inbound cap). */
 const BASE_MESSAGE_BYTES = 10 * 1024 * 1024;
 
@@ -86,6 +114,9 @@ const MAX_LOGGED_DROPPED_HEADERS = 20;
 
 /** The running server instance, or null when stopped. */
 let server: SMTPServer | null = null;
+
+/** The TLS listener in front of `server` in implicit mode (#349), or null. */
+let tlsListener: TlsServer | null = null;
 
 /** Interval handle for the periodic rate-limit map cleanup. */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -213,12 +244,69 @@ function sessionContext(session: { id: string }): LogContext {
   return { smtpSessionId: session.id, listener: "submission" };
 }
 
+/** A session id in smtp-server's own format (10 random bytes in base 32). */
+function newSessionId(): string {
+  return BigInt(`0x${randomBytes(10).toString("hex")}`)
+    .toString(32)
+    .padStart(16, "0");
+}
+
+/**
+ * The implicit-TLS listener (#349): the runtime's own TLS server, which
+ * terminates TLS from the first byte and hands each decrypted socket to
+ * `smtp`, so every session is TLS before its first SMTP byte.
+ *
+ * Bun quirks, both seen with Bun 1.3.14:
+ * - `handshakeTimeout` is ignored, so a client that never finishes the
+ *   handshake would hold its socket forever. The handshake gets the idle
+ *   limit of any session by hand, on the accepted socket (which under Bun
+ *   is the TLS socket itself; the session's own timeout replaces it).
+ * - A plaintext client's failed handshake (it gets a TLS alert) can still
+ *   reach the secure-connection callback. Nothing it sent is ever read as
+ *   SMTP and nothing written to it reaches the wire, but it opens a
+ *   session that closes at once: one `SMTP session closed` line, and one
+ *   connection counted against its IP's connection limit, as any
+ *   plaintext client is counted (one per TCP connection, never more).
+ */
+function createImplicitTlsListener(
+  smtp: SMTPServer,
+  material: { key: Buffer; cert: Buffer },
+): TlsServer {
+  const listener = createTlsServer(
+    { ...material, handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS },
+    (socket) => {
+      /** The handshake is done: smtp-server arms its own idle timeout. */
+      socket.setTimeout(0);
+      smtp.connect(socket, { id: newSessionId() });
+    },
+  );
+  listener.on("connection", (socket: Socket) => {
+    socket.setTimeout(TLS_HANDSHAKE_TIMEOUT_MS, () => socket.destroy());
+  });
+  listener.on("tlsClientError", (error: Error, socket: Socket) => {
+    const code: unknown = Reflect.get(error, "code");
+    logger.warn("SMTP submission TLS handshake failed", {
+      ip: socket.remoteAddress,
+      code: typeof code === "string" ? code : null,
+      error: error.message,
+    });
+  });
+  return listener;
+}
+
 /**
  * Starts the SMTP submission server on the configured port. Requires
- * AUTH; authenticates the password against the API-keys table. STARTTLS is
- * advertised when a cert/key pair is configured; plaintext AUTH is allowed
- * (`allowInsecureAuth`) so the common same-host / private-network setup
- * works with zero TLS configuration.
+ * AUTH; authenticates the password against the API-keys table. The TLS
+ * mode comes from `config.smtpSubmission.tls.mode` (#349):
+ *
+ * - `implicit`: TLS from the first byte. The runtime's own TLS server
+ *   (`tls.createServer`) terminates it and hands each decrypted socket to
+ *   smtp-server, which runs as `secure` + `secured` ("TLS done upstream"):
+ *   every session is TLS, STARTTLS is not offered, and AUTH is allowed.
+ * - `starttls` (Node only, refused at boot under Bun): smtp-server offers
+ *   STARTTLS and refuses AUTH before it.
+ * - `none`: plaintext, which needs `SMTP_SUBMISSION_ALLOW_INSECURE=true`
+ *   (#133) for AUTH, so a trusted-network setup works without a cert.
  */
 export function start(portOverride?: number): void {
   const { tls, connectionRateLimit } = config.smtpSubmission;
@@ -226,12 +314,20 @@ export function start(portOverride?: number): void {
   const port = portOverride ?? config.smtpSubmission.port;
 
   /**
-   * Load TLS material if both a cert and key path are configured. When
-   * present, smtp-server advertises STARTTLS backed by this cert. A bad
-   * path fails loudly at start rather than silently downgrading security.
+   * The per-IP counters belong to one running server: a server started
+   * again (the tests start and stop it per file) begins with none, as a
+   * restarted process does, instead of inheriting the previous run's
+   * connection and failed-AUTH budget.
+   */
+  connectionMap.clear();
+  authFailureMap.clear();
+
+  /**
+   * Load the TLS material when a mode needs it. A bad path fails loudly at
+   * start rather than silently downgrading security.
    */
   let tlsOptions: { key: Buffer; cert: Buffer } | undefined;
-  if (tls.certPath && tls.keyPath) {
+  if (tls.mode !== "none") {
     try {
       tlsOptions = {
         cert: readFileSync(tls.certPath),
@@ -250,37 +346,46 @@ export function start(portOverride?: number): void {
   /**
    * Refuse to accept AUTH credentials in cleartext by default (#133). The
    * password is a full-privilege `bm_live_…` key. Plaintext AUTH is only
-   * allowed when TLS is configured (clients STARTTLS first) or the operator
-   * has explicitly opted in via `SMTP_SUBMISSION_ALLOW_INSECURE=true` for a
-   * trusted-network deployment. Failing fast here beats silently leaking
-   * keys on the wire.
+   * allowed when the operator has explicitly opted in via
+   * `SMTP_SUBMISSION_ALLOW_INSECURE=true` for a trusted-network deployment
+   * without TLS. With TLS configured the flag is ignored: AUTH only over TLS.
+   * Failing fast here beats silently leaking keys on the wire.
    */
-  const allowInsecureAuth = config.smtpSubmission.allowInsecureAuth;
-  if (!tlsOptions && !allowInsecureAuth) {
+  if (tls.mode === "none" && !config.smtpSubmission.allowInsecureAuth) {
     throw new Error(
       "[smtp-submission] Refusing to start: AUTH would be accepted over a\n" +
         "  plaintext connection, and the password is a full-privilege API key.\n" +
         "  → Configure TLS (SMTP_SUBMISSION_TLS_CERT + SMTP_SUBMISSION_TLS_KEY)\n" +
-        "    so clients STARTTLS before AUTH, OR set\n" +
+        "    so clients connect over TLS (port 465), OR set\n" +
         "    SMTP_SUBMISSION_ALLOW_INSECURE=true if the server is only reachable\n" +
         "    over a trusted network (same host / private Docker network).",
     );
   }
+  const allowInsecureAuth = tls.mode === "none";
+  const implicit = tls.mode === "implicit";
 
   const maxMessageBytes = submissionMaxMessageBytes(config.attachments.maxTotalBytes);
 
-  server = new SMTPServer({
-    ...tlsOptions,
-    secure: false,
+  const smtp = new SMTPServer({
+    /** STARTTLS uses the cert itself; in implicit mode the TLS server holds it. */
+    ...(tls.mode === "starttls" ? tlsOptions : {}),
+    /**
+     * Implicit TLS (#349): the sessions arrive already decrypted from the
+     * TLS listener below, so smtp-server treats them as secure (no
+     * STARTTLS offer, AUTH allowed) and `secured` says the TLS is done
+     * upstream: it never wraps a socket itself (which Bun cannot do) and
+     * does not warn about its built-in default certificate.
+     */
+    secure: implicit,
+    secured: implicit,
     /** AUTH is mandatory: this is the open-relay guard for submission. */
     authOptional: false,
     /** Only password-based mechanisms; the password carries the API key. */
     authMethods: ["PLAIN", "LOGIN"],
     /**
-     * Allow AUTH over a plaintext connection only when opted in (#133).
-     * `false` by default; the `start()` guard above already refuses to boot
-     * with neither TLS nor the explicit opt-in, so reaching here with
-     * `false` means TLS is configured and clients STARTTLS before AUTH.
+     * Allow AUTH over a plaintext connection only without TLS, and the
+     * `start()` guard above has already refused to boot unless the operator
+     * opted in (#133). With a cert, AUTH needs TLS first (#349).
      */
     allowInsecureAuth,
     size: maxMessageBytes,
@@ -371,6 +476,8 @@ export function start(portOverride?: number): void {
             logger.info("SMTP submission client authenticated", {
               ip,
               apiKeyId: apiKey.id,
+              /** Whether the session is TLS (#349): always true with a cert. */
+              secure: session.secure,
             });
             callback(null, { user: apiKey.id });
           })
@@ -678,15 +785,10 @@ export function start(portOverride?: number): void {
     },
   });
 
-  server.listen(port, () => {
-    logger.info("SMTP submission server started", {
-      port,
-      tls: tlsOptions ? "STARTTLS available" : "plaintext (allowInsecureAuth)",
-    });
-  });
+  server = smtp;
 
-  server.on("error", (err: Error) => {
-    /** Fail fast if the port can't be bound (#167); see smtp-listen.ts. */
+  /** Fail fast if the port can't be bound (#167); see smtp-listen.ts. */
+  const onServerError = (err: Error): void => {
     if (isListenError(err)) {
       logger.error(describeListenError("SMTP submission", port, err.code), {
         port,
@@ -695,7 +797,20 @@ export function start(portOverride?: number): void {
       process.exit(1);
     }
     logger.error("SMTP submission server error", { error: err.message });
-  });
+  };
+  smtp.on("error", onServerError);
+
+  const onListening = (): void => {
+    logger.info("SMTP submission server started", { port, tls: tls.mode });
+  };
+
+  if (implicit && tlsOptions) {
+    tlsListener = createImplicitTlsListener(smtp, tlsOptions);
+    tlsListener.on("error", onServerError);
+    tlsListener.listen(port, onListening);
+  } else {
+    smtp.listen(port, onListening);
+  }
 
   /** Periodic sweep of expired rate-limit entries (every 5 minutes). */
   cleanupInterval = setInterval(
@@ -719,6 +834,10 @@ export function stop(): void {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
+  }
+  if (tlsListener) {
+    tlsListener.close();
+    tlsListener = null;
   }
   if (server) {
     server.close(() => {

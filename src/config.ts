@@ -486,6 +486,116 @@ export function readAttachmentsMaxTotalMb(
 }
 
 /**
+ * How the SMTP submission server offers TLS (#349). `implicit`: TLS from
+ * the first byte (port 465). `starttls`: plaintext, upgraded by the
+ * STARTTLS command (Node only, see {@link readSubmissionTls}). `none`: no
+ * certificate, plaintext only.
+ */
+export type SubmissionTlsMode = "implicit" | "starttls" | "none";
+
+/** The submission server's TLS settings and port, as {@link readSubmissionTls} resolves them. */
+export interface SubmissionTlsSettings {
+  mode: SubmissionTlsMode;
+  /** PEM certificate path, empty in `none` mode. */
+  certPath: string;
+  /** PEM private-key path, empty in `none` mode. */
+  keyPath: string;
+  /** Listen port: `SMTP_SUBMISSION_PORT`, else 465 in `implicit` mode and 587 otherwise. */
+  port: number;
+}
+
+/** The raw environment values {@link readSubmissionTls} reads. */
+interface SubmissionTlsEnv {
+  mode: string | undefined;
+  certPath: string | undefined;
+  keyPath: string | undefined;
+  port: string | undefined;
+}
+
+/**
+ * Reads `SMTP_SUBMISSION_TLS_MODE`, `SMTP_SUBMISSION_TLS_CERT`,
+ * `SMTP_SUBMISSION_TLS_KEY` and `SMTP_SUBMISSION_PORT` (#349).
+ *
+ * - The mode is `implicit` or `starttls`; unset or blank, it is `implicit`
+ *   when both a cert and a key are set, and `none` without them.
+ * - A mode without a cert and key, a cert without a key (or the reverse),
+ *   or any other mode value refuses to boot: a typo must never leave the
+ *   API keys on a plaintext link.
+ * - `starttls` refuses to boot under Bun: Bun cannot upgrade an accepted
+ *   socket to TLS on the server side (`new tls.TLSSocket(socket, { isServer:
+ *   true })` never handshakes in Bun 1.3.14), so a STARTTLS offer would
+ *   never complete and clients could not authenticate at all.
+ * - The port defaults to 465 in `implicit` mode and 587 otherwise; a set
+ *   port must be a whole number from 1 to 65535.
+ *
+ * Exported for tests.
+ */
+export function readSubmissionTls(
+  raw: SubmissionTlsEnv = {
+    mode: process.env["SMTP_SUBMISSION_TLS_MODE"],
+    certPath: process.env["SMTP_SUBMISSION_TLS_CERT"],
+    keyPath: process.env["SMTP_SUBMISSION_TLS_KEY"],
+    port: process.env["SMTP_SUBMISSION_PORT"],
+  },
+  onBun: boolean = typeof Bun !== "undefined",
+): SubmissionTlsSettings {
+  const certPath = raw.certPath?.trim() ?? "";
+  const keyPath = raw.keyPath?.trim() ?? "";
+  if ((certPath === "") !== (keyPath === "")) {
+    throw new Error(
+      "[config] SMTP_SUBMISSION_TLS_CERT and SMTP_SUBMISSION_TLS_KEY must be set together:\n" +
+        "  one without the other would leave submission without TLS.",
+    );
+  }
+  const hasCertificate = certPath !== "";
+  const requested = raw.mode?.trim() ?? "";
+
+  let mode: SubmissionTlsMode;
+  if (requested === "") {
+    mode = hasCertificate ? "implicit" : "none";
+  } else if (requested === "implicit" || requested === "starttls") {
+    if (!hasCertificate) {
+      throw new Error(
+        `[config] SMTP_SUBMISSION_TLS_MODE="${requested}" needs a certificate:\n` +
+          "  → Set SMTP_SUBMISSION_TLS_CERT and SMTP_SUBMISSION_TLS_KEY, or leave the mode unset.",
+      );
+    }
+    mode = requested;
+  } else {
+    throw new Error(
+      `[config] SMTP_SUBMISSION_TLS_MODE must be "implicit" or "starttls", got "${raw.mode}"`,
+    );
+  }
+
+  if (mode === "starttls" && onBun) {
+    throw new Error(
+      "[config] SMTP_SUBMISSION_TLS_MODE=starttls is not supported on Bun:\n" +
+        "  Bun cannot upgrade a connection to TLS on the server side, so a STARTTLS\n" +
+        "  handshake would never complete.\n" +
+        "  → Use implicit TLS: leave SMTP_SUBMISSION_TLS_MODE unset (or set it to\n" +
+        '    "implicit") and point clients at port 465 with "SSL/TLS".',
+    );
+  }
+
+  const port = optionalBoundedInt(
+    "SMTP_SUBMISSION_PORT",
+    mode === "implicit" ? 465 : 587,
+    1,
+    65535,
+    raw.port,
+  );
+  return {
+    mode,
+    certPath: hasCertificate ? certPath : "",
+    keyPath: hasCertificate ? keyPath : "",
+    port,
+  };
+}
+
+/** The submission server's TLS settings and port, read once at boot (#349). */
+const submissionTls = readSubmissionTls();
+
+/**
  * The largest REST body without attachments: 5 MB of html plus 5 MB of
  * text (the send DTO's caps), with room for the other fields.
  */
@@ -914,8 +1024,11 @@ export const config = {
   smtpSubmission: {
     /** Set to "true" to start the SMTP submission server. Off by default. */
     enabled: optionalEnv("SMTP_SUBMISSION_ENABLED", "false") === "true",
-    /** Port for the submission server (default 587: the IANA submission port). */
-    port: parseInt(optionalEnv("SMTP_SUBMISSION_PORT", "587"), 10),
+    /**
+     * Port for the submission server (#349): `SMTP_SUBMISSION_PORT`, else
+     * 465 with implicit TLS and 587 (the IANA submission port) otherwise.
+     */
+    port: submissionTls.port,
 
     /**
      * Per-API-key daily send quota (#123). Counts messages accepted via the
@@ -930,16 +1043,17 @@ export const config = {
     ),
 
     /**
-     * Optional TLS material. When both a cert and key path are provided,
-     * the server advertises STARTTLS so clients can upgrade the connection
-     * before AUTH. When absent, plaintext AUTH is allowed
-     * (`allowInsecureAuth`): acceptable only on a trusted network
-     * (same host / private Docker network), which is the common
-     * self-hosted case. Paths are read from disk at server start.
+     * TLS (#349). With a cert and key the mode defaults to `implicit`: TLS
+     * from the first byte, terminated by the runtime's own TLS server.
+     * `starttls` exists for Node only (Bun refuses it at boot). Without a
+     * cert the mode is `none`, and plaintext AUTH needs
+     * `SMTP_SUBMISSION_ALLOW_INSECURE=true` (#133). Paths are read from
+     * disk at server start. See `readSubmissionTls`.
      */
     tls: {
-      certPath: optionalEnv("SMTP_SUBMISSION_TLS_CERT", ""),
-      keyPath: optionalEnv("SMTP_SUBMISSION_TLS_KEY", ""),
+      mode: submissionTls.mode,
+      certPath: submissionTls.certPath,
+      keyPath: submissionTls.keyPath,
     },
 
     /**
@@ -949,8 +1063,8 @@ export const config = {
      * `SMTP_SUBMISSION_ALLOW_INSECURE=true` only when the submission server
      * is reachable solely over a trusted network (same host / private
      * Docker network) and you accept the risk. When TLS is configured
-     * (`SMTP_SUBMISSION_TLS_*`), clients STARTTLS before AUTH and this flag
-     * is irrelevant. When neither TLS nor this flag is set, the server
+     * (`SMTP_SUBMISSION_TLS_*`), AUTH is only accepted over TLS and this
+     * flag is ignored (#349). When neither TLS nor this flag is set, the server
      * refuses to start rather than silently accept cleartext credentials.
      */
     allowInsecureAuth: optionalEnv("SMTP_SUBMISSION_ALLOW_INSECURE", "false") === "true",

@@ -25,9 +25,9 @@ services:
   #   ports:
   #     # Inbound SMTP (SMTP_ENABLED=true, SMTP_PORT=25 in .env; docs/inbound.md)
   #     - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
-  #     # SMTP submission with STARTTLS (SMTP_SUBMISSION_ENABLED=true and
-  #     # SMTP_SUBMISSION_TLS_CERT / _KEY in .env; docs/smtp-submission.md)
-  #     - "${SMTP_SUBMISSION_PORT:-587}:${SMTP_SUBMISSION_PORT:-587}"
+  #     # SMTP submission over implicit TLS on 465 (SMTP_SUBMISSION_ENABLED=true
+  #     # and SMTP_SUBMISSION_TLS_CERT / _KEY in .env; docs/smtp-submission.md)
+  #     - "${SMTP_SUBMISSION_PORT:-465}:${SMTP_SUBMISSION_PORT:-465}"
   #     # ...or plaintext submission for apps on this host only
   #     # (SMTP_SUBMISSION_ALLOW_INSECURE=true): loopback, never public
   #     - "127.0.0.1:2587:${SMTP_SUBMISSION_PORT:-587}"
