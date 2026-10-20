@@ -55,7 +55,8 @@ export type PublicDashboard = Elysia<"/dashboard">;
  *    one is served without a new cookie. A rotation error is logged and
  *    the request is served (the old token stays current).
  * 7. The `REQUIRE_2FA` policy (#220): an account whose role must have a
- *    second factor and has none (`hasTotp`, from the same lookup) is
+ *    second factor and has none (`hasSecondFactor`: TOTP or a passkey,
+ *    #223, from the same lookup) is
  *    sent to its Two-factor page (302) from every route but that page
  *    and its actions, until it enrols. Logout and the assets are public
  *    routes, so they stay reachable.
@@ -186,7 +187,7 @@ export function withSessionGuard(app: PublicDashboard) {
      * set up. After the rotation, so a held-back session still slides.
      */
     if (
-      !session.hasTotp &&
+      !session.hasSecondFactor &&
       twoFactorRequired(config.dashboard.require2fa, session.role) &&
       !isTwoFactorEnrolmentPath(path)
     ) {

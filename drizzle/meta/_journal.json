@@ -274,6 +274,13 @@
       "when": 1792518114058,
       "tag": "0038_email_to_list",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1792520458748,
+      "tag": "0039_passkeys",
+      "breakpoints": true
     }
   ]
 }

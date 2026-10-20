@@ -22,6 +22,7 @@
  *   time[data-bm-time]          timestamps shown in the viewer's locale (`time-display.tsx`)
  *   iframe.html-preview-frame   email HTML preview (`html-preview.tsx`)
  *   iframe.live-html-preview-frame  template preview following a textarea
+ *   data-passkey="create|get"   a passkey ceremony (`passkey-ceremony.tsx`, #223)
  */
 (function () {
   "use strict";
@@ -88,6 +89,32 @@
     if (form.hasAttribute("data-confirm")) {
       if (!window.confirm(form.getAttribute("data-confirm") || "")) e.preventDefault();
     }
+  });
+
+  /*
+   * Passkey ceremonies (#223): a `form[data-passkey-start]` (adding a
+   * passkey: name and password) is sent to the options endpoint instead of
+   * submitting. Registered before the double-submit guard, which then
+   * sees the submit cancelled and leaves the button alone.
+   */
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    if (!(form instanceof HTMLFormElement) || e.defaultPrevented) return;
+    if (!form.hasAttribute("data-passkey-start")) return;
+    var scope = form.closest("[data-passkey]");
+    if (!scope) return;
+    e.preventDefault();
+    runPasskey(scope, new URLSearchParams(new FormData(form)), form);
+  });
+
+  document.addEventListener("click", function (e) {
+    var target = e.target instanceof Element ? e.target : null;
+    var start = target ? target.closest("button[data-passkey-start]") : null;
+    if (!start) return;
+    var scope = start.closest("[data-passkey]");
+    if (!scope) return;
+    e.preventDefault();
+    runPasskey(scope, new URLSearchParams(), start);
   });
 
   /* Prevent double form submissions: disables the button and shows "Processing…". */
@@ -171,11 +198,216 @@
   }
 
   onReady(function () {
+    markPasskeySupport();
     hydrateTimes();
     document.querySelectorAll("[data-chip-input]").forEach(initChipInput);
     initHtmlPreviews();
     initLiveHtmlPreviews();
   });
+
+  /* ─── Passkeys (#223) ─── */
+
+  /*
+   * The browser half of a WebAuthn ceremony, without a library: fetch the
+   * options (a same-origin POST; the session guard and the public routes
+   * check the Origin header), turn their base64url fields into buffers,
+   * call navigator.credentials.create / get, turn the result back into
+   * base64url JSON and submit it in the hidden finish form, so the server
+   * answers with a normal redirect. Messages are written as text, never
+   * as HTML.
+   */
+
+  /** WebAuthn is available in this browser (and this is a secure context). */
+  function passkeysSupported() {
+    return (
+      typeof window.PublicKeyCredential === "function" &&
+      !!navigator.credentials &&
+      typeof navigator.credentials.create === "function" &&
+      typeof navigator.credentials.get === "function"
+    );
+  }
+
+  /** Shows the "not supported" note of every ceremony when WebAuthn is missing. */
+  function markPasskeySupport() {
+    if (passkeysSupported()) return;
+    document.querySelectorAll("[data-passkey-unsupported]").forEach(function (el) {
+      el.classList.remove("hidden");
+    });
+  }
+
+  function base64urlToBuffer(value) {
+    var base64 = String(value).replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4) base64 += "=";
+    var binary = atob(base64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function bufferToBase64url(buffer) {
+    var bytes = new Uint8Array(buffer);
+    var binary = "";
+    for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+
+  /** A credential descriptor list with its ids as buffers. */
+  function descriptors(list) {
+    return (list || []).map(function (c) {
+      return { type: c.type, id: base64urlToBuffer(c.id), transports: c.transports };
+    });
+  }
+
+  /** Creation options (JSON from the server) as `navigator.credentials.create` wants them. */
+  function creationOptions(o) {
+    return {
+      challenge: base64urlToBuffer(o.challenge),
+      rp: o.rp,
+      user: {
+        id: base64urlToBuffer(o.user.id),
+        name: o.user.name,
+        displayName: o.user.displayName,
+      },
+      pubKeyCredParams: o.pubKeyCredParams,
+      timeout: o.timeout,
+      attestation: o.attestation,
+      authenticatorSelection: o.authenticatorSelection,
+      excludeCredentials: descriptors(o.excludeCredentials),
+      extensions: o.extensions,
+    };
+  }
+
+  /** Request options (JSON from the server) as `navigator.credentials.get` wants them. */
+  function requestOptions(o) {
+    var options = {
+      challenge: base64urlToBuffer(o.challenge),
+      rpId: o.rpId,
+      timeout: o.timeout,
+      userVerification: o.userVerification,
+      extensions: o.extensions,
+    };
+    if (o.allowCredentials && o.allowCredentials.length > 0) {
+      options.allowCredentials = descriptors(o.allowCredentials);
+    }
+    return options;
+  }
+
+  /** The browser's result as the JSON the server parses. */
+  function credentialToJSON(credential) {
+    var r = credential.response;
+    var response = { clientDataJSON: bufferToBase64url(r.clientDataJSON) };
+    if (r.attestationObject) {
+      response.attestationObject = bufferToBase64url(r.attestationObject);
+      if (typeof r.getTransports === "function") response.transports = r.getTransports();
+    }
+    if (r.authenticatorData) {
+      response.authenticatorData = bufferToBase64url(r.authenticatorData);
+      response.signature = bufferToBase64url(r.signature);
+      if (r.userHandle) response.userHandle = bufferToBase64url(r.userHandle);
+    }
+    return {
+      id: credential.id,
+      rawId: bufferToBase64url(credential.rawId),
+      type: credential.type,
+      response: response,
+      clientExtensionResults: {},
+    };
+  }
+
+  /** Writes a message (as text) in the ceremony's error line, or hides it. */
+  function showPasskeyError(scope, message) {
+    var line = scope.querySelector("[data-passkey-error]");
+    if (!line) return;
+    line.textContent = message || "";
+    line.classList.toggle("hidden", !message);
+  }
+
+  /** What to tell the user when the browser's prompt fails. */
+  function promptErrorMessage(error, mode) {
+    var name = error && error.name;
+    if (name === "NotAllowedError" || name === "AbortError") {
+      return "The passkey prompt was closed or timed out. Try again.";
+    }
+    if (name === "InvalidStateError" && mode === "create") {
+      return "This passkey is already registered.";
+    }
+    return "The passkey could not be used. Try again.";
+  }
+
+  /** Runs one ceremony: options, the browser prompt, then the finish form. */
+  function runPasskey(scope, params, control) {
+    var mode = scope.getAttribute("data-passkey");
+    var optionsUrl = new URL(
+      scope.getAttribute("data-passkey-options") || "",
+      window.location.href,
+    );
+    var finish = scope.querySelector("form[data-passkey-finish]");
+    var field = finish ? finish.querySelector('input[name="credential"]') : null;
+    if (!passkeysSupported()) {
+      showPasskeyError(scope, "This browser does not support passkeys.");
+      return;
+    }
+    if (optionsUrl.origin !== window.location.origin || !finish || !field) return;
+    if (mode !== "create" && mode !== "get") return;
+    var buttons =
+      control.tagName === "FORM" ? control.querySelectorAll("button") : [control];
+    function busy(on) {
+      Array.prototype.forEach.call(buttons, function (b) {
+        b.disabled = on;
+      });
+    }
+    showPasskeyError(scope, "");
+    busy(true);
+
+    fetch(optionsUrl.href, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json",
+      },
+      body: params.toString(),
+    })
+      .then(function (res) {
+        return res.json().then(
+          function (data) {
+            return { ok: res.ok, data: data };
+          },
+          function () {
+            return { ok: false, data: {} };
+          },
+        );
+      })
+      .then(function (answer) {
+        var data = answer.data || {};
+        if (typeof data.redirect === "string" && data.redirect.charAt(0) === "/") {
+          window.location.assign(data.redirect);
+          return null;
+        }
+        if (!answer.ok || !data.options) {
+          var refused = new Error(data.error || "Something went wrong. Try again.");
+          refused.name = "ServerRefused";
+          throw refused;
+        }
+        return mode === "create"
+          ? navigator.credentials.create({ publicKey: creationOptions(data.options) })
+          : navigator.credentials.get({ publicKey: requestOptions(data.options) });
+      })
+      .then(function (credential) {
+        if (!credential) return;
+        field.value = JSON.stringify(credentialToJSON(credential));
+        finish.submit();
+      })
+      .catch(function (error) {
+        busy(false);
+        showPasskeyError(
+          scope,
+          error && error.name === "ServerRefused"
+            ? error.message
+            : promptErrorMessage(error, mode),
+        );
+      });
+  }
 
   /* ─── Time display (#104) ─── */
 

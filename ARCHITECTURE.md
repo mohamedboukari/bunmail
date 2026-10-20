@@ -308,7 +308,10 @@ bunmail/
 │   │   │   │                               recovery-code.service.ts (pure: generate / normalize / SHA-256 recovery codes, #220),
 │   │   │   │                               two-factor-policy.service.ts (pure: REQUIRE_2FA coverage, enrolment paths, #220),
 │   │   │   │                               two-factor.service.ts (enrol / confirm / second login step / disable / regenerate / remove, #220),
-│   │   │   │                               two-factor-alert.service.ts (2FA security emails via system-mail, no links, #220),
+│   │   │   │                               two-factor-alert.service.ts (2FA and passkey security emails via system-mail, no links, #220, #223),
+│   │   │   │                               passkey-policy.service.ts (pure: relying party from APP_BASE_URL, name, counter rule, credential JSON parsing, #223),
+│   │   │   │                               passkey-challenge.service.ts (in-memory single-use 5-minute WebAuthn challenges, #223),
+│   │   │   │                               passkey.service.ts (add / second step / passwordless / rename / remove, @simplewebauthn/server, #223),
 │   │   │   │                               user-admin.service.ts (role change / deactivate / reactivate / remove / transfer / reset link, owner lock),
 │   │   │   │                               user-admin-policy.service.ts (pure: who may act on whom, which buttons),
 │   │   │   │                               password-reset.service.ts (mint / look up / complete reset links, owner lock, #277),
@@ -334,8 +337,8 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), sign-in helpers shared by password and passkey sign-in (#223)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
@@ -351,10 +354,10 @@ bunmail/
 │       │   ├── dashboard.js              ← The only script: theme, confirms, bulk select, chip inputs, time display, previews (#255)
 │       │   └── icons.tsx                 ← Inline SVG icons
 │       ├── layouts/
-│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218; Active sessions, Change password and Two-factor for every role, #281, #279, #220)
+│       │   └── base.tsx                  ← HTML shell + self-hosted CSS/JS + nav (admin-only links by viewer role, #218; Active sessions, Change password, Two-factor and Passkeys for every role, #281, #279, #220, #223)
 │       ├── routes/
 │       │   ├── login.tsx                 ← Email + password login form (standalone, no nav, #216)
-│       │   ├── login-two-factor.tsx      ← Second login step: TOTP or recovery code (standalone, #220)
+│       │   ├── login-two-factor.tsx      ← Second login step: TOTP or recovery code, and/or a passkey (standalone, #220, #223)
 │       │   ├── setup.tsx                 ← Owner setup form + invalid-link page (standalone, #215)
 │       │   ├── invite.tsx                ← Invitation accept form + invalid-link / account-exists pages (standalone, #217)
 │       │   ├── invitations.tsx           ← Invitations: invite form, pending list, one-time link (#217)
@@ -364,6 +367,7 @@ bunmail/
 │       │   ├── account-password.tsx      ← Change password form for the signed-in user (#279)
 │       │   ├── account-sessions.tsx      ← Active sessions of the signed-in user (#281)
 │       │   ├── account-two-factor.tsx    ← Two-factor page: QR code enrolment, recovery codes, disable (#220)
+│       │   ├── account-passkeys.tsx      ← Passkeys page: list, add, rename, remove (#223)
 │       │   ├── home.tsx                  ← Stats overview (cards grid)
 │       │   ├── landing.tsx               ← Public marketing page
 │       │   ├── unsubscribe.tsx           ← Unsubscribe confirm / done / invalid pages, no script (#249)
@@ -901,7 +905,7 @@ Dashboard accounts: identity only; login methods live in `user_credentials`. Exa
 
 ### `user_credentials` (#214)
 
-One row per login method: `password`, and `totp` (the second factor, #220); `passkey`, `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; one `totp` row per user (#220, migration `0027`); `(provider, provider_account_id)` where provider is set. Columns: `secret_hash` (argon2id hash, or the TOTP secret encrypted with `DKIM_ENCRYPTION_KEY`), `provider`, `provider_account_id` (text), `name`, `public_key`, `counter` (bigint: passkey sign count, or the last accepted TOTP step for replay protection), `last_used_at`, timestamps. A `totp` row exists only once confirmed.
+One row per login method: `password`, `totp` (the second factor, #220) and `passkey` (WebAuthn, a first or second factor, #223); `oauth` reserved (CHECK). FK `users` ON DELETE CASCADE. Unique: one `password` row per user; one `totp` row per user (#220, migration `0027`); `(provider, provider_account_id)` where provider is set; `provider_account_id` where `type = 'passkey'` (the WebAuthn credential id, #223, migration `0039`). Columns: `secret_hash` (argon2id hash, or the TOTP secret encrypted with `DKIM_ENCRYPTION_KEY`), `provider`, `provider_account_id` (text: the passkey credential id, base64url), `name` (passkey label, 1 to 64 characters), `public_key` (passkey COSE key, base64url), `transports` (varchar(255), nullable, comma-separated known passkey transports, #223), `counter` (bigint: passkey signature counter for clone detection, or the last accepted TOTP step for replay protection), `last_used_at`, timestamps. A `totp` row exists only once confirmed; a `passkey` row only once its registration verified. "Has a second factor" (`hasSecondFactor`) means a `totp` or `passkey` row.
 
 ### `user_recovery_codes` (#220)
 
@@ -909,7 +913,7 @@ TOTP recovery codes (migration `0027`): `id` (`rcv_`), `user_id` (FK `users` ON 
 
 ### `sessions` (#214, #216)
 
-Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`) (#220: `pending` after the password of an account with a second factor, 10 minutes, never admitted by the guard; `mfa` after the code), `auth_method`, `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. `location` (#281, migration `0025`, nullable `varchar(128)`): the approximate location of `ip` ("City, Country" or "Country"), looked up once in the background after the session is created when GeoIP is configured. `totp_pending_secret` (#220, migration `0027`, nullable `text`): the encrypted secret of a TOTP enrolment started in this session and not confirmed yet. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
+Opaque session tokens stored as SHA-256 (`token_hash`, UNIQUE), FK `users` ON DELETE CASCADE, `assurance` CHECK IN (`pending`,`password`,`mfa`) (#220: `pending` after the password of an account with a second factor, TOTP or a passkey (#223), 10 minutes, never admitted by the guard; `mfa` after the code or a passkey, and for a passwordless passkey sign-in), `auth_method` (`passkey` for a passwordless sign-in, whose session is bound to the passkey by `credential_id`), `expires_at` (24 h idle, capped at `created_at` + 7 days), `last_seen_at`, `ip`, `user_agent`. Token rotation (#216, migration `0017`) adds `previous_token_hash` (nullable, the token the last rotation replaced) and `rotated_at` (nullable). `credential_id` (#277, migration `0019`, nullable, FK `user_credentials` ON DELETE CASCADE) binds a session to the credential it was opened with: replacing a password deletes those sessions, and a login racing a reset cannot open one on the old password. `location` (#281, migration `0025`, nullable `varchar(128)`): the approximate location of `ip` ("City, Country" or "Country"), looked up once in the background after the session is created when GeoIP is configured. `totp_pending_secret` (#220, migration `0027`, nullable `text`): the encrypted secret of a TOTP enrolment started in this session and not confirmed yet. Indexes on `user_id`, `expires_at`, `previous_token_hash` and `credential_id`. Every superseded hash is also kept in `session_token_history` (`token_hash` PK, `session_id` FK ON DELETE CASCADE, `superseded_at`) until the session ends, so reuse of a token of any age is detected. Lifecycle (create, rotate, reuse detection, revoke, sweep): [docs/users.md](docs/users.md#sessions-216).
 
 ### `user_tokens` (#214)
 
@@ -1060,6 +1064,10 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/login                   | Check email + password, open a session (`pending` for a 2FA account, #220) | No |
 | GET    | /dashboard/login/two-factor        | Second login step form (#220) | Pending session |
 | POST   | /dashboard/login/two-factor        | Check the TOTP or recovery code (throttled, replay-proof), `mfa` session with a new token (#220) | Pending session |
+| POST   | /dashboard/login/two-factor/passkey/options | Passkey request options for the second step, the account's passkeys allowed, JSON (#223) | Pending session |
+| POST   | /dashboard/login/two-factor/passkey | Verify a passkey assertion (same budget as codes), `mfa` session with a new token (#223) | Pending session |
+| POST   | /dashboard/login/passkey/options   | Passwordless passkey options (discoverable), `bm_wa` cookie, one login attempt counted, JSON (#223) | Public |
+| POST   | /dashboard/login/passkey           | Verify the passkey (origin, RP ID, UV, signature, counter), `mfa` session bound to it (#223) | Public |
 | POST   | /dashboard/logout                  | Revoke the session, clear the cookie | No |
 | GET    | /dashboard/setup?token=            | Owner setup form (read-only, never spends the token) | Setup token |
 | POST   | /dashboard/setup                   | Set owner password, spend the token, sign in | Setup token |
@@ -1080,6 +1088,11 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/account/two-factor/confirm | First code: 2FA on, ten recovery codes, every other session signed out, this one `mfa` (#220) | Member |
 | POST   | /dashboard/account/two-factor/recovery-codes | Ten new recovery codes, needs an app code (#220) | Member |
 | POST   | /dashboard/account/two-factor/disable | 2FA off, needs the password and a code (#220) | Member |
+| GET    | /dashboard/account/passkeys        | Own passkeys: name, added, last used; add, rename, remove (#223) | Member |
+| POST   | /dashboard/account/passkeys/options | Current password (password change budget), then creation options bound to this session, JSON (#223) | Member |
+| POST   | /dashboard/account/passkeys        | Verify and store the new passkey; the first second factor signs out every other session, this one `mfa` (#223) | Member |
+| POST   | /dashboard/account/passkeys/:id/rename | Rename an own passkey (#223) | Member |
+| POST   | /dashboard/account/passkeys/:id/delete | Remove an own passkey, needs the password; its sessions end (#223) | Member |
 | GET    | /dashboard/send                    | Compose & send email    | Member |
 | POST   | /dashboard/send                    | Queue email for send    | Member |
 | GET    | /dashboard/emails                  | Email logs + filters + bulk-select | Member |
@@ -1177,7 +1190,7 @@ Not under `/api/v1` and outside the auth middleware: the token (an HMAC over ema
 - **Lookup:** Hash incoming token → match against `key_hash` column
 - **Roles (#130):** keys are **admin** or **restricted** (`is_admin`). `adminMiddleware` (`src/middleware/auth.ts`, used after `authMiddleware`) gates the management plane (`/api/v1/api-keys`, `/api/v1/domains`, `/api/v1/inbound`) returning `403 ADMIN_REQUIRED` for restricted keys. `is_admin` is operator-set only (dashboard + seed), never via a REST DTO. Existing keys migrated to admin; new API-created keys default restricted.
 - **Bootstrap:** Run `bun run src/db/seed.ts` to create the first API key (admin). The dashboard owner is created on boot from `BUNMAIL_OWNER_EMAIL` (#215); recover a lost setup link with `bun run src/db/reset-owner.ts`
-- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Optional TOTP two-factor authentication with recovery codes, mandatory for the owner or admins with `REQUIRE_2FA` (#220). Every protected route requires a minimum account role (owner > admin > member, #222). Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
+- **Dashboard (separate from API keys, #216):** account login (email + password, argon2id) and server-side sessions in Postgres. The cookie token is looked up by its SHA-256 through an indexed column, so no secret is compared in JavaScript; sessions rotate their token every minute with reuse detection, and `reset-owner` signs the owner out everywhere. Optional TOTP two-factor authentication with recovery codes, mandatory for the owner or admins with `REQUIRE_2FA` (#220). Passkeys (WebAuthn, `@simplewebauthn/server`): a phishing-resistant passwordless sign-in or second factor, bound to `APP_BASE_URL`, user verification required, clone detection on the signature counter (#223). Every protected route requires a minimum account role (owner > admin > member, #222). Details: [docs/dashboard.md](docs/dashboard.md#auth-flow)
 
 ---
 

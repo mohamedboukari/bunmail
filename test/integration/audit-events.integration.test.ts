@@ -741,7 +741,7 @@ const CASES: Case[] = [
         action: "auth.two_factor.removed",
         ...asUser("member"),
         targetId: ids.member,
-        metadata: { via: "password_reset" },
+        metadata: { via: "password_reset", totp: true, passkeys: 0 },
       };
     },
   },

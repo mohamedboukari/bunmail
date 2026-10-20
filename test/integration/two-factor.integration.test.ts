@@ -540,7 +540,7 @@ describe("login with two-factor", () => {
 
       const active = await sessionService.findActiveSession(token);
       expect(active?.assurance).toBe("mfa");
-      expect(active?.hasTotp).toBe(true);
+      expect(active?.hasSecondFactor).toBe(true);
       expect(await sessionService.findActiveSession(pending)).toBeNull();
       expect(await sessionService.findPendingSession(pending)).toBeNull();
       expect((await call("GET", "/dashboard", { token })).status).toBe(200);

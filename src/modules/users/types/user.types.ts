@@ -18,12 +18,21 @@ export function isUserRole(value: string): value is UserRole {
 }
 
 /**
- * Login methods. `password` and `totp` (the second factor, #220) are
- * implemented; the others are reserved so passkeys (#223) and OAuth/SSO
- * (#224) can add rows without a schema change.
+ * Login methods. `password`, `totp` (the second factor, #220) and
+ * `passkey` (WebAuthn, a first or second factor, #223) are implemented;
+ * `oauth` is reserved so OAuth/SSO (#224) can add rows without a schema
+ * change.
  */
 export const CREDENTIAL_TYPES = ["password", "totp", "passkey", "oauth"] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
+
+/**
+ * The credential types that count as a second factor (#220, #223): an
+ * account holding any of them gets a `pending` session from the password
+ * step, its `password` sessions are refused, and it satisfies
+ * `REQUIRE_2FA`. Read by the one shared predicate, `hasSecondFactor`.
+ */
+export const SECOND_FACTOR_TYPES = ["totp", "passkey"] as const;
 
 /**
  * How far a session has got through login. `pending` means the first
@@ -340,8 +349,10 @@ export type CompletePasswordResetResult =
       tokensRevoked: number;
       /** How many open invitations and reset links the account had issued were revoked. */
       issuedTokensRevoked: number;
-      /** The account's TOTP second factor and recovery codes were removed (#220). */
+      /** A second factor was removed (#220, #223): TOTP with its recovery codes, or passkeys. */
       twoFactorRemoved: boolean;
+      /** What exactly was removed, for the security email and the audit log (#223). */
+      secondFactorsRemoved: RemovedSecondFactors;
       /** `sessions.id` of the session opened for the account. */
       sessionId: string;
       /** Raw cookie value of that session. */
@@ -517,10 +528,11 @@ export interface ActiveSession {
   /** How far the session got through login (`password` or `mfa` here). */
   assurance: SessionAssurance;
   /**
-   * The account has a confirmed `totp` credential (#220), from the same
-   * query. The guard reads it for the `REQUIRE_2FA` policy.
+   * The account has a second factor (#220, #223): a confirmed `totp`
+   * credential or a passkey, from the same query (`hasSecondFactor`). The
+   * guard reads it for the `REQUIRE_2FA` policy.
    */
-  hasTotp: boolean;
+  hasSecondFactor: boolean;
   /** Which of the session's two hashes the presented token matched. */
   matched: "current" | "previous";
   /** The current token is older than `SESSION_ROTATE_SECONDS`. */
@@ -714,6 +726,135 @@ export type TwoFactorLoginResult =
     }
   | { ok: false; reason: "rate_limited" | "wrong_code" | "session_gone" };
 
+/**
+ * The second factors a recovery link removed (#220, #223): a completed
+ * admin-issued reset link or `reset-owner` link takes every one away.
+ */
+export interface RemovedSecondFactors {
+  /** The TOTP credential (and its recovery codes) was removed. */
+  totp: boolean;
+  /** How many passkeys were removed. */
+  passkeys: number;
+}
+
+/* ─── Passkeys (#223) ─── */
+
+/** A passkey as the Passkeys page lists it. Never carries the key or the counter. */
+export interface PasskeySummary {
+  /** `user_credentials.id` (`crd_...`); safe to log. */
+  id: string;
+  /** The user's label for it (escape before rendering). */
+  name: string;
+  createdAt: Date;
+  /** Last successful sign-in with it, or null. */
+  lastUsedAt: Date | null;
+}
+
+/**
+ * The relying party passkeys are bound to (#223), derived from
+ * `APP_BASE_URL`: its hostname is the RP ID, its origin the only origin
+ * a ceremony may come from.
+ */
+export interface RelyingParty {
+  /** Hostname of `APP_BASE_URL`, e.g. `mail.example.com`. */
+  rpID: string;
+  /** Origin of `APP_BASE_URL`, e.g. `https://mail.example.com`. */
+  origin: string;
+}
+
+/**
+ * Why a passkey ceremony was refused (#223). Logged server-side; the
+ * browser gets one generic message per flow.
+ *
+ * - `rate_limited`: the failed-attempt budget is spent; nothing verified.
+ * - `wrong_password`: the current password did not verify (add, delete).
+ * - `invalid_name`: the name failed the policy (add, rename).
+ * - `no_challenge`: no live challenge for this binding (never issued,
+ *   already used, or older than 5 minutes).
+ * - `rejected`: the response did not verify (origin, RP ID, challenge,
+ *   signature, user verification, malformed input).
+ * - `unknown_credential`: no passkey (of this account) has that id.
+ * - `counter_regressed`: the signature counter did not grow, a possible
+ *   cloned authenticator; the assertion is refused.
+ * - `already_registered`: the authenticator is already registered.
+ * - `account_disabled`: the account is deactivated (passwordless sign-in).
+ * - `not_found`: no passkey of this account has that id (rename, delete).
+ * - `session_gone`: the pending session expired, was revoked or completed.
+ */
+export type PasskeyRefusal =
+  | "rate_limited"
+  | "wrong_password"
+  | "invalid_name"
+  | "no_challenge"
+  | "rejected"
+  | "unknown_credential"
+  | "counter_regressed"
+  | "already_registered"
+  | "account_disabled"
+  | "not_found"
+  | "session_gone";
+
+/** A refused passkey action, with the passkey involved when one was found. */
+export interface PasskeyFailure<R extends PasskeyRefusal = PasskeyRefusal> {
+  ok: false;
+  reason: R;
+  /** The matched passkey (`counter_regressed`), for the alert and the log. */
+  passkey?: { id: string; name: string; userId: string; email: string };
+}
+
+/** Result of a verified registration: the new passkey. */
+export type FinishPasskeyRegistrationResult =
+  | {
+      ok: true;
+      /** `user_credentials.id` of the new passkey. */
+      credentialId: string;
+      name: string;
+      /** Other sessions signed out (only when this is the account's first second factor). */
+      sessionsRevoked: number;
+    }
+  | PasskeyFailure<"no_challenge" | "rejected" | "already_registered">;
+
+/** Result of the second login step with a passkey (#223). */
+export type PasskeyTwoFactorResult =
+  | {
+      ok: true;
+      /** `user_credentials.id` of the passkey used. */
+      credentialId: string;
+      /** The rotated session token (the pending one is dead). */
+      token: string;
+      /** Seconds left until the session's absolute cap: the cookie `Max-Age`. */
+      maxAgeSec: number;
+    }
+  | PasskeyFailure<
+      | "rate_limited"
+      | "no_challenge"
+      | "rejected"
+      | "unknown_credential"
+      | "counter_regressed"
+      | "session_gone"
+    >;
+
+/** Result of a passwordless sign-in with a passkey (#223). */
+export type PasskeySignInResult =
+  | {
+      ok: true;
+      userId: string;
+      /** The account's stored email (for the new-device alert). PII. */
+      email: string;
+      /** `user_credentials.id` of the passkey used; the caller binds the new session to it. */
+      credentialId: string;
+    }
+  | (PasskeyFailure<
+      | "no_challenge"
+      | "rejected"
+      | "unknown_credential"
+      | "counter_regressed"
+      | "account_disabled"
+    > & {
+      /** The account the credential belongs to, when it was found (audit log). Never shown. */
+      userId?: string;
+    });
+
 /** What a completed owner setup returns (#215, #216). */
 export interface CompletedOwnerSetup {
   /** `users.id` of the owner. */
@@ -722,8 +863,10 @@ export interface CompletedOwnerSetup {
   email: string;
   /** Raw cookie value of the session opened for the owner. */
   sessionToken: string;
-  /** The owner's TOTP second factor and recovery codes were removed (#220, reset-owner recovery). */
+  /** A second factor of the owner was removed (#220, #223, reset-owner recovery). */
   twoFactorRemoved: boolean;
+  /** What exactly was removed, for the security email (#223). */
+  secondFactorsRemoved: RemovedSecondFactors;
 }
 
 /**

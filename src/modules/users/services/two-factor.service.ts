@@ -1,4 +1,4 @@
-import { and, count, eq, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { config } from "../../../config.ts";
 import { decryptSecret, encryptSecret } from "../../../utils/crypto.ts";
@@ -16,6 +16,7 @@ import type {
   PendingEnrolment,
   PendingSession,
   RegenerateRecoveryCodesResult,
+  RemovedSecondFactors,
   SecondFactorMethod,
   SessionClient,
   Tx,
@@ -41,7 +42,8 @@ import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 /**
  * TOTP two-factor authentication for the dashboard (#220): enrolment,
  * the second login step, recovery codes, disabling, and the removal a
- * password reset or `reset-owner` performs.
+ * password reset or `reset-owner` performs (of every second factor, the
+ * passkeys of #223 included).
  *
  * **Storage.** A confirmed second factor is a `user_credentials` row of
  * type `totp`: `secret_hash` holds the base32 secret encrypted with
@@ -251,8 +253,8 @@ export async function twoFactorStatus(userId: string): Promise<TwoFactorStatus> 
   });
 }
 
-/** The account's `password` credential hash, or null. */
-async function passwordHashOf(userId: string): Promise<string | null> {
+/** The account's `password` credential hash, or null (also the passkey re-auth, #223). */
+export async function passwordHashOf(userId: string): Promise<string | null> {
   const [credential] = await withSanitizedErrors(() =>
     db
       .select({ secretHash: userCredentials.secretHash })
@@ -560,29 +562,68 @@ export async function regenerateRecoveryCodes(
 
 /* ─── Recovery (lost authenticator) ─── */
 
+/** The credential type of a passkey (#223). */
+const PASSKEY_CREDENTIAL = "passkey";
+
 /**
- * Removes the account's second factor and recovery codes, inside the
- * caller's transaction: the recovery path when the authenticator is lost.
- * Called by a completed admin-issued password reset (#277) and a
- * completed owner setup link (`reset-owner`), which already sign every
- * session of the account out. Pending enrolment secrets on its sessions
- * are cleared too.
+ * Removes every second factor of the account, inside the caller's
+ * transaction: the TOTP credential with its recovery codes (#220) and
+ * every passkey (#223). The recovery path when the authenticator or the
+ * passkeys are lost. Called by a completed admin-issued password reset
+ * (#277) and a completed owner setup link (`reset-owner`), which already
+ * sign every session of the account out. Pending enrolment secrets on its
+ * sessions are cleared too.
  *
- * @returns true when a second factor was removed.
+ * @returns what was removed, for the security email and the audit log.
  */
-export async function removeTwoFactor(
+export async function removeSecondFactors(
   executor: DbExecutor,
   userId: string,
-): Promise<boolean> {
+): Promise<RemovedSecondFactors> {
   const removed = await executor
     .delete(userCredentials)
     .where(
-      and(eq(userCredentials.userId, userId), eq(userCredentials.type, TOTP_CREDENTIAL)),
+      and(
+        eq(userCredentials.userId, userId),
+        inArray(userCredentials.type, [TOTP_CREDENTIAL, PASSKEY_CREDENTIAL]),
+      ),
     )
-    .returning({ id: userCredentials.id });
+    .returning({ type: userCredentials.type });
   await executor
     .update(sessions)
     .set({ totpPendingSecret: null })
     .where(eq(sessions.userId, userId));
-  return removed.length > 0;
+  return {
+    totp: removed.some((row) => row.type === TOTP_CREDENTIAL),
+    passkeys: removed.filter((row) => row.type === PASSKEY_CREDENTIAL).length,
+  };
+}
+
+/** Whether a removal took any second factor away. */
+export function removedAny(removed: RemovedSecondFactors): boolean {
+  return removed.totp || removed.passkeys > 0;
+}
+
+/**
+ * Which second factors the account has (#223): whether it has TOTP and
+ * how many passkeys. The second login step offers exactly these.
+ */
+export async function secondFactorsOf(
+  userId: string,
+): Promise<{ totp: boolean; passkeys: number }> {
+  const rows = await withSanitizedErrors(() =>
+    db
+      .select({ type: userCredentials.type })
+      .from(userCredentials)
+      .where(
+        and(
+          eq(userCredentials.userId, userId),
+          inArray(userCredentials.type, [TOTP_CREDENTIAL, PASSKEY_CREDENTIAL]),
+        ),
+      ),
+  );
+  return {
+    totp: rows.some((row) => row.type === TOTP_CREDENTIAL),
+    passkeys: rows.filter((row) => row.type === PASSKEY_CREDENTIAL).length,
+  };
 }

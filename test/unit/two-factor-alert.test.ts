@@ -24,6 +24,9 @@ const EVENTS: TwoFactorAlertEvent[] = [
   "recovery_codes_regenerated",
   "removed_by_reset",
   "login_codes_exhausted",
+  "passkey_added",
+  "passkey_removed",
+  "passkey_counter_regressed",
 ];
 
 describe("buildTwoFactorAlertEmail", () => {
@@ -57,6 +60,36 @@ describe("buildTwoFactorAlertEmail", () => {
         }).subject,
     );
     expect(new Set(subjects).size).toBe(EVENTS.length);
+  });
+
+  test("a passkey's name and what a reset removed are listed (#223), the name escaped", () => {
+    const added = buildTwoFactorAlertEmail({
+      event: "passkey_added",
+      email: "a@example.com",
+      ip: null,
+      at: new Date(),
+      passkeyName: "<b>Laptop</b>\r\nBcc: evil@example.com",
+    });
+    expect(added.html).toContain("&lt;b&gt;Laptop&lt;/b&gt;");
+    expect(added.html).not.toContain("<b>Laptop");
+    expect(added.text).toContain("Passkey: <b>Laptop</b>");
+    expect(added.text).not.toContain("\r\nBcc:");
+
+    const reset = (removed: { totp: boolean; passkeys: number }): string =>
+      buildTwoFactorAlertEmail({
+        event: "removed_by_reset",
+        email: "a@example.com",
+        ip: null,
+        at: new Date(),
+        removed,
+      }).text;
+    expect(reset({ totp: true, passkeys: 2 })).toContain(
+      "Removed: authenticator app (and its recovery codes) and 2 passkeys",
+    );
+    expect(reset({ totp: false, passkeys: 1 })).toContain("Removed: 1 passkey");
+    expect(reset({ totp: true, passkeys: 0 })).toContain(
+      "Removed: authenticator app (and its recovery codes)\n",
+    );
   });
 
   test("hostile values are escaped in HTML and flattened in text", () => {

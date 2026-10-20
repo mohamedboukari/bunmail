@@ -5,7 +5,7 @@ import { generateId } from "../../../utils/id.ts";
 import { sessions } from "../models/session.schema.ts";
 import { sessionTokenHistory } from "../models/session-token-history.schema.ts";
 import { users } from "../models/user.schema.ts";
-import { hasTotpCredential } from "../models/user-credential.schema.ts";
+import { hasSecondFactor } from "../models/user-credential.schema.ts";
 import {
   isSessionAssurance,
   isUserRole,
@@ -67,10 +67,11 @@ function seconds(value: number): SQL {
  * The session-side half of "live" (#216, #281): unexpired (`expires_at`
  * carries both the 24 h idle and the 7 d absolute rule, see
  * `slidingExpiry`) and an assurance that may open a page: `mfa`, or
- * `password` only while the account has no TOTP second factor (#220).
- * `pending` never. So a password-level session can never outlive the
- * account turning 2FA on, even one a login opened while a confirmation
- * was committing (confirmation deletes the other sessions, but a login
+ * `password` only while the account has no second factor (#220: TOTP;
+ * #223: a passkey; one shared predicate, `hasSecondFactor`). `pending`
+ * never. So a password-level session can never outlive the account
+ * turning 2FA on or adding a passkey, even one a login opened while a
+ * confirmation was committing (confirmation deletes the other sessions, but a login
  * that checked the password just before can insert after it). The guard
  * (`findActiveSession`) and the Active sessions list share it, so the
  * list shows exactly the sessions that still open the dashboard.
@@ -82,7 +83,7 @@ function liveSession(): SQL | undefined {
       eq(sessions.assurance, "mfa"),
       and(
         eq(sessions.assurance, "password"),
-        sql`NOT ${hasTotpCredential(sessions.userId)}`,
+        sql`NOT ${hasSecondFactor(sessions.userId)}`,
       ),
     ),
   );
@@ -142,7 +143,7 @@ export async function createSession(
  * `password` or `mfa`, so a `pending` session (#220) can never open a
  * protected page. The same row carries the account's email and role, the
  * session's assurance (#222) and whether the account has a second factor
- * (#220, for the `REQUIRE_2FA` policy): the guard builds the handlers'
+ * (#220, #223, for the `REQUIRE_2FA` policy): the guard builds the handlers'
  * `auth` from it without a second query.
  */
 export async function findActiveSession(token: string): Promise<ActiveSession | null> {
@@ -155,7 +156,7 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
         email: users.email,
         role: users.role,
         assurance: sessions.assurance,
-        hasTotp: hasTotpCredential(sessions.userId),
+        hasSecondFactor: hasSecondFactor(sessions.userId),
         isCurrent: sql<boolean>`${sessions.tokenHash} = ${tokenHash}`,
         rotationDue: sql<boolean>`coalesce(${sessions.rotatedAt}, ${sessions.createdAt}) < now() - ${seconds(SESSION_ROTATE_SECONDS)}`,
         graceOver: sql<boolean>`coalesce(${sessions.rotatedAt} < now() - ${seconds(SESSION_ROTATION_GRACE_SECONDS)}, true)`,
@@ -186,7 +187,7 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
     email: row.email,
     role: row.role,
     assurance: row.assurance,
-    hasTotp: row.hasTotp,
+    hasSecondFactor: row.hasSecondFactor,
     matched: row.isCurrent ? "current" : "previous",
     rotationDue: row.rotationDue,
     graceOver: row.graceOver,
@@ -556,4 +557,13 @@ export async function markSessionMfa(tx: Tx, sessionId: string): Promise<void> {
     .update(sessions)
     .set({ assurance: "mfa", totpPendingSecret: null })
     .where(eq(sessions.id, sessionId));
+}
+
+/**
+ * Raises a session to `mfa` after the user proved a passkey in it (#223,
+ * registration). Unlike `markSessionMfa`, a TOTP enrolment the session
+ * started is left alone. The token is not rotated, for the same reason.
+ */
+export async function raiseSessionToMfa(tx: Tx, sessionId: string): Promise<void> {
+  await tx.update(sessions).set({ assurance: "mfa" }).where(eq(sessions.id, sessionId));
 }

@@ -86,6 +86,11 @@ const ROUTES: Record<string, RouteSpec> = {
   /** The second login step (#220): authorized by a `pending` session, checked in the handler. */
   "GET /dashboard/login/two-factor": { access: "public" },
   "POST /dashboard/login/two-factor": { access: "public" },
+  /** Passkeys (#223): the passwordless sign-in (bound to the `bm_wa` cookie) and the passkey second step (a `pending` session). */
+  "POST /dashboard/login/passkey/options": { access: "public" },
+  "POST /dashboard/login/passkey": { access: "public" },
+  "POST /dashboard/login/two-factor/passkey/options": { access: "public" },
+  "POST /dashboard/login/two-factor/passkey": { access: "public" },
   /** The self-hosted stylesheet and script every page loads, login included (#255). */
   "GET /dashboard/assets/dashboard.css": { access: "public" },
   "GET /dashboard/assets/dashboard.js": { access: "public" },
@@ -115,6 +120,21 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/account/two-factor/disable": {
     access: "member",
     body: { password: "x", code: "x" },
+  },
+  /** Every role manages its own passkeys (#223), like its second factor; dummy values change nothing. */
+  "GET /dashboard/account/passkeys": { access: "member" },
+  "POST /dashboard/account/passkeys/options": {
+    access: "member",
+    body: { name: "x", password: "x" },
+  },
+  "POST /dashboard/account/passkeys": { access: "member", body: { credential: "x" } },
+  "POST /dashboard/account/passkeys/:id/rename": {
+    access: "member",
+    body: { name: "x" },
+  },
+  "POST /dashboard/account/passkeys/:id/delete": {
+    access: "member",
+    body: { password: "x" },
   },
   "GET /dashboard/send": { access: "member" },
   "POST /dashboard/send": {

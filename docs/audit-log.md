@@ -58,8 +58,8 @@ recordAuditEvent(input, tx?)
 
 | Action | Actor | Target | Metadata |
 |---|---|---|---|
-| `auth.login.succeeded` | user | session | `method` (`password`, `totp`, `recovery_code`), `recoveryCodesLeft` |
-| `auth.login.failed` (failure) | user, or no id | | `step` (`password`, `two_factor`), `reason` (`unknown_account`, `no_password`, `deactivated`, `wrong_password`, `input_too_long`, `credential_replaced`, `wrong_code`) |
+| `auth.login.succeeded` | user | session | `method` (`password`, `totp`, `recovery_code`, `passkey` #223), `recoveryCodesLeft` |
+| `auth.login.failed` (failure) | user, or no id | | `step` (`password`, `two_factor`, `passkey` for a passwordless sign-in #223), `reason` (`unknown_account`, `no_password`, `deactivated`, `wrong_password`, `input_too_long`, `credential_replaced`, `wrong_code`, and for passkeys `passkey_rejected`, `unknown_passkey`, `passkey_counter_regressed`) |
 | `auth.login.rate_limited` (failure) | no id | | `retryAfterSec` |
 | `auth.login.two_factor_required` | user | session | |
 | `auth.login.two_factor_locked` (failure) | user | session | |
@@ -70,7 +70,10 @@ recordAuditEvent(input, tx?)
 | `auth.two_factor.enabled` | user | user | `sessionsRevoked` |
 | `auth.two_factor.disabled` | user | user | `method` |
 | `auth.two_factor.recovery_codes_regenerated` | user | user | |
-| `auth.two_factor.removed` | user | user | `via` (`password_reset`, `owner_setup`) |
+| `auth.two_factor.removed` | user | user | `via` (`password_reset`, `owner_setup`), `totp`, `passkeys` (what was removed, #223) |
+| `auth.passkey.added` | user | passkey (label: its name) | `sessionsRevoked` (#223) |
+| `auth.passkey.removed` | user | passkey (label: its name) | (#223) |
+| `auth.passkey.counter_regressed` (failure) | user | passkey (label: its name) | `storedCounter`, `receivedCounter`: a possible cloned authenticator, the sign-in was refused (#223) |
 | `auth.password.changed` | user | user | `sessionsRevoked` |
 | `auth.password_reset.issued` | user (the issuer) | user | `expiresAt`, `linksReplaced` |
 | `auth.password_reset.completed` | user | user | `issuedBy`, `sessionsRevoked` |

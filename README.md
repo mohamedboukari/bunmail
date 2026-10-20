@@ -118,7 +118,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Attachments**: up to 10 files per send (REST `attachments`, Resend-compatible, or the parts of an SMTP-submitted message), `ATTACHMENTS_MAX_TOTAL_MB` in total (default 5, up to 18); executables, scripts and installers refused by extension and by sniffed content, types derived from the bytes, inline `cid:` images; files kept only until the email is sent, fails or bounces, and downloadable from the dashboard as forced downloads until then ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **One-click unsubscribe**: single-recipient mail carries a per-recipient RFC 8058 `List-Unsubscribe` link (and an `unsub+` mailto when inbound SMTP is on); using it suppresses that recipient for the sending key and fires `email.unsubscribed` ([docs/suppressions.md](docs/suppressions.md#one-click-unsubscribe))
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
-- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, bounce rate with a warning above 2%, queue depth), a per-MX delivery table on each email with a badge for sessions sent without TLS; owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, a Change password page for every account (signs out every other device), an Active sessions page for every account (device, IP, optional approximate location from an offline GeoIP database; sign out one device or all others), an email alert on sign-in from a new device (no links), optional TOTP two-factor authentication with recovery codes for every account (`REQUIRE_2FA` makes it mandatory for the owner or admins), an append-only audit log of security-relevant actions (sign-ins, account, two-factor, API key, domain, webhook and suppression changes, with actor, IP and user agent) for admins, and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
+- **Web dashboard**: server-rendered (Elysia JSX), bulk operations, real-time stats (24h sent, success rate, bounce rate with a warning above 2%, queue depth), a per-MX delivery table on each email with a badge for sessions sent without TLS; owner account login with revocable server-side sessions, invite-only teammate accounts (admin or member), a Users page to change roles, deactivate or remove accounts, issue one-time password reset links and transfer ownership, a Change password page for every account (signs out every other device), an Active sessions page for every account (device, IP, optional approximate location from an offline GeoIP database; sign out one device or all others), an email alert on sign-in from a new device (no links), optional TOTP two-factor authentication with recovery codes for every account (`REQUIRE_2FA` makes it mandatory for the owner or admins), passkeys (WebAuthn) for a phishing-resistant passwordless sign-in or second factor (#223), an append-only audit log of security-relevant actions (sign-ins, account, two-factor, API key, domain, webhook and suppression changes, with actor, IP and user agent) for admins, and per-user API keys (members manage their own restricted keys; deactivating an account disables its keys)
 - **OpenAPI 3.0**: interactive docs at `/api/docs`
 - **Type-safe**: strict TypeScript, Drizzle ORM, no `any`
 
@@ -262,7 +262,7 @@ See [docs/](docs/) for module-level documentation:
 - [docs/emails.md](docs/emails.md): Outbound module
 - [docs/inbound.md](docs/inbound.md): Inbound module
 - [docs/dmarc-reports.md](docs/dmarc-reports.md): DMARC `rua` aggregate report ingest
-- [docs/users.md](docs/users.md): Dashboard accounts, roles, invitations, sessions, password reset links, password change and two-factor authentication
+- [docs/users.md](docs/users.md): Dashboard accounts, roles, invitations, sessions, password reset links, password change, two-factor authentication and passkeys
 - [docs/logging.md](docs/logging.md): Log format, correlation IDs and tracing a request, email or SMTP session
 - [docs/self-hosting.md](docs/self-hosting.md): Production deployment with DNS records
 - [THREAT_MODEL.md](THREAT_MODEL.md): Assets, attackers, controls, and operator responsibilities
@@ -286,7 +286,7 @@ Active issues: [github.com/mohamedboukari/bunmail/issues](https://github.com/moh
 
 Near-term highlights:
 
-- Passkeys and SSO for dashboard accounts (#223, #224)
+- SSO for dashboard accounts (#224)
 - Bun-native SMTP client (#60)
 
 ## Contributing

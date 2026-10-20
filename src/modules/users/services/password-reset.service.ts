@@ -23,7 +23,7 @@ import { withOwnerLock } from "./owner.service.ts";
 import { PASSWORD_RESET_TTL_MINUTES } from "./password-reset-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
-import { removeTwoFactor } from "./two-factor.service.ts";
+import { removeSecondFactors, removedAny } from "./two-factor.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -267,7 +267,8 @@ export async function completePasswordReset(
       type: PASSWORD_CREDENTIAL,
       secretHash,
     });
-    const twoFactorRemoved = await removeTwoFactor(tx, userId);
+    const secondFactorsRemoved = await removeSecondFactors(tx, userId);
+    const twoFactorRemoved = removedAny(secondFactorsRemoved);
 
     const revokedTokens = await tx
       .update(userTokens)
@@ -331,7 +332,11 @@ export async function completePasswordReset(
           actor,
           ...client,
           target,
-          metadata: { via: "password_reset" },
+          metadata: {
+            via: "password_reset",
+            totp: secondFactorsRemoved.totp,
+            passkeys: secondFactorsRemoved.passkeys,
+          },
         },
         tx,
       );
@@ -347,6 +352,7 @@ export async function completePasswordReset(
       tokensRevoked: revokedTokens.length,
       issuedTokensRevoked,
       twoFactorRemoved,
+      secondFactorsRemoved,
       sessionId: session.sessionId,
       sessionToken: session.token,
     };

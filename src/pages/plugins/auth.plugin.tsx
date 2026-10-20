@@ -1,4 +1,4 @@
-import { t, type Context } from "elysia";
+import { t } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
 import type {
@@ -15,10 +15,7 @@ import {
   shouldAuditLockout,
 } from "../../middleware/login-rate-limit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
-import type {
-  AuditActor,
-  AuditLoginFailureReason,
-} from "../../modules/audit/types/audit.types.ts";
+import type { AuditLoginFailureReason } from "../../modules/audit/types/audit.types.ts";
 import { LoginPage } from "../routes/login.tsx";
 import { OwnerSetupPage, OwnerSetupInvalidPage } from "../routes/setup.tsx";
 import {
@@ -27,17 +24,15 @@ import {
   InviteInvalidPage,
 } from "../routes/invite.tsx";
 import { PasswordResetInvalidPage, PasswordResetPage } from "../routes/reset.tsx";
-import { LoginTwoFactorPage } from "../routes/login-two-factor.tsx";
-import { readDeviceCookie, readSessionCookie } from "../session.ts";
+import { readSessionCookie } from "../session.ts";
 import * as ownerService from "../../modules/users/services/owner.service.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import * as loginService from "../../modules/users/services/login.service.ts";
-import * as sessionLocation from "../../modules/users/services/session-location.service.ts";
-import * as signInDevice from "../../modules/users/services/sign-in-device.service.ts";
 import * as inviteService from "../../modules/users/services/invite.service.ts";
 import * as passwordResetService from "../../modules/users/services/password-reset.service.ts";
 import * as twoFactorService from "../../modules/users/services/two-factor.service.ts";
 import { TWO_FACTOR_LOGIN_PAGE } from "../../modules/users/services/two-factor-policy.service.ts";
+import { relyingPartyFrom } from "../../modules/users/services/passkey-policy.service.ts";
 import { inviteNameProblem } from "../../modules/users/services/invite-policy.service.ts";
 import {
   isWellFormedSetupToken,
@@ -49,13 +44,9 @@ import {
   normalizeLoginEmail,
   sessionIp,
 } from "../../modules/users/services/session-policy.service.ts";
-import {
-  isWellFormedToken,
-  mintToken,
-} from "../../modules/users/services/token.service.ts";
+import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
 import {
   issueSession,
-  issueDeviceCookie,
   clearSession,
   SESSION_STORE_DOWN,
   revokeOnTokenReuse,
@@ -64,36 +55,23 @@ import { redirect } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
-import {
-  shouldAlertCodesExhausted,
-  twoFactorLoginLimiter,
-} from "../lib/two-factor-limiter.ts";
+import { twoFactorLoginLimiter } from "../lib/two-factor-limiter.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
+import {
+  UNKNOWN_ACCOUNT,
+  completeSignIn,
+  endLockedSecondStep,
+  requestIp,
+  secondStepPage,
+  setAuthPageHeaders,
+  userActor,
+} from "../lib/sign-in.tsx";
 
 /**
  * SQLSTATE of a foreign-key violation: a login's session insert naming a
  * credential that a password reset replaced meanwhile (#277).
  */
 const FOREIGN_KEY_VIOLATION = "23503";
-
-/**
- * Leak hardening for the owner setup pages (#215), whose URL or form
- * carries a one-time setup token: never cached (`no-store`), not
- * MIME-sniffed, and not frameable (no clickjacking of the form).
- *
- * `Referrer-Policy: strict-origin` keeps the token URL out of every
- * `Referer` (the page loads a third-party CDN script, and our own access
- * logs record Referer too): requests carry the origin only. It must NOT be
- * `no-referrer`: under that policy browsers send `Origin: null` on the
- * form POST (Fetch spec, "append a request Origin header"), so
- * `isSameOrigin` would reject every real submission with 403.
- */
-function setAuthPageHeaders(set: Context["set"]): void {
-  set.headers["cache-control"] = "no-store";
-  set.headers["referrer-policy"] = "strict-origin";
-  set.headers["x-content-type-options"] = "nosniff";
-  set.headers["x-frame-options"] = "DENY";
-}
 
 /**
  * What the login page says for each `?error=` value; anything else shows
@@ -106,6 +84,8 @@ const LOGIN_ERRORS = new Map<string, string>([
     "two_factor_locked",
     "Too many invalid codes. Wait a few minutes, then sign in again.",
   ],
+  /** A passwordless passkey sign-in failed (#223): one message for every reason. */
+  ["passkey", "That passkey could not sign you in. Try again, or use your password."],
 ]);
 
 /**
@@ -120,61 +100,6 @@ const LOGIN_FAILURE_AUDIT: Record<LoginFailureReason, AuditLoginFailureReason> =
 };
 
 /**
- * The actor of a sign-in attempt whose email matched no account (#221):
- * no id, no label. The typed address is never stored.
- */
-const UNKNOWN_ACCOUNT: AuditActor = { type: "user", id: null, label: null };
-
-/** A dashboard user, by id: the audit log reads the email from the row. */
-function userActor(userId: string): AuditActor {
-  return { type: "user", id: userId };
-}
-
-/** The client IP of a request (the login limiter's resolution). */
-function requestIp(request: Request, socketIp: string | undefined): string {
-  return resolveClientIp({
-    socketIp,
-    forwardedFor: request.headers.get("x-forwarded-for"),
-    trustedProxyHops: config.dashboard.trustedProxyHops,
-  });
-}
-
-/**
- * What runs once a password sign-in is complete (#281, #282): after the
- * password for an account without a second factor, after the code
- * (#220) for one with it. The approximate location is looked up and the
- * new-device check runs, both in the background (never awaited: they
- * never delay or fail a login); the browser keeps its `bm_device` cookie
- * when it presents a well-formed one, else it gets a new one (a malformed
- * or oversized value counts as absent), and the cookie is set again
- * either way, which refreshes its lifetime. Call after `issueSession`:
- * the device cookie is appended to the session cookie.
- */
-function completeSignIn(
-  set: Context["set"],
-  request: Request,
-  signIn: { userId: string; email: string; sessionId: string; ip: string },
-): void {
-  /** The new-device check waits on it for at most 2 s. */
-  const located = sessionLocation.locateSession(signIn.sessionId, sessionIp(signIn.ip));
-  const presentedDevice = readDeviceCookie(request.headers.get("cookie"));
-  const deviceToken =
-    presentedDevice && isWellFormedToken(presentedDevice)
-      ? presentedDevice
-      : mintToken().token;
-  void signInDevice.recognizeSignInDevice({
-    userId: signIn.userId,
-    email: signIn.email,
-    deviceToken,
-    ip: sessionIp(signIn.ip),
-    userAgent: request.headers.get("user-agent"),
-    location: located,
-    at: new Date(),
-  });
-  issueDeviceCookie(set, deviceToken);
-}
-
-/**
  * Public dashboard pages (#291): login (both steps, #220), logout, owner
  * setup, invitation accept and password reset. Mounted before the session
  * guard, so none of these routes runs it; each checks same-origin and its
@@ -185,7 +110,8 @@ export function authPages(app: PublicDashboard) {
     app
       /**
        * GET /dashboard/login
-       * Shows the email and password form. Gets the auth-page headers (no
+       * Shows the email and password form, and "Sign in with a passkey"
+       * when passkeys are on (#223). Gets the auth-page headers (no
        * caching, no framing). The error text is the same for every failed
        * login, so it never says whether an account exists.
        */
@@ -195,7 +121,12 @@ export function authPages(app: PublicDashboard) {
           setAuthPageHeaders(set);
           const error =
             query.error === undefined ? undefined : LOGIN_ERRORS.get(query.error);
-          return <LoginPage error={error} />;
+          return (
+            <LoginPage
+              error={error}
+              passkey={relyingPartyFrom(config.appBaseUrl) !== null}
+            />
+          );
         },
         {
           query: t.Object({
@@ -478,7 +409,7 @@ export function authPages(app: PublicDashboard) {
               ? await sessionService.findPendingSession(token)
               : null;
           if (!pending) return redirect(set, "/dashboard");
-          return <LoginTwoFactorPage />;
+          return await secondStepPage(pending.userId);
         } catch (error: unknown) {
           logger.error("Two-factor sign-in page: session lookup failed", {
             error: errorMessage(error),
@@ -583,37 +514,9 @@ export function authPages(app: PublicDashboard) {
               }
               /** Budget spent (now or before): the pending session ends here. */
               if (result.reason === "rate_limited" || limiter.isLimited()) {
-                await sessionService.revokeSessionByToken(token);
-                logger.warn(
-                  "Two-factor sign-in blocked: too many attempts, pending session revoked",
-                  { userId: pending.userId, sessionId: pending.sessionId, ip },
-                );
-                /** Once per pending session: it is gone, so a retry needs the password again. */
-                await recordAuditEvent({
-                  ...audit,
-                  action: "auth.login.two_factor_locked",
-                  outcome: "failure",
-                });
-                /**
-                 * The account's own budget ran out: the password was right
-                 * and the codes kept failing, a likely password compromise.
-                 * Email the account, at most once per window.
-                 */
-                if (
-                  limiter.ownKeyLimited() &&
-                  shouldAlertCodesExhausted(pending.userId)
-                ) {
-                  void sendTwoFactorAlert({
-                    event: "login_codes_exhausted",
-                    userId: pending.userId,
-                    email: pending.email,
-                    ip: sessionIp(ip),
-                  });
-                }
-                clearSession(set);
-                return redirect(set, "/dashboard/login?error=two_factor_locked");
+                return endLockedSecondStep(set, request, { token, pending, ip, limiter });
               }
-              return <LoginTwoFactorPage error="Invalid code. Try again." />;
+              return await secondStepPage(pending.userId, "Invalid code. Try again.");
             }
 
             limiter.clear();
@@ -831,15 +734,17 @@ export function authPages(app: PublicDashboard) {
           logger.warn("Owner setup completed", {
             owner: redactEmail(owner.email),
             twoFactorRemoved: owner.twoFactorRemoved,
+            passkeysRemoved: owner.secondFactorsRemoved.passkeys,
             ip,
           });
-          /** A `reset-owner` link removed the owner's 2FA (#220): tell the owner. */
+          /** A `reset-owner` link removed the owner's second factors (#220, #223): tell the owner. */
           if (owner.twoFactorRemoved) {
             void sendTwoFactorAlert({
               event: "removed_by_reset",
               userId: owner.userId,
               email: owner.email,
               ip: sessionIp(ip),
+              removed: owner.secondFactorsRemoved,
             });
           }
 
@@ -1170,16 +1075,18 @@ export function authPages(app: PublicDashboard) {
             tokensRevoked: result.tokensRevoked,
             issuedTokensRevoked: result.issuedTokensRevoked,
             twoFactorRemoved: result.twoFactorRemoved,
+            passkeysRemoved: result.secondFactorsRemoved.passkeys,
             sessionId: result.sessionId,
             ip,
           });
-          /** The reset removed the account's 2FA (#220): tell the account. */
+          /** The reset removed the account's second factors (#220, #223): tell the account. */
           if (result.twoFactorRemoved) {
             void sendTwoFactorAlert({
               event: "removed_by_reset",
               userId: result.userId,
               email: result.email,
               ip: sessionIp(ip),
+              removed: result.secondFactorsRemoved,
             });
           }
 
