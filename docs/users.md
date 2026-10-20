@@ -407,7 +407,7 @@ WebAuthn passkeys, verified by `@simplewebauthn/server` (14.0.3, pinned exactly)
 
 **Security emails** (`two-factor-alert.service.ts`, no links, never awaited): `passkey_added` and `passkey_removed` (with the passkey's name, escaped), `passkey_counter_regressed`.
 
-**Dependency note.** `package.json` `overrides` pins `@peculiar/asn1-schema` and `@peculiar/asn1-x509` to 2.11.0: `mailauth`'s `@postalsys/vmc` pins 2.8.0, which bun hoisted, splitting the ASN.1 schema registry between two copies, and every ECDSA signature then failed to verify. BunMail uses only mailauth's SPF and DKIM code, not VMC.
+**Dependency note.** `package.json` `overrides` pins every `@peculiar/asn1-*` package in the tree (`android`, `asym-key`, `cms`, `csr`, `ecc`, `pfx`, `pkcs8`, `pkcs9`, `rsa`, `schema`, `x509`, `x509-attr`, `x509-logotype`, `x509-post-quantum`) to 2.10.0 and `@peculiar/x509` to 2.1.0. `mailauth`'s `@postalsys/vmc` pins 2.8.0, which bun hoisted next to the library's newer copies, splitting the ASN.1 schema registry between them, and every ECDSA signature then failed to verify; one version for the whole family gives one registry. 2.10.0 and `@peculiar/x509` 2.1.0 (which accepts `^2.9.4`; 2.2.0 needs `^2.11.0`) because every pinned version must be at least two weeks old. BunMail uses only mailauth's SPF and DKIM code, not VMC. After a dependency change, check `bun.lock` still lists one version of each `@peculiar/asn1-*` package.
 
 ## Service helpers
 
