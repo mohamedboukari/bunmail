@@ -3,20 +3,8 @@ import { apiPlugins } from "./modules/api-plugins.ts";
 import { openapi } from "@elysiajs/openapi";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
-import { SuppressedRecipientError } from "./modules/suppressions/errors.ts";
-import {
-  ApiKeyCreatorInactiveError,
-  InactiveApiKeyError,
-  UnauthorizedSenderError,
-} from "./modules/api-keys/errors.ts";
-import { TemplateTooLargeError } from "./modules/templates/errors.ts";
-import {
-  EmailSendRejectedError,
-  InvalidFromNameError,
-  InvalidTagError,
-  InvalidAttachmentError,
-  AttachmentTypeNotAllowedError,
-} from "./modules/emails/errors.ts";
+import { ApiKeyCreatorInactiveError } from "./modules/api-keys/errors.ts";
+import { serializeSendError } from "./modules/emails/serializations/send-error.serialization.ts";
 import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
@@ -315,27 +303,18 @@ const app = new Elysia()
     }
 
     /**
-     * Suppression-list rejection (#25). The service throws
-     * `SuppressedRecipientError`; map to 422 with structured body so
-     * clients can pivot to `DELETE /api/v1/suppressions/:id` via the
-     * `suppressionId` field: `null` when a shared suppression applied
-     * (#250), whose row belongs to another key and is never revealed.
+     * A send refused on its input: the suppression gate (#25), the sender
+     * domain (#245), the template, a custom header, a tag, an attachment,
+     * the recipients (#178), a revoked key, the allowed senders (#126).
+     * Mapped in `serializeSendError`, which the batch endpoint (#178) also
+     * uses per item, so both answer a refusal the same way.
      */
-    if (error instanceof SuppressedRecipientError) {
-      set.status = 422;
-      return {
-        success: false,
-        error: error.message,
-        code: "RECIPIENT_SUPPRESSED",
-        suppressionId: error.suppressionId,
-      };
+    const sendError = serializeSendError(error);
+    if (sendError) {
+      set.status = sendError.status;
+      return sendError.body;
     }
 
-    /**
-     * Send refused on its input (#245): sender domain not registered or
-     * not DKIM-verified, template not found, subject missing. Each class
-     * carries its own status (404 or 422) and code.
-     */
     /** A domain name already registered (case-insensitive) → 409. */
     if (error instanceof DomainAlreadyRegisteredError) {
       set.status = 409;
@@ -355,95 +334,12 @@ const app = new Elysia()
     }
 
     /**
-     * An invalid `fromName` (#250) is a validation failure: same code and
-     * `details` shape as one TypeBox reports, naming the field only.
-     */
-    if (error instanceof InvalidFromNameError) {
-      set.status = error.status;
-      return {
-        success: false,
-        error: "Request validation failed",
-        code: error.code,
-        details: [{ path: `/${error.field}`, message: error.message }],
-      };
-    }
-
-    /** An invalid tag or tag filter (#189): the same shape, naming the key only. */
-    if (error instanceof InvalidTagError) {
-      set.status = error.status;
-      return {
-        success: false,
-        error: "Request validation failed",
-        code: error.code,
-        details: [{ path: error.path, message: error.message }],
-      };
-    }
-
-    /** An attachment refused on its input (#181): the same shape, naming its index only. */
-    if (error instanceof InvalidAttachmentError) {
-      set.status = error.status;
-      return {
-        success: false,
-        error: "Request validation failed",
-        code: error.code,
-        details: [{ path: error.path, message: error.message }],
-      };
-    }
-
-    /** An executable, script or installer attachment (#181): its index, never its name. */
-    if (error instanceof AttachmentTypeNotAllowedError) {
-      set.status = error.status;
-      return {
-        success: false,
-        error: error.message,
-        code: error.code,
-        index: error.index,
-      };
-    }
-
-    if (error instanceof EmailSendRejectedError) {
-      set.status = error.status;
-      return { success: false, error: error.message, code: error.code };
-    }
-
-    /**
-     * Variables would make the rendered template larger than allowed → 422.
-     */
-    if (error instanceof TemplateTooLargeError) {
-      set.status = 422;
-      return { success: false, error: error.message, code: "TEMPLATE_OUTPUT_TOO_LARGE" };
-    }
-
-    /**
-     * The sending key was revoked after it was resolved (dashboard, or a
-     * race with revocation) → 401, same as auth rejecting a revoked key.
-     */
-    if (error instanceof InactiveApiKeyError) {
-      set.status = 401;
-      return { success: false, error: error.message, code: "API_KEY_REVOKED" };
-    }
-
-    /**
      * The new key's creator (#219: the calling key's user) is deactivated
      * or gone → 403; nothing was created.
      */
     if (error instanceof ApiKeyCreatorInactiveError) {
       set.status = 403;
       return { success: false, error: error.message, code: "API_KEY_CREATOR_INACTIVE" };
-    }
-
-    /**
-     * Sender-authorization rejection (#126). The key is valid (so not 401)
-     * but isn't permitted to send from this `From` address → 403.
-     */
-    if (error instanceof UnauthorizedSenderError) {
-      set.status = 403;
-      return {
-        success: false,
-        error: error.message,
-        code: "UNAUTHORIZED_SENDER",
-        sender: error.sender,
-      };
     }
 
     /**

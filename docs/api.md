@@ -28,6 +28,7 @@ Changes made through the API (API keys created, updated or revoked; domains adde
 - **Limit:** 100 requests per 60-second fixed window per API key by default (`API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`)
 - **Scope:** Per API key ID (not per IP)
 - **Response on exceed:** `429 Too Many Requests` with `Retry-After` header (seconds)
+- **Batch sends (#178):** `POST /api/v1/emails/batch` counts as one request per email in it. When the key's remaining budget in the window is smaller than the batch, the whole batch is refused with `429` before any email is created (the refused request still counts once). A batch larger than `API_RATE_LIMIT_MAX` can never pass: split it.
 
 ---
 
@@ -91,7 +92,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 |--------------|--------|----------|----------------------------------------------|
 | `from`       | string | Yes      | Sender email address                         |
 | `fromName`   | string | No       | Sender display name (#250), sent as `From: "<fromName>" <from>`. Rules below. Returned as `fromName` on email responses (`null` when unset). |
-| `to`         | string | Yes      | Recipient email address                      |
+| `to`         | string or array | Yes | One recipient address, or an array of addresses (#178) for ONE message whose `To:` header lists them all. Rules below. |
 | `subject`    | string | *        | Subject line (required when not using template) |
 | `html`       | string | No       | HTML body (max 5 MB)                         |
 | `text`       | string | No       | Plain text body (max 5 MB)                   |
@@ -106,6 +107,15 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `attachments` | array | No       | Files to attach (#181), Resend-compatible: `[{ "filename", "content", "contentType"?, "contentId"? }]`, `content` in base64. Rules below. Returned as `attachments` on email responses, metadata only. |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
+
+**Recipients** (`to`, `cc`, `bcc`, #178):
+
+- **`to`** is one address (a string) or an array of 1 or more addresses, each a single valid address (`422 VALIDATION_ERROR` at `/to` or `/to/<i>` otherwise). An array is ONE message: every recipient sees all the `to` addresses in its `To:` header, `cc` as before, and `bcc` never appears in any header. Delivery is still split per recipient domain (one SMTP transaction per domain's MX), and per recipient when signed return paths apply (#236), exactly as for `cc` and `bcc`. For distinct messages, use [`POST /api/v1/emails/batch`](#post-apiv1emailsbatch).
+- **Deduplicated** ignoring case, the first spelling kept: `["Bob@example.com", "bob@example.com"]` is one recipient. An address in both `to` and `cc` (or `bcc`) gets one envelope slot and is shown in `To:`.
+- **Caps:** at most **50** addresses in `to` after deduplication, and at most **100** unique recipients across `to`, `cc` and `bcc` together. Over either is `422 TOO_MANY_RECIPIENTS`, and nothing is queued. `cc` and `bcc` keep their 1000-character limit.
+- **Suppressions** apply to every recipient: one suppressed address anywhere in `to`, `cc` or `bcc` refuses the whole send with `422 RECIPIENT_SUPPRESSED`.
+- **`category: "marketing"`** still needs exactly one recipient: several `to` addresses are `422 MARKETING_REQUIRES_ONE_CLICK`.
+- **Response shape:** the email's `to` is an **array** when the send gave an array (even of one address) or when the email has several `to` addresses, and a **string** for a single-address send, as before #178, so existing clients see no change. `GET /api/v1/emails/:id` and the lists answer an array for an email with several `to` addresses and a string otherwise. Webhook payloads keep `to` as a string: the stored list, comma-separated when there are several.
 
 **Template variables** are HTML-escaped where they land in the HTML body (`{{name}}`); `{{{name}}}` inserts a value as raw HTML. Subjects and text bodies take the value as is (#250, see [templates.md](templates.md)).
 
@@ -189,7 +199,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 
 `warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
 
-**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), `422 TOO_MANY_ATTACHMENTS` (more than 10, #181), `422 ATTACHMENTS_TOO_LARGE` (over `ATTACHMENTS_MAX_TOTAL_MB` decoded, #181), `422 ATTACHMENT_TYPE_NOT_ALLOWED` (an executable, script or installer, by extension or content, with its `index`, #181), `413` (a body over the HTTP limit), `422 VALIDATION_ERROR` (also for an invalid `fromName`, tag or attachment, with the field, `/tags/<key>` or `/attachments/<i>/<field>` in `details`), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
+**Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), `422 TOO_MANY_RECIPIENTS` (more than 50 `to` addresses, or more than 100 unique recipients across `to`, `cc` and `bcc`, #178), `422 TOO_MANY_ATTACHMENTS` (more than 10, #181), `422 ATTACHMENTS_TOO_LARGE` (over `ATTACHMENTS_MAX_TOTAL_MB` decoded, #181), `422 ATTACHMENT_TYPE_NOT_ALLOWED` (an executable, script or installer, by extension or content, with its `index`, #181), `413` (a body over the HTTP limit), `422 VALIDATION_ERROR` (also for an invalid `fromName`, tag or attachment, with the field, `/tags/<key>` or `/attachments/<i>/<field>` in `details`), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
 **Idempotency keys** (#188). Send an optional `Idempotency-Key` request header (the convention of [draft-ietf-httpapi-idempotency-key-header](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/), as Stripe and Resend use it) to make a send safe to retry after a timeout or a 5xx:
 
@@ -252,6 +262,51 @@ The `source` field is the ingress channel the email arrived through: `api` (this
 | `tls` | The latest SMTP session's encryption: `starttls`, `plaintext` (the MX did not offer STARTTLS, or refused it), or `null` (no session got ready, or an entry from before #250). STARTTLS needs TLS 1.2 or later; it is opportunistic and certificates are not verified, unless the recipient domain's MTA-STS policy is in enforce mode. |
 | `mtaSts` | The recipient domain's MTA-STS policy mode on the latest attempt (#250): `enforce` (only the MX hosts the policy names, STARTTLS required, certificate verified; a TLS failure or no matching MX host is `retry`, never a bounce), `testing` (delivered as without a policy), or `null` (no policy, mode `none`, or an entry from before). See [emails.md](emails.md#mta-sts-250). |
 | `updatedAt` | When the latest outcome happened; `null` on entries from before #250 that were never delivered. |
+
+
+#### `POST /api/v1/emails/batch`
+
+Queue 1 to 100 **distinct** emails in one request (#178): each item becomes its own email, with its own id, `Message-ID` and delivery. For one message to several people, use an array `to` on `/send` instead.
+
+**Request Body:**
+
+```json
+{
+  "emails": [
+    { "from": "hello@example.com", "to": "alice@example.org", "subject": "Your receipt", "text": "..." },
+    { "from": "hello@example.com", "to": ["bob@example.org", "carol@example.net"], "templateId": "tpl_...", "variables": { "name": "Bob" }, "idempotencyKey": "order-1042" }
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `emails` | array | Yes | 1 to 100 items. Each item is exactly a [`/send`](#post-apiv1emailssend) body (templates, `tags`, `headers`, `category`, `attachments` included) plus an optional `idempotencyKey`. |
+| `emails[].idempotencyKey` | string | No | That item's idempotency key, with the [`/send` rules](#post-apiv1emailssend) (#188): 1 to 255 printable ASCII characters, scoped to the API key, shared with keys sent on `/send`. |
+
+**Semantics:**
+
+- **In order, independently.** Items are processed one after the other, in request order. Each is validated, checked (suppression, allowed senders, template, sender domain, caps) and created on its own, exactly as `/send` would; one invalid or refused item never fails the others, and an item created stays created whatever happens to a later one.
+- **Always `200`** once the request itself is valid, with one result per item, in request order. A batch is not `207 Multi-Status`: one status code is simpler for clients, and each item's `success` flag carries its outcome. The request itself fails as a whole only when `emails` is missing, empty or over 100 items (`422 VALIDATION_ERROR`), on auth (`401`/`403`), on the rate limit (`429`), on the body limit (`413`), or with the header below.
+- **Idempotency** is per item: an item with an `idempotencyKey` that was already used with the same item body replays its first result (`replayed: true`, nothing created); with another body that item fails with `IDEMPOTENCY_KEY_REUSED`. The `Idempotency-Key` header is **not supported** here: sending it is `422 IDEMPOTENCY_KEY_NOT_SUPPORTED`, nothing is processed; set `idempotencyKey` on each item instead.
+- **Rate limit:** the batch counts as one request per item; see [Rate Limiting](#rate-limiting). Over the remaining budget, the whole batch is `429` and nothing is created.
+- **Size:** attachments are capped per item (`ATTACHMENTS_MAX_TOTAL_MB` each), not per batch, but the HTTP body limit (see `/send`) caps the whole request and answers `413`. Split batches with large attachments into several requests.
+- Unknown item properties are ignored, as on `/send`.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "index": 0, "success": true, "data": { "id": "msg_...", "to": "alice@example.org", "status": "queued", "...": "..." }, "warnings": [], "replayed": false },
+    { "index": 1, "success": false, "error": "Recipient is on the suppression list. Remove the suppression first if this is intentional.", "code": "RECIPIENT_SUPPRESSED", "suppressionId": "sup_..." }
+  ]
+}
+```
+
+- A **created** item: `index`, `success: true`, `data` (the email, as `/send` returns it), `warnings` (#245) and `replayed`.
+- A **failed** item: `index`, `success: false`, `error`, `code` (the code `/send` would answer: `VALIDATION_ERROR` with `details: [{ path, message }]` (paths inside the item, values never echoed), `RECIPIENT_SUPPRESSED` with `suppressionId`, `TOO_MANY_RECIPIENTS`, `UNAUTHORIZED_SENDER` with `sender`, `ATTACHMENT_TYPE_NOT_ALLOWED` with `attachmentIndex` (the attachment's index, renamed so it cannot clash with the item's), and so on), or `INTERNAL_ERROR` for an unexpected server error on that item (logged, nothing internal returned; the other items are unaffected).
 
 ---
 
@@ -325,7 +380,7 @@ Permanently delete every trashed email for the calling API key. Returns `{ "succ
 
 #### `GET /api/v1/emails/tombstones`
 
-List the post-purge audit snapshots (#34) of the calling key's hard-deleted emails: identifiers only (`id`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`, and `attachments`: each file's `filename`, `contentType` and `size`, #181), never the body or a file. Optional `?messageId=` (wrapped or unwrapped form) to trace a complaint or late bounce. Paginated; kept for `TOMBSTONE_RETENTION_DAYS` (default 90). See [docs/emails.md](emails.md#tombstones-34).
+List the post-purge audit snapshots (#34) of the calling key's hard-deleted emails: identifiers only (`id`, `messageId`, `fromAddress`, `toAddress`, `subject`, `status`, `sentAt`, `deletedAt`, `purgedAt`, and `attachments`: each file's `filename`, `contentType` and `size`, #181), never the body or a file. `toAddress` is the email's `to` list as stored: comma-separated when it had several (#178). Optional `?messageId=` (wrapped or unwrapped form) to trace a complaint or late bounce. Paginated; kept for `TOMBSTONE_RETENTION_DAYS` (default 90). See [docs/emails.md](emails.md#tombstones-34).
 
 ---
 
@@ -838,7 +893,7 @@ Hard-deletes the suppression. The recipient becomes eligible for sends from this
 
 #### Send-time rejection
 
-When `POST /api/v1/emails/send` is called with a recipient on the suppression list, the response is:
+When `POST /api/v1/emails/send` is called with a recipient on the suppression list (any `to` address, #178, or any `cc` or `bcc` address), the response is (a batch item carries the same fields, with its `index`):
 
 ```http
 HTTP/1.1 422 Unprocessable Entity
@@ -903,6 +958,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received`, `domain.verified` or `domain.verification_failed` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than the limit, rejected before it is read: 12 MiB plus the base64 of `ATTACHMENTS_MAX_TOTAL_MB` plus 64 KiB (about 19.3 MB with the default 5 MB, #181) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender, subject or body (#245, #250): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`), `SUBJECT_REQUIRED` or `BODY_REQUIRED`, or a suppressed recipient (`RECIPIENT_SUPPRESSED`), or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a `marketing` send that cannot carry the one-click unsubscribe link (`MARKETING_REQUIRES_ONE_CLICK`, #250), or a send refused on its attachments (`TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED`, #181), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender, subject or body (#245, #250): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`), `SUBJECT_REQUIRED` or `BODY_REQUIRED`, or a suppressed recipient (`RECIPIENT_SUPPRESSED`), or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a `marketing` send that cannot carry the one-click unsubscribe link (`MARKETING_REQUIRES_ONE_CLICK`, #250), or a send over the recipient caps (`TOO_MANY_RECIPIENTS`, #178), or an `Idempotency-Key` header on the batch endpoint (`IDEMPOTENCY_KEY_NOT_SUPPORTED`, #178), or a send refused on its attachments (`TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED`, #181), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
 | 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively; a DKIM key rotation step refused on the domain's state (#250): `DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE` |
 | 429    | Rate limit exceeded, or a delivery replayed 5 times this hour (`REPLAY_LIMIT_REACHED`, #258); both send `Retry-After` |

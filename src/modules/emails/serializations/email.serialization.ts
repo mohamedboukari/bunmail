@@ -1,6 +1,7 @@
 import { isEmailCategory, type Email, type EmailCategory } from "../types/email.types.ts";
 import type { CustomHeaders, EmailTags } from "../models/email.schema.ts";
 import type { AttachmentMeta } from "../services/attachment-storage.ts";
+import { splitToList } from "../services/recipient-limits.ts";
 import {
   serializeDeliveryState,
   type SerializedDeliveryGroup,
@@ -31,7 +32,12 @@ export interface SerializedEmail {
   from: string;
   /** Sender display name (#250); null when none. */
   fromName: string | null;
-  to: string;
+  /**
+   * The `to` recipients (#178): an array when the email has several, or
+   * when the send gave an array; one address as a string otherwise, as
+   * before #178, so single-recipient clients see no change.
+   */
+  to: string | string[];
   cc: string | null;
   bcc: string | null;
   /** Reply-To address(es), comma-separated (#169) */
@@ -68,6 +74,15 @@ export interface SerializedEmail {
   deliveryState: SerializedDeliveryGroup[];
 }
 
+/** How {@link serializeEmail} shapes the output. */
+export interface SerializeEmailOptions {
+  /**
+   * Answer `to` as an array even with one address (#178): set by the send
+   * routes when the request gave `to` as an array, so the response mirrors it.
+   */
+  toAsArray?: boolean;
+}
+
 /**
  * Transforms a raw database email row into the public API response shape.
  * Strips internal fields like `apiKeyId` and `domainId` that consumers
@@ -77,12 +92,14 @@ export interface SerializedEmail {
 export function serializeEmail(
   email: Email,
   attachments: readonly AttachmentMeta[],
+  options: SerializeEmailOptions = {},
 ): SerializedEmail {
+  const toList = splitToList(email.toAddress);
   return {
     id: email.id,
     from: email.fromAddress,
     fromName: email.fromName,
-    to: email.toAddress,
+    to: options.toAsArray === true || toList.length > 1 ? toList : email.toAddress,
     cc: email.cc,
     bcc: email.bcc,
     replyTo: email.replyTo,

@@ -27,6 +27,7 @@ import { parseSmtpError, type ParsedSmtpError } from "../../../utils/smtp-error.
 import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { deferralDelayMs } from "./rate-budget.ts";
+import { splitToList } from "./recipient-limits.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { domainNameIs } from "../../domains/services/domain.service.ts";
@@ -663,10 +664,13 @@ async function sendClaimedEmail(
    */
   const attempt = email.attempts;
 
+  /** The first `to` address and the count only, never the list (#178). */
+  const toList = splitToList(email.toAddress);
   logger.info("Processing email", {
     emailId,
     attempt,
-    to: redactEmail(email.toAddress),
+    to: redactEmail(toList[0]),
+    toCount: toList.length,
   });
 
   /**

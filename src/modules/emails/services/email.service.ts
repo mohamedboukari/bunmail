@@ -44,7 +44,15 @@ import {
   EmailSendRejectedError,
   InvalidAttachmentError,
   AttachmentTypeNotAllowedError,
+  TooManyRecipientsError,
 } from "../errors.ts";
+import {
+  joinToList,
+  MAX_TO_RECIPIENTS,
+  MAX_TOTAL_RECIPIENTS,
+  normalizeToList,
+  recipientCapProblem,
+} from "./recipient-limits.ts";
 import { prepareAttachments, type PreparedAttachment } from "./attachments.ts";
 import {
   attachmentStorage,
@@ -256,14 +264,38 @@ async function prepareEmail(
 ): Promise<PreparedEmail> {
   const id = generateId("msg");
   const senderDomain = input.from.split("@")[1];
+  /** The `to` list (#178), normalized once: everything below reads it. */
+  const toList = normalizeToList(input.to);
+  const toAddress = joinToList(toList);
 
+  /** The first recipient and the counts only: never the whole list (#178). */
   logger.info("Creating email", {
     id,
     from: redactEmail(input.from),
-    to: redactEmail(input.to),
+    to: redactEmail(toList[0]),
+    toCount: toList.length,
     apiKeyId,
     attachmentCount: input.attachments?.length ?? 0,
   });
+
+  /**
+   * Recipient caps (#178), the first input rule: at most 50 addresses in
+   * `to` and 100 unique recipients with `cc` and `bcc`. Every ingress
+   * shares them; SMTP submission also caps `RCPT TO` at 50.
+   */
+  const capProblem = recipientCapProblem(toList, input.cc, input.bcc);
+  if (capProblem !== null) {
+    logger.warn("Send blocked: too many recipients", {
+      id,
+      apiKeyId,
+      source,
+      cap: capProblem,
+      toCount: toList.length,
+    });
+    throw capProblem === "to"
+      ? new TooManyRecipientsError("to", MAX_TO_RECIPIENTS)
+      : new TooManyRecipientsError("recipients", MAX_TOTAL_RECIPIENTS);
+  }
 
   /**
    * Custom headers (#177), checked first: it is pure input validation,
@@ -345,7 +377,7 @@ async function prepareEmail(
    */
   if (input.category === "marketing") {
     const blocker = oneClickBlocker({
-      toAddress: input.to,
+      toAddress,
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
     });
@@ -409,9 +441,10 @@ async function prepareEmail(
    * the suppression list was effective by accident. Now that
    * multi-MX delivery actually reaches CC/BCC, unchecked CC/BCC would
    * let suppressed addresses receive mail. We iterate the parsed
-   * recipient list and reject on the first match.
+   * recipient list (every `to` address included, #178) and reject on the
+   * first match.
    */
-  const recipients = parseRecipients(input.to, input.cc, input.bcc);
+  const recipients = parseRecipients(toAddress, input.cc, input.bcc);
   for (const rcpt of recipients) {
     const match = await isSuppressed(apiKeyId, rcpt.address);
     if (!match) continue;
@@ -523,7 +556,7 @@ async function prepareEmail(
       domainId,
       fromAddress: input.from,
       fromName,
-      toAddress: input.to,
+      toAddress,
       cc: input.cc ?? null,
       bcc: input.bcc ?? null,
       replyTo: input.replyTo ?? null,

@@ -120,6 +120,8 @@ Events are scoped to the API key that owns the webhook:
 }
 ```
 
+**`to`** is the email's `to` list as stored: one address, or several comma-separated (`"a@example.com, b@example.org"`) for a send with an array `to` (#178). It stays a string, unlike the REST email's `to`, so existing consumers keep working.
+
 **`tags`** (#189): every `email.*` event built from an email row (`email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
 
 `email.bounced`:

@@ -4,6 +4,7 @@ import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { RecipientSummary } from "../components/recipient-summary.tsx";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 
 /**
@@ -309,11 +310,8 @@ export function EmailsPage({
                           {email.fromAddress}
                         </a>
                       </td>
-                      <td
-                        class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]"
-                        safe
-                      >
-                        {email.toAddress}
+                      <td class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[150px]">
+                        <RecipientSummary toAddress={email.toAddress} />
                       </td>
                       <td
                         class="px-4 py-3 text-gray-700 dark:text-gray-300 truncate max-w-[200px]"

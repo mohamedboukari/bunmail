@@ -13,7 +13,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `domain_id`     | varchar(36)    | nullable, FK → domains  | Sender domain (auto-linked for DKIM signing) |
 | `from_address`  | varchar(255)   | NOT NULL                | Sender email address                        |
 | `from_name`     | varchar(100)   | nullable                | Sender display name (#250), sent as `From: "<name>" <from_address>`. 1 to 100 characters, no control, bidi-control or `@ < > "` character. See [From display name](#from-display-name-250). |
-| `to_address`    | varchar(255)   | NOT NULL                | Recipient email address                     |
+| `to_address`    | text           | NOT NULL                | The `to` recipients: one address, or several as a normalized comma-separated list (`a@example.com, b@example.org`), like `cc` and `bcc`. `varchar(255)` until migration `0038` (#178) |
 | `cc`            | text           | nullable                | Comma-separated CC recipients               |
 | `bcc`           | text           | nullable                | Comma-separated BCC recipients              |
 | `reply_to`      | text           | nullable                | Comma-separated Reply-To address(es) (#169). Sets the `Reply-To:` header on every MX group's message; the envelope sender is unaffected (`from_address`, or its signed return path with inbound SMTP on, #236). |
@@ -94,7 +94,7 @@ Indexes: `idempotency_keys_api_key_key_unique` (unique `(api_key_id, key)`, the 
 
 ```
 src/modules/emails/
-├── emails.plugin.ts                ← Routes: send, list, get, trash/restore/permanent/empty
+├── emails.plugin.ts                ← Routes: send, batch, list, get, trash/restore/permanent/empty
 ├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
 │   ├── email.schema.ts             ← Drizzle pgTable + indexes
@@ -103,9 +103,12 @@ src/modules/emails/
 │   └── idempotency-key.schema.ts   ← Idempotency keys of the send API (#188)
 ├── dtos/
 │   ├── send-email.dto.ts           ← Send email validation (direct + template), Idempotency-Key header
+│   ├── batch-send-email.dto.ts     ← Batch envelope and per-item validation, per-item idempotencyKey (#178)
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
+│   ├── batch-send.service.ts       ← POST /batch: items in order, each created or refused on its own (#178)
+│   ├── recipient-limits.ts         ← Pure `to` list normalization and the 50 / 100 recipient caps (#178)
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
 │   ├── tombstone.service.ts        ← Hard delete with a tombstone, tombstone reads and retention (#34)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
@@ -129,7 +132,9 @@ src/modules/emails/
 │   ├── stats.service.ts            ← Dashboard stats aggregation
 │   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
 ├── serializations/
-│   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId)
+│   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId); `to` string or array (#178)
+│   ├── send-error.serialization.ts ← Status and body of a refused send, shared by onError and batch items (#178)
+│   ├── batch-item.serialization.ts ← One batch result: created, invalid, refused or internal error (#178)
 │   ├── email-tombstone.serialization.ts ← Tombstone response mapper (#34)
 │   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
@@ -169,6 +174,16 @@ A template without a text body keeps the send's inline `text`, if any (#250); a 
 A message needs a body: with neither `html` nor `text` (after trimming, inline or from the template) the send is refused with `422 BODY_REQUIRED` (SMTP `550`, #250).
 
 **Attachments** are supported, on REST and template sends and SMTP submission alike (#181): see [Attachments](#attachments-181).
+
+## Several recipients and batch sends (#178)
+
+**`to` as an array.** `to` is one address or an array; SMTP submission passes its `To:` addresses as a comma-separated string. `createEmail` normalizes it first (`normalizeToList` in `services/recipient-limits.ts`: split on commas, trimmed, empty pieces dropped, deduplicated ignoring case with the first spelling kept) and stores it in `to_address` joined with `", "`, so `parseRecipients` reads `to`, `cc` and `bcc` the same way. It is ONE message: the mailer sets `To:` to the whole stored list and `Cc:` to `cc`, and never puts `bcc` in a header; delivery is unchanged ([Multi-MX Delivery](#multi-mx-delivery-87)): one transaction per recipient domain, one per recipient under signed return paths (#236).
+
+**Caps** (`recipientCapProblem`, the first input rule, every ingress): at most `MAX_TO_RECIPIENTS` (50) `to` addresses after deduplication, and at most `MAX_TOTAL_RECIPIENTS` (100) unique recipients across `to`, `cc` and `bcc` as `parseRecipients` counts them; either is `TooManyRecipientsError` (`422 TOO_MANY_RECIPIENTS`, SMTP `550`). The suppression gate checks every parsed recipient, so a suppressed `to` address refuses the send like a suppressed `cc` or `bcc` one did. A marketing send still needs exactly one recipient (`soleRecipient` parses `to` too), and the per-recipient `List-Unsubscribe` token (#249) is minted only for an email with one `to` address and no `cc` or `bcc`.
+
+**Readers of `to_address`.** The serializer answers `to` as an array when the row holds several addresses or the send gave an array (`toAsArray`), else the string; webhook payloads (`email.sent`, `email.failed`, `email.bounced`) keep the stored string; tombstones keep the stored list; bounce return paths (`recipientOrder`), the unsubscribe token (`soleRecipient`) and the feedback-loop recipient check parse it with `parseRecipients`; the dashboard list shows the first address and `+N` (full list in the tooltip), the email page the whole list. Logs carry the first address (through `redactEmail`) and `toCount`, never the list.
+
+**Batch** (`POST /api/v1/emails/batch`, `services/batch-send.service.ts`). The body is validated as an envelope only (1 to 100 items of any shape); each item is validated on its own by `parseBatchItem` (Elysia's validator for the `/send` body plus `idempotencyKey`, unknown properties removed) and then created with `createEmail`, or `createEmailIdempotent` when it has an `idempotencyKey`, in request order. A refusal is mapped by `serializeSendError` (the same mapping the global `onError` uses) into that item's result; an unexpected error is logged with the error's name and answered `INTERNAL_ERROR`; no item affects another and there is no surrounding transaction. One `Batch send processed` line logs the counts (`created`, `replayed`, `failed`) and the duration. The rate limiter weighs the request by its item count (`requestWeight` in `src/middleware/rate-limit-core.ts`) and refuses the whole batch before the handler runs when it does not fit; the `Idempotency-Key` header is refused (`422 IDEMPOTENCY_KEY_NOT_SUPPORTED`).
 
 ## From display name (#250)
 
@@ -335,7 +350,7 @@ All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-s
 **Reads (live)**
 
 #### `createEmail(input, apiKeyId, source?): Promise<CreatedEmail>`
-Creates an email record with status `queued` and returns `{ email, warnings, attachments }` (the stored attachments' metadata, #181). Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)), `tags` (`InvalidTagError`, see [Tags](#tags-189)) and `attachments` (stored in the email's transaction, see [Attachments](#attachments-181)). Throws an `EmailSendRejectedError` subclass for input it refuses.
+Normalizes `to` (a string or an array, #178) and applies the recipient caps (`TooManyRecipientsError`, see [Several recipients](#several-recipients-and-batch-sends-178)). Creates an email record with status `queued` and returns `{ email, warnings, attachments }` (the stored attachments' metadata, #181). Resolves templates if `templateId` is provided. Links the sender's domain for DKIM signing and reports its unverified DNS records (see [Domain Linking](#domain-linking)). Validates and stores custom `headers` (see [Custom Headers](#custom-headers)), `fromName` (`InvalidFromNameError`, see [From display name](#from-display-name-250)) `category` (`MarketingRequiresOneClickError` for a marketing send that cannot carry the one-click link, see [Category](#category-250)), `tags` (`InvalidTagError`, see [Tags](#tags-189)) and `attachments` (stored in the email's transaction, see [Attachments](#attachments-181)). Throws an `EmailSendRejectedError` subclass for input it refuses.
 
 #### `attachmentsFor(emailIds): Promise<Map<emailId, AttachmentMeta[]>>` / `findAttachmentForDownload(emailId, position)`
 Attachment metadata of a page of emails in one query, never the bytes (#181); and one attachment with its bytes (`null` once dropped) for the dashboard download.
@@ -448,6 +463,16 @@ Parses `key:value` filters, split on the first `:` (`malformed` without one), ea
 #### `describeTagProblem(refusal, subject)`
 The caller-facing message: names a valid key, never the value.
 
+### batch-send.service.ts
+
+#### `sendBatch(items, apiKeyId, buildResponse): Promise<BatchItemResult[]>`
+The batch endpoint (#178): validates, creates or replays each item in order and returns one result per item, never throwing for an item. `buildResponse(created, toAsArray)` is the route's `/send` response. See [Several recipients and batch sends](#several-recipients-and-batch-sends-178).
+
+### recipient-limits.ts
+
+#### `normalizeToList(to)` / `joinToList(list)` / `splitToList(stored)` / `recipientCapProblem(toList, cc, bcc)`
+The `to` list (#178): normalized from a string or an array, its stored form and back, and the cap it breaks (`"to"`, `"total"` or `null`). Pure.
+
 ### message-body.ts
 
 #### `composeMessageBody(html, text): { html, text, wrapped, textDerived }`
@@ -517,7 +542,7 @@ Each `emails` row can address recipients across multiple domains (`to` + `cc` + 
 4. Generates one canonical `Message-ID:` for the whole email so all recipients see the same identifier (bounce/complaint feedback loops join on this).
 5. For each group, submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only, to the first MX host that takes it.
 
-The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed. BCC addresses appear only in their group's envelope, never in the rendered headers.
+The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed: every `to` address of an array send (#178) included. BCC addresses appear only in their group's envelope, never in the rendered headers.
 
 ### MX resolution and failover (#250)
 

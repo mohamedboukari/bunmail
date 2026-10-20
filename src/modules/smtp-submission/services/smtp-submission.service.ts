@@ -18,6 +18,7 @@ import { redactEmail } from "../../../utils/redact.ts";
 import { hashApiKey } from "../../../utils/crypto.ts";
 import { findByHash } from "../../api-keys/services/api-key.service.ts";
 import { createEmail } from "../../emails/services/email.service.ts";
+import { splitToList } from "../../emails/services/recipient-limits.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { SuppressedRecipientError } from "../../suppressions/errors.ts";
 import { AttachmentsTooLargeError, EmailSendRejectedError } from "../../emails/errors.ts";
@@ -752,11 +753,14 @@ export function start(portOverride?: number): void {
                 if (reservedDay === null) await recordOutcome(apiKeyId, "accepted");
                 reservedDay = null;
 
+                /** The first `to` address and the count, never the list (#178). */
+                const toList = splitToList(email.toAddress);
                 logger.info("SMTP submission accepted: email queued", {
                   id: email.id,
                   apiKeyId,
                   from: redactEmail(input.from),
-                  to: redactEmail(input.to),
+                  to: redactEmail(toList[0]),
+                  toCount: toList.length,
                 });
 
                 callback();

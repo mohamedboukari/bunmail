@@ -1,4 +1,4 @@
-import { pgTable, varchar, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, varchar, text, timestamp, index } from "drizzle-orm/pg-core";
 import { jsonb } from "../../../db/jsonb.ts";
 
 /**
@@ -64,7 +64,9 @@ export const emailTombstones = pgTable(
     messageId: varchar("message_id", { length: 255 }),
 
     fromAddress: varchar("from_address", { length: 255 }).notNull(),
-    toAddress: varchar("to_address", { length: 255 }).notNull(),
+    /** The email's `to` list as stored on it: one address, or several
+     *  comma-separated (#178), hence `text`. */
+    toAddress: text("to_address").notNull(),
 
     /** Subject line: null when the original was somehow null at delete
      *  time, otherwise the human-readable handle for "I'm looking for

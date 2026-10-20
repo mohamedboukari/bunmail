@@ -4,6 +4,8 @@ import {
   MAX_REQUESTS,
   pruneExpiredEntries,
   readApiKeyId,
+  requestWeight,
+  BATCH_SEND_ROUTE,
   WINDOW_MS,
   type RateLimitEntry,
 } from "../../src/middleware/rate-limit-core.ts";
@@ -129,5 +131,54 @@ describe("pruneExpiredEntries", () => {
 
   test("handles an empty map", () => {
     expect(pruneExpiredEntries(new Map(), T0)).toBe(0);
+  });
+});
+
+describe("checkRateLimit with a weight (#178)", () => {
+  test("a batch counts as one request per email", () => {
+    const map = new Map<string, RateLimitEntry>();
+    expect(checkRateLimit(map, "key_a", T0, undefined, 30)).toEqual({ limited: false });
+    expect(map.get("key_a")!.count).toBe(30);
+  });
+
+  test("a batch larger than the remaining budget is refused whole and counts once", () => {
+    const map = new Map<string, RateLimitEntry>();
+    sendN(map, "key_a", MAX_REQUESTS - 10, T0);
+    const decision = checkRateLimit(map, "key_a", T0, undefined, 11);
+    expect(decision).toMatchObject({ limited: true, count: MAX_REQUESTS - 9 });
+    /** The 9 sends left still fit. */
+    expect(checkRateLimit(map, "key_a", T0, undefined, 9)).toEqual({ limited: false });
+    expect(checkRateLimit(map, "key_a", T0)).toMatchObject({ limited: true });
+  });
+
+  test("a batch exactly the remaining budget passes", () => {
+    const map = new Map<string, RateLimitEntry>();
+    sendN(map, "key_a", MAX_REQUESTS - 10, T0);
+    expect(checkRateLimit(map, "key_a", T0, undefined, 10)).toEqual({ limited: false });
+  });
+
+  test("a batch larger than the whole limit is refused even in a fresh window", () => {
+    const map = new Map<string, RateLimitEntry>();
+    expect(
+      checkRateLimit(map, "key_a", T0, { max: 10, windowMs: WINDOW_MS }, 11),
+    ).toMatchObject({ limited: true, count: 1 });
+  });
+});
+
+describe("requestWeight (#178)", () => {
+  test("the batch route weighs one per email", () => {
+    expect(
+      requestWeight({ route: BATCH_SEND_ROUTE, body: { emails: [{}, {}, {}] } }),
+    ).toBe(3);
+  });
+
+  test("every other route, or an unexpected body, weighs 1", () => {
+    expect(
+      requestWeight({ route: "/api/v1/emails/send", body: { emails: [{}, {}] } }),
+    ).toBe(1);
+    expect(requestWeight({ route: BATCH_SEND_ROUTE, body: { emails: "x" } })).toBe(1);
+    expect(requestWeight({ route: BATCH_SEND_ROUTE, body: null })).toBe(1);
+    expect(requestWeight({ route: BATCH_SEND_ROUTE })).toBe(1);
+    expect(requestWeight(null)).toBe(1);
   });
 });

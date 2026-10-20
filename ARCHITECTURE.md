@@ -446,7 +446,7 @@ Client Request
      │
      ▼
 ┌─────────────┐
-│  Rate Limit │  ← In-memory fixed window (100 req/min per API key)
+│  Rate Limit │  ← In-memory fixed window (100 req/min per API key; a batch counts once per email, #178)
 │  Middleware │
 └──────┬──────┘
        │
@@ -601,7 +601,7 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 | domain_id     | varchar(36)    | FK → domains.id, nullable       |
 | from_address  | varchar(255)   | NOT NULL                        |
 | from_name     | varchar(100)   | nullable: `From:` display name, no control, bidi-control or `@ < > "` character (#250) |
-| to_address    | varchar(255)   | NOT NULL                        |
+| to_address    | text           | NOT NULL: one address, or several comma-separated (at most 50, #178; `varchar(255)` until migration `0038`) |
 | cc            | text           | nullable                        |
 | bcc           | text           | nullable                        |
 | reply_to      | text           | nullable                        |
@@ -719,7 +719,7 @@ Post-purge audit trail. Every hard-delete of an `emails` row first writes a snap
 | api_key_id     | varchar(36)    | NOT NULL: snapshot, NOT a FK                 |
 | message_id     | varchar(255)   | nullable: SMTP `Message-ID`, indexed         |
 | from_address   | varchar(255)   | NOT NULL                                      |
-| to_address     | varchar(255)   | NOT NULL                                      |
+| to_address     | text           | NOT NULL: the email's `to` list as stored (#178) |
 | subject        | varchar(500)   | nullable                                      |
 | status         | varchar(20)    | NOT NULL: sent / bounced / failed at delete time |
 | sent_at        | timestamptz    | nullable                                      |
@@ -954,7 +954,8 @@ dmarc_reports ──1:N──▶ dmarc_records  (CASCADE on parent delete)
 
 | Method | Path                                | Description                                | Auth |
 |--------|-------------------------------------|--------------------------------------------|------|
-| POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188; optional `attachments`, #181) | Yes  |
+| POST   | /api/v1/emails/send                 | Send an email (optional `Idempotency-Key` header, #188; optional `attachments`, #181; `to` a string or an array of up to 50, #178) | Yes  |
+| POST   | /api/v1/emails/batch                | Send 1 to 100 distinct emails, one result per item, always 200; counts as N sends against the rate limit (#178) | Yes  |
 | GET    | /api/v1/emails                      | List sent emails (excludes trash); `status`, `source` and repeatable `tag=key:value` filters | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
 | GET    | /api/v1/emails/:id                  | Get email by ID, with its per-MX `deliveryState` (#250) | Yes  |
@@ -1021,7 +1022,7 @@ Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.co
 | GET    | /api/v1/suppressions/:id            | Get a suppression by ID                    | Yes  |
 | DELETE | /api/v1/suppressions/:id            | Remove (recipient eligible immediately)    | Yes  |
 
-`POST /api/v1/emails/send` returns HTTP 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` when the recipient is on the calling key's list (`suppressionId: null` for a shared hard suppression of another key, `SUPPRESSIONS_SHARED_HARD`, #250). No row inserted, no queue entry, no SMTP attempt. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md).
+`POST /api/v1/emails/send` returns HTTP 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` when any recipient (any `to`, #178, `cc` or `bcc` address) is on the calling key's list (`suppressionId: null` for a shared hard suppression of another key, `SUPPRESSIONS_SHARED_HARD`, #250). No row inserted, no queue entry, no SMTP attempt. See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md).
 
 A successful send also returns `warnings` (#245): the sender domain's records that are not verified (`dkim_unverified`, `spf_unverified`, `dmarc_unverified`, or `domain_unregistered` in development). An unregistered sender domain in production is `422 SENDER_DOMAIN_NOT_REGISTERED`; with `REQUIRE_VERIFIED_DOMAIN=true` a domain whose DKIM record is still unverified after one inline DNS re-check is `422 SENDER_DOMAIN_UNVERIFIED`. See [docs/emails.md](docs/emails.md#domain-linking).
 

@@ -301,3 +301,30 @@ export class AttachmentTypeNotAllowedError extends EmailSendRejectedError {
     this.reason = reason;
   }
 }
+
+/**
+ * More recipients than a send may have (#178): over `MAX_TO_RECIPIENTS`
+ * (50) addresses in `to` after deduplication (`field: "to"`), or over
+ * `MAX_TOTAL_RECIPIENTS` (100) unique recipients across `to`, `cc` and
+ * `bcc` (`field: "recipients"`). Nothing is queued. SMTP submission
+ * answers it with `550`.
+ */
+export class TooManyRecipientsError extends EmailSendRejectedError {
+  override readonly name = "TooManyRecipientsError";
+  readonly status = 422;
+  readonly code = "TOO_MANY_RECIPIENTS";
+  /** Which cap: the `to` list, or all recipients together. */
+  readonly field: "to" | "recipients";
+  /** The cap. */
+  readonly max: number;
+
+  constructor(field: "to" | "recipients", max: number) {
+    super(
+      field === "to"
+        ? `At most ${max} addresses in to.`
+        : `At most ${max} unique recipients across to, cc and bcc.`,
+    );
+    this.field = field;
+    this.max = max;
+  }
+}

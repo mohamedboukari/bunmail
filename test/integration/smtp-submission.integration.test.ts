@@ -240,6 +240,41 @@ describe("SMTP submission: recipient handling", () => {
     expect(rows[0]!.bcc).toBeNull();
   });
 
+  test("several To addresses (and RCPT TO) are relayed as one email with all of them (#178)", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+
+    await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to: ["alice@example.org", "carol@example.net"],
+      subject: "two to",
+      text: "hi",
+    });
+
+    const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.toAddress).toBe("alice@example.org, carol@example.net");
+    expect(rows[0]!.bcc).toBeNull();
+  });
+
+  test("a To list longer than 255 characters is stored whole (#178)", async () => {
+    const { id: apiKeyId, rawKey } = await seed.apiKey();
+    const to = Array.from(
+      { length: 12 },
+      (_, i) => `recipient-number-${i}@a-long-domain-name.example.org`,
+    );
+
+    await transport(rawKey).sendMail({
+      from: "hello@unregistered.test",
+      to,
+      subject: "many to",
+      text: "hi",
+    });
+
+    const [row] = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
+    expect(row!.toAddress.length).toBeGreaterThan(255);
+    expect(row!.toAddress.split(", ")).toEqual(to);
+  });
+
   test("BCC recipients are delivered but kept out of the visible headers", async () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
