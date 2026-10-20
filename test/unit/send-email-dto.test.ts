@@ -152,3 +152,31 @@ describe("sendEmailDto: fromName and category (#250)", () => {
     expect(check.Check({ ...base, fromName: "a".repeat(1001) })).toBe(false);
   });
 });
+
+describe("sendEmailDto: to as a string or an array (#178)", () => {
+  test("accepts one address or an array of addresses", () => {
+    expect(check.Check({ ...base, to: "a@example.com" })).toBe(true);
+    expect(check.Check({ ...base, to: ["a@example.com"] })).toBe(true);
+    expect(check.Check({ ...base, to: ["a@example.com", "b@example.org"] })).toBe(true);
+  });
+
+  test("an array over 50 passes the shape check: the cap and its code are createEmail's", () => {
+    const to = Array.from({ length: 51 }, (_, i) => `u${i}@example.com`);
+    expect(check.Check({ ...base, to })).toBe(true);
+  });
+
+  test("rejects an empty array, a bad address in it, a non-string, or a raw cap breach", () => {
+    expect(check.Check({ ...base, to: [] })).toBe(false);
+    expect(check.Check({ ...base, to: ["a@example.com", "nope"] })).toBe(false);
+    expect(check.Check({ ...base, to: ["a@example.com", 1] })).toBe(false);
+    expect(check.Check({ ...base, to: "a@example.com, b@example.com" })).toBe(false);
+    const huge = Array.from({ length: 501 }, (_, i) => `u${i}@example.com`);
+    expect(check.Check({ ...base, to: huge })).toBe(false);
+  });
+
+  test("rejects CR/LF smuggled in an array item", () => {
+    expect(check.Check({ ...base, to: ["a@example.com\r\nBcc: v@example.com"] })).toBe(
+      false,
+    );
+  });
+});

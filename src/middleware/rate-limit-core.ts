@@ -58,13 +58,19 @@ export type RateLimitDecision =
  * Records one request for `key` and decides whether it's over the limit.
  *
  * Fixed window per key: the first request (or the first after the window
- * expires) starts a new window; each later request in the window
- * increments the count; request number `max + 1` onward is limited.
+ * expires) starts a new window; each later request in the window adds its
+ * `weight`; a request that would take the count past `max` is limited.
+ *
+ * `weight` is how many sends the request is (#178): 1 for every route but
+ * the batch send, which is one per email ({@link requestWeight}). A
+ * limited request is refused whole and still counts once, so a client that
+ * keeps retrying an over-budget batch is limited like any other.
  *
  * @param map - Per-key state (mutated)
  * @param key - The API key ID
  * @param now - Current time in ms
  * @param options - The limit (defaults to 100 requests per 60 s)
+ * @param weight - Sends this request counts as (default 1)
  * @returns Whether the request is limited, with seconds until the window resets
  */
 export function checkRateLimit(
@@ -72,26 +78,44 @@ export function checkRateLimit(
   key: string,
   now: number,
   options: RateLimitOptions = DEFAULT_OPTIONS,
+  weight = 1,
 ): RateLimitDecision {
   const { max, windowMs } = options;
-  const entry = map.get(key);
+  let entry = map.get(key);
 
   if (!entry || now - entry.windowStart >= windowMs) {
     /** No entry or window expired: start a new window */
-    map.set(key, { count: 1, windowStart: now });
-    return { limited: false };
+    entry = { count: 0, windowStart: now };
+    map.set(key, entry);
   }
 
-  /** Increment the counter within the current window */
-  entry.count += 1;
-
-  if (entry.count > max) {
+  if (entry.count + weight > max) {
+    entry.count += 1;
     /** Seconds remaining in the current window */
     const retryAfter = Math.ceil((entry.windowStart + windowMs - now) / 1000);
     return { limited: true, count: entry.count, retryAfter };
   }
 
+  entry.count += weight;
   return { limited: false };
+}
+
+/** The route whose one request is several sends (#178), as Elysia names it. */
+export const BATCH_SEND_ROUTE = "/api/v1/emails/batch";
+
+/**
+ * How many sends a request counts as against the limit (#178): for
+ * `POST /api/v1/emails/batch`, the number of emails in its (already
+ * validated) body; 1 for every other request. Read at runtime, like
+ * {@link readApiKeyId}, so an unexpected context degrades to 1.
+ */
+export function requestWeight(context: unknown): number {
+  if (typeof context !== "object" || context === null) return 1;
+  if (!("route" in context) || context.route !== BATCH_SEND_ROUTE) return 1;
+  if (!("body" in context)) return 1;
+  const { body } = context;
+  if (typeof body !== "object" || body === null || !("emails" in body)) return 1;
+  return Array.isArray(body.emails) ? Math.max(1, body.emails.length) : 1;
 }
 
 /**

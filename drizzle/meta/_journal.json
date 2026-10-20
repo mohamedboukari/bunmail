@@ -267,6 +267,13 @@
       "when": 1792447071684,
       "tag": "0037_email_attachments",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1792518114058,
+      "tag": "0038_email_to_list",
+      "breakpoints": true
     }
   ]
 }

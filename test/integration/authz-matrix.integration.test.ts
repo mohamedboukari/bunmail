@@ -56,6 +56,14 @@ const ROUTES: Record<string, RouteSpec> = {
     access: "key",
     body: { from: "hello@example.com", to: "user@example.org", subject: "x", text: "x" },
   },
+  "POST /api/v1/emails/batch": {
+    access: "key",
+    body: {
+      emails: [
+        { from: "hello@example.com", to: ["user@example.org"], subject: "x", text: "x" },
+      ],
+    },
+  },
   "GET /api/v1/emails/": { access: "key" },
   "GET /api/v1/emails/trash": { access: "key" },
   "GET /api/v1/emails/tombstones": { access: "key" },

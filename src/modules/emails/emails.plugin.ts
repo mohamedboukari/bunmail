@@ -1,5 +1,6 @@
 import { Elysia, t } from "elysia";
 import { sendEmailDto, sendEmailHeadersDto } from "./dtos/send-email.dto.ts";
+import { batchSendEmailDto, MAX_BATCH_EMAILS } from "./dtos/batch-send-email.dto.ts";
 import { listEmailsDto } from "./dtos/list-emails.dto.ts";
 import {
   serializeEmail,
@@ -8,11 +9,12 @@ import {
 import { serializeEmailTombstone } from "./serializations/email-tombstone.serialization.ts";
 import * as emailService from "./services/email.service.ts";
 import * as tombstoneService from "./services/tombstone.service.ts";
+import * as batchSendService from "./services/batch-send.service.ts";
 import { authMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
 import { redactEmail } from "../../utils/redact.ts";
-import type { Email } from "./types/email.types.ts";
+import type { CreatedEmail, Email, SendResponse } from "./types/email.types.ts";
 
 /**
  * Serializes emails with their attachment metadata (#181), read in one
@@ -21,6 +23,26 @@ import type { Email } from "./types/email.types.ts";
 async function serializeEmails(rows: Email[]): Promise<SerializedEmail[]> {
   const attachments = await emailService.attachmentsFor(rows.map((row) => row.id));
   return rows.map((row) => serializeEmail(row, attachments.get(row.id) ?? []));
+}
+
+/**
+ * The `/send` response for a created email: `200` with the email and its
+ * sender-domain warnings (#245). Shared by `/send` and each batch item
+ * (#178), and stored as the idempotency snapshot (#188). `toAsArray`
+ * keeps `to` an array when the request gave one.
+ */
+function sendResponse(
+  { email, warnings, attachments }: CreatedEmail,
+  toAsArray: boolean,
+): SendResponse {
+  return {
+    status: 200,
+    body: {
+      success: true,
+      data: serializeEmail(email, attachments, { toAsArray }),
+      warnings,
+    },
+  };
 }
 
 /** One email with its attachment metadata (#181). */
@@ -35,6 +57,8 @@ async function serializeOneEmail(row: Email): Promise<SerializedEmail> {
  * Routes:
  * - POST /send                  → Queue a new email for delivery (optional
  *                                 `Idempotency-Key` header, #188)
+ * - POST /batch                 → Queue 1 to 100 distinct emails, one result
+ *                                 per item (#178)
  * - GET  /                      → List emails (excludes trashed)
  * - GET  /trash                 → List trashed emails
  * - GET  /:id                   → Get a single email by ID (excludes trashed)
@@ -71,7 +95,14 @@ export const emailsPlugin = new Elysia({
   .post(
     "/send",
     async ({ body, apiKeyId, headers, set }) => {
-      logger.info("POST /api/v1/emails/send", { apiKeyId, to: redactEmail(body.to) });
+      /** The first `to` address and the count only, never the list (#178). */
+      const toList = typeof body.to === "string" ? [body.to] : body.to;
+      logger.info("POST /api/v1/emails/send", {
+        apiKeyId,
+        to: redactEmail(toList[0]),
+        toCount: toList.length,
+      });
+      const toAsArray = Array.isArray(body.to);
 
       /**
        * With an `Idempotency-Key` (#188) the response comes from the key's
@@ -83,10 +114,7 @@ export const emailsPlugin = new Elysia({
           body,
           apiKeyId,
           idempotencyKey,
-          ({ email, warnings, attachments }) => ({
-            status: 200,
-            body: { success: true, data: serializeEmail(email, attachments), warnings },
-          }),
+          (created) => sendResponse(created, toAsArray),
         );
         set.status = result.status;
         if (result.replayed) set.headers["idempotent-replayed"] = "true";
@@ -94,16 +122,12 @@ export const emailsPlugin = new Elysia({
       }
 
       /** Create the email record: it starts in "queued" status */
-      const { email, warnings, attachments } = await emailService.createEmail(
-        body,
-        apiKeyId,
+      const response = sendResponse(
+        await emailService.createEmail(body, apiKeyId),
+        toAsArray,
       );
-
-      return {
-        success: true,
-        data: serializeEmail(email, attachments),
-        warnings,
-      };
+      set.status = response.status;
+      return response.body;
     },
     {
       body: sendEmailDto,
@@ -112,7 +136,51 @@ export const emailsPlugin = new Elysia({
         tags: ["Emails"],
         summary: "Send an email",
         description:
-          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `warnings` lists the sender domain's DNS records that are not verified (empty when all are). An optional `Idempotency-Key` header makes the request safe to retry: a repeat with the same key and body returns the first response with `Idempotent-Replayed: true` instead of sending again. Optional `attachments` (at most 10, at most ATTACHMENTS_MAX_TOTAL_MB decoded in total) are stored until the email reaches a final state; executables, scripts and installers are refused.",
+          "Queue a new email for delivery. The email is inserted with status 'queued' and the queue processor handles SMTP delivery asynchronously. `to` is one address or an array of up to 50 (one message whose To header lists them all; at most 100 unique recipients with cc and bcc, else 422 TOO_MANY_RECIPIENTS); the response's `to` is an array when the request gave one, a string otherwise. `warnings` lists the sender domain's DNS records that are not verified (empty when all are). An optional `Idempotency-Key` header makes the request safe to retry: a repeat with the same key and body returns the first response with `Idempotent-Replayed: true` instead of sending again. Optional `attachments` (at most 10, at most ATTACHMENTS_MAX_TOTAL_MB decoded in total) are stored until the email reaches a final state; executables, scripts and installers are refused.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * POST /api/v1/emails/batch (#178)
+   *
+   * 1 to 100 distinct emails in one request, each exactly a `/send` body
+   * plus an optional per-item `idempotencyKey`. Items are processed in
+   * order and independently (`batch-send.service.ts`): one bad item never
+   * fails the others. Always `200` when the request itself is valid, with
+   * one result per item in request order; each result's `success` carries
+   * its outcome. The rate limiter counts the batch as one send per email
+   * and refuses it whole (429) when the key's remaining budget is smaller.
+   */
+  .post(
+    "/batch",
+    async ({ body, apiKeyId, headers, set }) => {
+      /**
+       * One key cannot name N sends: refused before any item is touched,
+       * with a pointer to the per-item field.
+       */
+      if (headers["idempotency-key"] !== undefined) {
+        logger.warn("Batch send refused: Idempotency-Key header", { apiKeyId });
+        set.status = 422;
+        return {
+          success: false,
+          error:
+            "The Idempotency-Key header is not supported on /emails/batch: set idempotencyKey on each item instead.",
+          code: "IDEMPOTENCY_KEY_NOT_SUPPORTED",
+        };
+      }
+
+      logger.info("POST /api/v1/emails/batch", { apiKeyId, count: body.emails.length });
+      const data = await batchSendService.sendBatch(body.emails, apiKeyId, sendResponse);
+      return { success: true, data };
+    },
+    {
+      body: batchSendEmailDto,
+      detail: {
+        tags: ["Emails"],
+        summary: "Send a batch of emails",
+        description: `Queue 1 to ${MAX_BATCH_EMAILS} distinct emails in one request: each item is a /send body (templates, tags, attachments included) plus an optional \`idempotencyKey\`, and becomes its own email with its own Message-ID. Items are processed in order and independently, so one invalid or refused item never fails the others. The answer is 200 with one result per item, in request order: \`{ index, success: true, data, warnings, replayed }\` or \`{ index, success: false, error, code, details? }\`, with the codes /send would answer. The batch counts as one send per email against the API key's rate limit and is refused whole with 429 when the remaining budget is smaller. The Idempotency-Key header is refused (422 IDEMPOTENCY_KEY_NOT_SUPPORTED): use per-item keys. Attachments are capped per item (ATTACHMENTS_MAX_TOTAL_MB), and the HTTP body limit caps the whole request, so split large attachment batches.`,
         security: [{ bearerAuth: [] }],
       },
     },

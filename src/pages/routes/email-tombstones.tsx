@@ -3,6 +3,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
+import { RecipientSummary } from "../components/recipient-summary.tsx";
 import type { EmailTombstone } from "../../modules/emails/models/email-tombstone.schema.ts";
 
 interface EmailTombstonesPageProps {
@@ -124,8 +125,8 @@ export function EmailTombstonesPage({
                       <span class="text-gray-400">n/a</span>
                     )}
                   </td>
-                  <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300" safe>
-                    {t.toAddress}
+                  <td class="px-4 py-3 text-xs text-gray-700 dark:text-gray-300">
+                    <RecipientSummary toAddress={t.toAddress} />
                   </td>
                   <td class="px-4 py-3 text-xs truncate max-w-[300px]">
                     {t.subject != null ? (

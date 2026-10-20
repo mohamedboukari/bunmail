@@ -61,7 +61,13 @@ export interface SendEmailInput {
    * bare address everywhere else.
    */
   fromName?: string;
-  to: string;
+  /**
+   * One address, or several (#178): an array, or a comma-separated string
+   * (SMTP submission). Normalized by `createEmail`
+   * (`services/recipient-limits.ts`): trimmed, deduplicated ignoring case,
+   * at most 50, and at most 100 unique recipients with `cc` and `bcc`.
+   */
+  to: string | readonly string[];
   cc?: string;
   bcc?: string;
   /** Reply-To address(es), comma-separated (#169) */

@@ -155,4 +155,21 @@ describe("serializeEmail", () => {
       },
     ]);
   });
+
+  describe("to (#178)", () => {
+    test("one stored address is a string", () => {
+      expect(serializeEmail(email, []).to).toBe("user@test.com");
+    });
+
+    test("several stored addresses are an array", () => {
+      const several = { ...email, toAddress: "a@test.com, b@test.org" };
+      expect(serializeEmail(several, []).to).toEqual(["a@test.com", "b@test.org"]);
+    });
+
+    test("toAsArray answers an array even with one address", () => {
+      expect(serializeEmail(email, [], { toAsArray: true }).to).toEqual([
+        "user@test.com",
+      ]);
+    });
+  });
 });

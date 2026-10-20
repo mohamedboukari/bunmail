@@ -5,6 +5,7 @@ import {
   checkRateLimit,
   pruneExpiredEntries,
   readApiKeyId,
+  requestWeight,
   type RateLimitEntry,
   type RateLimitOptions,
 } from "./rate-limit-core.ts";
@@ -65,8 +66,9 @@ export function stopRateLimitCleanup(): void {
  * Fixed window algorithm:
  * 1. Look up the API key's current window in the in-memory map
  * 2. If the window has expired, reset the counter
- * 3. Increment the counter
- * 4. If over the limit, return 429 with Retry-After header
+ * 3. Add the request's weight: 1, or one per email for a batch send (#178)
+ * 4. If that would pass the limit, return 429 with Retry-After header,
+ *    before the handler runs, so an over-budget batch creates nothing
  *
  * Must be applied AFTER authMiddleware (needs `apiKeyId` in context).
  * The limit comes from `config.apiRateLimit` (default 100 per 60 s).
@@ -89,11 +91,13 @@ export const rateLimitMiddleware = new Elysia({
 
     const { set } = context;
 
-    const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now(), limit);
+    /** A batch send counts as one send per email (#178). */
+    const weight = requestWeight(context);
+    const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now(), limit, weight);
     if (!decision.limited) return;
 
     const { count, retryAfter } = decision;
-    logger.warn("Rate limit exceeded", { apiKeyId, count, retryAfter });
+    logger.warn("Rate limit exceeded", { apiKeyId, count, weight, retryAfter });
 
     set.status = 429;
     set.headers["retry-after"] = String(retryAfter);

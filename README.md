@@ -104,6 +104,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **DKIM signing**: auto-generates 2048-bit RSA keys per domain, under a selector you can choose, with zero-downtime key rotation
 - **SPF / DKIM / DMARC verification**: DNS checks built into the dashboard, with the records to publish per domain, the parsed DMARC policy and where the MX points, re-run daily in the background so a record that drifts is caught (`domain.verification_failed`)
 - **Email queue**: Postgres-backed with MTA-style retry backoff (up to 48 h for temporary failures such as greylisting), lease-based crash recovery that is safe with several replicas, and no double sends between concurrent workers
+- **Several recipients and batch sends**: `to` takes an array of up to 50 addresses for one message (100 recipients with cc and bcc, delivered per recipient domain, bcc never in a header), and `POST /api/v1/emails/batch` queues up to 100 distinct emails in one request, each item validated and created on its own with per-item idempotency keys ([docs/api.md](docs/api.md#post-apiv1emailsbatch))
 - **Idempotency keys**: an optional `Idempotency-Key` header on the send API makes retries safe; a repeat with the same key and body returns the first response instead of sending twice, even under concurrent retries ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **Templates**: Mustache-style `{{variable}}` substitution, HTML-escaped in the HTML body (`{{{variable}}}` inserts raw HTML)
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`, `domain.verification_failed`, `domain.verified`
@@ -129,7 +130,8 @@ All endpoints (except `/health` and the public unsubscribe pages at `/u/:token`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/emails/send` | Queue an email (direct or template) |
+| POST | `/api/v1/emails/send` | Queue an email (direct or template), to one address or an array of up to 50 |
+| POST | `/api/v1/emails/batch` | Queue 1 to 100 distinct emails, one result per item |
 | GET | `/api/v1/emails` | List emails (excludes trash) |
 | GET | `/api/v1/emails/trash` | List trashed emails |
 | GET | `/api/v1/emails/:id` | Get email by ID |

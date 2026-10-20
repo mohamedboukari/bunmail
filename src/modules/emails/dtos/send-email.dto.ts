@@ -42,7 +42,27 @@ export const sendEmailDto = t.Object({
         'Sender display name, shown instead of the address by most clients. 1 to 100 characters after trimming; control and bidi-control characters and any of @ < > " are refused (422 VALIDATION_ERROR).',
     }),
   ),
-  to: t.String({ format: "email" }),
+  /**
+   * One address, or an array of addresses (#178): ONE message whose `To:`
+   * header lists them all, delivered per recipient domain. Only the shape
+   * and a raw cap are checked here; `createEmail`
+   * (`services/recipient-limits.ts`) deduplicates ignoring case and
+   * refuses more than 50 `to` addresses, or more than 100 unique
+   * recipients with `cc` and `bcc`, with `422 TOO_MANY_RECIPIENTS`.
+   */
+  to: t.Union(
+    [
+      t.String({ format: "email" }),
+      t.Array(t.String({ format: "email", maxLength: 254 }), {
+        minItems: 1,
+        maxItems: 500,
+      }),
+    ],
+    {
+      description:
+        "One address, or an array of addresses for one message whose To header lists them all. At most 50 addresses (deduplicated ignoring case) and at most 100 unique recipients across to, cc and bcc (else 422 TOO_MANY_RECIPIENTS). The response's to is an array when the send gave an array or the email has several addresses, a string otherwise.",
+    },
+  ),
   /**
    * `cc`/`bcc` accept a comma-separated address list, so `format: "email"`
    * (single-address) can't be used. As header-injection defense-in-depth
@@ -181,7 +201,7 @@ export const sendEmailDto = t.Object({
  * characters (0x21 to 0x7E), so no spaces and no control characters. A
  * repeated header arrives joined with ", " and fails the pattern.
  */
-const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,255}$";
+export const IDEMPOTENCY_KEY_PATTERN = "^[\\x21-\\x7e]{1,255}$";
 
 /**
  * Request headers of POST /api/v1/emails/send that are validated: the

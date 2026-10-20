@@ -161,8 +161,14 @@ export const emails = pgTable(
      */
     fromName: varchar("from_name", { length: 100 }),
 
-    /** Recipient email address */
-    toAddress: varchar("to_address", { length: 255 }).notNull(),
+    /**
+     * The `to` recipients (#178): one address, or several as a normalized
+     * comma-separated list (`a@example.com, b@example.org`), like `cc` and
+     * `bcc`, so `parseRecipients` reads all three the same way. At most 50
+     * addresses, deduplicated ignoring case (`services/recipient-limits.ts`).
+     * `text` since #178: `varchar(255)` held only about five addresses.
+     */
+    toAddress: text("to_address").notNull(),
 
     /** Carbon copy recipients (comma-separated, nullable) */
     cc: text("cc"),
