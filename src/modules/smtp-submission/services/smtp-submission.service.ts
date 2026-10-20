@@ -251,6 +251,35 @@ function newSessionId(): string {
     .padStart(16, "0");
 }
 
+/** Sockets `closeWholeSocket` already guards (under Bun, accepted and TLS are one). */
+const guardedSockets = new WeakSet<Socket>();
+
+/**
+ * Makes a socket of the implicit-TLS listener close in full whenever
+ * either side ends it (#351), at every stage (handshake, handoff, session):
+ * - Ending our side destroys the socket once everything written has been
+ *   handed to the runtime. `_final` runs only after every pending write has
+ *   completed, so the last reply (a `221`, a `421`) still goes out; Bun's
+ *   own `_final` would half-close the socket instead, which is the state
+ *   that leaks it (see `createImplicitTlsListener`).
+ * - The client's FIN or a socket error destroys it at once: no half-open
+ *   session, nothing left polling a dead socket. smtp-server's own `close`
+ *   listener then closes its session, so `SMTP session closed` is logged.
+ */
+function closeWholeSocket(socket: Socket): void {
+  if (guardedSockets.has(socket)) return;
+  guardedSockets.add(socket);
+  socket._final = (callback) => {
+    socket.destroy();
+    callback();
+  };
+  socket.once("end", () => {
+    logger.debug("SMTP submission client hung up", { ip: socket.remoteAddress });
+    socket.destroy();
+  });
+  socket.on("error", () => socket.destroy());
+}
+
 /**
  * The implicit-TLS listener (#349): the runtime's own TLS server, which
  * terminates TLS from the first byte and hands each decrypted socket to
@@ -267,6 +296,12 @@ function newSessionId(): string {
  *   session that closes at once: one `SMTP session closed` line, and one
  *   connection counted against its IP's connection limit, as any
  *   plaintext client is counted (one per TCP connection, never more).
+ * - A TLS socket we end (smtp-server ends it on QUIT, a 421 or its idle
+ *   timeout) and that is then paused (smtp-server unpipes its parser right
+ *   after) never closes once the client's FIN arrives (#351): it sits in
+ *   CLOSE_WAIT and the event loop keeps waking for it, a full CPU
+ *   core on Linux. `destroy()` cannot close it after that point, so the
+ *   socket must never be half-closed by us: see `closeWholeSocket`.
  */
 function createImplicitTlsListener(
   smtp: SMTPServer,
@@ -275,13 +310,26 @@ function createImplicitTlsListener(
   const listener = createTlsServer(
     { ...material, handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS },
     (socket) => {
-      /** The handshake is done: smtp-server arms its own idle timeout. */
+      closeWholeSocket(socket);
+      /**
+       * The handshake is done: smtp-server arms its own idle timeout. The
+       * handshake timeout's listener goes too, or the session's idle
+       * timeout would destroy the socket before smtp-server sends its 421.
+       */
       socket.setTimeout(0);
+      socket.removeAllListeners("timeout");
       smtp.connect(socket, { id: newSessionId() });
     },
   );
   listener.on("connection", (socket: Socket) => {
-    socket.setTimeout(TLS_HANDSHAKE_TIMEOUT_MS, () => socket.destroy());
+    closeWholeSocket(socket);
+    socket.setTimeout(TLS_HANDSHAKE_TIMEOUT_MS, () => {
+      logger.warn("SMTP submission TLS handshake timed out", {
+        ip: socket.remoteAddress,
+        timeoutMs: TLS_HANDSHAKE_TIMEOUT_MS,
+      });
+      socket.destroy();
+    });
   });
   listener.on("tlsClientError", (error: Error, socket: Socket) => {
     const code: unknown = Reflect.get(error, "code");
