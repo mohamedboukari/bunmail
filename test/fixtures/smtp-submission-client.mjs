@@ -11,6 +11,13 @@
  *   hangup     TLS, the greeting, then drops the connection without QUIT
  *   plaintext  no TLS at all: sends EHLO and AUTH PLAIN in the clear
  *
+ * Hang-up modes (#351), each repeated `SUBMISSION_REPEAT` times (default 1),
+ * one connection after the other; `hangup` repeats the same way:
+ *   tcp-hangup        TCP connect, then closes before any TLS byte
+ *   handshake-hangup  sends a ClientHello, closes on the server's first reply
+ *   half-close        TLS, EHLO, then `end()`: waits for the server to close
+ *   quit              TLS, QUIT, then drops the connection on the `221`
+ *
  * The API key comes from the `SUBMISSION_KEY` environment variable and the
  * subject of `send` from `SUBMISSION_SUBJECT`. The server presents
  * `mx1.example.test`, a leaf of the test CA (`test/fixtures/tls/`), and the
@@ -21,7 +28,7 @@
  * closed early or never answered, so a failing test shows its cause.
  */
 import { readFileSync } from "node:fs";
-import { connect as connectTcp } from "node:net";
+import { connect as connectTcp, createServer as createTcpServer } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { createTransport } from "nodemailer";
 
@@ -48,7 +55,10 @@ process.on("uncaughtException", (error) =>
   done({ ok: false, error: `uncaught: ${error.message}` }),
 );
 /** A fixture that hangs still reports, before the test's own timeout. */
-setTimeout(() => done({ ok: false, error: "client timed out" }), 10_000).unref();
+setTimeout(() => done({ ok: false, error: "client timed out" }), 20_000).unref();
+
+/** How many times a hang-up mode runs (#351). */
+const repeat = Number(process.env["SUBMISSION_REPEAT"] ?? "1");
 
 /** Sends one message with nodemailer, implicit TLS or STARTTLS. */
 async function sendWithNodemailer(implicit) {
@@ -129,6 +139,115 @@ function tlsGreeting(next) {
   });
 }
 
+/**
+ * Resolves once `socket` is closed, with whether the server ended it
+ * first; rejects after 5 s, which only a server that never closes causes.
+ */
+function closed(socket) {
+  return new Promise((resolve, reject) => {
+    let serverEnded = false;
+    socket.on("end", () => (serverEnded = true));
+    if (socket.destroyed) return resolve({ serverEnded });
+    const timer = setTimeout(() => reject(new Error("socket never closed")), 5000);
+    socket.on("close", () => {
+      clearTimeout(timer);
+      resolve({ serverEnded });
+    });
+  });
+}
+
+/** Opens TLS and resolves with the socket after a `220` greeting. */
+function openSession() {
+  return new Promise((resolve, reject) => {
+    const socket = connectTls({ host, port, ca, servername });
+    socket.on("error", reject);
+    socket.on("close", () => reject(new Error("server closed the connection")));
+    readReply(socket, (greeting) => {
+      if (!(greeting.at(-1) ?? "").startsWith("220 ")) {
+        reject(new Error(`no 220 greeting: ${greeting.at(-1)}`));
+        socket.destroy();
+        return;
+      }
+      resolve({ socket, greeting });
+    });
+  });
+}
+
+/** Writes `command` and resolves with the reply lines. */
+function command(socket, line) {
+  return new Promise((resolve) => {
+    readReply(socket, resolve);
+    socket.write(`${line}\r\n`);
+  });
+}
+
+/** The first bytes a TLS client sends (its ClientHello), from a local listener. */
+function clientHello() {
+  return new Promise((resolve) => {
+    const capture = createTcpServer((raw) => {
+      raw.once("data", (chunk) => {
+        resolve(chunk);
+        raw.destroy();
+        capture.close();
+      });
+    });
+    capture.listen(0, host, () => {
+      const probe = connectTls({ host, port: capture.address().port, ca, servername });
+      probe.on("error", () => undefined);
+    });
+  });
+}
+
+/** The hang-up modes (#351): one connection each, resolved once it is gone. */
+const HANG_UPS = {
+  "tcp-hangup": async () => {
+    const socket = connectTcp({ host, port });
+    socket.on("error", () => undefined);
+    socket.on("connect", () => socket.destroy());
+    return closed(socket);
+  },
+  "handshake-hangup": async () => {
+    const hello = await clientHello();
+    const socket = connectTcp({ host, port });
+    socket.on("error", () => undefined);
+    socket.on("connect", () => socket.write(hello));
+    /** The server's first flight: the handshake is half done. */
+    socket.once("data", () => socket.destroy());
+    return closed(socket);
+  },
+  hangup: async () => {
+    const { socket, greeting } = await openSession();
+    socket.removeAllListeners("close");
+    socket.on("error", () => undefined);
+    socket.destroy();
+    return { greeting, ...(await closed(socket)) };
+  },
+  "half-close": async () => {
+    const { socket, greeting } = await openSession();
+    socket.removeAllListeners("close");
+    const ehlo = await command(socket, "EHLO client.example.test");
+    socket.end();
+    return { greeting, ehlo, ...(await closed(socket)) };
+  },
+  quit: async () => {
+    const { socket, greeting } = await openSession();
+    socket.removeAllListeners("close");
+    socket.on("error", () => undefined);
+    const serverEnded = new Promise((resolve) => {
+      socket.once("end", resolve);
+      socket.once("close", resolve);
+    });
+    const reply = await command(socket, "QUIT");
+    /**
+     * Hangs up once the server has ended its side after the 221, so the
+     * FIN always reaches a socket the server already ended (the leak).
+     */
+    await serverEnded;
+    socket.destroy();
+    return { greeting, response: reply.at(-1), ...(await closed(socket)) };
+  },
+};
+
 if (mode === "send") {
   await sendWithNodemailer(true);
 } else if (mode === "starttls") {
@@ -141,11 +260,15 @@ if (mode === "send") {
       done({ ok: true, protocol, greeting, ehlo });
     });
   });
-} else if (mode === "hangup") {
-  tlsGreeting((socket, greeting) => {
-    socket.destroy();
-    done({ ok: true, greeting });
-  });
+} else if (mode in HANG_UPS) {
+  const hangUp = HANG_UPS[mode];
+  let last = {};
+  try {
+    for (let run = 0; run < repeat; run++) last = await hangUp();
+    done({ ok: true, runs: repeat, ...last });
+  } catch (error) {
+    done({ ok: false, error: error.message, ...last });
+  }
 } else if (mode === "plaintext") {
   const socket = connectTcp({ host, port });
   const received = [];
