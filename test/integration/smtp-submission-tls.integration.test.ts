@@ -1,8 +1,9 @@
 /**
  * Implicit TLS on the SMTP submission server (#349), under Bun.
  *
- * The BunMail submission server runs in this (Bun) process with a test
- * certificate; every client is a Node child process
+ * The BunMail submission server runs in this (Bun) process with
+ * `mx1.example.test`, a leaf of the test CA, which every client verifies
+ * against that CA; every client is a Node child process
  * (`test/fixtures/smtp-submission-client.mjs`), so the client is never the
  * thing under test. Bun cannot act as a STARTTLS server, and smtp-server's
  * own implicit TLS fails under Bun for the same reason, so BunMail
@@ -31,7 +32,8 @@ interface ClientResult {
   ok: boolean;
   response?: string;
   code?: string | null;
-  message?: string;
+  /** Why the client failed: what the server said, or that it closed or never answered. */
+  error?: string;
   protocol?: string;
   greeting?: string[];
   ehlo?: string[];
@@ -55,7 +57,7 @@ function toClientResult(line: unknown): ClientResult {
     ok: field("ok") === true,
     response: text("response"),
     code: text("code") ?? null,
-    message: text("message"),
+    error: text("error"),
     protocol: text("protocol"),
     greeting: lines("greeting"),
     ehlo: lines("ehlo"),
@@ -81,8 +83,12 @@ async function runClient(
     },
   });
   const out = await new Response(proc.stdout).text();
-  await proc.exited;
+  const exitCode = await proc.exited;
   const last = out.trim().split("\n").pop() ?? "";
+  if (last === "") {
+    /** The fixture always prints a line; say so instead of a JSON parse error. */
+    return { ok: false, error: `the client printed nothing (exit code ${exitCode})` };
+  }
   return toClientResult(JSON.parse(last));
 }
 
@@ -110,8 +116,9 @@ beforeAll(() => {
   });
   Object.assign(config.smtpSubmission.tls, {
     mode: "implicit",
-    certPath: `${TLS_DIR}hook.example.test.cert.pem`,
-    keyPath: `${TLS_DIR}hook.example.test.key.pem`,
+    /** A leaf of the test CA: the client verifies it against that CA. */
+    certPath: `${TLS_DIR}mx1.example.test.cert.pem`,
+    keyPath: `${TLS_DIR}mx1.example.test.key.pem`,
   });
   try {
     smtpSubmission.start(TEST_PORT);
@@ -158,7 +165,7 @@ describe("SMTP submission: implicit TLS (#349)", () => {
   test("TLS from the first byte, then a greeting and an EHLO without STARTTLS", async () => {
     await waitForStart();
     const result = await runClient("ehlo");
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(result.protocol).toMatch(/^TLSv1\.[23]$/);
     expect(result.greeting?.at(-1)).toMatch(/^220 /);
     const ehlo = result.ehlo ?? [];
@@ -171,7 +178,7 @@ describe("SMTP submission: implicit TLS (#349)", () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
     const result = await runClient("send", { key: rawKey, subject: "via 465" });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     expect(result.response).toMatch(/^250 /);
 
     const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
@@ -195,7 +202,7 @@ describe("SMTP submission: implicit TLS (#349)", () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
     const result = await runClient("plaintext", { key: rawKey });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     /** A TLS alert record (content type 21), not SMTP text. */
     expect(result.hex?.startsWith("15")).toBe(true);
     expect(result.text).not.toContain("220");
@@ -213,7 +220,8 @@ describe("SMTP submission: implicit TLS (#349)", () => {
     const { id: apiKeyId, rawKey } = await seed.apiKey();
 
     const result = await runClient("starttls", { key: rawKey });
-    expect(result.ok).toBe(false);
+    /** The server waits for a TLS ClientHello, so the plaintext greeting never comes. */
+    expect(result).toMatchObject({ ok: false, code: "ETIMEDOUT" });
 
     const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
     expect(rows).toHaveLength(0);
@@ -222,12 +230,12 @@ describe("SMTP submission: implicit TLS (#349)", () => {
   test("a client hanging up mid-session leaves the server working", async () => {
     await waitForStart();
     const hangup = await runClient("hangup");
-    expect(hangup.ok).toBe(true);
+    expect(hangup).toMatchObject({ ok: true });
     expect(hangup.greeting?.at(-1)).toMatch(/^220 /);
 
     const { id: apiKeyId, rawKey } = await seed.apiKey();
     const result = await runClient("send", { key: rawKey, subject: "after a hang-up" });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true });
     const rows = await db.select().from(emails).where(eq(emails.apiKeyId, apiKeyId));
     expect(rows.map((row) => row.subject)).toEqual(["after a hang-up"]);
   });

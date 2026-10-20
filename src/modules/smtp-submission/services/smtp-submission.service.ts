@@ -314,6 +314,15 @@ export function start(portOverride?: number): void {
   const port = portOverride ?? config.smtpSubmission.port;
 
   /**
+   * The per-IP counters belong to one running server: a server started
+   * again (the tests start and stop it per file) begins with none, as a
+   * restarted process does, instead of inheriting the previous run's
+   * connection and failed-AUTH budget.
+   */
+  connectionMap.clear();
+  authFailureMap.clear();
+
+  /**
    * Load the TLS material when a mode needs it. A bad path fails loudly at
    * start rather than silently downgrading security.
    */

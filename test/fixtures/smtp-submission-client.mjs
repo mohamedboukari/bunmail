@@ -12,10 +12,15 @@
  *   plaintext  no TLS at all: sends EHLO and AUTH PLAIN in the clear
  *
  * The API key comes from the `SUBMISSION_KEY` environment variable and the
- * subject of `send` from `SUBMISSION_SUBJECT`. Prints one JSON line with
- * the outcome and exits. The server's certificate is a self-signed test
- * one, so it is not verified.
+ * subject of `send` from `SUBMISSION_SUBJECT`. The server presents
+ * `mx1.example.test`, a leaf of the test CA (`test/fixtures/tls/`), and the
+ * client verifies it against that CA under that name.
+ *
+ * Always prints exactly one JSON line and exits: the outcome, or
+ * `{ ok: false, error, ... }` with what the server said when it refused,
+ * closed early or never answered, so a failing test shows its cause.
  */
+import { readFileSync } from "node:fs";
 import { connect as connectTcp } from "node:net";
 import { connect as connectTls } from "node:tls";
 import { createTransport } from "nodemailer";
@@ -25,11 +30,25 @@ const port = Number(portArg);
 const key = process.env["SUBMISSION_KEY"] ?? "";
 const host = "127.0.0.1";
 
-/** Writes the outcome line and exits. */
+/** The test CA and the name on the server's certificate. */
+const ca = readFileSync(new URL("tls/test-ca.cert.pem", import.meta.url));
+const servername = "mx1.example.test";
+
+let finished = false;
+
+/** Writes the one outcome line and exits; later calls do nothing. */
 function done(result) {
+  if (finished) return;
+  finished = true;
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exit(0);
 }
+
+process.on("uncaughtException", (error) =>
+  done({ ok: false, error: `uncaught: ${error.message}` }),
+);
+/** A fixture that hangs still reports, before the test's own timeout. */
+setTimeout(() => done({ ok: false, error: "client timed out" }), 10_000).unref();
 
 /** Sends one message with nodemailer, implicit TLS or STARTTLS. */
 async function sendWithNodemailer(implicit) {
@@ -39,7 +58,7 @@ async function sendWithNodemailer(implicit) {
     secure: implicit,
     requireTLS: !implicit,
     auth: { user: "apikey", pass: key },
-    tls: { rejectUnauthorized: false },
+    tls: { ca, servername },
     connectionTimeout: 3000,
     greetingTimeout: 3000,
     socketTimeout: 5000,
@@ -53,7 +72,12 @@ async function sendWithNodemailer(implicit) {
     });
     done({ ok: true, response: info.response });
   } catch (error) {
-    done({ ok: false, code: error.code ?? null, message: error.message });
+    done({
+      ok: false,
+      error: error.message,
+      code: error.code ?? null,
+      response: error.response ?? null,
+    });
   }
 }
 
@@ -82,12 +106,27 @@ function readReply(socket, next) {
   socket.on("data", onData);
 }
 
-/** Opens TLS from the first byte and waits for the greeting. */
+/**
+ * Opens TLS from the first byte and waits for a `220` greeting. Anything
+ * else (a `421` from the connection limit, a close, an error) ends the
+ * run with that cause.
+ */
 function tlsGreeting(next) {
-  const socket = connectTls({ host, port, rejectUnauthorized: false });
-  socket.setTimeout(5000, () => done({ ok: false, message: "timed out" }));
-  socket.on("error", (error) => done({ ok: false, message: error.message }));
-  readReply(socket, (greeting) => next(socket, greeting, socket.getProtocol()));
+  const socket = connectTls({ host, port, ca, servername });
+  let greeting = [];
+  socket.setTimeout(5000, () => done({ ok: false, error: "timed out", greeting }));
+  socket.on("error", (error) => done({ ok: false, error: error.message, greeting }));
+  socket.on("close", () =>
+    done({ ok: false, error: "server closed the connection", greeting }),
+  );
+  readReply(socket, (lines) => {
+    greeting = lines;
+    if (!(lines.at(-1) ?? "").startsWith("220 ")) {
+      done({ ok: false, error: "no 220 greeting", greeting });
+      return;
+    }
+    next(socket, lines, socket.getProtocol());
+  });
 }
 
 if (mode === "send") {
@@ -123,5 +162,5 @@ if (mode === "send") {
   socket.on("close", finish);
   setTimeout(finish, 2000);
 } else {
-  done({ ok: false, message: `unknown mode ${mode}` });
+  done({ ok: false, error: `unknown mode ${mode}` });
 }
