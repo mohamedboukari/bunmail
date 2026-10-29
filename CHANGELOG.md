@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-10-27
+## [0.11.0] - 2026-10-29
 
 > **Theme: deliverability, sending features and account security on top of 0.10.0.** Direct-to-MX delivery gains MTA-STS, signed return paths, provider throttling, MX failover and daily DNS and blocklist checks; the send API gains attachments, tags, idempotency keys, custom headers and batch sends; dashboard accounts gain TOTP, passkeys, an audit log and an active sessions page. No new required setting, but several existing settings are now validated at boot and SMTP ports move out of the tracked compose file: read the upgrade guide before pulling.
 
