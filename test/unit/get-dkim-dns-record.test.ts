@@ -4,7 +4,9 @@ import { describe, test, expect, mock } from "bun:test";
  * Unit tests for getDkimDnsRecord.
  *
  * Tests DNS TXT record generation from a domain's DKIM public key.
- * Mocks the DB, logger, and config since the domain service imports them.
+ * Mocks the DB and config since the domain service imports them. The
+ * logger is NOT mocked: `mock.module` leaks into every later test file, and
+ * a stubbed logger there breaks tests that spy on it or on console output.
  */
 
 /* ─── Mock config ─── */
@@ -17,16 +19,6 @@ void mock.module("../../src/config.ts", () => ({
     logLevel: "error",
     /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
     domainReverify: { enabled: true, intervalHours: 24 },
-  },
-}));
-
-/* ─── Mock logger ─── */
-void mock.module("../../src/utils/logger.ts", () => ({
-  logger: {
-    debug: mock(() => {}),
-    info: mock(() => {}),
-    warn: mock(() => {}),
-    error: mock(() => {}),
   },
 }));
 
