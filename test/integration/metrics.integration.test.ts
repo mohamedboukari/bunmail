@@ -7,8 +7,15 @@
 
 import { describe, test, expect, beforeEach } from "bun:test";
 import { eq } from "drizzle-orm";
-import { readQueueSnapshot } from "../../src/modules/metrics/services/db-gauges.service.ts";
-import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import {
+  readQueueSnapshot,
+  readSuppressionCounts,
+  readWebhookBacklog,
+} from "../../src/modules/metrics/services/db-gauges.service.ts";
+import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
+import { suppressions } from "../../src/modules/suppressions/models/suppression.schema.ts";
+import { generateId } from "../../src/utils/id.ts";
+import { truncateAll, seed, db, emails, enqueueDelivery } from "./_helpers.ts";
 
 beforeEach(async () => {
   await truncateAll();
@@ -63,5 +70,85 @@ describe("readQueueSnapshot", () => {
     /** The overdue email, not the trashed one an hour overdue. */
     expect(snapshot.oldestDueAgeSeconds).toBeGreaterThan(9 * 60);
     expect(snapshot.oldestDueAgeSeconds).toBeLessThan(11 * 60);
+  });
+});
+
+describe("readWebhookBacklog", () => {
+  test("counts pending deliveries; due only those whose next attempt has passed", async () => {
+    const apiKey = await seed.apiKey();
+    const webhook = await seed.webhook({
+      apiKeyId: apiKey.id,
+      url: "https://hooks.example.com/x",
+      events: ["email.sent"],
+    });
+    const envelope = {
+      event: "email.sent",
+      timestamp: new Date().toISOString(),
+      data: {},
+    };
+    const due = await enqueueDelivery({ webhookId: webhook.id, envelope });
+    const later = await enqueueDelivery({ webhookId: webhook.id, envelope });
+    const done = await enqueueDelivery({ webhookId: webhook.id, envelope });
+    await db
+      .update(webhookDeliveries)
+      .set({ nextAttemptAt: inMinutes(-2) })
+      .where(eq(webhookDeliveries.id, due.id));
+    await db
+      .update(webhookDeliveries)
+      .set({ nextAttemptAt: inMinutes(15) })
+      .where(eq(webhookDeliveries.id, later.id));
+    await db
+      .update(webhookDeliveries)
+      .set({ status: "delivered" })
+      .where(eq(webhookDeliveries.id, done.id));
+
+    expect(await readWebhookBacklog()).toEqual({ pending: 2, due: 1 });
+  });
+});
+
+describe("readSuppressionCounts", () => {
+  test("active suppressions by reason; expired ones out, an unknown reason as other", async () => {
+    const apiKey = await seed.apiKey();
+    await seed.suppression({
+      apiKeyId: apiKey.id,
+      email: "a@example.org",
+      reason: "bounce",
+    });
+    await seed.suppression({
+      apiKeyId: apiKey.id,
+      email: "b@example.org",
+      reason: "bounce",
+    });
+    await seed.suppression({
+      apiKeyId: apiKey.id,
+      email: "c@example.org",
+      reason: "complaint",
+    });
+    await seed.suppression({
+      apiKeyId: apiKey.id,
+      email: "d@example.org",
+      reason: "bounce",
+      bounceType: "soft",
+      expiresAt: inMinutes(60),
+    });
+    await seed.suppression({
+      apiKeyId: apiKey.id,
+      email: "e@example.org",
+      reason: "manual",
+      expiresAt: inMinutes(-60),
+    });
+    /** The column is free text: a reason a newer version wrote, or a manual edit. */
+    await db.insert(suppressions).values({
+      id: generateId("sup"),
+      apiKeyId: apiKey.id,
+      email: "f@example.org",
+      reason: "legacy-import",
+    });
+
+    const counts = await readSuppressionCounts();
+    const byReason = Object.fromEntries(
+      counts.map(({ reason, count }) => [reason, count]),
+    );
+    expect(byReason).toEqual({ bounce: 3, complaint: 1, other: 1 });
   });
 });

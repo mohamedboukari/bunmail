@@ -3,6 +3,7 @@ import { memberGuard, roleAtLeast } from "../guards.tsx";
 import * as statsService from "../../modules/emails/services/stats.service.ts";
 import { peekReverseDnsStatus } from "../../modules/domains/services/sending-ips.service.ts";
 import { getDnsblStatus } from "../../modules/domains/services/sending-ip-dnsbl.service.ts";
+import { dbSnapshot } from "../../modules/metrics/services/metrics.service.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 
 /** Dashboard home (#291): the stat cards. */
@@ -22,6 +23,8 @@ export function homePages(app: GuardedDashboard) {
             <HomePage
               stats={stats}
               canInvite={isAdmin}
+              /** Queue, webhook backlog, suppressions (#362): operations detail, admins and the owner only. */
+              systemHealth={isAdmin ? { snapshot: await dbSnapshot() } : undefined}
               /** Sending IPs are infrastructure detail: admins and the owner only (#248). */
               serverIdentity={isAdmin ? { status: peekReverseDnsStatus() } : undefined}
               /** The DNSBL self-check (#250), also infrastructure detail. */

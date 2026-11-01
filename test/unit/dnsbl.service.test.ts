@@ -263,3 +263,16 @@ describe("selfTestDnsbl", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({ answer: "127.255.255.254" });
   });
 });
+
+/** A clock stepping back (an NTP correction) must not mute the warning until it catches up. */
+describe("isBlacklistedIp: the warning throttle and a clock that went back", () => {
+  test("after a backwards step the next failure warns again", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const lookup = (): Promise<string[]> =>
+      Promise.reject(Object.assign(new Error("queryA EBADRESP"), { code: "EBADRESP" }));
+    await isBlacklistedIp("8.8.8.8", ZONE, { lookup, now: () => 50_000_000 });
+    await isBlacklistedIp("8.8.8.8", ZONE, { lookup, now: () => 10_000_000 });
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+});

@@ -45,6 +45,7 @@ import {
 import { config } from "../../../config.ts";
 import { ReplayLimitReachedError } from "../errors.ts";
 import { recordReplay, REPLAYS_PER_DELIVERY_PER_HOUR } from "./replay-limit.service.ts";
+import { recordWebhookAttempt } from "../../metrics/services/metrics.service.ts";
 
 /**
  * Backoff schedule per the issue's acceptance criteria. The value at
@@ -549,6 +550,7 @@ export async function recordAttempt(opts: {
         updatedAt: now,
       })
       .where(eq(webhookDeliveries.id, opts.deliveryId));
+    recordWebhookAttempt("delivered");
     return;
   }
 
@@ -568,6 +570,7 @@ export async function recordAttempt(opts: {
         updatedAt: now,
       })
       .where(eq(webhookDeliveries.id, opts.deliveryId));
+    recordWebhookAttempt("failed");
     return;
   }
 
@@ -584,6 +587,7 @@ export async function recordAttempt(opts: {
       updatedAt: now,
     })
     .where(eq(webhookDeliveries.id, opts.deliveryId));
+  recordWebhookAttempt("retry");
 }
 
 /* ─── Read-side queries ─── */
