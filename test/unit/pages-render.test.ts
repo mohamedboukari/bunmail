@@ -14,7 +14,7 @@ import { describe, test, expect } from "bun:test";
  *   - Real markup correctness (we'd need DOM-level snapshots)
  *   - Browser interactivity / form submissions (no JS in our pages)
  *
- * The plugin-level `dashboard.test.ts` e2e covers routing + auth: these
+ * The plugin-level `dashboard-*.test.ts` e2e files cover routing + auth: these
  * tests cover the rendering layer beneath. Together they exercise the
  * full HTML response path.
  */

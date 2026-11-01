@@ -78,7 +78,7 @@ Every route needs an entry in the test's `ROUTES` table (access level, a minimal
 
 - **`mailer.service.ts`**: Nodemailer wrapper. Would need `mailcatcher` / `maildev` in compose. Skipped.
 - **`dns-verification.service.ts`**: DNS resolver, flaky in CI. Mock at the `resolve()` boundary if needed.
-- **Dashboard JSX rendering**: server-rendered HTML, snapshot-tested via `dashboard.test.ts` at the e2e tier already. Snapshots have low value-to-maintenance ratio for our scope.
+- **Dashboard JSX rendering**: server-rendered HTML, snapshot-tested via the `dashboard-*.test.ts` files at the e2e tier already. Snapshots have low value-to-maintenance ratio for our scope.
 
 ## CI configuration
 
@@ -137,6 +137,7 @@ Bun's `mock.module` is process-wide: a mock registered by one file stays in plac
 - **`bun run lint:mocks`** ([test/mock-completeness.ts](../test/mock-completeness.ts)) fails on any `mock.module` in `test/` whose factory misses an export, so adding an export to a mocked module fails the PR that adds it. It reads factories written as an arrow returning an object literal (inline or bound to a `const`); anything else fails unless the call carries `// mock-completeness: ignore <reason>`. It runs in CI and in lint-staged.
 - **Don't mock the logger in unit tests**; spy on it (`spyOn(logger, "warn")`). A complete logger mock is still a no-op logger, and `log-context.test.ts` checks real log lines.
 - **CI runs unit and e2e in random order with three fixed seeds** (1, 42, 1337), so an order-dependent failure is reproducible: `bun test test/unit --randomize --seed=42`.
+- **A shared setup module must re-register its mocks per file.** The dashboard e2e tests are split per area (`dashboard-<area>.test.ts`, #291) over one setup module, `dashboard-setup.ts`, which loads once per run. A dashboard file that runs after another e2e file mocking the same services would otherwise see that file's mocks, so every dashboard file calls `useDashboardMocks()`, which runs `registerDashboardMocks()` in its `beforeAll`. Without it, 11 to 21 tests fail per random seed. A new dashboard area file starts with that call; a value a test changes (an imported `let` is read-only) gets a setter in the setup (`setIssueResult`).
 
 When adding a service unit test, prefer the **dependency-injection pattern**: extract a pure orchestration function that takes its dependencies as callbacks (see `resolveDomainForEmail`, `handleBounce`, `handleSendFailure`). Then the unit test feeds fake callbacks; the production wrapper wires real implementations.
 
