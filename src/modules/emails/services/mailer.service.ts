@@ -36,6 +36,7 @@ import type {
   DeliveryState,
 } from "../models/email.schema.ts";
 import type { EmailCategory } from "../types/email.types.ts";
+import { mxDeliveries } from "../../metrics/services/metrics.service.ts";
 
 /**
  * Result of a `sendMail` call. The `messageId` is the canonical
@@ -1122,6 +1123,7 @@ function recordOutcome(
       tls,
       mtaSts,
     });
+    mxDeliveries.inc({ tls: tls ?? "unknown" });
     for (const { recipient, error } of refused) {
       const entryKey = refusedKey(state, key, recipient, order);
       const entry = failedEntry(group, [recipient], error, {

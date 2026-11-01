@@ -847,6 +847,35 @@ export function readGeoipSettings(
   return online;
 }
 
+/** A metrics scrape token: long enough that it cannot be guessed, header-safe. */
+const METRICS_TOKEN_RE = /^[A-Za-z0-9_-]{32,256}$/;
+
+/** Fewest distinct characters a scrape token may have (`openssl rand -hex 32` has 16). */
+const METRICS_TOKEN_MIN_DISTINCT = 8;
+
+/**
+ * Reads `METRICS_TOKEN` (#362): the bearer token a scraper sends to
+ * `GET /metrics`. Unset or blank turns the endpoint off (404). Anything
+ * else must be 32 to 256 letters, digits, `-` or `_` (for example
+ * `openssl rand -hex 32`) with at least 8 distinct characters, or the
+ * server refuses to boot: a short or repetitive token would protect
+ * nothing, and the endpoint has no rate limit. Never logged. Exported
+ * for tests.
+ */
+export function readMetricsToken(
+  raw: string | undefined = process.env["METRICS_TOKEN"],
+): string | null {
+  const token = raw?.trim() ?? "";
+  if (token === "") return null;
+  if (!METRICS_TOKEN_RE.test(token) || new Set(token).size < METRICS_TOKEN_MIN_DISTINCT) {
+    throw new Error(
+      "[config] METRICS_TOKEN must be 32 to 256 letters, digits, '-' or '_', with at least 8 distinct characters.\n" +
+        "  → Generate one with `openssl rand -hex 32`, or leave it empty to turn /metrics off.",
+    );
+  }
+  return token;
+}
+
 /**
  * Central application configuration.
  *
@@ -861,6 +890,11 @@ export const config = {
   database: {
     /** PostgreSQL connection URL (required) */
     url: requiredEnv("DATABASE_URL"),
+  },
+
+  metrics: {
+    /** Bearer token for `GET /metrics` (#362); `null` turns the endpoint off. */
+    token: readMetricsToken(),
   },
 
   server: {

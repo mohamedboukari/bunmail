@@ -11,7 +11,7 @@ BunMail exposes an auto-generated OpenAPI 3.0 spec:
 
 ## Authentication
 
-All endpoints (except `/health` and the public unsubscribe pages, `/u/:token`) require a Bearer token in the `Authorization` header:
+All endpoints (except `/health`, the public unsubscribe pages, `/u/:token`, and `/metrics`, which takes its own `METRICS_TOKEN`) require a Bearer token in the `Authorization` header:
 
 ```
 Authorization: Bearer bm_live_<your-api-key>
@@ -61,6 +61,10 @@ Returns server health status. No authentication required.
   "timestamp": "2026-03-15T12:00:00.000Z"
 }
 ```
+
+#### `GET /metrics`
+
+Prometheus metrics (#362), in the text exposition format (`text/plain; version=0.0.4`). Only when `METRICS_TOKEN` is set, and only with `Authorization: Bearer <METRICS_TOKEN>` (not an API key): a wrong or missing token gets `401`, and without `METRICS_TOKEN` the path is an ordinary `404`. Metrics, scrape configs and alerts: [docs/metrics.md](metrics.md).
 
 ---
 
