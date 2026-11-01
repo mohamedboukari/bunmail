@@ -125,6 +125,7 @@ Logs must be good enough for a post-mortem (#284, full guide in `docs/logging.md
 
 - Place unit tests alongside source or under `test/unit/` matching the module structure.
 - New endpoints must include or update tests for both route and service logic.
+- `mock.module` leaks across test files: a factory must provide every export of its target (stub them or spread the real module), and a `config` stub starts from the real `config` object, nested fields included; `bun run lint:mocks` enforces the exports part (#293, see `docs/testing.md`).
 
 ### Cross-Module Types
 

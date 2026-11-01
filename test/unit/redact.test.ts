@@ -11,6 +11,9 @@ import { describe, test, expect, mock } from "bun:test";
 /* ─── Mock the config module so we can flip the flag ─── */
 let redactPiiFlag = true;
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 /**
  * NOTE: Bun's `mock.module` leaks globally across test files: a mock
  * registered here stays active for every file Bun loads afterwards. So
@@ -22,15 +25,24 @@ let redactPiiFlag = true;
  * CI's test-file ordering. Keep `database.url` populated. (#119 CI red)
  */
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
-    database: { url: "postgres://test:test@localhost:5432/test" },
+    ...realConfig.config,
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost:5432/test",
+    },
     /** Leaks into later files that render pages or read the sending identity (#247). */
-    mail: { hostname: "localhost", publicIps: [] },
+    mail: { ...realConfig.config.mail, hostname: "localhost", publicIps: [] },
     get logRedactPii() {
       return redactPiiFlag;
     },
     /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
-    domainReverify: { enabled: true, intervalHours: 24 },
+    domainReverify: {
+      ...realConfig.config.domainReverify,
+      enabled: true,
+      intervalHours: 24,
+    },
   },
 }));
 

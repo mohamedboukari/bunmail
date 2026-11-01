@@ -85,8 +85,10 @@ Every route needs an entry in the test's `ROUTES` table (access level, a minimal
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) provisions a `postgres:16` service container with `POSTGRES_DB: bunmail_test`. The CI job runs:
 
 ```yaml
-- bun test test/unit
-- bun test test/e2e
+- bun run lint:mocks                  # every mock.module covers every export (#293)
+- bun run test:unit:coverage
+- bun run test:e2e:coverage
+- bun test test/unit --randomize --seed=N   # and test/e2e, for N = 1, 42, 1337
 - bun run db:migrate                  # apply schema to bunmail_test
 - bun run test:integration            # 600+ tests against real Postgres
 ```
@@ -125,6 +127,16 @@ bun test --preload ./test/integration/_preload.ts --coverage test/integration
 | Write a pure function (parser, classifier, helper) | `test/unit/<name>.test.ts`: feed in fixtures, assert output |
 | Add a route or change a request/response shape | `test/e2e/<feature>-api.test.ts`: exercise via `app.handle(new Request(...))` with services mocked |
 | Add a service method that touches the DB | `test/integration/<service>.integration.test.ts`: run the real method against the real DB, use seed factories from `_helpers.ts` |
+
+### `mock.module` rules (#293)
+
+Bun's `mock.module` is process-wide: a mock registered by one file stays in place for every file that runs after it in the same `bun test` process, so which mock a file sees depends on file order, and that order differs between machines.
+
+- **Cover every export of the mocked module.** An export the factory omits is `undefined` for the next file that imports the module. Either stub each export, or spread the real module under the stubs (`const realConfig = await import("../../src/config.ts")` before the mock, then `() => ({ ...realConfig, config: { ... } })`), which is what the `config.ts`, `logger.ts` and `dns/promises` mocks do.
+- **A `config` stub starts from the real `config` object**, top level and nested: `config: { ...realConfig.config, mail: { ...realConfig.config.mail, hostname: "localhost" } }`. A field the stub leaves out is `undefined` for every later file that reads it (a missing `dkimEncryptionKey` broke the unsubscribe-token tests under some file orders). `lint:mocks` checks exports, not fields, so this one is on the author; the random-order CI step catches a slip. Keep `database.url` set: `src/db/index.ts` reads it at import.
+- **`bun run lint:mocks`** ([test/mock-completeness.ts](../test/mock-completeness.ts)) fails on any `mock.module` in `test/` whose factory misses an export, so adding an export to a mocked module fails the PR that adds it. It reads factories written as an arrow returning an object literal (inline or bound to a `const`); anything else fails unless the call carries `// mock-completeness: ignore <reason>`. It runs in CI and in lint-staged.
+- **Don't mock the logger in unit tests**; spy on it (`spyOn(logger, "warn")`). A complete logger mock is still a no-op logger, and `log-context.test.ts` checks real log lines.
+- **CI runs unit and e2e in random order with three fixed seeds** (1, 42, 1337), so an order-dependent failure is reproducible: `bun test test/unit --randomize --seed=42`.
 
 When adding a service unit test, prefer the **dependency-injection pattern**: extract a pure orchestration function that takes its dependencies as callbacks (see `resolveDomainForEmail`, `handleBounce`, `handleSendFailure`). Then the unit test feeds fake callbacks; the production wrapper wires real implementations.
 

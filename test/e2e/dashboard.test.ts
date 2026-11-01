@@ -64,22 +64,30 @@ const dashboardConfig = {
   loginRateLimit: { enabled: true, maxAttempts: 5, windowSec: 900 },
 };
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
+    ...realConfig.config,
     env: "development",
     appBaseUrl: "",
-    database: { url: "postgres://test:test@localhost/test" },
-    server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost", publicIps: [] },
-    smtp: { enabled: false },
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost/test",
+    },
+    server: { ...realConfig.config.server, port: 3000, host: "0.0.0.0" },
+    mail: { ...realConfig.config.mail, hostname: "localhost", publicIps: [] },
+    smtp: { ...realConfig.config.smtp, enabled: false },
     dashboard: dashboardConfig,
     /** Read by the invitation services (#217), which are mocked below. */
     systemMailFrom: null,
-    invites: { expiryDays: 7 },
+    invites: { ...realConfig.config.invites, expiryDays: 7 },
     /** Session locations off (#281): login looks nothing up. */
-    geoip: { source: "off" },
+    geoip: { ...realConfig.config.geoip, source: "off" },
     /** Read by the home page's Blocklists card (#250): off, nothing is looked up. */
-    sendingIpDnsbl: { enabled: false },
+    sendingIpDnsbl: { ...realConfig.config.sendingIpDnsbl, enabled: false },
     logLevel: "error",
     logRedactPii: false,
   },
@@ -92,7 +100,11 @@ const warnLog = mock((_message: string, _data?: Record<string, unknown>) => {});
 const errorLog = mock((_message: string, _data?: Record<string, unknown>) => {});
 const infoLog = mock((_message: string, _data?: Record<string, unknown>) => {});
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realLogger = await import("../../src/utils/logger.ts");
+
 void mock.module("../../src/utils/logger.ts", () => ({
+  ...realLogger,
   logger: {
     debug: mock(() => {}),
     info: infoLog,
@@ -239,6 +251,10 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
   ),
   getDomainById: mock(() => Promise.resolve(undefined)),
   getDomainByName: mock(() => Promise.resolve(undefined)),
+  domainExistsByName: mock(() => Promise.resolve(false)),
+  updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
+  updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
+  domainNameIs: mock(() => undefined),
   deleteDomain: mock(() => Promise.resolve(undefined)),
   getDkimDnsRecord: mock(() => null),
 }));
@@ -247,6 +263,10 @@ void mock.module(
   "../../src/modules/domains/services/dns-verification.service.ts",
   () => ({
     verifyDomain: mock(() => Promise.resolve()),
+    /** Not on the dashboard routes; present so a leak of this mock has no holes (#293). */
+    runDnsChecks: mock(() =>
+      Promise.reject(new Error("runDnsChecks is not stubbed in this test")),
+    ),
   }),
 );
 
@@ -298,6 +318,8 @@ void mock.module("../../src/modules/webhooks/services/webhook.service.ts", () =>
   listWebhooks: mock(() => Promise.resolve([])),
   listAllWebhooks: mock(() => Promise.resolve([])),
   deleteWebhook: mock(() => Promise.resolve(undefined)),
+  findWebhookById: mock(() => Promise.resolve(undefined)),
+  findWebhooksForEvent: mock(() => Promise.resolve([])),
 }));
 
 void mock.module("../../src/modules/inbound/services/inbound.service.ts", () => ({

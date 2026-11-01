@@ -148,6 +148,12 @@ describe("redactSecrets", () => {
   });
 });
 
+/**
+ * Needs the real logger: `mock.module` leaks across files in one run, so
+ * a unit test that mocked `src/utils/logger.ts` would turn this into a
+ * no-op under some file orders (#293). Unit tests spy on the logger
+ * instead of mocking it.
+ */
 describe("logger output", () => {
   test("a line carries the context and has its secrets redacted", () => {
     const spy = spyOn(console, "error").mockImplementation(() => {});

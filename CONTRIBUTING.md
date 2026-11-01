@@ -37,6 +37,7 @@ bun run dev
 | `bunx tsc --noEmit`   | Type-check without emitting         |
 | `bun run lint`        | Run oxlint (type-aware)             |
 | `bun run lint:fix`    | Run oxlint with auto-fix            |
+| `bun run lint:mocks`  | Check every `mock.module` is complete |
 | `bun run db:push`     | Push schema to dev DB               |
 | `bun run db:generate` | Generate migration files            |
 | `bun run db:migrate`  | Run migrations                      |
@@ -79,6 +80,10 @@ We use [Conventional Commits](https://www.conventionalcommits.org/). The commit 
 - Only services access the database
 - Use kebab-case for filenames, PascalCase for classes, camelCase for variables
 - Document public functions with JSDoc comments
+
+## Tests
+
+The tiers, scripts and conventions are in [docs/testing.md](docs/testing.md). One rule trips people up: Bun's `mock.module` leaks across test files, so a `mock.module` factory must provide **every** export of the module it mocks (stub each one, or spread the real module under the stubs). `bun run lint:mocks` checks this and runs in CI and on commit; CI also runs the unit and e2e tiers in random order with fixed seeds, so an order-dependent failure reproduces with `bun test test/unit --randomize --seed=<seed>`.
 
 ## Pull Requests
 

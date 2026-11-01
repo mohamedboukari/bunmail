@@ -115,6 +115,13 @@ jobs:
         # so a run only passes if it printed its success sentinel.
         run: bun run lint:xss
 
+      - name: Mock completeness
+        # Bun's `mock.module` leaks across files in one process, so a
+        # factory that omits an export of its module breaks whichever file
+        # imports that module next, depending on file order (#293). Fails
+        # on any `mock.module` in test/ that misses an export.
+        run: bun run lint:mocks
+
       # Unit and e2e stay in separate processes: Bun's `mock.module` leaks
       # across files in a combined run. Each writes its own LCOV.
       - name: Test (unit, with coverage)
@@ -122,6 +129,17 @@ jobs:
 
       - name: Test (e2e, with coverage)
         run: bun run test:e2e:coverage
+
+      - name: Test (unit and e2e, random order)
+        # File order decides which leaked mock a file sees, and it differs
+        # between machines. Three fixed seeds make an order-dependent
+        # failure reproducible (`bun test test/unit --randomize --seed=N`)
+        # instead of an occasional flake (#293).
+        run: |
+          for seed in 1 42 1337; do
+            bun test test/unit --randomize --seed="$seed"
+            bun test test/e2e --randomize --seed="$seed"
+          done
 
       - name: Coverage floor (unit + e2e merged)
         # Merges both LCOVs and fails below 64% lines / 73% functions.

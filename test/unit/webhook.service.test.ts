@@ -25,6 +25,9 @@ function chainable<T>(result: T): T {
   return proxy as T;
 }
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 /**
  * Own the config mock (complete enough) so a leaked partial stub from an
  * earlier unit file can't shadow `config.webhookDelivery`: `createWebhook`
@@ -33,19 +36,33 @@ function chainable<T>(result: T): T {
  * import below) makes it the active one for this file. See the #121 fix.
  */
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
+    ...realConfig.config,
     env: "test",
-    database: { url: "postgres://test:test@localhost:5432/test" },
-    server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost", publicIps: [] },
-    dashboard: { ownerEmail: null },
-    webhookDelivery: { retentionDays: 30, allowInsecureHttp: false, maxPerApiKey: 10 },
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost:5432/test",
+    },
+    server: { ...realConfig.config.server, port: 3000, host: "0.0.0.0" },
+    mail: { ...realConfig.config.mail, hostname: "localhost", publicIps: [] },
+    dashboard: { ...realConfig.config.dashboard, ownerEmail: null },
+    webhookDelivery: {
+      ...realConfig.config.webhookDelivery,
+      retentionDays: 30,
+      allowInsecureHttp: false,
+      maxPerApiKey: 10,
+    },
     /** `createWebhook` encrypts the signing secret at rest (#259). */
     dkimEncryptionKey: Buffer.alloc(32, 7),
     logLevel: "error",
     logRedactPii: false,
     /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
-    domainReverify: { enabled: true, intervalHours: 24 },
+    domainReverify: {
+      ...realConfig.config.domainReverify,
+      enabled: true,
+      intervalHours: 24,
+    },
   },
 }));
 
