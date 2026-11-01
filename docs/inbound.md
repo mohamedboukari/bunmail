@@ -130,6 +130,13 @@ Checks the connecting IP against a DNS blackhole list (default: [Spamhaus ZEN](h
 
 Addresses that aren't publicly routable skip the DNSBL check: private (`10/8`, `172.16/12`, `192.168/16`), loopback (`127/8`), link-local (`169.254/16`), CGNAT (`100.64/10`) and reserved ranges, using the same numeric range checks as the webhook SSRF guard. IPv6 addresses also skip it, since most DNSBL zones don't index them. Every other public IPv4 address is checked.
 
+**Only a listing code blocks.** An answer of `127.0.0.2` or higher in `127.0.0.x` rejects the connection. Anything else lets it through unchecked, with a warning (at most once per reason every 10 minutes, with a count of the repeats): a failed lookup (timeout, `SERVFAIL`), a refused query (`127.255.255.x`) or an unexpected answer (a resolver that rewrites NXDOMAIN).
+
+**The resolver matters.** Spamhaus refuses queries sent through public resolvers: through Cloudflare (`1.1.1.1`) every query gets `127.255.255.254`, and through Google Public DNS (`8.8.8.8`) every query gets NXDOMAIN, so no IP is ever blocked. At startup BunMail looks up the zone's permanent test entry (`127.0.0.2`, RFC 5782) and logs `Inbound DNSBL self-test passed`, or a warning when the zone does not answer through your resolver. To make it answer:
+
+- run a local recursive resolver on the host (for example Unbound) and point Docker's DNS at it, so queries reach Spamhaus from your own IP; or
+- use a free [Spamhaus Data Query Service](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/) key: set `SMTP_DNSBL_ZONE=<key>.zen.dq.spamhaus.net`.
+
 ### Layer 2: Connection Rate Limiting
 
 Per-IP fixed-window rate limit on SMTP connections. Exceeding the limit returns SMTP 421 (temporary rejection).
