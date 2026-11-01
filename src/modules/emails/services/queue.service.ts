@@ -32,6 +32,10 @@ import { findById as findApiKeyById } from "../../api-keys/services/api-key.serv
 import { isSuppressed } from "../../suppressions/services/suppression.service.ts";
 import { domainNameIs } from "../../domains/services/domain.service.ts";
 import { signedReturnPathEnabled } from "../../bounces/services/return-path-mx.ts";
+import {
+  emailsFinished,
+  sendAttemptDuration,
+} from "../../metrics/services/metrics.service.ts";
 
 /**
  * Subset of the `domains` row used by the queue's DKIM + unsubscribe
@@ -642,12 +646,19 @@ async function processEmail(email: ClaimedEmail, deps: QueueDeps): Promise<void>
     );
   } finally {
     clearInterval(renewal);
+    const elapsedMs = performance.now() - startedAt;
     logger.debug("Email send attempt finished", {
       emailId: email.id,
       attempt: email.attempts,
-      durationMs: Math.round(performance.now() - startedAt),
+      durationMs: Math.round(elapsedMs),
     });
+    sendAttemptDuration.observe({}, elapsedMs / 1000);
   }
+}
+
+/** The `source` label of an email's metrics (#362). */
+function metricSource(email: ClaimedEmail): "api" | "smtp" {
+  return email.source === "smtp" ? "smtp" : "api";
 }
 
 /** Sends one claimed email and records the outcome (see {@link runQueueCycle}). */
@@ -871,6 +882,7 @@ async function sendClaimedEmail(
       attempt,
       error: errorMessage,
     });
+    emailsFinished.inc({ status: "failed", source: metricSource(email) });
     return;
   }
 
@@ -1207,6 +1219,7 @@ async function recordSendOutcome(
     sentGroups: finalGroups.filter((g) => g.status === "sent").length,
     failedGroups: finalGroups.filter((g) => g.status === "failed").length,
   });
+  emailsFinished.inc({ status: outcome.finalStatus, source: metricSource(email) });
 }
 
 /** The row update and events an attempt's delivery state leads to. */

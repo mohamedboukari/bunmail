@@ -176,6 +176,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > - `HOST` (`0.0.0.0`) and `PORT` (`3000`): the HTTP bind address and port.
 > - `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` (`true`): `false` turns the login throttle off.
 > - `LOG_LEVEL` (`info`; `debug`, `info`, `warn` or `error`, anything else refuses to boot) and `LOG_REDACT_PII` (`true` in production, `false` in development). See [docs/logging.md](logging.md).
+> - `METRICS_TOKEN` (unset: `/metrics` is a 404): the bearer token Prometheus scrapers send to `GET /metrics` (#362); 32 to 256 letters, digits, `-` or `_` with at least 8 distinct characters, anything else refuses to boot. See [docs/metrics.md](metrics.md).
 > - `TOMBSTONE_RETENTION_DAYS` (`90`): how long the post-purge snapshot of a hard-deleted email is kept (#34, see [emails.md](emails.md#tombstones-34)).
 > - `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`): `true` also allows `http://` webhook URLs; private addresses stay blocked (#128).
 > - Inbound SMTP (see [docs/inbound.md](inbound.md)): `SMTP_ENABLED` (`false`), `SMTP_PORT` (`2525`; use `25` in production), `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `SMTP_RATE_LIMIT_MAX` / `SMTP_RATE_LIMIT_WINDOW` (`true`, `10` connections per `60` seconds per IP).

@@ -1,5 +1,6 @@
 import { requestIdFrom, runWithLogContext } from "../utils/log-context.ts";
 import { logger } from "../utils/logger.ts";
+import { recordHttpRequest } from "../modules/metrics/services/metrics.service.ts";
 
 /**
  * Request context and the per-request log line (#284).
@@ -61,16 +62,18 @@ export function requestLogLevel(
   return "info";
 }
 
-/** Writes the one line that records a request's outcome. */
+/** Writes the one line that records a request's outcome, and counts it (#362). */
 function logRequest(request: Request, status: number, startedAt: number): void {
   const path = requestLogPath(request.url);
+  const elapsedMs = performance.now() - startedAt;
   const fields = {
     method: request.method,
     path,
     status,
-    durationMs: Math.round(performance.now() - startedAt),
+    durationMs: Math.round(elapsedMs),
   };
   logger[requestLogLevel(status, path)]("HTTP request", fields);
+  recordHttpRequest(request.method, path, status, elapsedMs / 1000);
 }
 
 /**

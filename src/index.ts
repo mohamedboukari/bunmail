@@ -23,6 +23,7 @@ import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { unsubscribePlugin } from "./pages/unsubscribe.plugin.tsx";
 import { faviconPlugin } from "./pages/favicon.ts";
 import { notFoundResponse } from "./pages/routes/not-found.tsx";
+import { metricsPlugin } from "./modules/metrics/metrics.plugin.ts";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submission.service.ts";
@@ -478,6 +479,8 @@ const app = new Elysia()
       },
     },
   )
+  /** Prometheus metrics at /metrics (#362), only with METRICS_TOKEN set */
+  .use(metricsPlugin({ version: appVersion }))
   /** Every REST API module under /api/v1 (see src/modules/api-plugins.ts) */
   .use(apiPlugins)
   /** Dashboard: server-rendered UI under /dashboard */
