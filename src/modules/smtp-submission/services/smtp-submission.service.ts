@@ -38,6 +38,12 @@ import {
   describeListenError,
   isListenError,
 } from "../../inbound/services/smtp-listen.ts";
+import {
+  recordSmtpConnection,
+  recordSmtpMessageAccepted,
+  recordSmtpRejection,
+  type SmtpRejection,
+} from "../../metrics/services/metrics.service.ts";
 
 /**
  * The SMTP submission server (#120) lets any SMTP-capable app (Infisical,
@@ -227,7 +233,9 @@ function extractAddresses(field: AddressObject | AddressObject[] | undefined): s
  * Maps an SMTP error to a response with a specific SMTP status code so the
  * submitting client sees a real rejection instead of a generic failure.
  */
-function smtpError(message: string, responseCode: number): Error {
+function smtpError(message: string, responseCode: number, reason: SmtpRejection): Error {
+  /** Every refusal names its reason, counted in `bunmail_smtp_rejections_total` (#362). */
+  recordSmtpRejection("submission", reason);
   /** `Object.assign` widens the type structurally, so no cast is needed. */
   return Object.assign(new Error(message), { responseCode });
 }
@@ -463,6 +471,7 @@ export function start(portOverride?: number): void {
     onConnect(session: SMTPServerSession, callback: (err?: Error) => void) {
       runWithLogContext(sessionContext(session), () => {
         sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
+        recordSmtpConnection("submission");
         const ip = session.remoteAddress;
         if (
           connectionRateLimit.enabled &&
@@ -474,7 +483,9 @@ export function start(portOverride?: number): void {
           )
         ) {
           logger.warn("SMTP submission connection rate limited", { ip });
-          return callback(smtpError("Too many connections, try again later", 421));
+          return callback(
+            smtpError("Too many connections, try again later", 421, "rate_limited"),
+          );
         }
         callback();
       });
@@ -501,14 +512,22 @@ export function start(portOverride?: number): void {
         if (authRateLimit.enabled && isAuthLockedOut(ip)) {
           logger.warn("SMTP submission AUTH rate limited", { ip });
           /** 454 = temporary auth failure; client should back off. */
-          return callback(smtpError("Too many failed authentication attempts", 454));
+          return callback(
+            smtpError(
+              "Too many failed authentication attempts",
+              454,
+              "auth_rate_limited",
+            ),
+          );
         }
 
         /** Password is the API key; some clients only set the username. */
         const candidate = auth.password || auth.username || "";
         if (!candidate) {
           if (authRateLimit.enabled) recordAuthFailure(ip);
-          return callback(smtpError("Authentication credentials required", 535));
+          return callback(
+            smtpError("Authentication credentials required", 535, "auth_failed"),
+          );
         }
 
         findByHash(hashApiKey(candidate))
@@ -516,7 +535,7 @@ export function start(portOverride?: number): void {
             if (!apiKey || !apiKey.isActive) {
               if (authRateLimit.enabled) recordAuthFailure(ip);
               logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
-              return callback(smtpError("Invalid API key", 535));
+              return callback(smtpError("Invalid API key", 535, "auth_failed"));
             }
             /**
              * Success: stash the key id. The IP's failure count stays until
@@ -536,7 +555,7 @@ export function start(portOverride?: number): void {
               error: error instanceof Error ? error.message : String(error),
             });
             /** 451 = local error; don't leak details, don't count as a guess. */
-            callback(smtpError("Temporary authentication failure", 451));
+            callback(smtpError("Temporary authentication failure", 451, "temporary"));
           });
       });
     },
@@ -563,6 +582,7 @@ export function start(portOverride?: number): void {
             smtpError(
               `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
               452,
+              "too_many_recipients",
             ),
           );
         }
@@ -600,7 +620,7 @@ export function start(portOverride?: number): void {
               chunks.length = 0;
               stream.unpipe();
               stream.resume();
-              callback(smtpError("Message size exceeds limit", 552));
+              callback(smtpError("Message size exceeds limit", 552, "too_large"));
               return;
             }
             chunks.push(chunk);
@@ -619,7 +639,7 @@ export function start(portOverride?: number): void {
               const apiKeyId = session.user;
               if (!apiKeyId) {
                 logger.error("SMTP submission DATA without an authenticated session");
-                callback(smtpError("Authentication required", 530));
+                callback(smtpError("Authentication required", 530, "auth_required"));
                 return;
               }
 
@@ -651,6 +671,7 @@ export function start(portOverride?: number): void {
                       smtpError(
                         `Daily send quota of ${dailyQuota} reached for this API key; resets at 00:00 UTC`,
                         452,
+                        "quota",
                       ),
                     );
                     return;
@@ -763,6 +784,7 @@ export function start(portOverride?: number): void {
                   toCount: toList.length,
                 });
 
+                recordSmtpMessageAccepted("submission");
                 callback();
               } catch (error) {
                 /**
@@ -787,7 +809,7 @@ export function start(portOverride?: number): void {
                     apiKeyId,
                     suppressionId: error.suppressionId,
                   });
-                  callback(smtpError(error.message, 550));
+                  callback(smtpError(error.message, 550, "suppressed"));
                   return;
                 }
                 /**
@@ -801,6 +823,9 @@ export function start(portOverride?: number): void {
                     smtpError(
                       error.message,
                       error instanceof AttachmentsTooLargeError ? 552 : 550,
+                      error instanceof AttachmentsTooLargeError
+                        ? "too_large"
+                        : "rejected",
                     ),
                   );
                   return;
@@ -815,7 +840,15 @@ export function start(portOverride?: number): void {
                     apiKeyId,
                     reason: error.name,
                   });
-                  callback(smtpError(error.message, 550));
+                  callback(
+                    smtpError(
+                      error.message,
+                      550,
+                      error instanceof UnauthorizedSenderError
+                        ? "sender_not_allowed"
+                        : "rejected",
+                    ),
+                  );
                   return;
                 }
                 /**
@@ -828,7 +861,13 @@ export function start(portOverride?: number): void {
                   apiKeyId,
                   error: error instanceof Error ? error.message : String(error),
                 });
-                callback(smtpError("Local error in processing, try again later", 451));
+                callback(
+                  smtpError(
+                    "Local error in processing, try again later",
+                    451,
+                    "temporary",
+                  ),
+                );
               }
             })();
           });

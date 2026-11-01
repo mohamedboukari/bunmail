@@ -10,12 +10,20 @@ import {
   type ZoneCheck,
 } from "../../modules/domains/services/sending-ip-dnsbl.service.ts";
 import { TimeDisplay } from "../components/time-display.tsx";
+import type { DbSnapshot } from "../../modules/metrics/services/db-gauges.service.ts";
 
 /**
  * Bounce rate above which the home page warns (#250): 2%, a common ceiling
  * before mailbox providers start filtering a sender's mail.
  */
 export const BOUNCE_RATE_WARNING_THRESHOLD = 0.02;
+
+/**
+ * How long the most overdue email may wait before the System health card
+ * calls the queue stuck (#362): 5 minutes, as the example alert in
+ * docs/metrics.md.
+ */
+export const QUEUE_STUCK_AFTER_SECONDS = 300;
 
 /**
  * Dashboard home page: shows an overview grid of stat cards.
@@ -28,22 +36,27 @@ export const BOUNCE_RATE_WARNING_THRESHOLD = 0.02;
  * Admins and the owner also get a link to the Invitations page (#217):
  * the sidebar is shared by every role and does not know the viewer's.
  *
- * Admins and the owner also see the Server identity card (#248): the
+ * Admins and the owner also see the System health card (#362): the queue,
+ * the webhook backlog and the active suppressions, live from the same
+ * snapshot `/metrics` serves; the Server identity card (#248): the
  * sending IPs and whether their reverse DNS names `MAIL_HOSTNAME`; and
  * next to it the Blocklists card (#250): the latest DNSBL self-check.
  *
  * @param canInvite True when the viewer may open the Invitations page.
+ * @param systemHealth The database snapshot (`null`: the read failed), for admins only.
  * @param serverIdentity The cached reverse DNS result, for admins only.
  * @param blocklists The latest DNSBL self-check, for admins only.
  */
 export function HomePage({
   stats,
   canInvite = false,
+  systemHealth,
   serverIdentity,
   blocklists,
 }: {
   stats: DashboardStats;
   canInvite?: boolean;
+  systemHealth?: { snapshot: DbSnapshot | null };
   serverIdentity?: { status: ReverseDnsStatus | null };
   blocklists?: DnsblStatus;
 }) {
@@ -176,6 +189,10 @@ export function HomePage({
           accent="border-pink-500"
         />
       </div>
+
+      {systemHealth !== undefined && (
+        <SystemHealthCard snapshot={systemHealth.snapshot} />
+      )}
 
       {(serverIdentity !== undefined || blocklists !== undefined) && (
         <div class="grid gap-x-4 lg:grid-cols-2">
@@ -413,6 +430,106 @@ function BlocklistsCard({ status }: { status: DnsblStatus }) {
         )}
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-3">
           Information only: a listing never holds or refuses mail.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/** A wait in seconds as people read it: `45 s`, `12 min`, `3 h 5 min`. */
+export function formatWait(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s} s`;
+  const minutes = Math.floor(s / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** One labelled number in the System health card. */
+function HealthFigure({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <dt class="text-xs text-gray-500 dark:text-gray-400" safe>
+        {label}
+      </dt>
+      <dd class="text-lg font-semibold" safe>
+        {String(value)}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * System health (#362): the queue, the webhook backlog and the active
+ * suppressions, from the same database snapshot `/metrics` serves
+ * (refreshed at most every 15 s), so the page and a Prometheus scrape
+ * never disagree. For operators without a monitoring stack: is mail
+ * moving right now?
+ */
+function SystemHealthCard({ snapshot }: { snapshot: DbSnapshot | null }) {
+  return (
+    <section>
+      <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3 mt-8">
+        System health
+      </h2>
+      <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">
+        {snapshot === null ? (
+          <p class="text-sm text-red-600 dark:text-red-400">
+            The database did not answer: queue figures are unavailable. Check the app logs
+            for <code>Metrics: database snapshot failed</code>.
+          </p>
+        ) : (
+          <div class="grid gap-6 md:grid-cols-3">
+            <div>
+              <div class="flex items-center gap-2 mb-2">
+                <h3 class="text-sm font-medium">Queue</h3>
+                {snapshot.queue.oldestDueAgeSeconds > QUEUE_STUCK_AFTER_SECONDS ? (
+                  <span class={BADGE.red}>
+                    stuck? oldest waiting{" "}
+                    <span safe>{formatWait(snapshot.queue.oldestDueAgeSeconds)}</span>
+                  </span>
+                ) : (
+                  <span class={BADGE.green}>moving</span>
+                )}
+              </div>
+              <dl class="grid grid-cols-3 gap-2">
+                <HealthFigure label="Due now" value={snapshot.queue.due} />
+                <HealthFigure label="Sending" value={snapshot.queue.sending} />
+                <HealthFigure label="Queued" value={snapshot.queue.queued} />
+              </dl>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Queued includes scheduled retries; due now should drain within seconds.
+              </p>
+            </div>
+            <div>
+              <h3 class="text-sm font-medium mb-2">Webhooks</h3>
+              <dl class="grid grid-cols-2 gap-2">
+                <HealthFigure label="Due now" value={snapshot.webhooks.due} />
+                <HealthFigure label="Pending" value={snapshot.webhooks.pending} />
+              </dl>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Pending includes retries scheduled after a failed delivery.
+              </p>
+            </div>
+            <div>
+              <h3 class="text-sm font-medium mb-2">Active suppressions</h3>
+              {snapshot.suppressions.length === 0 ? (
+                <p class="text-sm text-gray-500 dark:text-gray-400">None.</p>
+              ) : (
+                <dl class="grid grid-cols-2 gap-2">
+                  {snapshot.suppressions.map(({ reason, count }) => (
+                    <HealthFigure label={reason} value={count} />
+                  ))}
+                </dl>
+              )}
+            </div>
+          </div>
+        )}
+        <p class="text-xs text-gray-500 dark:text-gray-400 mt-4">
+          Live from the database, refreshed at most every 15 seconds. The same figures are
+          available to Prometheus at <code>/metrics</code> (see docs/metrics.md).
         </p>
       </div>
     </section>

@@ -35,6 +35,12 @@ import {
   unsubscribe,
   type UnsubscribeTarget,
 } from "../../suppressions/services/unsubscribe.service.ts";
+import {
+  recordSmtpConnection,
+  recordSmtpMessageAccepted,
+  recordSmtpRejection,
+  type SmtpRejection,
+} from "../../metrics/services/metrics.service.ts";
 
 /**
  * Maximum size (bytes) of any single inbound message: RFC 5321 SIZE
@@ -181,9 +187,11 @@ export async function storeInboundEmail(
  * Builds the error shape `smtp-server` callbacks expect: a standard
  * `Error` carrying the SMTP reply code the library writes back to the
  * client. `Object.assign` widens the type structurally, so call sites
- * don't need an `as Error & { responseCode: number }` cast.
+ * don't need an `as Error & { responseCode: number }` cast. Every refusal
+ * names its `reason`, counted in `bunmail_smtp_rejections_total` (#362).
  */
-function smtpError(message: string, responseCode: number): Error {
+function smtpError(message: string, responseCode: number, reason: SmtpRejection): Error {
+  recordSmtpRejection("inbound", reason);
   return Object.assign(new Error(message), { responseCode });
 }
 
@@ -236,12 +244,15 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
     onConnect(session, callback) {
       runWithLogContext(sessionContext(session), () => {
         sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
+        recordSmtpConnection("inbound");
         const ip = session.remoteAddress;
 
         /** Layer 2: Per-IP rate limiting (runs first, instant, no I/O) */
         if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
           logger.warn("SMTP connection rate limited", { ip });
-          return callback(smtpError("Too many connections, try again later", 421));
+          return callback(
+            smtpError("Too many connections, try again later", 421, "rate_limited"),
+          );
         }
 
         /** Layer 1: DNSBL check (async DNS lookup) */
@@ -254,7 +265,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
             if (listed) {
               logger.warn("SMTP connection rejected: IP blacklisted", { ip });
               return callback(
-                smtpError("Connection rejected: your IP is blacklisted", 554),
+                smtpError("Connection rejected: your IP is blacklisted", 554, "dnsbl"),
               );
             }
             callback();
@@ -286,7 +297,13 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
           logger.warn("SMTP MAIL FROM rejected: malformed address", {
             address: redactEmail(value),
           });
-          return callback(smtpError("Sender address is not a valid email address", 553));
+          return callback(
+            smtpError(
+              "Sender address is not a valid email address",
+              553,
+              "sender_invalid",
+            ),
+          );
         }
 
         callback();
@@ -318,6 +335,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
             smtpError(
               `Too many recipients (max ${MAX_RECIPIENTS_PER_TRANSACTION} per transaction)`,
               452,
+              "too_many_recipients",
             ),
           );
         }
@@ -339,13 +357,13 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                 domain: address.address.split("@")[1] ?? null,
                 ip: session.remoteAddress,
               });
-              callback(smtpError("No such recipient", 550));
+              callback(smtpError("No such recipient", 550, "recipient_unknown"));
             })
             .catch((error: unknown) => {
               logger.error("Unsubscribe address check failed during RCPT TO", {
                 error: error instanceof Error ? error.message : String(error),
               });
-              callback(smtpError("Temporary failure, try again later", 451));
+              callback(smtpError("Temporary failure, try again later", 451, "temporary"));
             });
           return;
         }
@@ -366,13 +384,13 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                 domain: address.address.split("@")[1] ?? null,
                 ip: session.remoteAddress,
               });
-              callback(smtpError("No such recipient", 550));
+              callback(smtpError("No such recipient", 550, "recipient_unknown"));
             })
             .catch((error: unknown) => {
               logger.error("Return path check failed during RCPT TO", {
                 error: error instanceof Error ? error.message : String(error),
               });
-              callback(smtpError("Temporary failure, try again later", 451));
+              callback(smtpError("Temporary failure, try again later", 451, "temporary"));
             });
           return;
         }
@@ -388,7 +406,9 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
           logger.warn("SMTP RCPT TO rejected: invalid address", {
             address: redactEmail(recipientAddress),
           });
-          return callback(smtpError("Invalid recipient address", 550));
+          return callback(
+            smtpError("Invalid recipient address", 550, "recipient_invalid"),
+          );
         }
 
         domainExistsByName(domain)
@@ -400,7 +420,11 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                 ip: session.remoteAddress,
               });
               return callback(
-                smtpError(`Recipient domain "${domain}" is not handled here`, 550),
+                smtpError(
+                  `Recipient domain "${domain}" is not handled here`,
+                  550,
+                  "domain_unknown",
+                ),
               );
             }
             callback();
@@ -421,6 +445,11 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * and fires an `email.received` webhook event.
      */
     onData(stream, session, callback) {
+      /** Every outcome goes through here; a success counts as an accepted message (#362). */
+      const done = (error?: Error | null): void => {
+        if (!error) recordSmtpMessageAccepted("inbound");
+        callback(error);
+      };
       runWithLogContext(sessionContext(session), () => {
         const stats = sessionStats.get(session.id);
         if (stats) stats.messages += 1;
@@ -455,7 +484,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
               chunks.length = 0;
               stream.unpipe();
               stream.resume();
-              callback(smtpError("Message size exceeds limit", 552));
+              done(smtpError("Message size exceeds limit", 552, "too_large"));
               return;
             }
 
@@ -534,7 +563,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
 
                 /** Nothing left for a regular mailbox (#249, #236). */
                 if (otherRecipients.length === 0 && envelopeRecipients.length > 0) {
-                  callback();
+                  done();
                   return;
                 }
 
@@ -558,7 +587,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                     outcome: feedback.outcome,
                     emailId: feedback.emailId,
                   });
-                  callback();
+                  done();
                   return;
                 }
 
@@ -587,7 +616,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                       source: bounce.source,
                     });
                   }
-                  callback();
+                  done();
                   return;
                 }
 
@@ -618,7 +647,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                     reportId: dmarcResult.reportId,
                     recordCount: dmarcResult.recordCount,
                   });
-                  callback();
+                  done();
                   return;
                 }
 
@@ -714,12 +743,12 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
                   });
                 }
 
-                callback();
+                done();
               } catch (error) {
                 logger.error("Failed to process inbound email", {
                   error: error instanceof Error ? error.message : String(error),
                 });
-                callback(smtpError("Failed to process message", 451));
+                done(smtpError("Failed to process message", 451, "temporary"));
               }
             })();
           });

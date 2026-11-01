@@ -8,7 +8,7 @@ import {
   gauge,
   histogram,
 } from "./registry.ts";
-import { readQueueSnapshot, type QueueSnapshot } from "./db-gauges.service.ts";
+import { readDbSnapshot, type DbSnapshot } from "./db-gauges.service.ts";
 
 /**
  * BunMail's Prometheus metrics (#362), served by `GET /metrics`
@@ -67,7 +67,7 @@ collectedCounter(
   },
 );
 
-/* ─── Queue (from the database, cached) ─── */
+/* ─── Database gauges (cached) ─── */
 
 /** How long one database read serves scrapes: several scrapers share it. */
 const SNAPSHOT_TTL_MS = 15_000;
@@ -75,28 +75,32 @@ const SNAPSHOT_TTL_MS = 15_000;
 /** A read slower than this counts as failed, so a hung database cannot hang the scrape. */
 const SNAPSHOT_TIMEOUT_MS = 5_000;
 
-let snapshot: { at: number; value: QueueSnapshot | null } | null = null;
-let pending: Promise<QueueSnapshot | null> | null = null;
+let snapshot: { at: number; value: DbSnapshot | null } | null = null;
+let pending: Promise<DbSnapshot | null> | null = null;
 
-/** `readQueueSnapshot`, rejected after {@link SNAPSHOT_TIMEOUT_MS}. */
-function readWithTimeout(): Promise<QueueSnapshot> {
+/** `readDbSnapshot`, rejected after {@link SNAPSHOT_TIMEOUT_MS}. */
+function readWithTimeout(): Promise<DbSnapshot> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`queue snapshot took over ${SNAPSHOT_TIMEOUT_MS} ms`));
+      reject(new Error(`database snapshot took over ${SNAPSHOT_TIMEOUT_MS} ms`));
     }, SNAPSHOT_TIMEOUT_MS);
   });
-  return Promise.race([readQueueSnapshot(), timeout]).finally(() => {
+  return Promise.race([readDbSnapshot(), timeout]).finally(() => {
     clearTimeout(timer);
   });
 }
 
-/** The queue snapshot, from the cache or one shared database read; `null` when the read failed. */
-async function queueSnapshot(now = Date.now()): Promise<QueueSnapshot | null> {
+/**
+ * The database gauges, from the cache or one shared read; `null` when the
+ * read failed. The dashboard's System health card reads the same snapshot,
+ * so the page and a scrape never disagree.
+ */
+export async function dbSnapshot(now = Date.now()): Promise<DbSnapshot | null> {
   if (snapshot !== null && now - snapshot.at < SNAPSHOT_TTL_MS) return snapshot.value;
   pending ??= readWithTimeout()
     .catch((error: unknown) => {
-      logger.warn("Metrics: queue snapshot failed", { error: loggableError(error) });
+      logger.warn("Metrics: database snapshot failed", { error: loggableError(error) });
       return null;
     })
     .then((value) => {
@@ -112,9 +116,9 @@ async function queueSnapshot(now = Date.now()): Promise<QueueSnapshot | null> {
 gauge(
   registry,
   "bunmail_metrics_db_up",
-  "1 when the last queue snapshot read the database, 0 when it failed (the queue gauges are then absent).",
+  "1 when the last database snapshot worked, 0 when it failed (the database gauges are then absent).",
   [],
-  async () => [{ labels: {}, value: (await queueSnapshot()) === null ? 0 : 1 }],
+  async () => [{ labels: {}, value: (await dbSnapshot()) === null ? 0 : 1 }],
 );
 gauge(
   registry,
@@ -122,8 +126,8 @@ gauge(
   "Live emails not yet final, by status (queued includes scheduled retries; trashed rows excluded).",
   ["status"],
   async () => {
-    const queue = await queueSnapshot();
-    if (queue === null) return [];
+    const queue = (await dbSnapshot())?.queue;
+    if (queue === undefined) return [];
     return [
       { labels: { status: "queued" }, value: queue.queued },
       { labels: { status: "sending" }, value: queue.sending },
@@ -136,8 +140,8 @@ gauge(
   "Queued emails whose next attempt is due now: what the queue should be sending.",
   [],
   async () => {
-    const queue = await queueSnapshot();
-    return queue === null ? [] : [{ labels: {}, value: queue.due }];
+    const queue = (await dbSnapshot())?.queue;
+    return queue === undefined ? [] : [{ labels: {}, value: queue.due }];
   },
 );
 gauge(
@@ -146,8 +150,41 @@ gauge(
   "Seconds the most overdue queued email has been due; near 0 on a healthy queue.",
   [],
   async () => {
-    const queue = await queueSnapshot();
-    return queue === null ? [] : [{ labels: {}, value: queue.oldestDueAgeSeconds }];
+    const queue = (await dbSnapshot())?.queue;
+    return queue === undefined ? [] : [{ labels: {}, value: queue.oldestDueAgeSeconds }];
+  },
+);
+gauge(
+  registry,
+  "bunmail_webhook_deliveries_pending",
+  "Webhook deliveries still to make, including scheduled retries.",
+  [],
+  async () => {
+    const webhooks = (await dbSnapshot())?.webhooks;
+    return webhooks === undefined ? [] : [{ labels: {}, value: webhooks.pending }];
+  },
+);
+gauge(
+  registry,
+  "bunmail_webhook_deliveries_due",
+  "Pending webhook deliveries due now: what the worker should be delivering.",
+  [],
+  async () => {
+    const webhooks = (await dbSnapshot())?.webhooks;
+    return webhooks === undefined ? [] : [{ labels: {}, value: webhooks.due }];
+  },
+);
+gauge(
+  registry,
+  "bunmail_suppressions",
+  "Active suppressions (not expired), by reason (bounce, complaint, manual, unsubscribe, other).",
+  ["reason"],
+  async () => {
+    const counts = (await dbSnapshot())?.suppressions;
+    return (counts ?? []).map(({ reason, count }) => ({
+      labels: { reason },
+      value: count,
+    }));
   },
 );
 
@@ -177,6 +214,96 @@ export const mxDeliveries = counter(
   "Recipient MX groups delivered, by transport security (starttls, plaintext).",
   ["tls"],
 );
+
+/* ─── SMTP listeners ─── */
+
+/** The two SMTP listeners. */
+export type SmtpListener = "inbound" | "submission";
+
+/**
+ * Why a listener refused a connection or a command: a fixed set, so the
+ * label stays bounded. `temporary` is a `451` the client should retry.
+ */
+export type SmtpRejection =
+  | "rate_limited"
+  | "dnsbl"
+  | "auth_rate_limited"
+  | "auth_failed"
+  | "auth_required"
+  | "sender_invalid"
+  | "sender_not_allowed"
+  | "recipient_invalid"
+  | "recipient_unknown"
+  | "domain_unknown"
+  | "too_many_recipients"
+  | "too_large"
+  | "quota"
+  | "suppressed"
+  | "rejected"
+  | "temporary";
+
+const smtpConnections = counter(
+  registry,
+  "bunmail_smtp_connections_total",
+  "SMTP connections accepted by a listener (inbound on port 25, submission), before any check.",
+  ["listener"],
+);
+const smtpRejections = counter(
+  registry,
+  "bunmail_smtp_rejections_total",
+  "SMTP connections or commands a listener refused, by reason.",
+  ["listener", "reason"],
+);
+const smtpMessagesAccepted = counter(
+  registry,
+  "bunmail_smtp_messages_accepted_total",
+  "Messages a listener accepted (inbound: stored; submission: queued for sending).",
+  ["listener"],
+);
+
+/** Counts a connection a listener accepted. */
+export function recordSmtpConnection(listener: SmtpListener): void {
+  smtpConnections.inc({ listener });
+}
+
+/** Counts a connection or command a listener refused. */
+export function recordSmtpRejection(listener: SmtpListener, reason: SmtpRejection): void {
+  smtpRejections.inc({ listener, reason });
+}
+
+/** Counts a message a listener accepted. */
+export function recordSmtpMessageAccepted(listener: SmtpListener): void {
+  smtpMessagesAccepted.inc({ listener });
+}
+
+/** Inbound DNSBL checks that did not run (#365), every one, unlike the throttled warning. */
+const dnsblUnchecked = counter(
+  registry,
+  "bunmail_inbound_dnsbl_unchecked_total",
+  "Inbound connections let through without a DNSBL answer, by why (lookup_failed, refused, unexpected).",
+  ["kind"],
+);
+
+/** Counts an inbound connection allowed without a DNSBL answer. */
+export function recordDnsblUnchecked(
+  kind: "lookup_failed" | "refused" | "unexpected",
+): void {
+  dnsblUnchecked.inc({ kind });
+}
+
+/* ─── Webhooks ─── */
+
+const webhookAttempts = counter(
+  registry,
+  "bunmail_webhook_attempts_total",
+  "Webhook delivery attempts, by outcome (delivered; retry, a failure that will be retried; failed, the last attempt failed).",
+  ["outcome"],
+);
+
+/** Counts one stored webhook attempt. */
+export function recordWebhookAttempt(outcome: "delivered" | "retry" | "failed"): void {
+  webhookAttempts.inc({ outcome });
+}
 
 /* ─── HTTP ─── */
 

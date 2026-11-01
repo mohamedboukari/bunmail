@@ -265,7 +265,7 @@ bunmail/
 │   │   │   └── errors.ts                 ← AuditStoreError (SQLSTATE only)
 │   │   ├── metrics/                      ← Prometheus metrics at GET /metrics (#362), no tables
 │   │   │   ├── metrics.plugin.ts         ← The route and its METRICS_TOKEN bearer guard (404 when unset)
-│   │   │   └── services/                 ← registry.ts (counter, histogram, gauge, text format), metrics.service.ts (BunMail's metrics), db-gauges.service.ts (queue snapshot)
+│   │   │   └── services/                 ← registry.ts (counter, histogram, gauge, text format), metrics.service.ts (BunMail's metrics), db-gauges.service.ts (queue, webhook backlog, suppressions)
 │   │   ├── suppressions/                 ← Per-API-key send-time suppression list (#25)
 │   │   │   ├── suppressions.plugin.ts    ← POST/GET/GET-:id/DELETE-:id under /api/v1/suppressions
 │   │   │   ├── services/

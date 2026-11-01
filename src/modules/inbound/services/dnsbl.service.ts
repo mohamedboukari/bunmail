@@ -3,6 +3,7 @@ import { isIP } from "net";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
+import { recordDnsblUnchecked } from "../../metrics/services/metrics.service.ts";
 
 /**
  * DNSBL lookups for the inbound SMTP receiver.
@@ -84,6 +85,8 @@ const uncheckedWarnings = new Map<string, { at: number; suppressed: number }>();
  * Logs that the DNSBL check did not run, at most once per reason every
  * ten minutes: a resolver outage or a refusing zone would otherwise warn
  * on every connection. Each line carries how many were suppressed before it.
+ * A clock that went backwards (an NTP step) ends the quiet period rather
+ * than stretching it.
  */
 function warnUnchecked(
   reason: string,
@@ -91,7 +94,8 @@ function warnUnchecked(
   now: number,
 ): void {
   const last = uncheckedWarnings.get(reason);
-  if (last !== undefined && now - last.at < UNCHECKED_WARN_INTERVAL_MS) {
+  const elapsed = last === undefined ? Number.POSITIVE_INFINITY : now - last.at;
+  if (last !== undefined && elapsed >= 0 && elapsed < UNCHECKED_WARN_INTERVAL_MS) {
     last.suppressed += 1;
     return;
   }
@@ -145,6 +149,7 @@ export async function isBlacklistedIp(
     /** No such record: the IP is not listed. */
     if (code === "ENOTFOUND" || code === "ENODATA") return false;
     const shown = typeof code === "string" ? code : "unknown";
+    recordDnsblUnchecked("lookup_failed");
     warnUnchecked(`lookup-failed:${shown}`, { ip, zone, code: shown }, now());
     return false;
   }
@@ -152,6 +157,7 @@ export async function isBlacklistedIp(
   const result = classifyDnsblAnswers(answers);
   if (result.kind === "listed") return true;
   if (result.kind === "refused" || result.kind === "unexpected") {
+    recordDnsblUnchecked(result.kind);
     warnUnchecked(
       `${result.kind}:${result.answer}`,
       { ip, zone, answer: result.answer },
