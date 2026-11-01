@@ -1,5 +1,6 @@
 import { resolve4 } from "dns/promises";
 import { isIP } from "net";
+import { logger } from "../../../utils/logger.ts";
 import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
 
 /**
@@ -44,21 +45,39 @@ export function dnsblQueryName(ip: string, zone: string): string | null {
  *
  * Queries the DNSBL zone by reversing the IP octets and appending the zone,
  * e.g. 1.2.3.4 → 4.3.2.1.zen.spamhaus.org. If the query returns an A record,
- * the IP is listed. A NOTFOUND / timeout means the IP is clean.
+ * the IP is listed. NOTFOUND / NODATA means the IP is clean. Any other
+ * failure (timeout, SERVFAIL, refused) means the check did not run: the
+ * connection is still allowed (fail open), with a warning so the gap
+ * shows in the logs.
  *
- * @param ip   - The connecting client's IP address
- * @param zone - The DNSBL zone to query (e.g. "zen.spamhaus.org")
+ * @param ip     - The connecting client's IP address
+ * @param zone   - The DNSBL zone to query (e.g. "zen.spamhaus.org")
+ * @param lookup - The A-record lookup (`resolve4`); injectable for tests
  * @returns true if the IP is blacklisted
  */
-export async function isBlacklistedIp(ip: string, zone: string): Promise<boolean> {
+export async function isBlacklistedIp(
+  ip: string,
+  zone: string,
+  lookup: (hostname: string) => Promise<string[]> = resolve4,
+): Promise<boolean> {
   const query = dnsblQueryName(ip, zone);
   if (query === null) return false;
 
   try {
-    const results = await resolve4(query);
+    const results = await lookup(query);
     return results.length > 0;
-  } catch {
-    /** NOTFOUND, TIMEOUT, etc.: IP is not listed (fail open) */
+  } catch (error: unknown) {
+    const code: unknown =
+      typeof error === "object" && error !== null
+        ? Reflect.get(error, "code")
+        : undefined;
+    /** No such record: the IP is not listed. */
+    if (code === "ENOTFOUND" || code === "ENODATA") return false;
+    logger.warn("DNSBL lookup failed: connection allowed unchecked", {
+      ip,
+      zone,
+      code: typeof code === "string" ? code : "unknown",
+    });
     return false;
   }
 }

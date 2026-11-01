@@ -1,5 +1,9 @@
-import { describe, test, expect } from "bun:test";
-import { dnsblQueryName } from "../../src/modules/inbound/services/dnsbl.service.ts";
+import { describe, test, expect, spyOn, afterEach } from "bun:test";
+import {
+  dnsblQueryName,
+  isBlacklistedIp,
+} from "../../src/modules/inbound/services/dnsbl.service.ts";
+import { logger } from "../../src/utils/logger.ts";
 
 const ZONE = "zen.spamhaus.org";
 
@@ -64,5 +68,64 @@ describe("dnsblQueryName (#166)", () => {
     expect(dnsblQueryName("not-an-ip", ZONE)).toBeNull();
     expect(dnsblQueryName("999.1.1.1", ZONE)).toBeNull();
     expect(dnsblQueryName("", ZONE)).toBeNull();
+  });
+});
+
+/**
+ * A lookup that fails says so (postmortem logging): only "no such record" means not
+ * listed; a timeout or SERVFAIL means the check did not run. Both fail
+ * open, but the second one leaves a warning. The lookup is injected and
+ * the logger spied, not `mock.module`, so nothing leaks into other files
+ * (#293).
+ */
+describe("isBlacklistedIp: lookup failures", () => {
+  const PUBLIC_IP = "8.8.8.8";
+
+  /** A DNS error shaped like Bun's (`code` on an Error). */
+  function dnsError(code: string): Error {
+    return Object.assign(new Error(`queryA ${code}`), { code });
+  }
+
+  afterEach(() => {
+    spyOn(logger, "warn").mockRestore();
+  });
+
+  test("an A record means listed", async () => {
+    const lookup = (): Promise<string[]> => Promise.resolve(["127.0.0.4"]);
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(true);
+  });
+
+  test.each(["ENOTFOUND", "ENODATA"])(
+    "%s means not listed, with no warning",
+    async (code) => {
+      const lookup = (): Promise<string[]> => Promise.reject(dnsError(code));
+      const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each(["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED"])(
+    "%s fails open and warns with the code",
+    async (code) => {
+      const lookup = (): Promise<string[]> => Promise.reject(dnsError(code));
+      const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        "DNSBL lookup failed: connection allowed unchecked",
+        {
+          ip: PUBLIC_IP,
+          zone: ZONE,
+          code,
+        },
+      );
+    },
+  );
+
+  test("an error without a code still warns", async () => {
+    const lookup = (): Promise<string[]> => Promise.reject(new Error("odd"));
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ code: "unknown" });
   });
 });
