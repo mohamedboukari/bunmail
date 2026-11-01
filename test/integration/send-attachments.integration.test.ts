@@ -26,7 +26,6 @@ import { Elysia, ValidationError } from "elysia";
 import { eq, sql, type SQL } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import { simpleParser } from "mailparser";
-import { dkimVerify } from "mailauth/lib/dkim/verify";
 import { emailsPlugin } from "../../src/modules/emails/emails.plugin.ts";
 import {
   AttachmentTypeNotAllowedError,
@@ -34,6 +33,7 @@ import {
   InvalidAttachmentError,
 } from "../../src/modules/emails/errors.ts";
 import { runQueueCycle } from "../../src/modules/emails/services/queue.service.ts";
+import { verifyDkimSignatures } from "../../src/modules/inbound/services/dkim-verifier.service.ts";
 import {
   buildMailOptions,
   type sendMail,
@@ -284,10 +284,10 @@ const DKIM_TXT = `v=DKIM1; k=rsa; p=${publicKey
   .replace(/-----(BEGIN|END) PUBLIC KEY-----/g, "")
   .replace(/\s+/g, "")}`;
 
-/** A resolver that only knows the test domain's DKIM key. */
-async function dkimResolver(name: string, type: string): Promise<string[][]> {
-  if (type === "TXT" && name === `bunmail._domainkey.${DOMAIN}`) return [[DKIM_TXT]];
-  throw Object.assign(new Error(`no ${type} for ${name}`), { code: "ENOTFOUND" });
+/** A TXT lookup that only knows the test domain's DKIM key. */
+async function dkimResolver(name: string): Promise<string[][]> {
+  if (name === `bunmail._domainkey.${DOMAIN}`) return [[DKIM_TXT]];
+  throw Object.assign(new Error(`no TXT for ${name}`), { code: "ENOTFOUND" });
 }
 
 let apiKeyId = "";
@@ -371,9 +371,10 @@ describe("REST send with attachments", () => {
     /** The HTML's cid: reference is sent as it was. */
     expect(String(parsed.html)).toContain('src="cid:logo@attach.example.com"');
 
-    const verified = await dkimVerify(raw, { resolver: dkimResolver });
-    expect(verified.results[0]?.status.result).toBe("pass");
-    expect(verified.results[0]?.signingDomain).toBe(DOMAIN);
+    const verified = await verifyDkimSignatures(raw, { resolveTxt: dkimResolver });
+    expect(verified).toHaveLength(1);
+    expect(verified[0]?.result).toBe("pass");
+    expect(verified[0]?.signingDomain).toBe(DOMAIN);
   });
 
   test("a template send takes attachments too", async () => {

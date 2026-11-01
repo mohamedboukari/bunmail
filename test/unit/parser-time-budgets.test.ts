@@ -1,11 +1,14 @@
 import { describe, test, expect } from "bun:test";
+import { generateKeyPairSync } from "crypto";
 import { gzipSync, strToU8 } from "fflate";
 import { simpleParser } from "mailparser";
 import {
   looksLikeDmarcReport,
   parseAggregateReport,
 } from "../../src/modules/dmarc-reports/services/dmarc-parser.service.ts";
+import { verifyDkimSignatures } from "../../src/modules/inbound/services/dkim-verifier.service.ts";
 import { buildInboundNotification } from "../../src/modules/inbound/services/inbound-notify.service.ts";
+import { keyName, keyRecord, publicKeyValue } from "../dkim-vectors.ts";
 
 /**
  * Time budgets for parsers on the unauthenticated inbound path (#232).
@@ -203,6 +206,67 @@ describe("buildInboundNotification with 10 MB fields", () => {
             ...fields,
           }),
         ),
+      ).toBeLessThan(BUDGET_MS);
+    },
+    RUNNER_TIMEOUT_MS,
+  );
+});
+
+describe("verifyDkimSignatures at 10 MB (#373)", () => {
+  const BUDGET_MS = 5_000;
+
+  /** sha256 of an empty relaxed body, so the header canonicalization runs too. */
+  const EMPTY_BODY_HASH = "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const dns = keyRecord(`v=DKIM1; p=${publicKeyValue(publicKey)}`);
+  const resolveTxt = (name: string): Promise<string[][]> =>
+    name === keyName("sel") && "txt" in dns
+      ? Promise.resolve(dns.txt)
+      : Promise.reject(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }));
+
+  /** A signature header; a wrong bh= stops at the body hash, the right one reaches the key. */
+  const signature = (canon: string, bh = "AAAA", h = "from"): string =>
+    `DKIM-Signature: v=1; a=rsa-sha256; c=${canon}; d=example.com; s=sel; h=${h}; bh=${bh}; b=AAAA\r\n`;
+  const from = "From: a@example.com\r\n";
+
+  test.each([
+    [
+      "10 MB of spaces in the body, relaxed",
+      () => `${signature("relaxed/relaxed")}${from}\r\n${" ".repeat(TEN_MB)}x`,
+    ],
+    [
+      "10 MB of empty lines before the last one, simple",
+      () => `${signature("simple/simple")}${from}\r\n${"\r\n".repeat(TEN_MB / 2)}x`,
+    ],
+    [
+      "10 MB of bare LF at the end of the body, relaxed",
+      () => `${signature("relaxed/relaxed")}${from}\r\n${"\n".repeat(TEN_MB)}`,
+    ],
+    [
+      "10 MB of whitespace runs ending lines, relaxed",
+      () => `${signature("relaxed/relaxed")}${from}\r\n${"a \t \r\n".repeat(TEN_MB / 6)}`,
+    ],
+    [
+      "a 10 MB signed From of spaces",
+      () =>
+        `${signature("relaxed/relaxed", EMPTY_BODY_HASH)}From: ${" ".repeat(TEN_MB)}x\r\n\r\n`,
+    ],
+    [
+      "10 MB of header fields, every one named in h=",
+      () =>
+        `${signature("relaxed/relaxed", EMPTY_BODY_HASH, `from${":x".repeat(TEN_MB / 12)}`)}${from}${"X: a\r\n".repeat(TEN_MB / 12)}\r\n`,
+    ],
+    [
+      "10 MB of FWS inside the tag-list",
+      () =>
+        `DKIM-Signature: v=1;${" \r\n ".repeat(TEN_MB / 4)}a=rsa-sha256; d=example.com; s=sel; h=from; bh=AAAA; b=AAAA\r\n${from}\r\nx`,
+    ],
+  ])(
+    "%s",
+    async (_name, build) => {
+      const raw = Buffer.from(build(), "latin1");
+      expect(
+        await timedAsync(() => verifyDkimSignatures(raw, { resolveTxt })),
       ).toBeLessThan(BUDGET_MS);
     },
     RUNNER_TIMEOUT_MS,

@@ -152,9 +152,13 @@ When adding a service unit test, prefer the **dependency-injection pattern**: ex
 
 Everything that parses untrusted input has a unit test that feeds it generated input at the size the server accepts (10 MB for inbound and submitted messages, 25 MB after DMARC decompression) and asserts completion inside a generous budget, so a super-linear regression fails CI instead of being found by the first crafted message:
 
-- `test/unit/parser-time-budgets.test.ts`: the DMARC heuristic and parser, mailparser (`simpleParser`), and the inbound notification builder.
+- `test/unit/parser-time-budgets.test.ts`: the DMARC heuristic and parser, mailparser (`simpleParser`), the inbound notification builder, and the DKIM verifier (#373).
 - `test/unit/bounce-parser.test.ts`: the DSN parser (#235).
 - `test/unit/recipients.test.ts`: `parseRecipients`, including the adversarial shapes that made the previous address regex backtrack quadratically.
 
 Inputs are generated in the test, never stored as fixtures. Budgets are deliberately loose (hundreds of ms to a few seconds) to stay stable on CI; each was checked to fail against a quadratic implementation.
+
+## DKIM verifier vectors (#373)
+
+`test/dkim-vectors.ts` builds signed messages (nodemailer's own signer for relaxed/relaxed RSA, a plain RFC 6376 signer for simple, `l=`, `i=`, `x=` and ed25519-sha256), each with the DNS answers it needs and the expected verdict; `test/unit/dkim-verifier.test.ts` runs them with fresh keys over an injected `resolveTxt`, no `mock.module`. `test/fixtures/dkim-differential.json` is one run of the same vectors with mailauth's verdicts (default and strict mode), written by `test/fixtures/generate-dkim-differential.ts` while mailauth was still installed; `test/unit/dkim-differential.test.ts` checks the verifier against it and lists every intended difference with its reason.
 

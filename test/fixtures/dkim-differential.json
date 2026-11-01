@@ -1,0 +1,911 @@
+{
+  "generatedWith": "mailauth 7.1.1 dkimVerify, test/fixtures/generate-dkim-differential.ts",
+  "cases": [
+    {
+      "name": "nodemailer relaxed/relaxed rsa-sha256",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "simple/simple rsa-sha256",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=CLlPb7sVGbuBxVZTfKC4cEqVUC5XB5cKpg6PGDvnDDZYQjRqH0UOl0ErF0HZ\r\n\t qsWJ61PxJooeMPUSV+9PfoYU/1InshhMd/kg2XeXb14JJtTaCkMaK5azZxuK\r\n\t 41pU5veQuZFfBVUPJaABpAeWN3z8z4og+ON1r2EQMD3QzHca4AsU2jZyICfq\r\n\t Y/FGv6TagOBjvekL/id0KLp7HPehnvbwnQ7aXdFCX5DzGfNWcNLUnYt3jBBg\r\n\t qnDh/AruD22nqp/hc5hT87zvsclrUMSP84hSqIM9r/phFa+YbdNsTbd7jM4s\r\n\t QV0tt94aIjpPFXJetH9R2rmiiBOop+q2w1mXtycjjA==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "relaxed/simple rsa-sha256",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=relaxed/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=ZU/8IO78vGF9fdan9ws6odh2gLPXWgoUzwvXhuh2txOG4Gzl61ChTYibpRJD\r\n\t Rl8L2QKkTLd75SVTrS3xfbewhf1J3gfByTMultANidhykSl5Hyb+pG/Sjeyc\r\n\t XMws/BtrBxc7Xz8QwNtdRtXXiesa1PAdTIYt+PhEMYCy08QJFpyLTVuGpaz1\r\n\t yizsh9y/OdhdfGQfAPUPZ/dTQjW5OqRmlYQfiOWVXTB2b7PX7wZzQBA2jePj\r\n\t KAbH9Kjs0jgAaz3lf1b1fgug76Fg+Xi8HtEpPtpY1zNzEhCWSuEmZfcJBp0f\r\n\t mU3TntKQe4FFqVowrOEvWb02ggcd/QY9asvFspTkAg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "simple/relaxed rsa-sha256",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/relaxed;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n\tb=oMMoZvgdgSKTlyYMvzvRj/Bn8W8FqVYOgPbuMExvokupXlXrBGDbhNZj1sCY\r\n\t 0GOPwYIoafTnFKpqogvKy+2RPKXgalXTgptE74cbmz9kEE/tWWsxDbe9dqCK\r\n\t l6SJikn0EZh9ObVVOgSNhkRaiCb/SRJ8gJwtruuBhEqePwXtxNI3oLviyYy9\r\n\t UXgLLYjAvn6alX9RlL1iHLNBaaFCM7cm3qmHo+1JV2vqox0z+GbtcL4reZvb\r\n\t eUElMXdjuzyD3isstpJM37zQ1XwikRb7UuhER9ZUMxrvvpX479al4sx2R1A1\r\n\t Oq9mlw/VcVyNk/kkEB7twx52APhFANqIvMqZHRRnIg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "relaxed/relaxed ed25519-sha256",
+      "message": "DKIM-Signature: v=1;\r\n\ta=ed25519-sha256;\r\n\tc=relaxed/relaxed;\r\n\td=example.com;\r\n\ts=ed;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n\tb=XTEaEXbgIU+AkFL9zFu48fhOZG2uD87WmbkEXGcB06YzbQNzr9QAG6s+xAPB\r\n\t SjmW1GxZ2IGap39VxYHg9pM+Bg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "ed._domainkey.example.com": {
+          "txt": [["v=DKIM1; k=ed25519; p=CE6WXOaqbYmyjwuhiPZf7GeDwhRTHGAezoWeo7s1kyc="]]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "l= covers the body, text appended after signing",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=relaxed/relaxed;\r\n\td=example.com;\r\n\ts=rsa;\r\n\tl=45;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=Q29jPj+Z6zVLPlS6sQmIqRqaEzjk1jyi2AyV/0qNrd8=;\r\n\tb=GFcgww2nOjV/P/JH3Lz+Pr2QIC4Hu352s+OWMCIwk4WZ+jpRq4PifuLLlKuh\r\n\t bRwrybFdjDBEvuWDTFy4QrIJxYwztSULx7xa44dtFmx4j9nv29qADOkRsRsJ\r\n\t 4pRtEYSm49bb5aASzXtx5+nWjJP+UlxeKdC7Q6N6Yewf0vUPnm1Df5aUeOEt\r\n\t t8UCPQMyCF2BVtcUIfjxXkYi/ef8fzYI+whFAzKsKpVtYYhVyVrgVu5GqBhA\r\n\t C0T30ALFLBL+FXod/QnQ/H0mfbaA9SX19w9zjLZLWv2cvqfF+IINEr+BmF1y\r\n\t ICGuHarBaZIlQurYQiqhp9M+Ep45ygxpBCSENfS+og==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\nappended after signing\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "i= a subdomain of d=, t= and a future x=",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\tt=1780000000;\r\n\tx=4102444800;\r\n\ti=user@mail.example.com;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=NslAkRjJlwkKK0tKxXyNNMiK6sPdc2xrzo0fdMzsNr6ws58uLlk2Ayn+Cet+\r\n\t huTH4V78h85SLNkZAcjsviPpxiOATuN/Q72/Xq4+odX/Mt/0Ke7aT2mlaeVy\r\n\t MNXBLBRUhWZUriDx0A13CWrRHJnNjHHhkLPnOZ/QRoewpg71+CzPGh6+6dSv\r\n\t Ptta2TseqpUvSojdHGVVcJlqvsLqi+gSIaXWepbo3xoA1fFMSjR/Yl8gygLk\r\n\t GCTUGzrprZrRdr93g0Lt65ybrLtR83fQeoY34jU7n2Buqj9EiuoqTybQ8H7p\r\n\t rAQb8LwjuqGMXuZ5NlhsKEd4I9fNYJEME5o+KqAN6g==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "bare LF line ends",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\n h=from:to:subject:date:message-id:mime-version:content-type;\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\nFrom: Sender <sender@example.com>\nTo: rcpt@example.org\nSubject: Monthly   report\n\tcontinued on a folded line \nDate: Mon, 02 Nov 2026 10:00:00 +0000\nMessage-ID: <vector@example.com>\nMIME-Version: 1.0\nContent-Type: text/plain; charset=utf-8\n\nHello there,  \n\na line with   inner\t spaces\t \nlast line\n\n\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsigned header fields added after signing",
+      "message": "Received: from mx.example.org by mx.example.net; Mon, 02 Nov 2026 10:00:01 +0000\r\nX-Extra: 1\r\nDKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ARC header fields next to the DKIM-Signature",
+      "message": "ARC-Seal: i=1; a=rsa-sha256; t=1780000000; cv=none; d=example.net; s=arc;\r\n\tb=AAAA\r\nARC-Message-Signature: i=1; a=rsa-sha256; c=relaxed/relaxed; d=example.net;\r\n\ts=arc; h=from:to:subject; bh=AAAA; b=AAAA\r\nARC-Authentication-Results: i=1; mx.example.net; dkim=pass header.d=example.com\r\nDKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "two signatures, one broken",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=gone; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nDKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          },
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          },
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsigned message",
+      "message": "From: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "none",
+            "signingDomain": null
+          }
+        ],
+        "strict": [
+          {
+            "result": "none",
+            "signingDomain": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "body changed after signing",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line, edited\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "signed header changed after signing",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Weekly report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "over-signed Subject added after signing",
+      "message": "Subject: Injected\r\nDKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type:Subject;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=ew2cUC9qk3Yj3MCBCQ3rS+cyhCK/4mZoiorPQdefslinwuuZNTSVigLmxgTd\r\n\t 8/g+sgW8H2UGvf6BHiFBH7FZLFnarPkNzyAl2AHlmk3MZ/UmnwLE0WLMf8ot\r\n\t LKED9zOLfsSzMF+1fnYbRX1x5te1j0fabeTXUqc7poWkPT3q2yR+PZQ+7HWy\r\n\t jNxmMjILIcixqWVbn2lYKzNK6G+v9DEVKXUNa1ZLcxDoznJF6d9bf57+3ubz\r\n\t IuPF4DTp4LLvefEbC0FTb73hY/6qrFBPRFdlbASpfnbXVrG5NhMZM/W/6LlV\r\n\t eMDNOsCQfxApFOJ3/TtTc1DO8Yz61oxVRfKVdxv9wQ==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "over-signed Subject, nothing added",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type:Subject;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=ew2cUC9qk3Yj3MCBCQ3rS+cyhCK/4mZoiorPQdefslinwuuZNTSVigLmxgTd\r\n\t 8/g+sgW8H2UGvf6BHiFBH7FZLFnarPkNzyAl2AHlmk3MZ/UmnwLE0WLMf8ot\r\n\t LKED9zOLfsSzMF+1fnYbRX1x5te1j0fabeTXUqc7poWkPT3q2yR+PZQ+7HWy\r\n\t jNxmMjILIcixqWVbn2lYKzNK6G+v9DEVKXUNa1ZLcxDoznJF6d9bf57+3ubz\r\n\t IuPF4DTp4LLvefEbC0FTb73hY/6qrFBPRFdlbASpfnbXVrG5NhMZM/W/6LlV\r\n\t eMDNOsCQfxApFOJ3/TtTc1DO8Yz61oxVRfKVdxv9wQ==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "revoked key (empty p=)",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [["v=DKIM1; k=rsa; p="]]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "no key record",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {},
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "DNS failure on the key lookup",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "error": "ESERVFAIL"
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "temperror",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "temperror",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "key record syntax error",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB; ;"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "key record for ed25519, rsa-sha256 signature",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=ed25519; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6",
+              "AT3Dj42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnL",
+              "JdqvpWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "key record allows only sha1",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; h=sha1; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfP",
+              "jEY6AT3Dj42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/",
+              "OTnLJdqvpWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "key record t=y (testing)",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; t=y; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY",
+              "6AT3Dj42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTn",
+              "LJdqvpWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "key record t=s, i= a subdomain of d=",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\ti=@mail.example.com;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=pgWvfAokIVuoTWoHBGOIZ92Iv4vt3J5lsBJyOxPhriZvFg/atpAgWILc6yuX\r\n\t oBfU1MZDsflTGwc2X6bBU8Jff/IJfklwE7GK11TlUTd28wbq2T+rlo7/O9G+\r\n\t ZeJUaLP9fuVUDJRsA/0VERHMIIUADtbD2qAwc+NMsbDC5XU6bpKlK10TtJqc\r\n\t E6BJyXnF0hSTKz7/FZZ4s5yd9+Mmd2cjyENKeD/FbJyktxyPPB6Biu8qnBIY\r\n\t UDJ7eTAc7mzyrFjBpLCBzZmMo7Ozj6M9JPO40s98+u/NXrEl5O8OHsNfnpD5\r\n\t CqaUpg+9L1oWXacCgO7DwhLsffgQJr1Zp1lk4PD7Lg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; t=s; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY",
+              "6AT3Dj42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTn",
+              "LJdqvpWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "expired x=",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\tt=1600000000;\r\n\tx=1600086400;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=TQZNDeMltOTWuUgboG2V5k6frDnSY9jS40jxlgACvdWqeOM707wC9lA9ov1G\r\n\t jwgz/nqjum8VEh7NWozN+FcxKQv82VJOm0j6wYOHlZFuLR1qHZixNXNgB27N\r\n\t UGRptbtu/fTyIn/6IJFRBH6eBepb8erbKaZuI42vgwWJ5dtzkqb0AkxfLsbA\r\n\t LM57yad6FI/CSNJ4hL3VKiE4Bmcko24+xUcjSwP6NcZZM0XFtZPtTItAbGKF\r\n\t wQlQAIaYYlpMSiV07sL8unxZjT6hBImeriFFjf28BAAmXPJutU8Knfv2eAEa\r\n\t t5O0cLY50nxnhBGVQoa+C44ux+PWymy3KHjT+1N+dA==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "h= without From",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\th=To:Subject:Date;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=QFGEy7IMtgobMZIkTplXgusT2Wjn3s47OB4vW1GHkAIAspavZX3dk40qPTWM\r\n\t EZQ3oMCzXwxi4FOHUpmqGtoe4RDFlv1GxapvMTOtwX/dLB+80l/Tld5KLOfZ\r\n\t a5J0bqde137LkYKz+CzMqO33zL/kwsIB1LGuMnM2Y8i1neCrm0RuYikgIcTS\r\n\t dr7jlrv9RVq2JvKHs2S4audN/VrPwG31IShtjgffbcBwegI6a6z8eDArCEuy\r\n\t BkNpE5bisH2n6Crmekhacoz5Zph46AxR/SFQXXUQAU+bKz4dCzfDhNsLSDLS\r\n\t XT1YQs2XVz3/U7Yc48i+7mwshxyOgQhaH/WhfOJZTQ==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "i= outside d=",
+      "message": "DKIM-Signature: v=1;\r\n\ta=rsa-sha256;\r\n\tc=simple/simple;\r\n\td=example.com;\r\n\ts=rsa;\r\n\ti=user@example.net;\r\n\th=From:To:Subject:Date:Message-ID:MIME-Version:Content-Type;\r\n\tbh=DsgYQigzn68aF0vc10xrB/PRW8FC2HGQD69ncghzzgo=;\r\n\tb=tKdJh0sAAc4l46lD5vEIp1DL2iLaXV855ml4tf+pKzEBteJWh1HAjCM4wXIb\r\n\t HGydNXMVfuQYmoG+AgDKg8D2QOKI8n1v2lJrJ6041TbTb+yB1+8RXX09fodU\r\n\t OSVyncY4nvBv01cPzqnIZUMR46KzakxG/b3gE46yqYFhN3OAZ0zABLeTfY+c\r\n\t 8muguL9klFHy4KbnN5YXfcmdpBjcsH7hMyL5VsnyJT9PsdmUHywcVK+WFZiu\r\n\t m05Fo0jZpZHNnWEp8cfxTqjJEDbJUjn7rIswgyFbzZP9a3d64g3mVn45EqeL\r\n\t NVIPFNEqy9Yhvj+G0FBV/2l9wJPbp+sis1wA7g4EFg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "rsa-sha1",
+      "message": "DKIM-Signature: v=1; a=rsa-sha1; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=Moqv0EnKgT9+iExy6bTHjdtqPek=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=a3ynwJQKcCl2GSHvA7K2eEqcMRiKvtCW79eB4FWi8tIoKuc0iK7EmkSj6WbtXScaoMlHCgR0w\r\n ryC5VQJZwv/3NS5Qq+8iLG9rWE1orH248D7bkRuhvy55xwA1H65L6ktpTbitYj6j2I7SvrHPsVB\r\n aR9EdW8TN8zAEQQL+BW0VlBfHtcEu/dqkGtayUBllyz5HCX/twhpZdGEzVZoC/LvWQYpezf/4ra\r\n BalGnoXcw9JcMYPXt0kVfm09P9WiGhsQkKk+cyoOZvwF1Y5D77q/ZW8pYXJKqIAOosoFOCQs0oi\r\n H7etS2Kws/NnDAgKaZsnk3TSTzgAR/Oe0jz8CyLq7AAg==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "pass",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "policy",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "512-bit RSA key",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=short; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=cf9EzFmhTS9CyRDooT5H4AnYXCqguYLODDEqYyKeQ9r2L7oHXn6eV8E7aA4GENk7I3RlKrXHb\r\n MxmkB184XAfEw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "short._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAMOu0o+x+G8uRNfzq28QpuHOlFKVeLbHebHGmb1HUocb7bVx5QLaoF2lIY5Yz/Ww9tsTUUMDLDtFkPrpBrTKUsUCAwEAAQ=="
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "policy",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "policy",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "b= not base64",
+      "message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=!!notbase64!!w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown algorithm",
+      "message": "DKIM-Signature: v=1; a=rsa-sha512; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "none",
+            "signingDomain": null
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    },
+    {
+      "name": "v= other than 1",
+      "message": "DKIM-Signature: v=2; a=rsa-sha256; c=relaxed/relaxed; d=example.com;\r\n q=dns/txt; s=rsa; bh=AKmGojtkoAxDbGMpUcORuUfam5OBxoMH5DZTW3lD4gw=;\r\n h=from:to:subject:date:message-id:mime-version:content-type;\r\n b=w9PDEmAjUos8qQK7kczyhyyT3YisapuZzHbioqsSV9KiixksWH7BHjN3WxrIocMDSWcRDvvL4\r\n hQ6mshvUiT+aSv/OVtXjkoWya/oz8dmB3WdQMT4dSUI4bWwmwTR+mubYepEcTAtOcrdhQVAXGTu\r\n QD27TuFHcoLv68qWj3WOmbmRw0+wwYbFg0cIg0TbjwHF+GRStfWiEz/p8LZP3GPv3sPaZBfwXQR\r\n +BCvGJpM4daGO9+NAniCmO5Zjc0jH6D5LhIWCcdFnv7UpQz6Nc8U4sJRXQVs8ou6/F78TQcgrFl\r\n bsT3w2aTyE2WhbhRs2t5tjvDL+IbfftHdrEtTK8FyRgw==\r\nFrom: Sender <sender@example.com>\r\nTo: rcpt@example.org\r\nSubject: Monthly   report\r\n\tcontinued on a folded line \r\nDate: Mon, 02 Nov 2026 10:00:00 +0000\r\nMessage-ID: <vector@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nHello there,  \r\n\r\na line with   inner\t spaces\t \r\nlast line\r\n\r\n\r\n",
+      "dns": {
+        "rsa._domainkey.example.com": {
+          "txt": [
+            [
+              "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAygRUwg7ZQRG552mksE3NXXtIckyuX7IyLLl7djkPlHwkH+24bKt2kvZ3UdNYZePp48kkytDBb3U+6hTV7apopyMxh8yha66Cca49Bjk7BHniWIgl25ZZeTMDEi7J89sOfPjEY6AT3D",
+              "j42JLJa7OtdiQbmsB/qh0xaoqhwDeocrPJ2uCQshRUNXFubOWc/ln811LvPh/7rIFtHsCL4zlrquve0pvNOd0bOgpRYc/t6I2F8H6iJmjIvCOM7FWVugv2GRum80hEvkZWcU5mxwr1PoI8NtXU0+Ju14K563C16wIbweqKzR+MG/ZSAJWZgdJ5leLyqk2Gu/OTnLJdqv",
+              "pWeQIDAQAB"
+            ]
+          ]
+        }
+      },
+      "mailauth": {
+        "default": [
+          {
+            "result": "fail",
+            "signingDomain": "example.com"
+          }
+        ],
+        "strict": [
+          {
+            "result": "neutral",
+            "signingDomain": "example.com"
+          }
+        ]
+      }
+    }
+  ]
+}
