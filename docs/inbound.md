@@ -134,7 +134,7 @@ Addresses that aren't publicly routable skip the DNSBL check: private (`10/8`, `
 
 **The resolver matters.** Spamhaus refuses queries sent through public resolvers: through Cloudflare (`1.1.1.1`) every query gets `127.255.255.254`, and through Google Public DNS (`8.8.8.8`) every query gets NXDOMAIN, so no IP is ever blocked. At startup BunMail looks up the zone's permanent test entry (`127.0.0.2`, RFC 5782) and logs `Inbound DNSBL self-test passed`, or a warning when the zone does not answer through your resolver. To make it answer:
 
-- run a local recursive resolver on the host (for example Unbound) and point Docker's DNS at it, so queries reach Spamhaus from your own IP; or
+- run a local recursive resolver on the host and point the app container's DNS at it, so queries reach Spamhaus from your own IP: step by step with Unbound in [self-hosting.md](self-hosting.md#local-resolver-for-dnsbl); or
 - use a free [Spamhaus Data Query Service](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/) key: set `SMTP_DNSBL_ZONE=<key>.zen.dq.spamhaus.net`.
 
 ### Layer 2: Connection Rate Limiting

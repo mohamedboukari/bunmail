@@ -585,7 +585,49 @@ BunMail checks its own sending IPs (`MAIL_PUBLIC_IP`, or the A/AAAA records of `
 
 IPv6 addresses are only looked up on ZEN: the other two zones do not list IPv6. The result is on the dashboard home (**Blocklists** card, admins and the owner) and in the logs: a `warn` line `Sending IP listed on a DNSBL` when an address becomes listed, an `info` line when it is delisted, and one `DNSBL self-check completed` line per run (`job: "dnsbl-self-check"`). Only `127.0.0.2` to `127.0.0.11` count as listed. Spamhaus return codes are named: `127.0.0.2` SBL, `.3` CSS, `.4` to `.7` XBL, `.9` DROP, `.10` and `.11` PBL. A **PBL** listing is a policy listing, not abuse: the range's owner (usually the hosting provider) says it should not send mail directly. If this server is meant to send mail, remove the address at check.spamhaus.org. This check only reports: a listing never holds or refuses mail, and results are kept in memory per replica.
 
-**Public resolvers.** Spamhaus refuses queries sent through public resolvers (Google `8.8.8.8`, Cloudflare `1.1.1.1`, Quad9 and others) and answers `127.255.255.254` (or another `127.255.255.x` code) instead; the card then shows the zone as `unavailable`, never as listed. Barracuda may also ignore queries from resolvers it does not know. For a real answer, point the server at a local recursive resolver (for example Unbound on the host, and `dns:` in `docker-compose.override.yml` pointing the container at it), not at a forwarder to a public service. Lookups that fail or time out (5 s) show as `unknown`.
+**Public resolvers.** Spamhaus refuses queries sent through public resolvers (Google `8.8.8.8`, Cloudflare `1.1.1.1`, Quad9 and others) and answers `127.255.255.254` (or another `127.255.255.x` code) instead; the card then shows the zone as `unavailable`, never as listed. Barracuda may also ignore queries from resolvers it does not know. For a real answer, point the server at a local recursive resolver (see [Local resolver for DNSBL](#local-resolver-for-dnsbl) below), not at a forwarder to a public service. Lookups that fail or time out (5 s) show as `unknown`.
+
+#### Local resolver for DNSBL
+
+Both DNSBL checks (this outbound self-check, and the inbound check on port 25, see [inbound.md](inbound.md#layer-1-dnsbl-ip-check)) need DNS answers from your own IP. Through a public resolver, Spamhaus answers `127.255.255.254` (Cloudflare) or NXDOMAIN (Google) to everything, so nothing is ever found. The inbound check says so at boot: `Inbound DNSBL self-test failed: the zone does not answer`. The fix is a small recursive resolver on the host that the app container uses. Tested on Ubuntu 24.04 with Unbound 1.19:
+
+1. **Install Unbound and give it a BunMail config.** It listens on loopback and on the `docker0` bridge (`172.17.0.1`, check with `ip -4 addr show docker0`), answers only loopback and Docker's private ranges, and never listens on the public IP. `docker0` keeps its address, while a Compose network's gateway can change after `docker compose down`, so the bridge is the stable choice. `ip-freebind` lets Unbound start at boot before `docker0` exists. It runs next to `systemd-resolved` (which only holds `127.0.0.53` and `127.0.0.54`).
+
+   ```bash
+   sudo apt-get install -y unbound
+   sudo tee /etc/unbound/unbound.conf.d/bunmail.conf >/dev/null <<'EOF'
+   server:
+       interface: 127.0.0.1
+       interface: 172.17.0.1
+       ip-freebind: yes
+       access-control: 0.0.0.0/0 refuse
+       access-control: 127.0.0.0/8 allow
+       access-control: 172.16.0.0/12 allow
+       hide-identity: yes
+       hide-version: yes
+       prefetch: yes
+   EOF
+   sudo unbound-checkconf && sudo systemctl enable --now unbound && sudo systemctl restart unbound
+   dig +short 2.0.0.127.zen.spamhaus.org @127.0.0.1   # Spamhaus's test entry: 127.0.0.2 (and others)
+   ```
+
+2. **Point the app container at it** in `docker-compose.override.yml` (the commented example is in `docker-compose.override.example.yml`), then recreate the app:
+
+   ```yaml
+   services:
+     app:
+       dns:
+         - 172.17.0.1
+   ```
+
+   ```bash
+   docker compose up -d app
+   docker compose logs app | grep -E 'Inbound DNSBL self-test|DNSBL self-check completed'
+   ```
+
+   Expect `Inbound DNSBL self-test passed` (when inbound SMTP is on) and, about a minute later, a self-check line with `unavailable: 0`. All of the app's DNS (MX lookups for sending included) now goes through Unbound; send a test email to confirm.
+
+A query to `172.17.0.1` from the host itself is refused (its source is the public IP, outside the allowed ranges); test from inside the container instead. To undo, remove the `dns:` block and run `docker compose up -d app`. The alternative to a local resolver is a free [Spamhaus DQS](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/) key for the inbound check (`SMTP_DNSBL_ZONE=<key>.zen.dq.spamhaus.net`); the outbound self-check uses the public zones and still needs the resolver.
 
 **When listed:** find the cause first (a compromised account or API key, a bad list, an open relay on the same IP), stop it, then request removal at the zone's page above. SpamCop listings expire on their own about 24 hours after the reports stop. The next daily check (or a restart) shows the new state. For an overview of other blocklists, [mxtoolbox.com/blacklists.aspx](https://mxtoolbox.com/blacklists.aspx) checks many at once.
 

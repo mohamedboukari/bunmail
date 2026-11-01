@@ -34,6 +34,11 @@ services:
   #   volumes:
   #     # TLS certificate and key for submission, readable by uid 1000 (#167)
   #     - /etc/bunmail/tls:/etc/bunmail/tls:ro
+  #   # A local recursive resolver on the docker0 bridge, so DNSBL lookups
+  #   # (Spamhaus) do not go through a public resolver that refuses them.
+  #   # Set up Unbound first: docs/self-hosting.md, "Local resolver for DNSBL".
+  #   dns:
+  #     - 172.17.0.1
 
   # Exposing the dashboard and API directly, without a reverse proxy (not
   # recommended: plain HTTP). Replaces the base list instead of adding to it.
