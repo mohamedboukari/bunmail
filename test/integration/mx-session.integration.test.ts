@@ -93,7 +93,7 @@ describe("runMxSession: the connection is closed however the session ends", () =
     expect(classifySendFailure(outcomes[0]?.error)).toBeNull();
     /** The upgrade completed and the session got ready before it stalled. */
     expect(outcomes[0]?.tls).toBe("starttls");
-    expect(server.messages()).toBe(1);
+    expect(await server.waitForMessages(1)).toBe(1);
     expect(server.connections()).toBe(1);
     await server.waitForNoneOpen(2_000);
   });
@@ -113,7 +113,7 @@ describe("runMxSession: the connection is closed however the session ends", () =
       { key: "mx.example.test#0", tls: "starttls" },
       { key: "mx.example.test#1", tls: "starttls" },
     ]);
-    expect(server.messages()).toBe(2);
+    expect(await server.waitForMessages(2)).toBe(2);
     expect(server.connections()).toBe(1);
     await server.waitForNoneOpen(2_000);
   });

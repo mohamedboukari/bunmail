@@ -126,7 +126,7 @@ describe("provider buckets", () => {
       status: "sent",
       mxHost: "mx2.bucket.test",
     });
-    expect(server.messages()).toBe(2);
+    expect(await server.waitForMessages(2)).toBe(2);
     /** One session at a time across both host names (`MAIL_MX_CONCURRENCY=1`). */
     expect(server.peak()).toBe(1);
     expect(sawWaiter).toBe(true);
@@ -246,7 +246,7 @@ describe("rate budget through the queue", () => {
     const wait = await dueInSeconds(second.id);
     expect(wait).toBeGreaterThan(55);
     expect(wait).toBeLessThan(70);
-    expect(server.messages()).toBe(1);
+    expect(await server.waitForMessages(1)).toBe(1);
     /** No failure, and no webhook event of any kind for the deferred email. */
     expect(await events("email.failed")).toHaveLength(0);
     expect((await events()).filter((e) => e["emailId"] === second.id)).toHaveLength(0);
@@ -267,7 +267,7 @@ describe("rate budget through the queue", () => {
       attempts: 1,
       mxHost: "mx2.bucket.test",
     });
-    expect(server.messages()).toBe(2);
+    expect(await server.waitForMessages(2)).toBe(2);
     const sentEvents = await events("email.sent");
     expect(sentEvents).toHaveLength(2);
     expect(new Set(sentEvents.map((e) => e["emailId"]))).toEqual(
@@ -307,7 +307,7 @@ describe("rate budget through the queue", () => {
       attempts: 0,
       domain: "limited.test",
     });
-    expect(server.messages()).toBe(1);
+    expect(await server.waitForMessages(1)).toBe(1);
     const wait = await dueInSeconds(id);
     expect(wait).toBeGreaterThan(55);
     expect(wait).toBeLessThan(70);
@@ -323,7 +323,7 @@ describe("rate budget through the queue", () => {
       status: "sent",
       attempts: 1,
     });
-    expect(server.messages()).toBe(2);
+    expect(await server.waitForMessages(2)).toBe(2);
     /** `email.sent` fired once, on the attempt that landed the first group. */
     expect(await events("email.sent")).toHaveLength(1);
   });

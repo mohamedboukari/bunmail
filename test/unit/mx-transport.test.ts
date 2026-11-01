@@ -247,7 +247,7 @@ describe("TLS record against a real smtp-server (#250)", () => {
     pool.close();
     expect(first).toEqual({ tls: "starttls" });
     expect(second).toEqual({ tls: "starttls" });
-    expect(server.messages()).toBe(2);
+    expect(await server.waitForMessages(2)).toBe(2);
     expect(server.connections()).toBe(1);
   });
 });

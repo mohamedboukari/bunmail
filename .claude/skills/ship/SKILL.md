@@ -63,9 +63,13 @@ gh pr checks <PR> --watch --interval 30
 
 ## 8. Clean up and report
 
+Only after `gh pr view <PR> --json state --jq .state` prints `MERGED`, in its own step: deleting the remote branch of an unmerged PR closes it.
+
 ```bash
+git worktree remove <worktree-path>     # if the PR was built in a worktree
 git checkout main && git pull --ff-only
 git push origin --delete <branch> && git branch -D <branch>
+git worktree prune && git worktree list  # nothing left over from this or earlier PRs
 gh issue view <N> --json state
 ```
 

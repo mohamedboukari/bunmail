@@ -115,7 +115,7 @@ describe("MX failover against real receiving servers", () => {
       tls: "starttls",
       attempts: 1,
     });
-    expect(mx2.messages()).toBe(1);
+    expect(await mx2.waitForMessages(1)).toBe(1);
   });
 
   test("the first MX greets with 421: the second one delivers", async () => {
@@ -129,7 +129,7 @@ describe("MX failover against real receiving servers", () => {
     });
     expect(mx1.connections()).toBe(1);
     expect(mx1.messages()).toBe(0);
-    expect(mx2.messages()).toBe(1);
+    expect(await mx2.waitForMessages(1)).toBe(1);
   });
 
   test("the first MX answers 550 at RCPT: no failover, the recipient fails", async () => {
@@ -242,7 +242,7 @@ describe("MX resolution and RCPT outcomes through the queue", () => {
       attempts: 2,
       mxHost: "mx.flaky.test",
     });
-    expect(mx.messages()).toBe(1);
+    expect(await mx.waitForMessages(1)).toBe(1);
   });
 
   test("an NXDOMAIN fails the email", async () => {
@@ -278,7 +278,7 @@ describe("MX resolution and RCPT outcomes through the queue", () => {
 
     await queueCycle();
     /** One transaction carried all three recipients. */
-    expect(first.messages()).toBe(1);
+    expect(await first.waitForMessages(1)).toBe(1);
     const afterFirst = await row(id);
     expect(afterFirst.status).toBe("queued");
     const state = stateOf(afterFirst.deliveryState);
@@ -315,7 +315,7 @@ describe("MX resolution and RCPT outcomes through the queue", () => {
     routeExampleOrg({ mx1: second.port });
     await dueNow(id);
     await queueCycle();
-    expect(second.messages()).toBe(1);
+    expect(await second.waitForMessages(1)).toBe(1);
     const done = await row(id);
     expect(done.status).toBe("sent");
     const finalState = stateOf(done.deliveryState);
