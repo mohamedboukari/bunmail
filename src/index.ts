@@ -44,6 +44,62 @@ import { logReverseDnsAtBoot } from "./modules/domains/services/sending-ips.serv
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
+import { loggableError } from "./utils/db-error.ts";
+
+/**
+ * Last-resort crash lines. Without these, an uncaught error or an
+ * unhandled rejection kills the process with Bun's raw stack trace on
+ * stderr: not JSON, no level, no context, so a log store drops or
+ * mangles the one line a postmortem needs. Each writes one structured
+ * line, then exits 1 exactly like Bun's default, so Docker's restart
+ * policy still brings the app back. Registered before the boot steps
+ * below so a failed boot step is logged the same way.
+ */
+function logCrashAndExit(
+  kind: "uncaughtException" | "unhandledRejection",
+  error: unknown,
+): never {
+  logger.error("Process crashed", {
+    kind,
+    errorName: error instanceof Error ? error.name : typeof error,
+    /** Sanitized: a drizzle query error's message embeds the query parameters. */
+    error: loggableError(error),
+    /** Frames only: the stack's first lines repeat the (unsanitized) message. */
+    stack:
+      error instanceof Error && error.stack !== undefined
+        ? error.stack
+            .split("\n")
+            .map((line) => line.trim())
+            .filter((line) => line.startsWith("at "))
+            .slice(0, 20)
+        : undefined,
+  });
+  process.exit(1);
+}
+
+process.on("uncaughtException", (error) => logCrashAndExit("uncaughtException", error));
+process.on("unhandledRejection", (reason) =>
+  logCrashAndExit("unhandledRejection", reason),
+);
+
+/**
+ * The running version, from package.json. On the startup line and in the
+ * OpenAPI document, so a postmortem can tell which release was running.
+ */
+async function readAppVersion(): Promise<string> {
+  try {
+    const pkg: unknown = await Bun.file(
+      new URL("../package.json", import.meta.url),
+    ).json();
+    const version: unknown =
+      typeof pkg === "object" && pkg !== null ? Reflect.get(pkg, "version") : undefined;
+    return typeof version === "string" ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const appVersion = await readAppVersion();
 
 /**
  * Encrypt any DKIM private keys still stored as plaintext PEM (legacy
@@ -206,7 +262,7 @@ const app = new Elysia()
       documentation: {
         info: {
           title: "BunMail API",
-          version: "0.1.0",
+          version: appVersion,
           description:
             "Self-hosted email API for developers: free alternative to SendGrid/Resend. " +
             "Send transactional emails with direct SMTP delivery, DKIM/SPF/DMARC signing, " +
@@ -433,6 +489,9 @@ const app = new Elysia()
   });
 
 logger.info("BunMail server started", {
+  version: appVersion,
+  bun: Bun.version,
+  env: config.env,
   port: config.server.port,
   host: config.server.host,
 });
@@ -533,7 +592,15 @@ function shutdown() {
    *  instead of leaving them leased for 15 minutes. Best effort. */
   void queueService
     .releaseOwnLeases()
-    .catch(() => undefined)
+    .catch((error: unknown) => {
+      /** Still best effort, but a postmortem needs to know why emails sat leased. */
+      logger.warn(
+        "Could not release email leases on shutdown; they expire on their own",
+        {
+          error: loggableError(error),
+        },
+      );
+    })
     .finally(() => finishShutdown());
 }
 

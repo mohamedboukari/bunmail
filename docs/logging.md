@@ -42,6 +42,12 @@ Contexts nest: a webhook fired while sending an email logs with the email's `job
 | `Processing email`, then `Email reached terminal state` / `Email send had retry groups, requeued` / `Email permanently failed (input error)` | `info` / `warn` / `error` | email id, statuses, SMTP results |
 | `Email send attempt finished` | `debug` | `emailId`, `attempt`, `durationMs` |
 | `SMTP session closed` | `info` | `remoteAddress`, `messages`, `durationMs` |
+| `BunMail server started` | `info` | `version` (from `package.json`), `bun`, `env`, `port`, `host` |
+| `Process crashed` | `error` | `kind` (`uncaughtException` or `unhandledRejection`), `errorName`, `error` (sanitized), `stack` (frames only); the process then exits 1 and Docker restarts it |
+| `DNSBL lookup failed: connection allowed unchecked` | `warn` | `ip`, `zone`, `code` (a timeout or `SERVFAIL`, not "not listed": the inbound check did not run) |
+| `Could not release email leases on shutdown; they expire on their own` | `warn` | `error` |
+
+A database error is logged as `Database query failed (SQLSTATE <code>)`, or with the driver's code when there is no SQLSTATE (`ERR_POSTGRES_CONNECTION_CLOSED` for a lost connection), never with the query or its parameters.
 
 The `path` of the request line never contains the query string (owner setup links carry their token there), and any path segment that looks like a credential (32 or more URL-safe characters) is shown as `:token`.
 
@@ -72,6 +78,9 @@ docker compose logs --since 1h app | grep '"HTTP request"' | jq -c 'select(.stat
 # One SMTP connection: find its id in the close summary, then all its lines
 docker compose logs app | grep '"SMTP session closed"'
 docker compose logs app | grep '<smtpSessionId>'
+
+# Which version was running, and did the process crash
+docker compose logs app | grep -E '"(BunMail server started|Process crashed)"'
 ```
 
 Turn on `LOG_LEVEL=debug` (restart the app) to see internal detail while reproducing a problem, then set it back: debug output is large.

@@ -22,6 +22,20 @@ describe("loggableError", () => {
     expect(loggableError(error)).toBe("Database query failed");
   });
 
+  test("a lost connection keeps the driver's code, never free text", () => {
+    const closed = Object.assign(new Error("Connection closed"), {
+      code: "ERR_POSTGRES_CONNECTION_CLOSED",
+    });
+    expect(
+      loggableError(new DrizzleQueryError("select $1", ["a@example.org"], closed)),
+    ).toBe("Database query failed (ERR_POSTGRES_CONNECTION_CLOSED)");
+    /** A `code` that is not a plain identifier is dropped. */
+    const odd = Object.assign(new Error("x"), { code: "reader@example.org" });
+    expect(loggableError(new DrizzleQueryError("select 1", [], odd))).toBe(
+      "Database query failed",
+    );
+  });
+
   test("other errors keep their message", () => {
     expect(loggableError(new Error("injected failure"))).toBe("injected failure");
     expect(loggableError("plain")).toBe("plain");
