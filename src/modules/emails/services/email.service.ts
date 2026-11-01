@@ -65,6 +65,7 @@ import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import type {
   SendEmailInput,
   ListEmailsFilters,
@@ -75,6 +76,7 @@ import type {
   DbExecutor,
   SendResponse,
   IdempotentSendResult,
+  Tx,
 } from "../types/email.types.ts";
 
 /**
@@ -99,10 +101,11 @@ export async function createEmail(
   source: EmailSource = "api",
 ): Promise<CreatedEmail> {
   const prepared = await prepareEmail(input, apiKeyId, source);
-  /** With attachments, the email row and its files commit together (#181). */
-  return prepared.attachments.length > 0
-    ? db.transaction((tx) => insertPreparedEmail(tx, prepared))
-    : insertPreparedEmail(db, prepared);
+  /**
+   * One transaction: the email row, its files (#181) and its
+   * `email.queued` event (#371) commit together or not at all.
+   */
+  return db.transaction((tx) => insertPreparedEmail(tx, prepared));
 }
 
 /**
@@ -575,18 +578,33 @@ async function prepareEmail(
 }
 
 /**
- * Inserts a prepared send with status `queued`, through `executor` (the
- * pool, or a transaction: the idempotent send's, or the one `createEmail`
- * opens for attachments), with its attachments (#181), and logs it.
+ * Inserts a prepared send with status `queued` in `tx` (the idempotent
+ * send's transaction, or the one `createEmail` opens), with its
+ * attachments (#181) and its `email.queued` event (#371), and logs it.
+ * The event goes through the webhook outbox in the same transaction, so a
+ * subscriber hears about an email exactly when it exists.
  */
 async function insertPreparedEmail(
-  executor: DbExecutor,
+  tx: Tx,
   prepared: PreparedEmail,
 ): Promise<CreatedEmail> {
   const { values, warnings, senderDomain, attachments } = prepared;
   const { id, apiKeyId, source, domainId, headers, tags } = values;
-  const [email] = await executor.insert(emails).values(values).returning();
-  await attachmentStorage.saveAttachments(executor, id, attachments);
+  const [email] = await tx.insert(emails).values(values).returning();
+  await attachmentStorage.saveAttachments(tx, id, attachments);
+  await enqueueEvent(
+    tx,
+    "email.queued",
+    {
+      emailId: id,
+      from: values.fromAddress,
+      to: values.toAddress,
+      subject: values.subject,
+      tags: tags ?? null,
+      source,
+    },
+    { apiKeyId },
+  );
 
   logger.debug("Email created and queued", {
     id,

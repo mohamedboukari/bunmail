@@ -81,7 +81,7 @@ Indexes:
 
 | Event              | Fired when                                                     |
 |--------------------|----------------------------------------------------------------|
-| `email.queued`     | An email is inserted into the queue                            |
+| `email.queued`     | An email is accepted and inserted into the queue, from any path (REST send, batch item, SMTP submission, dashboard), in the same transaction as the email row (#371). Not for a refused send, and not again for an idempotent replay |
 | `email.sent`       | An email is successfully delivered                             |
 | `email.failed`     | An email permanently fails (temporary failures are retried with backoff until it is `MAIL_RETRY_MAX_AGE_HOURS` old). `data.blocked: true` when a receiver refused the sender (blocklist, reputation, SPF/DKIM/DMARC), not the recipient (#246). Also fired, with `blocked: true`, when a DSN at a signed return path reports such a block (`5.7.x`) for a `sent` email, which it marks `failed` (#250) |
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification to the recipient's signed return path (#236): DSN parsed by the bounce module, original `emails` row marked `bounced`, that recipient auto-suppressed (#24). Not for a DSN reporting a sender policy block (`5.7.x`, #250): that one fires `email.failed` with `blocked: true` and suppresses nobody. Also fired for a hard `5xx` at send time (`source: "inline"`), and with `bounceType: "soft"` for a recipient whose mailbox stayed full (`4.2.2`) until the retry window ran out (#250, `source: "inline"`, alongside the email's `email.failed`). See [docs/bounces.md](bounces.md). |
@@ -103,6 +103,23 @@ Events are scoped to the API key that owns the webhook:
 
 ## Webhook Payload
 
+`email.queued` (#371): the email as accepted, before any delivery; `source` is `api` or `smtp`:
+
+```json
+{
+  "event": "email.queued",
+  "timestamp": "2026-03-15T12:00:00.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "from": "hello@example.com",
+    "to": "user@example.com",
+    "subject": "Welcome!",
+    "tags": { "flow": "welcome" },
+    "source": "api"
+  }
+}
+```
+
 `email.sent`:
 
 ```json
@@ -122,7 +139,7 @@ Events are scoped to the API key that owns the webhook:
 
 **`to`** is the email's `to` list as stored: one address, or several comma-separated (`"a@example.com, b@example.org"`) for a send with an array `to` (#178). It stays a string, unlike the REST email's `to`, so existing consumers keep working.
 
-**`tags`** (#189): every `email.*` event built from an email row (`email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
+**`tags`** (#189): every `email.*` event built from an email row (`email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
 
 `email.bounced`:
 
