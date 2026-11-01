@@ -17,7 +17,7 @@
         "mailauth": "7.1.1",
         "mailparser": "^3.9.40",
         "mmdb-lib": "3.0.3",
-        "nodemailer": "^10.1.4",
+        "nodemailer": "10.1.4",
         "smtp-server": "3.19.23",
         "uqr": "0.1.3",
       },
