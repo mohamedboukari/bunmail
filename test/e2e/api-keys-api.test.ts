@@ -43,18 +43,30 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
-    database: { url: "postgres://test:test@localhost/test" },
-    server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost" },
-    dashboard: { ownerEmail: null },
+    ...realConfig.config,
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost/test",
+    },
+    server: { ...realConfig.config.server, port: 3000, host: "0.0.0.0" },
+    mail: { ...realConfig.config.mail, hostname: "localhost" },
+    dashboard: { ...realConfig.config.dashboard, ownerEmail: null },
     logLevel: "error",
   },
 }));
 
 /* ─── Mock logger ─── */
+/** The real module, spread under the stub so every export exists (#293). */
+const realLogger = await import("../../src/utils/logger.ts");
+
 void mock.module("../../src/utils/logger.ts", () => ({
+  ...realLogger,
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -100,6 +112,11 @@ void mock.module("../../src/modules/api-keys/services/api-key.service.ts", () =>
         : undefined,
     ),
   ),
+  /** Not on these routes; present so a leak of this mock has no holes (#293). */
+  findByHash: mock(() => Promise.resolve(undefined)),
+  findById: mock(() => Promise.resolve(undefined)),
+  setApiKeyAdmin: mock(() => Promise.resolve({ ok: false, reason: "not_found" })),
+  findDashboardKeyFor: mock(() => Promise.resolve(undefined)),
 }));
 
 /* ─── Mock auth + rate limit middleware ─── */
@@ -113,6 +130,8 @@ void mock.module("../../src/middleware/auth.ts", () => ({
 
 void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
+  startRateLimitCleanup: () => {},
+  stopRateLimitCleanup: () => {},
 }));
 
 /* ─── Import plugin after mocking ─── */

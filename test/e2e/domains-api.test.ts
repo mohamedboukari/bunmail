@@ -47,19 +47,31 @@ interface ErrorResponse {
 }
 
 /* ─── Mock config ─── */
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
-    database: { url: "postgres://test:test@localhost/test" },
-    server: { port: 3000, host: "0.0.0.0" },
-    mail: { hostname: "localhost", publicIps: [] },
-    smtp: { enabled: false },
-    dashboard: { ownerEmail: null },
+    ...realConfig.config,
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost/test",
+    },
+    server: { ...realConfig.config.server, port: 3000, host: "0.0.0.0" },
+    mail: { ...realConfig.config.mail, hostname: "localhost", publicIps: [] },
+    smtp: { ...realConfig.config.smtp, enabled: false },
+    dashboard: { ...realConfig.config.dashboard, ownerEmail: null },
     logLevel: "error",
   },
 }));
 
 /* ─── Mock logger ─── */
+/** The real module, spread under the stub so every export exists (#293). */
+const realLogger = await import("../../src/utils/logger.ts");
+
 void mock.module("../../src/utils/logger.ts", () => ({
+  ...realLogger,
   logger: {
     debug: mock(() => {}),
     info: mock(() => {}),
@@ -116,6 +128,12 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
     Promise.resolve(id === "dom_test123" ? mockDomain : undefined),
   ),
   getDkimDnsRecord: mock(() => null),
+  /** Not on these routes; present so a leak of this mock has no holes (#293). */
+  getDomainByName: mock(() => Promise.resolve(undefined)),
+  domainExistsByName: mock(() => Promise.resolve(false)),
+  updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
+  updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
+  domainNameIs: mock(() => undefined),
 }));
 
 /* ─── Mock the live DNS status (#250): no real DNS in e2e ─── */
@@ -167,6 +185,8 @@ void mock.module("../../src/middleware/auth.ts", () => ({
 
 void mock.module("../../src/middleware/rate-limit.ts", () => ({
   rateLimitMiddleware: new Elysia({ name: "rate-limit-middleware" }),
+  startRateLimitCleanup: () => {},
+  stopRateLimitCleanup: () => {},
 }));
 
 /* ─── Import plugin after mocking ─── */

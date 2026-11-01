@@ -14,12 +14,17 @@ import type { VerificationDeps } from "../../src/modules/domains/services/dns-ve
 let txtRecords: Record<string, string[][]> = {};
 const dbUpdates: Array<Record<string, unknown>> = [];
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realDns = await import("dns/promises");
+
 /**
- * Both `resolveTxt` (used here) and `resolveMx` (used by mailer.service
- * tests in the same process) need to be exported so cross-file
- * `mock.module` calls don't shadow each other's missing exports.
+ * Every export of `dns/promises` stays defined (the real module spread
+ * under the stubs), so this mock leaking into a later file cannot leave
+ * its `resolveMx`, `lookup` or `resolve4` undefined. `resolveMx` and
+ * `lookup` are stubbed too, so a leak never reaches the real resolver.
  */
 void mock.module("dns/promises", () => ({
+  ...realDns,
   resolveTxt: mock(async (hostname: string) => {
     if (hostname in txtRecords) return txtRecords[hostname];
     const err = Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });

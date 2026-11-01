@@ -25,9 +25,15 @@ function asRecord(value: unknown): Record<string, unknown> {
  * exercised in production; integration tests use the same mock pattern.
  */
 
+/** The real module, spread under the stub so every export exists (#293). */
+const realConfig = await import("../../src/config.ts");
+
 void mock.module("../../src/config.ts", () => ({
+  ...realConfig,
   config: {
+    ...realConfig.config,
     mail: {
+      ...realConfig.config.mail,
       hostname: "test.localhost",
       mxConcurrency: 1,
       mxRatePerMin: null,
@@ -35,14 +41,22 @@ void mock.module("../../src/config.ts", () => ({
       publicIps: [],
     },
     env: "test" as const,
-    database: { url: "" },
-    server: { port: 3000, host: "0.0.0.0" },
-    dashboard: { ownerEmail: null },
+    /** `src/db/index.ts` reads it at import; keep it set in case this stub leaks. */
+    database: {
+      ...realConfig.config.database,
+      url: "postgres://test:test@localhost:5432/test",
+    },
+    server: { ...realConfig.config.server, port: 3000, host: "0.0.0.0" },
+    dashboard: { ...realConfig.config.dashboard, ownerEmail: null },
     logLevel: "error" as const,
     /** Master for the return-path key (#236). */
     dkimEncryptionKey: Buffer.alloc(32, 7),
     /** Read by `applyDomainCheck` when a leaked stub reaches a verification (#250). */
-    domainReverify: { enabled: true, intervalHours: 24 },
+    domainReverify: {
+      ...realConfig.config.domainReverify,
+      enabled: true,
+      intervalHours: 24,
+    },
   },
 }));
 
@@ -73,7 +87,11 @@ function mxOf(cfg: Record<string, unknown>): string {
   return typeof name === "string" ? name : "";
 }
 
+/** The real module, spread under the stubs so every export exists (#293). */
+const realDns = await import("dns/promises");
+
 void mock.module("dns/promises", () => ({
+  ...realDns,
   resolveMx: mock(async (domain: string) => {
     if (mxResolver) return mxResolver(domain);
     if (mxResult instanceof Error) throw mxResult;
@@ -132,9 +150,14 @@ const createTransportMock = mock((cfg: Record<string, unknown>) => ({
 
 /** nodemailer 10 ships `createTransport` as both a named export and a
  *  member of the default export; mirror both so either import style in
- *  the code under test resolves to the mock. */
+ *  the code under test resolves to the mock. The Ethereal helpers are
+ *  stubbed so a leak of this mock has no holes (#293). */
 void mock.module("nodemailer", () => ({
   createTransport: createTransportMock,
+  createTestAccount: mock(() =>
+    Promise.reject(new Error("no Ethereal account in tests")),
+  ),
+  getTestMessageUrl: mock(() => false),
   default: { createTransport: createTransportMock },
 }));
 
