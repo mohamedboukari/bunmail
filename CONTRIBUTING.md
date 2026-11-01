@@ -98,7 +98,7 @@ The tiers, scripts and conventions are in [docs/testing.md](docs/testing.md). On
 The repo ships project config for [Claude Code](https://claude.com/claude-code). None of it is needed to build or test BunMail.
 
 - **`/ship`** (`.claude/skills/ship/`): takes an issue from plan to merged PR using this repo's workflow (plan and approval first, gates in CI order, docs and CHANGELOG, PR template, CI watch).
-- **`/release`** (`.claude/skills/release/`): the release flow (CHANGELOG prep commit, `bumpp`, then verifying the GitHub Release and the GHCR image attestation).
+- **`/release`** (`.claude/skills/release/`): the release flow (CHANGELOG prep commit, `bun run release`, then verifying the GitHub Release and the GHCR image attestation).
 - **No-em-dash hook** (`.claude/hooks/no-em-dash.ts`, wired in `.claude/settings.json`): enforces the CLAUDE.md rule on files Claude writes, and on lines added to the working tree when a turn ends.
 - **Permission allowlist** (`.claude/settings.json`): pre-approves read-only and test commands only (type-check, lint, tests, `git`/`gh` reads, graphify queries). Nothing that pushes, merges or deletes.
 - **Context7 MCP** (`.mcp.json`): up-to-date docs for Elysia, Drizzle and Bun via `https://mcp.context7.com/mcp`. It receives library-name queries, never your code. Claude Code asks you to approve it on first use.

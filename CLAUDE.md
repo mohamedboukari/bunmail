@@ -178,7 +178,7 @@ When adding a data model:
   - **"Tracked in #N"** references in `THREAT_MODEL.md` and `SECURITY.md`: once an issue ships, flip the residual-risk row from "tracked" to "mitigated".
   - **"Future / roadmap" / "v2+" sections**: drop items as they ship.
   - **Historical / planning docs** (e.g. `BunMail-Plan.md`): should carry a "historical, see X for current state" header so readers don't mistake them for current.
-- **Update `CHANGELOG.md` on every release.** When `bumpp` cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
+- **Update `CHANGELOG.md` on every release.** When `bun run release` (Bun's `bun pm version`) cuts a new version, add a corresponding entry summarizing user-facing changes (added / changed / fixed) under the new version heading, following Keep a Changelog format.
 
 ## Collaboration
 

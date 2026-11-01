@@ -77,7 +77,7 @@ No label carries an email address, a domain, an API key or a raw path, so the nu
 | `bunmail_queue_oldest_due_age_seconds` | gauge | | How long the most overdue queued email has been due. Near 0 on a healthy queue, however old its scheduled retries are |
 | `bunmail_emails_finished_total` | counter | `status` (`sent`, `bounced`, `failed`), `source` (`api`, `smtp`) | Emails that reached a final status, counted once when the outcome is stored |
 | `bunmail_email_send_attempt_duration_seconds` | histogram | | One send attempt (every MX group of one email), claim to stored outcome |
-| `bunmail_mx_deliveries_total` | counter | `tls` (`starttls`, `plaintext`) | Recipient MX groups delivered, by transport security |
+| `bunmail_mx_deliveries_total` | counter | `tls` (`starttls`, `plaintext`) | Recipient MX groups delivered, by transport security. Counts every MX delivery the server makes, system mail included (inbound "new mail" notifications, invitations), while `bunmail_emails_finished_total` counts only queued emails |
 | `bunmail_http_requests_total` | counter | `area`, `method`, `code_class` (`2xx` to `5xx`) | HTTP requests |
 | `bunmail_http_request_duration_seconds` | histogram | `area` | HTTP request duration |
 | `bunmail_smtp_connections_total` | counter | `listener` (`inbound`, `submission`) | Connections a listener accepted, before any check |
