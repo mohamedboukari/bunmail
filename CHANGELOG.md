@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **joi 18.3.1: patched dependency.** joi before 18.3.1 had a denial of service through an inefficient regular expression in its email validation (CVE-2026-118772, high). mailauth 7.x pins joi 18.2.9 exactly, so an override lifts it to the patched release within the same major version (mailauth 8.x still pins a vulnerable 18.3.0). BunMail's exposure is low: mailauth calls joi only for domain checks in SPF and base64 checks in DKIM, never its email validation. The install now holds one copy. The direct `nodemailer` dependency is pinned to `10.1.4`, the same spec as its override, so `npm ls` no longer fails with `EOVERRIDE` (npm refuses an override of a direct dependency unless both specs match; Bun did not mind). Raise both together when nodemailer moves.
+
 ## [0.11.0] - 2026-10-29
 
 > **Theme: deliverability, sending features and account security on top of 0.10.0.** Direct-to-MX delivery gains MTA-STS, signed return paths, provider throttling, MX failover and daily DNS and blocklist checks; the send API gains attachments, tags, idempotency keys, custom headers and batch sends; dashboard accounts gain TOTP, passkeys, an audit log and an active sessions page. No new required setting, but several existing settings are now validated at boot and SMTP ports move out of the tracked compose file: read the upgrade guide before pulling.
