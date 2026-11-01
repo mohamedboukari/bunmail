@@ -173,13 +173,13 @@ describe("MTA-STS enforce against real receiving servers", () => {
       tls: "starttls",
       mtaSts: "enforce",
     });
-    expect(mx1.messages()).toBe(1);
+    expect(await mx1.waitForMessages(1)).toBe(1);
     expect(policyFetches).toBe(1);
 
     /** The next attempt uses the cached policy: same TXT id, no fetch. */
     await send("user2@example.org");
     expect(policyFetches).toBe(1);
-    expect(mx1.messages()).toBe(2);
+    expect(await mx1.waitForMessages(2)).toBe(2);
   });
 
   test("an MX outside the policy is never tried", async () => {
@@ -194,7 +194,7 @@ describe("MTA-STS enforce against real receiving servers", () => {
       mtaSts: "enforce",
     });
     expect(mx1.connections()).toBe(0);
-    expect(mx2.messages()).toBe(1);
+    expect(await mx2.waitForMessages(1)).toBe(1);
   });
 
   test("a certificate for the wrong name fails over to the next matching host", async () => {
@@ -212,7 +212,7 @@ describe("MTA-STS enforce against real receiving servers", () => {
     });
     expect(mx1.connections()).toBe(1);
     expect(mx1.messages()).toBe(0);
-    expect(mx2.messages()).toBe(1);
+    expect(await mx2.waitForMessages(1)).toBe(1);
   });
 
   test("a certificate for the wrong name on the only matching host: retried, nothing sent", async () => {
@@ -283,7 +283,7 @@ describe("MTA-STS testing and no policy", () => {
         mtaSts: "testing",
       });
       await send("user2@example.org");
-      expect(mx1.messages()).toBe(2);
+      expect(await mx1.waitForMessages(2)).toBe(2);
       const warnings = warn.mock.calls.filter((call) =>
         String(call[0]).includes("MTA-STS testing policy would fail in enforce mode"),
       );
@@ -304,7 +304,7 @@ describe("MTA-STS testing and no policy", () => {
       tls: "starttls",
       mtaSts: null,
     });
-    expect(mx1.messages()).toBe(1);
+    expect(await mx1.waitForMessages(1)).toBe(1);
   });
 
   test("mode none: delivered as without a policy", async () => {

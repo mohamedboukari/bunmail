@@ -33,6 +33,13 @@ export interface FixtureServer {
   peak: () => number;
   /** Resolves once no connection is open, or rejects after `withinMs`. */
   waitForNoneOpen: (withinMs: number) => Promise<void>;
+  /**
+   * The message count once it reaches `count`, or the count so far after
+   * `withinMs`. Assert on this, not on `messages()`, after a send: the
+   * count arrives on the server's stdout, which can trail the SMTP reply
+   * the client already got, so a busy runner can read a stale 0.
+   */
+  waitForMessages: (count: number, withinMs?: number) => Promise<number>;
   stop: () => void;
 }
 
@@ -105,6 +112,13 @@ export async function startFixtureServer(
         }
         await Bun.sleep(20);
       }
+    },
+    waitForMessages: async (count, withinMs = 2000) => {
+      /** The count updates in the background, from the server's stdout. */
+      const reached = (): boolean => messages >= count;
+      const deadline = Date.now() + withinMs;
+      while (!reached() && Date.now() <= deadline) await Bun.sleep(10);
+      return messages;
     },
     stop: () => {
       void proc.stdin.end();

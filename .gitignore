@@ -53,6 +53,8 @@ graphify-out/
 # still runs them from disk, they just must not be committed
 .husky/post-commit
 .husky/post-checkout
+# Claude Code agent worktrees: local checkouts of other branches, never content
+.claude/worktrees/
 
 # Host-local compose overrides (#205): copy docker-compose.override.example.yml
 docker-compose.override.yml
