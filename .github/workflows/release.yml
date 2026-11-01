@@ -1,5 +1,5 @@
 # Release: creates a GitHub Release when a version tag is pushed.
-# Trigger: push a tag like v0.1.0 (via `bun run release` which runs bumpp).
+# Trigger: push a tag like v0.1.0 (via `bun run release`, which runs `bun pm version`).
 
 name: Release
 
