@@ -10,7 +10,7 @@ import {
   notifyInboundReceived,
   type InboundNotifyDeps,
 } from "./inbound-notify.service.ts";
-import { isBlacklistedIp } from "./dnsbl.service.ts";
+import { isBlacklistedIp, selfTestDnsbl } from "./dnsbl.service.ts";
 import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import {
@@ -194,6 +194,9 @@ function smtpError(message: string, responseCode: number): Error {
 export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void {
   const port = config.smtp.port;
   const { spamProtection } = config.smtp;
+
+  /** Does the DNSBL zone answer through this resolver? One line at boot, never fatal. */
+  if (spamProtection.dnsblEnabled) void selfTestDnsbl(spamProtection.dnsblZone);
 
   server = new SMTPServer({
     secure: false,

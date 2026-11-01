@@ -1,7 +1,9 @@
 import { describe, test, expect, spyOn, afterEach } from "bun:test";
 import {
+  classifyDnsblAnswers,
   dnsblQueryName,
   isBlacklistedIp,
+  selfTestDnsbl,
 } from "../../src/modules/inbound/services/dnsbl.service.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -72,60 +74,192 @@ describe("dnsblQueryName (#166)", () => {
 });
 
 /**
- * A lookup that fails says so (postmortem logging): only "no such record" means not
- * listed; a timeout or SERVFAIL means the check did not run. Both fail
- * open, but the second one leaves a warning. The lookup is injected and
- * the logger spied, not `mock.module`, so nothing leaks into other files
- * (#293).
+ * Answers are read like the outbound self-check reads them: only a
+ * listing code means listed. Spamhaus answers `127.255.255.254` to every
+ * query sent through a public resolver (1.1.1.1), so treating any answer
+ * as a listing would refuse every sender.
  */
-describe("isBlacklistedIp: lookup failures", () => {
+describe("classifyDnsblAnswers", () => {
+  test.each([["127.0.0.2"], ["127.0.0.4"], ["127.0.0.10"], ["127.0.0.255"]])(
+    "%s is a listing",
+    (answer) => {
+      expect(classifyDnsblAnswers([answer])).toEqual({ kind: "listed" });
+    },
+  );
+
+  test("a refused query wins over listing codes", () => {
+    expect(classifyDnsblAnswers(["127.0.0.2", "127.255.255.254"])).toEqual({
+      kind: "refused",
+      answer: "127.255.255.254",
+    });
+  });
+
+  test.each([["127.0.0.1"], ["93.184.216.34"], ["127.1.0.2"]])(
+    "%s is not a listing code",
+    (answer) => {
+      expect(classifyDnsblAnswers([answer])).toEqual({ kind: "unexpected", answer });
+    },
+  );
+
+  test("no answer is not listed", () => {
+    expect(classifyDnsblAnswers([])).toEqual({ kind: "not-listed" });
+  });
+});
+
+/**
+ * A check that did not run says so (postmortem logging), at most once per
+ * reason every ten minutes. The lookup and clock are injected and the
+ * logger spied, not `mock.module`, so nothing leaks into other files
+ * (#293). Each test runs at its own hour, past the previous throttle.
+ */
+describe("isBlacklistedIp", () => {
   const PUBLIC_IP = "8.8.8.8";
+  const HOUR = 60 * 60 * 1000;
+  let hour = 1_000;
+
+  /** A clock an hour past the previous test's, so throttle state never carries over. */
+  function freshClock(): { now: () => number; advance: (ms: number) => void } {
+    hour += 1;
+    let at = hour * HOUR;
+    return { now: () => at, advance: (ms) => (at += ms) };
+  }
 
   /** A DNS error shaped like Bun's (`code` on an Error). */
   function dnsError(code: string): Error {
     return Object.assign(new Error(`queryA ${code}`), { code });
   }
 
+  const answering =
+    (...answers: string[]) =>
+    (): Promise<string[]> =>
+      Promise.resolve(answers);
+  const failing = (code: string) => (): Promise<string[]> =>
+    Promise.reject(dnsError(code));
+
   afterEach(() => {
     spyOn(logger, "warn").mockRestore();
   });
 
-  test("an A record means listed", async () => {
-    const lookup = (): Promise<string[]> => Promise.resolve(["127.0.0.4"]);
-    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(true);
+  test("a listing code means listed, with no warning", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const deps = { lookup: answering("127.0.0.4"), ...freshClock() };
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   test.each(["ENOTFOUND", "ENODATA"])(
     "%s means not listed, with no warning",
     async (code) => {
-      const lookup = (): Promise<string[]> => Promise.reject(dnsError(code));
       const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
-      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
+      const deps = { lookup: failing(code), ...freshClock() };
+      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(false);
       expect(warn).not.toHaveBeenCalled();
     },
   );
 
+  test("a refused query (public resolver) is allowed, never treated as listed", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const deps = { lookup: answering("127.255.255.254"), ...freshClock() };
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "DNSBL check did not run: connection allowed unchecked",
+      {
+        reason: "refused:127.255.255.254",
+        ip: PUBLIC_IP,
+        zone: ZONE,
+        answer: "127.255.255.254",
+        suppressedSinceLast: 0,
+      },
+    );
+  });
+
+  test("an unexpected answer (NXDOMAIN rewritten) is allowed with a warning", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const deps = { lookup: answering("93.184.216.34"), ...freshClock() };
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(false);
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ reason: "unexpected:93.184.216.34" });
+  });
+
   test.each(["ETIMEOUT", "ESERVFAIL", "ECONNREFUSED"])(
     "%s fails open and warns with the code",
     async (code) => {
-      const lookup = (): Promise<string[]> => Promise.reject(dnsError(code));
       const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
-      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
-      expect(warn).toHaveBeenCalledWith(
-        "DNSBL lookup failed: connection allowed unchecked",
-        {
-          ip: PUBLIC_IP,
-          zone: ZONE,
-          code,
-        },
-      );
+      const deps = { lookup: failing(code), ...freshClock() };
+      expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(false);
+      expect(warn.mock.calls[0]?.[1]).toMatchObject({
+        reason: `lookup-failed:${code}`,
+        code,
+        suppressedSinceLast: 0,
+      });
     },
   );
 
   test("an error without a code still warns", async () => {
-    const lookup = (): Promise<string[]> => Promise.reject(new Error("odd"));
     const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
-    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, lookup)).toBe(false);
+    const deps = {
+      lookup: (): Promise<string[]> => Promise.reject(new Error("odd")),
+      ...freshClock(),
+    };
+    expect(await isBlacklistedIp(PUBLIC_IP, ZONE, deps)).toBe(false);
     expect(warn.mock.calls[0]?.[1]).toMatchObject({ code: "unknown" });
+  });
+
+  test("repeats are throttled for ten minutes, then counted on the next line", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const clock = freshClock();
+    const deps = { lookup: failing("ETIMEOUT"), now: clock.now };
+    for (let i = 0; i < 5; i += 1) await isBlacklistedIp(PUBLIC_IP, ZONE, deps);
+    expect(warn).toHaveBeenCalledTimes(1);
+    clock.advance(10 * 60 * 1000);
+    await isBlacklistedIp(PUBLIC_IP, ZONE, deps);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[1]).toMatchObject({ suppressedSinceLast: 4 });
+  });
+
+  test("each reason has its own throttle", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const { now } = freshClock();
+    await isBlacklistedIp(PUBLIC_IP, ZONE, { lookup: failing("ESERVFAIL"), now });
+    await isBlacklistedIp(PUBLIC_IP, ZONE, { lookup: answering("127.255.255.255"), now });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The boot self-test (RFC 5782 §5: every DNSBL lists 127.0.0.2). Through a
+ * resolver the zone blocks, the test entry comes back unlisted or refused,
+ * and the per-connection check silently protects nothing.
+ */
+describe("selfTestDnsbl", () => {
+  afterEach(() => {
+    spyOn(logger, "warn").mockRestore();
+    spyOn(logger, "info").mockRestore();
+  });
+
+  test("queries the test entry and passes when it is listed", async () => {
+    const info = spyOn(logger, "info").mockImplementation(() => undefined);
+    const queried: string[] = [];
+    const lookup = (name: string): Promise<string[]> => {
+      queried.push(name);
+      return Promise.resolve(["127.0.0.2", "127.0.0.10"]);
+    };
+    expect(await selfTestDnsbl(ZONE, { lookup })).toBe("ok");
+    expect(queried).toEqual(["2.0.0.127.zen.spamhaus.org"]);
+    expect(info).toHaveBeenCalledWith("Inbound DNSBL self-test passed", { zone: ZONE });
+  });
+
+  test("NXDOMAIN for the test entry (Google Public DNS) is not answering", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const lookup = (): Promise<string[]> =>
+      Promise.reject(Object.assign(new Error("queryA ENOTFOUND"), { code: "ENOTFOUND" }));
+    expect(await selfTestDnsbl(ZONE, { lookup })).toBe("not-answering");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ zone: ZONE, code: "ENOTFOUND" });
+  });
+
+  test("a refused answer (Cloudflare) is reported as refused", async () => {
+    const warn = spyOn(logger, "warn").mockImplementation(() => undefined);
+    const lookup = (): Promise<string[]> => Promise.resolve(["127.255.255.254"]);
+    expect(await selfTestDnsbl(ZONE, { lookup })).toBe("refused");
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({ answer: "127.255.255.254" });
   });
 });

@@ -44,7 +44,8 @@ Contexts nest: a webhook fired while sending an email logs with the email's `job
 | `SMTP session closed` | `info` | `remoteAddress`, `messages`, `durationMs` |
 | `BunMail server started` | `info` | `version` (from `package.json`), `bun`, `env`, `port`, `host` |
 | `Process crashed` | `error` | `kind` (`uncaughtException` or `unhandledRejection`), `errorName`, `error` (sanitized), `stack` (frames only); the process then exits 1 and Docker restarts it |
-| `DNSBL lookup failed: connection allowed unchecked` | `warn` | `ip`, `zone`, `code` (a timeout or `SERVFAIL`, not "not listed": the inbound check did not run) |
+| `DNSBL check did not run: connection allowed unchecked` | `warn`, at most once per `reason` every 10 minutes | `reason` (`lookup-failed:<code>`, `refused:<answer>` or `unexpected:<answer>`), `ip`, `zone`, `code` or `answer`, `suppressedSinceLast` |
+| `Inbound DNSBL self-test passed` / `... failed` | `info` / `warn`, once at start | `zone`, `code` or `answer`, `hint` (see [inbound.md](inbound.md): the zone must answer through your resolver) |
 | `Could not release email leases on shutdown; they expire on their own` | `warn` | `error` |
 
 A database error is logged as `Database query failed (SQLSTATE <code>)`, or with the driver's code when there is no SQLSTATE (`ERR_POSTGRES_CONNECTION_CLOSED` for a lost connection), never with the query or its parameters.
