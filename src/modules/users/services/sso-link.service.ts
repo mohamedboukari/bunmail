@@ -9,10 +9,12 @@ import type {
   ActiveSession,
   AttemptLimiter,
   SessionClient,
+  Tx,
 } from "../types/user.types.ts";
 import type {
   AuthorizeSsoLinkResult,
   LinkSsoIdentityResult,
+  RemovedSsoLink,
   SsoLinkRefusal,
   SsoLinkSummary,
   UnlinkSsoIdentityResult,
@@ -327,6 +329,49 @@ export async function linkSsoIdentity(
 
   if (!outcome.ok) return refuse(outcome.reason, userId);
   return { ok: true, linkId, name: input.name };
+}
+
+/* ─── Removal by a reset ─── */
+
+/**
+ * Locks the account's `users` row (`FOR UPDATE`) in the caller's
+ * transaction: the first lock of a link write (`linkSsoIdentity`) and of a
+ * completed reset, so the two serialize in one order and never deadlock.
+ */
+export async function lockAccountRow(tx: Tx, userId: string): Promise<void> {
+  await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for("update");
+}
+
+/**
+ * Removes every SSO link of the account (#224, decision 7), inside the
+ * caller's transaction: a completed admin-issued reset link (#277) and a
+ * completed `reset-owner` link call it next to `removeSecondFactors`.
+ * Whoever had access before the reset may have linked an identity of
+ * their own, so a reset takes the links away with the second factors.
+ * The sessions each link opened end with it, as on an unlink (the
+ * `sessions.credential_id` cascade; both resets also sign every session of
+ * the account out). Recorded by the caller (`auth.two_factor.removed`,
+ * `ssoLinks`); the security email lists what is returned.
+ *
+ * @returns the removed links: row id, stored `oidc:<issuer>` and label,
+ *          never the subject.
+ */
+export async function removeSsoLinks(tx: Tx, userId: string): Promise<RemovedSsoLink[]> {
+  const removed = await tx
+    .delete(userCredentials)
+    .where(
+      and(eq(userCredentials.userId, userId), eq(userCredentials.type, SSO_CREDENTIAL)),
+    )
+    .returning({
+      id: userCredentials.id,
+      provider: userCredentials.provider,
+      name: userCredentials.name,
+    });
+  return removed.map((link) => ({
+    id: link.id,
+    provider: link.provider ?? "",
+    name: link.name,
+  }));
 }
 
 /* ─── Unlinking ─── */

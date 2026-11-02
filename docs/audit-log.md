@@ -45,7 +45,7 @@ Indexes: `(occurred_at DESC, id DESC)` (the page and the purge), `(action, occur
 recordAuditEvent(input, tx?)
 ```
 
-- **With `tx`** (the change already runs in a transaction): the row is inserted in that transaction, so the change and its record commit or roll back together. A failed insert throws `AuditStoreError` and the change rolls back with it. Used by owner setup and `reset-owner`, invitations (create, resend, revoke, accept), every account action of the Users page (role, deactivate, reactivate, remove, transfer, reset link), password reset completion, password change, and two-factor enable, disable and recovery code regeneration.
+- **With `tx`** (the change already runs in a transaction): the row is inserted in that transaction, so the change and its record commit or roll back together. A failed insert throws `AuditStoreError` and the change rolls back with it. Used by owner setup and `reset-owner`, invitations (create, resend, revoke, accept), every account action of the Users page (role, deactivate, reactivate, remove, transfer, reset link), password reset completion, password change, two-factor enable, disable and recovery code regeneration, and an SSO link, unlink and sign-in (#224: the row commits with the session it opened).
 - **Without** (sign-in, sign-out, session revocation, token reuse, API key, domain, webhook and suppression changes, which are single statements): the row is inserted right after the outcome is decided. A failure is logged at `error` (`Audit event not recorded`, with the action, the actor and target ids and the SQLSTATE: never a label or the user agent) and never reaches the user's request.
 
 `input` is typed per action (`AuditEventInput<A>`): `metadata` is required exactly when the action declares a shape, and can only carry that shape's fields. As a last line of defence, a metadata key that looks like a secret (`password`, `secret`, `token`, `hash`, `cookie`, `credential`, `private`, `code`) is dropped with a `warn`. Metadata never carries passwords, tokens or their hashes, API keys, TOTP or recovery codes, webhook secrets or URLs (a webhook is labelled by its origin only: Slack- and Discord-style URLs carry the credential in the path), or message content.
@@ -58,10 +58,10 @@ recordAuditEvent(input, tx?)
 
 | Action | Actor | Target | Metadata |
 |---|---|---|---|
-| `auth.login.succeeded` | user | session | `method` (`password`, `totp`, `recovery_code`, `passkey` #223), `recoveryCodesLeft` |
-| `auth.login.failed` (failure) | user, or no id | | `step` (`password`, `two_factor`, `passkey` for a passwordless sign-in #223), `reason` (`unknown_account`, `no_password`, `deactivated`, `wrong_password`, `input_too_long`, `credential_replaced`, `wrong_code`, and for passkeys `passkey_rejected`, `unknown_passkey`, `passkey_counter_regressed`) |
+| `auth.login.succeeded` | user | session | `method` (`password`, `totp`, `recovery_code`, `passkey` #223, `oauth` for an SSO sign-in of an account without a second factor #224), `recoveryCodesLeft`, `provider` (with `oauth`: the provider's id in `SSO_PROVIDERS`) |
+| `auth.login.failed` (failure) | user, or no id | | `step` (`password`, `two_factor`, `passkey` for a passwordless sign-in #223, `sso` #224), `reason` (`unknown_account`, `no_password`, `deactivated`, `wrong_password`, `input_too_long`, `credential_replaced`, `wrong_code`; for passkeys `passkey_rejected`, `unknown_passkey`, `passkey_counter_regressed`; for SSO the flow's checks `discovery_failed`, `flow_missing`, `flow_invalid`, `flow_expired`, `provider_mismatch`, `state_mismatch`, `flow_replayed`, `issuer_mismatch`, `provider_error`, `id_token_invalid` with no id, then `unknown_identity` (no id), `deactivated` and `owner_second_factor_required` (the owner has no BunMail second factor, so no one-factor session is opened)), `provider` (with `sso`) |
 | `auth.login.rate_limited` (failure) | no id | | `retryAfterSec` |
-| `auth.login.two_factor_required` | user | session | |
+| `auth.login.two_factor_required` | user | session | `method` (`password`, or `oauth` for an SSO sign-in #224), `provider` (with `oauth`) |
 | `auth.login.two_factor_locked` (failure) | user | session | |
 | `auth.logout` | user | session | |
 | `auth.session.revoked` | user | session | `current`, `reason` (`user`, `code_budget_spent`, the latter a failure) |
@@ -71,7 +71,7 @@ recordAuditEvent(input, tx?)
 | `auth.two_factor.disabled` | user | user | `method` |
 | `auth.two_factor.recovery_codes_regenerated` | user | user | |
 | `auth.two_factor.removal_refused` (failure) | user | user | `factor` (`totp`, `passkey`), `reason` (`owner_sso_link`): turning TOTP off or removing a passkey would leave the owner with an SSO link and no second factor (#224) |
-| `auth.two_factor.removed` | user | user | `via` (`password_reset`, `owner_setup`), `totp`, `passkeys` (what was removed, #223) |
+| `auth.two_factor.removed` | user | user | `via` (`password_reset`, `owner_setup`), `totp`, `passkeys` (what was removed, #223), `ssoLinks` (how many SSO links went with them, #224; recorded when anything went, links alone included) |
 | `auth.passkey.added` | user | passkey (label: its name) | `sessionsRevoked` (#223) |
 | `auth.passkey.removed` | user | passkey (label: its name) | (#223) |
 | `auth.passkey.counter_regressed` (failure) | user | passkey (label: its name) | `storedCounter`, `receivedCounter`: a possible cloned authenticator, the sign-in was refused (#223) |
@@ -100,7 +100,7 @@ recordAuditEvent(input, tx?)
 
 The human labels the page shows live in `AUDIT_ACTION_LABELS` (a `Record` over every action, so an action without a label does not compile).
 
-SSO rows (#224) never carry the subject (`sub`), the provider email, the code or any token: some providers use the email as the subject, so a link is named by its row id and its provider. A failed provider round trip while linking (bad `state`, a replay, a refused ID token) is recorded as `flow_failed` only when the browser's live session names the account, without any value of the flow; otherwise it is only logged.
+SSO rows (#224) never carry the subject (`sub`), the provider email, the code, `state` or any token: some providers use the email as the subject, so a link is named by its row id and its provider. A failed provider round trip while linking (bad `state`, a replay, a refused ID token) is recorded as `flow_failed` only when the browser's live session names the account, without any value of the flow; otherwise it is only logged. An SSO sign-in is recorded like any sign-in: `auth.login.two_factor_required` or `auth.login.succeeded` with `method: "oauth"` and the provider's id, in the transaction that opens the session (target: the session); every refusal as `auth.login.failed` with `step: "sso"`, against the linked account when the identity matched one, else with no id. Each counts against the per-IP login limiter, so the flood bound above holds.
 
 Not recorded (yet): SMTP submission AUTH failures and REST requests with an invalid API key (high volume, unauthenticated; they are logged), template changes, email sends.
 

@@ -61,12 +61,12 @@ const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }
   removed_by_reset: {
     subject: "Two-factor authentication removed from your BunMail account",
     intro:
-      "Your BunMail password was reset with a one-time reset link, and the account's second factors were removed with it. Signing in now needs only the new password.",
+      "Your BunMail password was reset with a one-time reset link, and the account's second factors and single sign-on links were removed with it. Signing in now needs only the new password.",
   },
   login_codes_exhausted: {
     subject: "Failed two-factor sign-in attempts on your BunMail account",
     intro:
-      "Someone entered your BunMail password correctly, then several wrong two-factor codes, and the sign-in was blocked for a while. Whoever it was may know your password.",
+      "Someone passed the first sign-in step of your BunMail account (your password, or a single sign-on account linked to it), then entered several wrong two-factor codes, and the sign-in was blocked for a while. Whoever it was may know your password or control that single sign-on account.",
   },
   passkey_added: {
     subject: "A passkey was added to your BunMail account",
@@ -107,14 +107,26 @@ const ADVICE =
 const NO_LINK_NOTE =
   "This email has no links on purpose: open your BunMail dashboard yourself.";
 
-/** "authenticator app and 2 passkeys": what a reset removed (#223). */
-function describeRemoved(removed: RemovedSecondFactors): string {
+/**
+ * "authenticator app and 2 passkeys": what a reset removed (#223), with
+ * its single sign-on links counted (#224, each also listed on its own).
+ */
+function describeRemoved(removed: RemovedSecondFactors, ssoLinks: number): string {
   const parts: string[] = [];
   if (removed.totp) parts.push("authenticator app (and its recovery codes)");
   if (removed.passkeys > 0) {
     parts.push(`${removed.passkeys} ${removed.passkeys === 1 ? "passkey" : "passkeys"}`);
   }
+  if (ssoLinks > 0) {
+    parts.push(`${ssoLinks} single sign-on ${ssoLinks === 1 ? "link" : "links"}`);
+  }
   return parts.length === 0 ? "nothing" : parts.join(" and ");
+}
+
+/** One removed SSO link as a fact row: the provider and the masked provider account. */
+function removedLinkFact(link: SsoAlertFacts): [string, string] {
+  const account = link.account === null ? "" : ` (${maskEmail(link.account)})`;
+  return ["Single sign-on removed", oneLine(`${link.provider}${account}`)];
 }
 
 /**
@@ -122,7 +134,7 @@ function describeRemoved(removed: RemovedSecondFactors): string {
  * account at the provider as it was named at link time (its email, masked
  * like the account's own address), or `null` when none was given.
  */
-interface SsoAlertFacts {
+export interface SsoAlertFacts {
   provider: string;
   account: string | null;
 }
@@ -146,8 +158,11 @@ export function buildTwoFactorAlertEmail(input: {
   at: Date;
   passkeyName?: string;
   removed?: RemovedSecondFactors;
+  /** The SSO links a reset removed (`removed_by_reset`, #224). */
+  removedSsoLinks?: readonly SsoAlertFacts[];
   sso?: SsoAlertFacts;
 }): TwoFactorAlertContent {
+  const removedLinks = input.removedSsoLinks ?? [];
   const { subject, intro } = EVENT_TEXT[input.event];
   const facts: Array<[string, string]> = [
     ["Account", oneLine(maskEmail(input.email))],
@@ -167,7 +182,13 @@ export function buildTwoFactorAlertEmail(input: {
         ] satisfies Array<[string, string]>)),
     ...(input.removed === undefined
       ? []
-      : [["Removed", describeRemoved(input.removed)] satisfies [string, string]]),
+      : [
+          ["Removed", describeRemoved(input.removed, removedLinks.length)] satisfies [
+            string,
+            string,
+          ],
+        ]),
+    ...removedLinks.map(removedLinkFact),
     ["IP address", input.ip ? oneLine(input.ip) : "unknown"],
     ["Time", formatAlertTime(input.at)],
   ];
@@ -214,6 +235,8 @@ export interface SendTwoFactorAlertInput {
   passkeyName?: string;
   /** What a reset removed (`removed_by_reset`, #223). */
   removed?: RemovedSecondFactors;
+  /** The SSO links a reset removed (`removed_by_reset`, #224): escaped in the email. */
+  removedSsoLinks?: readonly SsoAlertFacts[];
   /** The SSO link (#224 events): escaped in the email. */
   sso?: SsoAlertFacts;
 }
@@ -238,6 +261,7 @@ export async function sendTwoFactorAlert(
       at: input.at ?? new Date(),
       passkeyName: input.passkeyName,
       removed: input.removed,
+      removedSsoLinks: input.removedSsoLinks,
       sso: input.sso,
     });
     const result = await sendSystemMail(

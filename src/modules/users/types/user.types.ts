@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { db } from "../../../db/index.ts";
 import type { WindowTicket } from "../../../utils/shared-store.ts";
+import type { RemovedSsoLink } from "./sso.types.ts";
 
 /**
  * Value sets for the dashboard accounts schema (#214). Each is enforced by
@@ -360,6 +361,8 @@ export type CompletePasswordResetResult =
       twoFactorRemoved: boolean;
       /** What exactly was removed, for the security email and the audit log (#223). */
       secondFactorsRemoved: RemovedSecondFactors;
+      /** The SSO links removed with them (#224), with the sessions they opened. */
+      ssoLinksRemoved: RemovedSsoLink[];
       /** `sessions.id` of the session opened for the account. */
       sessionId: string;
       /** Raw cookie value of that session. */
@@ -722,6 +725,12 @@ export interface PendingSession {
   userId: string;
   /** The account's stored email (for the new-device alert). PII. */
   email: string;
+  /**
+   * The stored `oidc:<issuer>` of the SSO link the session was opened
+   * with (#224), for the new-device alert; `null` (or absent) for any
+   * other first factor.
+   */
+  ssoProvider?: string | null;
 }
 
 /**
@@ -886,6 +895,8 @@ export interface CompletedOwnerSetup {
   twoFactorRemoved: boolean;
   /** What exactly was removed, for the security email (#223). */
   secondFactorsRemoved: RemovedSecondFactors;
+  /** The owner's SSO links removed with them (#224), with the sessions they opened. */
+  ssoLinksRemoved: RemovedSsoLink[];
 }
 
 /**

@@ -13,6 +13,7 @@ import type { SsoProviderSettings } from "../../src/config.ts";
 import {
   clearSsoDiscoveryCache,
   getSsoProviderMetadata,
+  SSO_DISCOVERY_FAILURE_TTL_MS,
   SSO_HTTP_MAX_BYTES,
 } from "../../src/modules/users/services/sso-discovery.service.ts";
 import {
@@ -597,11 +598,18 @@ describe("discovery", () => {
     expect(idp.hitCount("/.well-known/openid-configuration")).toBe(2);
   });
 
-  test("a failure is not cached: the next use tries again", async () => {
+  test("a failure is remembered for 30 s (no request), then tried again", async () => {
+    const now = Date.now();
     idp.discoveryOverride = () => new Response("down", { status: 503 });
-    expect(await getSsoProviderMetadata(provider())).toBeNull();
+    expect(await getSsoProviderMetadata(provider(), { now })).toBeNull();
     idp.discoveryOverride = null;
-    expect(await getSsoProviderMetadata(provider())).not.toBeNull();
+    expect(await getSsoProviderMetadata(provider(), { now: now + 29 * 1000 })).toBeNull();
+    expect(idp.hitCount("/.well-known/openid-configuration")).toBe(1);
+    expect(
+      await getSsoProviderMetadata(provider(), {
+        now: now + SSO_DISCOVERY_FAILURE_TTL_MS + 1000,
+      }),
+    ).not.toBeNull();
     expect(idp.hitCount("/.well-known/openid-configuration")).toBe(2);
   });
 
@@ -754,6 +762,15 @@ describe("logging", () => {
     ]) {
       expect(logged.toLowerCase()).not.toContain(secret.toLowerCase());
     }
+  });
+
+  test("a remembered failure is not warned again", async () => {
+    const now = Date.now();
+    idp.discoveryOverride = () => new Response("down", { status: 503 });
+    await getSsoProviderMetadata(provider(), { now });
+    await getSsoProviderMetadata(provider(), { now: now + 1000 });
+    await getSsoProviderMetadata(provider(), { now: now + 2000 });
+    expect(warned().match(/SSO discovery failed/g)).toHaveLength(1);
   });
 
   test("a failed discovery logs the provider and a short reason", async () => {

@@ -37,6 +37,8 @@ export interface SignInDeviceEvent {
   location: Promise<string | null>;
   /** When the sign-in happened. */
   at: Date;
+  /** The SSO provider's label for a sign-in through single sign-on (#224), named in the alert. */
+  ssoProvider?: string;
 }
 
 /** `promise`'s value, or `null` when it takes longer than `ms`. */
@@ -90,6 +92,7 @@ export async function recognizeSignInDevice(event: SignInDeviceEvent): Promise<v
       ip: event.ip,
       location,
       at: event.at,
+      ...(event.ssoProvider === undefined ? {} : { ssoProvider: event.ssoProvider }),
     });
   } catch (error: unknown) {
     logger.warn("New-device sign-in check failed", {

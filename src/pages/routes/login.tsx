@@ -20,15 +20,21 @@ import { PasskeyCeremony } from "../components/passkey-ceremony.tsx";
  * @param passkey  When true (passkeys are on, `APP_BASE_URL` set, #223),
  *                 a "Sign in with a passkey" button: a discoverable
  *                 passkey, so no email is typed.
+ * @param sso      The configured SSO providers while SSO is on (#224): one
+ *                 "Sign in with <label>" button each, a same-origin POST
+ *                 form to `/dashboard/login/sso/<id>`. The label is
+ *                 operator-set and rendered escaped.
  */
 export function LoginPage({
   error,
   disabled,
   passkey,
+  sso,
 }: {
   error?: string;
   disabled?: boolean;
   passkey?: boolean;
+  sso?: ReadonlyArray<{ id: string; label: string }>;
 }) {
   return (
     <html lang="en" class="h-full">
@@ -126,6 +132,25 @@ export function LoginPage({
                   Sign in with a passkey
                 </button>
               </PasskeyCeremony>
+            )}
+
+            {sso !== undefined && sso.length > 0 && !disabled && (
+              <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-2">
+                {sso.map((provider) => (
+                  <form
+                    method="POST"
+                    action={`/dashboard/login/sso/${encodeURIComponent(provider.id)}`}
+                  >
+                    <button
+                      type="submit"
+                      class="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors break-all"
+                      safe
+                    >
+                      {`Sign in with ${provider.label}`}
+                    </button>
+                  </form>
+                ))}
+              </div>
             )}
           </div>
 

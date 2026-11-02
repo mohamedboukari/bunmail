@@ -20,6 +20,7 @@ import { hashPassword } from "./password.service.ts";
 import { assignUnownedRecords } from "./record-ownership.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
 import { removeSecondFactors, removedAny } from "./two-factor.service.ts";
+import { lockAccountRow, removeSsoLinks } from "./sso-link.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { normalizeLoginEmail, sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -420,7 +421,8 @@ export async function findLiveOwnerSetup(
  *    factor and recovery codes are removed (#220: this is the owner's
  *    recovery path when the authenticator is lost, via `reset-owner`;
  *    issuing the link alone removes nothing, so an abandoned reset does
- *    not weaken the account), every other open token of the user is
+ *    not weaken the account) and so are its SSO links (#224, with the
+ *    sessions they opened), every other open token of the user is
  *    revoked, every session of the user is deleted, the new session is
  *    created (#216: the delete runs first, so the new session survives),
  *    and `users.updated_at` is touched.
@@ -457,6 +459,13 @@ export async function completeOwnerSetup(
     const userId = spent?.userId;
     if (!userId) return null;
 
+    /**
+     * The account row first (#224): linking an SSO identity locks it before
+     * anything else, so a link racing this reset either commits first (and
+     * its row is removed below) or waits and then finds its session gone.
+     */
+    await lockAccountRow(tx, userId);
+
     await tx
       .delete(userCredentials)
       .where(
@@ -474,6 +483,8 @@ export async function completeOwnerSetup(
     });
     const secondFactorsRemoved = await removeSecondFactors(tx, userId);
     const twoFactorRemoved = removedAny(secondFactorsRemoved);
+    /** The SSO links go with them (#224): the reset may follow a takeover. */
+    const ssoLinksRemoved = await removeSsoLinks(tx, userId);
 
     await tx
       .update(userTokens)
@@ -511,7 +522,7 @@ export async function completeOwnerSetup(
       { action: "auth.owner_setup.completed", actor, ...client, target },
       tx,
     );
-    if (twoFactorRemoved) {
+    if (twoFactorRemoved || ssoLinksRemoved.length > 0) {
       await recordAuditEvent(
         {
           action: "auth.two_factor.removed",
@@ -522,6 +533,7 @@ export async function completeOwnerSetup(
             via: "owner_setup",
             totp: secondFactorsRemoved.totp,
             passkeys: secondFactorsRemoved.passkeys,
+            ssoLinks: ssoLinksRemoved.length,
           },
         },
         tx,
@@ -529,7 +541,13 @@ export async function completeOwnerSetup(
     }
     return owner
       ? {
-          owner: { ...owner, sessionToken, twoFactorRemoved, secondFactorsRemoved },
+          owner: {
+            ...owner,
+            sessionToken,
+            twoFactorRemoved,
+            secondFactorsRemoved,
+            ssoLinksRemoved,
+          },
           sessionId,
         }
       : null;

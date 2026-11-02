@@ -24,8 +24,9 @@ import { recordAuditEvent } from "../../audit/services/audit.service.ts";
  *   second factor ({@link ssoLinkWithoutSecondFactor}).
  *
  * Resets (an admin-issued reset link, `reset-owner`) are not refused: they
- * remove the account's second factors on purpose (recovery), and they will
- * remove its SSO links with them (#224, part 4). Database errors are the
+ * remove the account's second factors on purpose (recovery), and its SSO
+ * links with them (`removeSsoLinks`), so the rule still holds after a
+ * reset. Database errors are the
  * caller's (`withSanitizedErrors` around its transaction).
  */
 

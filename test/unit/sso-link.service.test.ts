@@ -432,3 +432,25 @@ describe("unlinkSsoIdentity", () => {
     );
   });
 });
+
+describe("removeSsoLinks (a completed reset, #224)", () => {
+  test("every link of the account is deleted and returned, never the subject; nothing to remove gives an empty list", async () => {
+    queues.delete.push([
+      { id: "crd_1", provider: PROVIDER.key, name: "alice@example.com" },
+      { id: "crd_2", provider: null, name: null },
+    ]);
+    /** The mocked `db`, typed as the real one: its transaction hands the fake over. */
+    const { db } = await import("../../src/db/index.ts");
+    const removed = await db.transaction((tx) => links.removeSsoLinks(tx, USER_ID));
+    expect(removed).toEqual([
+      { id: "crd_1", provider: PROVIDER.key, name: "alice@example.com" },
+      { id: "crd_2", provider: "", name: null },
+    ]);
+    expect(JSON.stringify(removed)).not.toContain("sub-");
+
+    queues.delete.push([]);
+    expect(await db.transaction((tx) => links.removeSsoLinks(tx, USER_ID))).toEqual([]);
+    /** One statement each: the sessions they opened go by the foreign key's cascade. */
+    expect(queues.delete).toEqual([]);
+  });
+});

@@ -47,7 +47,16 @@ export interface NewDeviceAlertInput {
   location: string | null;
   /** When the sign-in happened. */
   at: Date;
+  /**
+   * The SSO provider's label when the sign-in came through single sign-on
+   * (#224): named in the email, with what to do about an unknown link.
+   */
+  ssoProvider?: string;
 }
+
+/** What to do about a sign-in through single sign-on, added to the advice (#224). */
+const SSO_ADVICE =
+  "If you do not recognise this, remove unknown links under Account > Sign-in methods.";
 
 /** A composed alert. */
 export interface NewDeviceAlertContent {
@@ -75,7 +84,11 @@ export function buildNewDeviceAlertEmail(
     ["IP address", input.ip ? oneLine(input.ip) : "unknown"],
   ];
   if (input.location) facts.push(["Approximate location", oneLine(input.location)]);
+  if (input.ssoProvider !== undefined) {
+    facts.push(["Signed in with", oneLine(`single sign-on (${input.ssoProvider})`)]);
+  }
   facts.push(["Time", formatAlertTime(input.at)]);
+  const advice = input.ssoProvider === undefined ? ADVICE : `${ADVICE} ${SSO_ADVICE}`;
   const intro =
     "Your BunMail account was just signed in to from a device it has not used recently.";
 
@@ -84,7 +97,7 @@ export function buildNewDeviceAlertEmail(
     "",
     ...facts.map(([label, value]) => `${label}: ${value}`),
     "",
-    ADVICE,
+    advice,
     "",
     NO_LINK_NOTE,
   ].join("\n");
@@ -99,7 +112,7 @@ export function buildNewDeviceAlertEmail(
     `<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:15px;color:#1f2328;line-height:1.5;">`,
     `<p style="margin:0 0 16px;">${escapeHtml(intro)}</p>`,
     `<table style="border-collapse:collapse;margin:0 0 16px;font-size:14px;">${rows}</table>`,
-    `<p style="margin:16px 0;">${escapeHtml(ADVICE)}</p>`,
+    `<p style="margin:16px 0;">${escapeHtml(advice)}</p>`,
     `<p style="margin:0;font-size:12px;color:#8b949e;">${escapeHtml(NO_LINK_NOTE)}</p>`,
     `</div>`,
   ].join("");

@@ -30,8 +30,9 @@ export interface SsoFlowPayload {
 }
 
 /**
- * Every reason an SSO flow can fail. The callback route (a later PR)
- * records them as the `reason` of `auth.login.failed`.
+ * Every reason an SSO flow can fail. A sign-in callback records them as
+ * the `reason` of `auth.login.failed` (`step: "sso"`); a link callback as
+ * `flow_failed` of `auth.sso.link_refused`.
  *
  * - `discovery_failed`: the provider's discovery document could not be
  *   fetched or did not pass its checks.
@@ -163,6 +164,20 @@ export type AuthorizeSsoLinkResult =
         | "provider_already_linked";
     };
 
+/**
+ * An SSO link a completed reset removed (#224): an admin-issued reset link
+ * or `reset-owner`, which take the account's second factors away too.
+ * Never the subject.
+ */
+export interface RemovedSsoLink {
+  /** `user_credentials.id` of the removed link. */
+  id: string;
+  /** The stored `oidc:<issuer>`. */
+  provider: string;
+  /** Its label (the provider email at link time), or `null`. */
+  name: string | null;
+}
+
 /** What writing a link gives (`linkSsoIdentity`). */
 export type LinkSsoIdentityResult =
   | {
@@ -193,13 +208,72 @@ export type UnlinkSsoIdentityResult =
   | { ok: false; reason: "not_found" | "rate_limited" | "wrong_password" };
 
 /**
+ * Why a proven identity may not sign in (#224, part 3). Each one is
+ * recorded as the `reason` of `auth.login.failed` (`step: "sso"`):
+ *
+ * - `unknown_identity`: no account is linked to `(issuer, sub)`; never
+ *   matched by email, never created, never an invitation accepted;
+ * - `deactivated`: the linked account is disabled;
+ * - `owner_second_factor_required`: the linked account is the owner and has
+ *   no BunMail second factor, so SSO would be a one-factor way into it
+ *   (the link rules keep this from happening; a reset removing the owner's
+ *   factors before its links, or any future path, would break it).
+ */
+export type SsoSignInRefusal =
+  "unknown_identity" | "deactivated" | "owner_second_factor_required";
+
+/** Whether a proven identity may sign in, and with which assurance (`resolveSsoSignIn`). */
+export type SsoSignInDecision =
+  | {
+      ok: true;
+      userId: string;
+      /** The account's address, for the new-device check. PII: never logged raw. */
+      email: string;
+      /** `user_credentials.id` of the link: the session is bound to it. */
+      linkId: string;
+      /** `pending` with a BunMail second factor (the second step follows), else `password`. */
+      assurance: "pending" | "password";
+    }
+  | {
+      ok: false;
+      reason: SsoSignInRefusal;
+      /** The linked account; `null` for an unknown identity. */
+      userId: string | null;
+    };
+
+/** What opening the session of an SSO sign-in gives (`openSsoSession`). */
+export type OpenSsoSessionResult =
+  | (Extract<SsoSignInDecision, { ok: true }> & {
+      sessionId: string;
+      /** The raw session token for the cookie. Never logged. */
+      token: string;
+    })
+  | Extract<SsoSignInDecision, { ok: false }>;
+
+/**
+ * The outcome of a sign-in callback (`finishSsoSignInCallback`): the new
+ * session, or the stage that refused it.
+ *
+ * - `flow`: the flow itself failed (cookie, state, replay, provider, ID
+ *   token), see {@link SsoFailureReason};
+ * - `purpose`: a valid flow that was not started to sign in;
+ * - `account`: the identity is proven but may not sign in, see
+ *   {@link SsoSignInRefusal}.
+ */
+export type SsoSignInCallbackOutcome =
+  | Extract<OpenSsoSessionResult, { ok: true }>
+  | { ok: false; stage: "flow"; reason: SsoFailureReason }
+  | { ok: false; stage: "purpose" }
+  | { ok: false; stage: "account"; reason: SsoSignInRefusal; userId: string | null };
+
+/**
  * The outcome of a link callback (`finishSsoLinkCallback`): the link, or
  * the stage that refused it.
  *
  * - `flow`: the flow itself failed (cookie, state, replay, provider, ID
  *   token), see {@link SsoFailureReason};
- * - `purpose`: a valid flow that was not started to link (a sign-in flow:
- *   not handled yet);
+ * - `purpose`: a valid flow that was not started to link (the callback
+ *   sends sign-in flows to `finishSsoSignInCallback` instead);
  * - `link`: the identity is proven but may not be linked, see
  *   {@link SsoLinkRefusal}.
  */

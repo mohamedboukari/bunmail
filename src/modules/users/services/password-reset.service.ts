@@ -24,6 +24,7 @@ import { PASSWORD_RESET_TTL_MINUTES } from "./password-reset-policy.service.ts";
 import { hashPassword } from "./password.service.ts";
 import { createSession, revokeAllUserSessions } from "./session.service.ts";
 import { removeSecondFactors, removedAny } from "./two-factor.service.ts";
+import { lockAccountRow, removeSsoLinks } from "./sso-link.service.ts";
 import { locateSession } from "./session-location.service.ts";
 import { sessionIp } from "./session-policy.service.ts";
 import { hashToken, mintToken } from "./token.service.ts";
@@ -217,7 +218,9 @@ export async function findLivePasswordReset(
  * (#220): an admin-issued reset is the recovery path for a lost
  * authenticator, and the session opened here is a `password` session of
  * an account without a second factor (under `REQUIRE_2FA` the user then
- * has to enrol again before using the dashboard).
+ * has to enrol again before using the dashboard). Its SSO links go with
+ * them (#224), and the sessions they opened: whoever had access before the
+ * reset may have linked an identity of their own.
  *
  * All or nothing: a failure rolls back every step, sessions included.
  *
@@ -247,6 +250,13 @@ export async function completePasswordReset(
     if (!spent?.userId || !spent.issuedBy) return { ok: false, reason: "invalid" };
     const { resetId, userId, issuedBy } = spent;
 
+    /**
+     * The account row first (#224): linking an SSO identity locks it before
+     * anything else, so a link racing this reset either commits first (and
+     * its row is removed below) or waits and then finds its session gone.
+     */
+    await lockAccountRow(tx, userId);
+
     await tx
       .delete(userCredentials)
       .where(
@@ -269,6 +279,8 @@ export async function completePasswordReset(
     });
     const secondFactorsRemoved = await removeSecondFactors(tx, userId);
     const twoFactorRemoved = removedAny(secondFactorsRemoved);
+    /** The SSO links go with them (#224): the reset may follow a takeover. */
+    const ssoLinksRemoved = await removeSsoLinks(tx, userId);
 
     const revokedTokens = await tx
       .update(userTokens)
@@ -325,7 +337,7 @@ export async function completePasswordReset(
       },
       tx,
     );
-    if (twoFactorRemoved) {
+    if (twoFactorRemoved || ssoLinksRemoved.length > 0) {
       await recordAuditEvent(
         {
           action: "auth.two_factor.removed",
@@ -336,6 +348,7 @@ export async function completePasswordReset(
             via: "password_reset",
             totp: secondFactorsRemoved.totp,
             passkeys: secondFactorsRemoved.passkeys,
+            ssoLinks: ssoLinksRemoved.length,
           },
         },
         tx,
@@ -353,6 +366,7 @@ export async function completePasswordReset(
       issuedTokensRevoked,
       twoFactorRemoved,
       secondFactorsRemoved,
+      ssoLinksRemoved,
       sessionId: session.sessionId,
       sessionToken: session.token,
     };

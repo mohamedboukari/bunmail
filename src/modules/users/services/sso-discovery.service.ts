@@ -8,7 +8,9 @@ import { logger } from "../../../utils/logger.ts";
  *
  * A provider's metadata (`<issuer>/.well-known/openid-configuration`) is
  * fetched on first use and kept for {@link SSO_DISCOVERY_TTL_MS}; a failure
- * is logged and retried on the next use, never fatal at boot.
+ * is logged once and remembered for {@link SSO_DISCOVERY_FAILURE_TTL_MS}
+ * (a down provider is not asked again on every click), then retried; never
+ * fatal at boot.
  *
  * Every request to a provider (discovery, code exchange, JWKS) goes
  * through {@link ssoHttpOptions}: a {@link SSO_HTTP_TIMEOUT_MS} timeout, a
@@ -30,6 +32,14 @@ export const SSO_HTTP_MAX_BYTES = 64 * 1024;
 
 /** How long discovered metadata is reused, in milliseconds (1 hour). */
 export const SSO_DISCOVERY_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * How long a failed discovery is remembered, in milliseconds (30 seconds):
+ * meanwhile every start answers "could not be reached" at once, without a
+ * request to the provider or another `warn` line, so a down provider and
+ * many clicks (or anonymous starts) cannot flood either.
+ */
+export const SSO_DISCOVERY_FAILURE_TTL_MS = 30 * 1000;
 
 /** Why a request to a provider failed before `oauth4webapi` saw an answer. */
 type SsoHttpFailure = "timeout" | "too_large" | "network";
@@ -268,16 +278,22 @@ interface CacheEntry {
  */
 const cache = new Map<string, CacheEntry>();
 
-/** Empties the metadata cache (tests). */
+/** Per provider: until when (epoch ms) a failed discovery is not tried again. */
+const failedUntil = new Map<string, number>();
+
+/** Empties the metadata cache and the remembered failures (tests). */
 export function clearSsoDiscoveryCache(): void {
   cache.clear();
+  failedUntil.clear();
 }
 
 /**
  * The provider's checked metadata, from the cache or a fresh discovery;
  * `null` when discovery fails, which is logged at `warn` with the provider
- * id and a short reason. Concurrent callers share one request, and a
- * failure is not cached, so the next sign-in tries again.
+ * id and a short reason. Concurrent callers share one request. A failure
+ * is remembered for {@link SSO_DISCOVERY_FAILURE_TTL_MS}: until then the
+ * answer is `null` at once (logged at `debug` only), then the next use
+ * tries again.
  */
 export async function getSsoProviderMetadata(
   provider: SsoProviderSettings,
@@ -285,6 +301,14 @@ export async function getSsoProviderMetadata(
 ): Promise<oauth.AuthorizationServer | null> {
   const key = `${provider.id}\n${provider.issuer}`;
   const now = settings.now ?? Date.now();
+  const blockedUntil = failedUntil.get(key);
+  if (blockedUntil !== undefined) {
+    if (blockedUntil > now) {
+      logger.debug("SSO discovery skipped: failed recently", { provider: provider.id });
+      return null;
+    }
+    failedUntil.delete(key);
+  }
   let entry = cache.get(key);
   if (!entry || entry.expiresAt <= now) {
     entry = {
@@ -297,7 +321,10 @@ export async function getSsoProviderMetadata(
   try {
     return await pending.metadata;
   } catch (error: unknown) {
-    if (cache.get(key) === pending) cache.delete(key);
+    if (cache.get(key) === pending) {
+      cache.delete(key);
+      failedUntil.set(key, now + SSO_DISCOVERY_FAILURE_TTL_MS);
+    }
     logger.warn("SSO discovery failed", {
       provider: provider.id,
       reason: error instanceof SsoDiscoveryError ? error.failure : "unexpected",

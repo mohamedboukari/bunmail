@@ -5,7 +5,11 @@ import { generateId } from "../../../utils/id.ts";
 import { sessions } from "../models/session.schema.ts";
 import { sessionTokenHistory } from "../models/session-token-history.schema.ts";
 import { users } from "../models/user.schema.ts";
-import { hasSecondFactor, hasSsoLink } from "../models/user-credential.schema.ts";
+import {
+  hasSecondFactor,
+  hasSsoLink,
+  userCredentials,
+} from "../models/user-credential.schema.ts";
 import {
   isSessionAssurance,
   isUserRole,
@@ -424,9 +428,21 @@ export async function purgeExpiredSessions(): Promise<number> {
 export async function findPendingSession(token: string): Promise<PendingSession | null> {
   const [row] = await withSanitizedErrors(() =>
     db
-      .select({ sessionId: sessions.id, userId: sessions.userId, email: users.email })
+      .select({
+        sessionId: sessions.id,
+        userId: sessions.userId,
+        email: users.email,
+        ssoProvider: userCredentials.provider,
+      })
       .from(sessions)
       .innerJoin(users, eq(users.id, sessions.userId))
+      .leftJoin(
+        userCredentials,
+        and(
+          eq(userCredentials.id, sessions.credentialId),
+          eq(userCredentials.type, "oauth"),
+        ),
+      )
       .where(
         and(
           eq(sessions.tokenHash, hashToken(token)),

@@ -56,6 +56,7 @@ import { isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
 import { twoFactorLoginLimiter } from "../lib/two-factor-limiter.ts";
 import type { WindowTicket } from "../../utils/shared-store.ts";
+import { removedLinkFacts, ssoProviderLabelOf, ssoSignInButtons } from "../lib/sso.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 import {
   UNKNOWN_ACCOUNT,
@@ -86,8 +87,21 @@ const LOGIN_ERRORS = new Map<string, string>([
   ],
   /** A passwordless passkey sign-in failed (#223): one message for every reason. */
   ["passkey", "That passkey could not sign you in. Try again, or use your password."],
-  /** An SSO callback that did not complete (#224): one message for every reason. */
+  /**
+   * An SSO sign-in or link callback that did not complete (#224): one
+   * message for every reason but the two below (a disabled account and the
+   * owner without a second factor included, so neither is told apart).
+   */
   ["sso", "Single sign-on did not complete. Try again, or sign in with your password."],
+  /** A proven SSO identity that no account is linked to (#224). */
+  [
+    "sso_unlinked",
+    "This sign-in is not linked to a BunMail account. Sign in with your password and link it under Account.",
+  ],
+  /** The provider's discovery failed when an SSO sign-in started (#224). */
+  ["sso_unavailable", "The sign-in provider could not be reached. Try again later."],
+  /** An SSO callback over the per-IP login budget (#224). */
+  ["rate_limited", "Too many attempts. Try again later."],
 ]);
 
 /**
@@ -112,8 +126,9 @@ export function authPages(app: PublicDashboard) {
     app
       /**
        * GET /dashboard/login
-       * Shows the email and password form, and "Sign in with a passkey"
-       * when passkeys are on (#223). Gets the auth-page headers (no
+       * Shows the email and password form, "Sign in with a passkey" when
+       * passkeys are on (#223), and one "Sign in with <label>" button per
+       * SSO provider while SSO is on (#224). Gets the auth-page headers (no
        * caching, no framing). The error text is the same for every failed
        * login, so it never says whether an account exists.
        */
@@ -127,6 +142,7 @@ export function authPages(app: PublicDashboard) {
             <LoginPage
               error={error}
               passkey={relyingPartyFrom(config.appBaseUrl) !== null}
+              sso={ssoSignInButtons()}
             />
           );
         },
@@ -350,6 +366,7 @@ export function authPages(app: PublicDashboard) {
                 actor: userActor(result.userId),
                 ...client,
                 target: { type: "session", id: sessionId, label: null },
+                metadata: { method: "password" },
               });
               issueSession(set, token, SESSION_PENDING_SECONDS);
               return redirect(set, TWO_FACTOR_LOGIN_PAGE);
@@ -555,6 +572,8 @@ export function authPages(app: PublicDashboard) {
               email: pending.email,
               sessionId: pending.sessionId,
               ip,
+              /** An SSO first factor (#224) is named in the new-device alert. */
+              ssoProvider: ssoProviderLabelOf(pending.ssoProvider),
             });
             return redirect(set, "/dashboard");
           } catch (error: unknown) {
@@ -738,16 +757,21 @@ export function authPages(app: PublicDashboard) {
             owner: redactEmail(owner.email),
             twoFactorRemoved: owner.twoFactorRemoved,
             passkeysRemoved: owner.secondFactorsRemoved.passkeys,
+            ssoLinksRemoved: owner.ssoLinksRemoved.length,
             ip,
           });
-          /** A `reset-owner` link removed the owner's second factors (#220, #223): tell the owner. */
-          if (owner.twoFactorRemoved) {
+          /**
+           * A `reset-owner` link removed the owner's second factors (#220,
+           * #223) or SSO links (#224): tell the owner.
+           */
+          if (owner.twoFactorRemoved || owner.ssoLinksRemoved.length > 0) {
             void sendTwoFactorAlert({
               event: "removed_by_reset",
               userId: owner.userId,
               email: owner.email,
               ip: sessionIp(ip),
               removed: owner.secondFactorsRemoved,
+              removedSsoLinks: removedLinkFacts(owner.ssoLinksRemoved),
             });
           }
 
@@ -1079,17 +1103,22 @@ export function authPages(app: PublicDashboard) {
             issuedTokensRevoked: result.issuedTokensRevoked,
             twoFactorRemoved: result.twoFactorRemoved,
             passkeysRemoved: result.secondFactorsRemoved.passkeys,
+            ssoLinksRemoved: result.ssoLinksRemoved.length,
             sessionId: result.sessionId,
             ip,
           });
-          /** The reset removed the account's second factors (#220, #223): tell the account. */
-          if (result.twoFactorRemoved) {
+          /**
+           * The reset removed the account's second factors (#220, #223) or
+           * SSO links (#224): tell the account.
+           */
+          if (result.twoFactorRemoved || result.ssoLinksRemoved.length > 0) {
             void sendTwoFactorAlert({
               event: "removed_by_reset",
               userId: result.userId,
               email: result.email,
               ip: sessionIp(ip),
               removed: result.secondFactorsRemoved,
+              removedSsoLinks: removedLinkFacts(result.ssoLinksRemoved),
             });
           }
 

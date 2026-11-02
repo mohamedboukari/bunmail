@@ -70,6 +70,28 @@ describe("buildNewDeviceAlertEmail", () => {
     assertNoLinks(mail.html);
   });
 
+  test("a sign-in through single sign-on names the provider and says to remove unknown links (#224), escaped, no link", () => {
+    const mail = buildNewDeviceAlertEmail({
+      ...INPUT,
+      ssoProvider: "<b>Corp</b>\r\nBcc: x",
+    });
+    expect(mail.text).toContain("Signed in with: single sign-on (<b>Corp</b> Bcc: x)");
+    expect(mail.text).toContain(
+      "If you do not recognise this, remove unknown links under Account > Sign-in methods.",
+    );
+    expect(mail.html).toContain("&lt;b&gt;Corp&lt;/b&gt;");
+    expect(mail.html).not.toContain("<b>Corp</b>");
+    expect(mail.html).toContain(
+      "remove unknown links under Account &gt; Sign-in methods",
+    );
+    assertNoLinks(mail.text);
+    assertNoLinks(mail.html);
+
+    const plain = buildNewDeviceAlertEmail(INPUT);
+    expect(plain.text).not.toContain("single sign-on");
+    expect(plain.text).not.toContain("Sign-in methods");
+  });
+
   test("an unknown location is left out; an unknown IP says so", () => {
     const mail = buildNewDeviceAlertEmail({ ...INPUT, ip: null, location: null });
     expect(mail.text).not.toContain("location");
