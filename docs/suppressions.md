@@ -173,7 +173,7 @@ Both HTTP routes are public (no auth, not under `/api/v1`), rate limited to 30 r
 
 **Effect** (`addFromUnsubscribe`): a permanent suppression, `reason = 'unsubscribe'`, under the email's API key. Idempotent: a permanent suppression already on file (bounce, complaint, manual, earlier unsubscribe) is left as it is and the request still succeeds; a temporary one (soft-bounce window) is turned into the permanent unsubscribe. Only when a row is created or upgraded does `email.unsubscribed` fire to that key's webhooks (`{ emailId, recipient, source, unsubscribedAt, tags }`, `tags` being the email's tags or `null`, #189; see [webhooks.md](webhooks.md)). Each request logs `Unsubscribe request processed` at `info` with `emailId`, `apiKeyId`, the redacted address, `source` and `outcome`.
 
-Files: `services/unsubscribe-token.ts` (mint, parse, verify, `soleRecipient`), `services/unsubscribe.service.ts` (`resolveUnsubscribeToken`, `unsubscribe`), `services/suppression.service.ts` (`addFromUnsubscribe`), the pages in `src/pages/unsubscribe.plugin.tsx` and `src/pages/routes/unsubscribe.tsx`, and the inbound branch in `src/modules/inbound/services/smtp-receiver.service.ts`.
+Files: `services/unsubscribe-token.ts` (mint, parse, verify, `soleRecipient`), `services/unsubscribe.service.ts` (`resolveUnsubscribeToken`, `unsubscribe`), `services/suppression.service.ts` (`addFromUnsubscribe`), the pages in `src/pages/unsubscribe.plugin.tsx` and `src/pages/routes/unsubscribe.tsx`, and the inbound branch in `src/modules/inbound/services/smtp-receiver-handlers.service.ts` (RCPT TO) and `smtp-receiver-data.service.ts` (DATA).
 
 ### Service methods
 

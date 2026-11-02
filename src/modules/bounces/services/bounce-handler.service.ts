@@ -393,7 +393,7 @@ export async function handleBounce<T>(
 
 /**
  * Public wrapper. Wires the real DB / service implementations. Called
- * by `inbound/services/smtp-receiver.service.ts` when a DSN arrives at a
+ * by `inbound/services/smtp-receiver-data.service.ts` when a DSN arrives at a
  * return path {@link resolveReturnPath} verified.
  */
 export async function handleParsedBounce(

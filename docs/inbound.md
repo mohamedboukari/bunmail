@@ -53,7 +53,11 @@ ARF complaint reports (`multipart/report; report-type=feedback-report`, RFC 5965
 src/modules/inbound/
 ├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
 ├── services/
-│   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser): start()/stop(), the public surface (#387)
+│   ├── smtp-receiver-session.service.ts ← per-connection stats, log context, trace spans, SMTP errors
+│   ├── smtp-receiver-handlers.service.ts ← connect (rate limit, DNSBL), MAIL FROM, RCPT TO, close summary
+│   ├── smtp-receiver-data.service.ts ← DATA: unsubscribe, return-path, feedback, bounce and DMARC branches, storage, notification
+│   ├── smtp-receiver-store.service.ts ← storeInboundEmail: the row and its `email.received` event in one transaction (#184)
 │   ├── connection-limit.ts          ← per-IP connection rate limit in the shared store (#185)
 │   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
@@ -266,6 +270,8 @@ See [docs/domains.md](domains.md#inbound-notifications-106) for the field and en
 ## Service Methods
 
 ### smtp-receiver.service.ts
+
+The receiver's public surface; the code sits in the `smtp-receiver-*.service.ts` files beside it, one per concern (#387, see the module layout above). It also re-exports `storeInboundEmail` (`smtp-receiver-store.service.ts`).
 
 #### `start(notifyDeps?): void`
 Starts the SMTP server on the configured port. `notifyDeps` (mailer, clock,

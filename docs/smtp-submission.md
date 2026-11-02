@@ -197,6 +197,8 @@ When quotas are disabled (`SMTP_SUBMISSION_DAILY_QUOTA=0`), `quota.daily` and `q
 
 ### smtp-submission.service.ts
 
+The server's public surface; the code sits in the `smtp-submission-*.service.ts` files beside it, one per concern (#387, see the module layout below).
+
 #### `start(portOverride?: number): void`
 Starts the submission server on `SMTP_SUBMISSION_PORT` (or `portOverride`, used by tests), in the TLS mode of `config.smtpSubmission.tls.mode` (#349): in `implicit` mode behind a Bun TLS listener that hands each decrypted connection to smtp-server. Requires AUTH; authenticates the password against the API-keys table via `findByHash`. Refuses to start without TLS unless `SMTP_SUBMISSION_ALLOW_INSECURE=true` (#133).
 
@@ -232,7 +234,11 @@ src/modules/smtp-submission/
 ├── smtp-submission.plugin.ts        ← REST: GET /api/v1/smtp-submission/stats (#123)
 ├── errors.ts                        ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 ├── services/
-│   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; implicit-TLS listener (#349); start()/stop()
+│   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; start()/stop(): the public surface, built from the files below (#387)
+│   ├── smtp-submission-session.service.ts ← per-connection stats, log context, trace spans, SMTP errors
+│   ├── smtp-submission-tls.service.ts ← implicit-TLS listener (#349) that never half-closes a socket (#351)
+│   ├── smtp-submission-handlers.service.ts ← connect limit, AUTH (the API key), RCPT TO cap, close summary
+│   ├── smtp-submission-data.service.ts ← DATA: size cap, daily quota, parse, header relay → createEmail
 │   ├── submission-limits.ts         ← per-IP connection and failed-AUTH throttles in the shared store (#185)
 │   └── usage.service.ts             ← per-(key,day) usage counters + quota read (#123)
 ├── message-mapper.ts                ← pure message → SendEmailInput mapping

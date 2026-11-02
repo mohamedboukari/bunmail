@@ -4,7 +4,7 @@
  * Kept dependency-free (its own error class, a type-only import of
  * `SendEmailInput` and the pure custom-header rules) so it can be
  * unit-tested without pulling in the SMTPServer / config / db stack: the
- * server code in `services/smtp-submission.service.ts` extracts raw
+ * server code in `services/smtp-submission-data.service.ts` extracts raw
  * addresses from the parsed message + SMTP envelope and delegates the
  * shaping decisions (sender resolution, BCC preservation, To fallback) to
  * these functions.
