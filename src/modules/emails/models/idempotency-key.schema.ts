@@ -25,7 +25,7 @@ import type { JsonObject } from "../types/email.types.ts";
  * and completed (`email_id`, `response_status`, `response_body`) before
  * that transaction commits, so a committed row is always complete: the
  * unique index makes a concurrent send with the same key wait for the
- * first one to commit or roll back. See `email.service.ts`
+ * first one to commit or roll back. See `email-create.service.ts`
  * (`createEmailIdempotent`).
  */
 export const idempotencyKeys = pgTable(

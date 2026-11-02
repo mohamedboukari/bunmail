@@ -17,7 +17,7 @@ import type {
  * hashing, the claiming upsert, completion, the content-free snapshot
  * and its replay content, and the expiry purge. The
  * send flow that ties them to the email insert is `createEmailIdempotent`
- * in `email.service.ts`.
+ * in `email-create.service.ts`.
  *
  * Never logs or returns the key itself: it is caller-chosen and may
  * carry identifiers from the caller's system.
