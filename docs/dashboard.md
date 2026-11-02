@@ -409,15 +409,28 @@ Server data a script needs goes in a `data-*` attribute or a JSON data block, ne
 src/pages/
 ├── pages.plugin.tsx          ← Parent plugin: public routes, then the session guard, then the area plugins (#291)
 ├── plugins/                  ← One functional plugin per area, each with only its routes (#291)
-│   ├── auth.plugin.tsx       ← Public: login (both steps, #220), logout, owner setup, invitation accept, password reset
+│   ├── auth.plugin.tsx       ← Public: login (both steps, #220), logout, owner setup, invitation accept, password reset; composes the auth-* groups below, in this order (#387)
+│   ├── auth-login.plugin.tsx ← Password login form and POST (#216)
+│   ├── auth-login-two-factor.plugin.tsx ← Second login step with a TOTP or recovery code (#220)
+│   ├── auth-logout.plugin.tsx ← Sign-out (#216)
+│   ├── auth-setup.plugin.tsx ← Owner setup (#215)
+│   ├── auth-invite.plugin.tsx ← Invitation accept (#217)
+│   ├── auth-reset.plugin.tsx ← Password reset (#277)
 │   ├── home.plugin.tsx       ← Stats overview
-│   ├── account.plugin.tsx    ← The signed-in user's own account: active sessions (#281), change password (#279), two-factor (#220)
+│   ├── account.plugin.tsx    ← The signed-in user's own account: active sessions (#281), change password (#279), two-factor (#220); composes the account-* groups below, in this order (#387)
+│   ├── account-sessions.plugin.tsx ← Active sessions page and its actions (#281)
+│   ├── account-two-factor.plugin.tsx ← Two-factor page, enrolment start and confirm (#220)
+│   ├── account-two-factor-manage.plugin.tsx ← New recovery codes, turning two-factor off (#220)
+│   ├── account-password.plugin.tsx ← Change password (#279)
 │   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
 │   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
 │   ├── audit-log.plugin.tsx  ← Audit log page (#221)
-│   ├── passkeys.plugin.tsx   ← Passkey sign-in and second step (public), the Passkeys page (#223)
+│   ├── passkeys.plugin.tsx   ← Passkey sign-in and second step (public), the Passkeys page (#223); composes the two public groups below, re-exports the Passkeys page (#387)
+│   ├── passkey-sign-in.plugin.tsx ← Passwordless passkey sign-in: options and finish (public)
+│   ├── passkey-second-step.plugin.tsx ← Second login step with a passkey: options and finish (public)
+│   ├── passkey-account.plugin.tsx ← The Passkeys page: add, rename, remove
 │   ├── sso-login.plugin.tsx  ← SSO sign-in start and the callback: sign-in or link (public, #224)
 │   ├── sso.plugin.tsx        ← The Sign-in methods page: link, unlink (#224)
 │   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), DKIM key rotation (#250), detail
@@ -437,6 +450,9 @@ src/pages/
 │   ├── two-factor-limiter.ts ← Failed-attempt budget of every two-factor code check (#220)
 │   ├── dns-verify-throttle.ts ← DNS-verify throttle: 5 checks per minute per domain, in the shared store (#133, #185)
 │   ├── sso.ts                ← What the SSO routes share: provider lookup, link refusal texts, the login page's SSO buttons (#224)
+│   ├── passkeys.ts           ← What the passkey routes share: relying party, options refusals, cross-origin refusal, audit reasons, finish-form schema (#223)
+│   ├── account-two-factor.ts ← What the Two-factor routes share: refusal texts, page redirect, change alerts, recovery-code reveal (#220)
+│   ├── client-ip.ts          ← Client IP of a request, for the account pages' log lines
 │   ├── error-message.ts      ← Error text for a log line
 │   └── form.ts               ← Repeated form field to `string[]`
 ├── guards.tsx                ← Role and assurance checks per route (#222)

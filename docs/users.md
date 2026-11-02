@@ -274,7 +274,7 @@ An admin or the owner can let a user who forgot their password back in without e
 
 ## Password change (#279)
 
-Every signed-in account, the owner included, changes its own password at `/dashboard/account/password` (`GET` renders the form, `POST` changes it; both `memberGuard`, in `src/pages/plugins/account.plugin.tsx`). The user must know the current password; forgotten passwords go through a reset link (#277) or, for the owner, `reset-owner`.
+Every signed-in account, the owner included, changes its own password at `/dashboard/account/password` (`GET` renders the form, `POST` changes it; both `memberGuard`, in `src/pages/plugins/account-password.plugin.tsx`). The user must know the current password; forgotten passwords go through a reset link (#277) or, for the owner, `reset-owner`.
 
 **Order of checks** (`changePassword` in `password-change.service.ts`, called by the route):
 
@@ -294,7 +294,7 @@ Only the `password` credential is replaced; the open invitations and reset links
 
 ## Active sessions (#281)
 
-Every signed-in account, the owner included, lists and signs out its **own** sessions at `/dashboard/account/sessions` (`memberGuard`, in `src/pages/plugins/account.plugin.tsx`); other accounts' sessions are the Users page's business (deactivation, #218). Route behaviour and log lines: [docs/dashboard.md](dashboard.md#active-sessions-281).
+Every signed-in account, the owner included, lists and signs out its **own** sessions at `/dashboard/account/sessions` (`memberGuard`, in `src/pages/plugins/account-sessions.plugin.tsx`); other accounts' sessions are the Users page's business (deactivation, #218). Route behaviour and log lines: [docs/dashboard.md](dashboard.md#active-sessions-281).
 
 - **List** (`listUserSessions(userId)`): the user's live sessions, most recently active first, with `id`, `ip`, `user_agent`, `location`, `created_at` and `last_seen_at`, never a token hash. "Live" is the guard's own predicate (`liveSession()`, shared with `findActiveSession`): `expires_at > now()` (which carries both the 24 h idle and the 7 d absolute rule) and assurance `mfa`, or `password` while the account has no TOTP second factor (#220). The page marks the row whose id is the request's `auth.session.id` as **This device**, and labels the device with `describeUserAgent` (`user-agent.service.ts`): a small built-in parser, fixed strings only ("Chrome on macOS", "Firefox on Windows", "curl", "Unknown browser").
 - **Sign out one** (`revokeUserSession(userId, sessionId)`): `DELETE ... WHERE id = $sessionId AND user_id = $userId`. The ownership check is in the `WHERE`, so another user's id (or an unknown one) deletes nothing and the route answers `404`. Revoking the request's own session signs this browser out (the route clears the cookie).
