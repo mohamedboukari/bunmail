@@ -51,8 +51,12 @@ export const userCredentials = pgTable(
     /** `password` | `totp` | `passkey` | `oauth`; see `CREDENTIAL_TYPES`. */
     type: varchar("type", { length: 16 }).notNull(),
 
-    /** External identity provider, if any. Null for a passkey (#223). */
-    provider: varchar("provider", { length: 100 }),
+    /**
+     * External identity provider, if any. Null for a passkey (#223). An SSO
+     * link (#224) stores `oidc:<issuer>`: 255 characters, so a long issuer
+     * URL fits (`MAX_SSO_ISSUER_LENGTH`, varchar(100) until migration `0040`).
+     */
+    provider: varchar("provider", { length: 255 }),
 
     /** The user's id at that provider, or the passkey credential id (base64url, #223). */
     /** `text`: WebAuthn credential ids may be up to 1023 bytes (base64url). */
@@ -112,6 +116,14 @@ export const userCredentials = pgTable(
       .on(table.userId)
       .where(sql`type = 'totp'`),
 
+    /**
+     * One SSO link per provider per user (#224): a second identity at the
+     * same issuer cannot be linked next to the first.
+     */
+    uniqueIndex("user_credentials_one_oauth_per_provider")
+      .on(table.userId, table.provider)
+      .where(sql`type = 'oauth'`),
+
     /** A WebAuthn credential id belongs to one passkey row, of one user (#223). */
     uniqueIndex("user_credentials_passkey_id_unique")
       .on(table.providerAccountId)
@@ -141,4 +153,17 @@ export const userCredentials = pgTable(
 export function hasSecondFactor(userId: AnyColumn): SQL<boolean> {
   const outer = sql`${sql.identifier(getTableName(userId.table))}.${sql.identifier(userId.name)}`;
   return sql<boolean>`EXISTS (SELECT 1 FROM "user_credentials" AS "second_factor" WHERE "second_factor"."user_id" = ${outer} AND "second_factor"."type" IN (${literals(SECOND_FACTOR_TYPES)}))`;
+}
+
+/**
+ * `EXISTS` an SSO link (#224, an `oauth` credential) for the user in
+ * `userId`: a SQL fragment like {@link hasSecondFactor}, written
+ * table-qualified for the same reason. The session guard reads it in its
+ * one query (the sidebar's Sign-in methods link), and the owner rule reads
+ * it next to `hasSecondFactor`: an owner with a link must keep a second
+ * factor.
+ */
+export function hasSsoLink(userId: AnyColumn): SQL<boolean> {
+  const outer = sql`${sql.identifier(getTableName(userId.table))}.${sql.identifier(userId.name)}`;
+  return sql<boolean>`EXISTS (SELECT 1 FROM "user_credentials" AS "sso_link" WHERE "sso_link"."user_id" = ${outer} AND "sso_link"."type" = 'oauth')`;
 }

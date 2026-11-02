@@ -28,7 +28,7 @@ Dashboard side: `src/pages/plugins/audit-log.plugin.tsx` (the route), `src/pages
 | `actor_label` | text, nullable | snapshot: the user's email or the key's name at the time; for `system`, what ran (`boot`, `reset-owner`, `session guard`, `retention purge`) |
 | `action` | varchar(64) | see [Actions](#actions); a code-level union, not a CHECK, so a new action needs no migration |
 | `outcome` | varchar(10), CHECK | `success` or `failure` |
-| `target_type`, `target_id`, `target_label` | nullable | what the action touched (`user`, `session`, `invitation`, `api_key`, `domain`, `webhook`, `suppression`, `audit_log`) and a label snapshot |
+| `target_type`, `target_id`, `target_label` | nullable | what the action touched (`user`, `session`, `passkey`, `sso_link`, `invitation`, `password_reset`, `owner_setup`, `api_key`, `domain`, `webhook`, `suppression`, `audit_log`) and a label snapshot |
 | `ip` | text, nullable | the client IP, resolved like the login limiter (`DASHBOARD_TRUSTED_PROXY_HOPS`); stored only when it is an IP literal |
 | `user_agent` | text, nullable | the `User-Agent`, cut to 256 characters |
 | `metadata` | jsonb, nullable | small typed details per action (below); stored as real JSON (`src/db/jsonb.ts`) |
@@ -70,10 +70,15 @@ recordAuditEvent(input, tx?)
 | `auth.two_factor.enabled` | user | user | `sessionsRevoked` |
 | `auth.two_factor.disabled` | user | user | `method` |
 | `auth.two_factor.recovery_codes_regenerated` | user | user | |
+| `auth.two_factor.removal_refused` (failure) | user | user | `factor` (`totp`, `passkey`), `reason` (`owner_sso_link`): turning TOTP off or removing a passkey would leave the owner with an SSO link and no second factor (#224) |
 | `auth.two_factor.removed` | user | user | `via` (`password_reset`, `owner_setup`), `totp`, `passkeys` (what was removed, #223) |
 | `auth.passkey.added` | user | passkey (label: its name) | `sessionsRevoked` (#223) |
 | `auth.passkey.removed` | user | passkey (label: its name) | (#223) |
 | `auth.passkey.counter_regressed` (failure) | user | passkey (label: its name) | `storedCounter`, `receivedCounter`: a possible cloned authenticator, the sign-in was refused (#223) |
+| `auth.sso.linked` | user | sso_link (the link's row id; label: the provider's label) | `provider`: the provider's id in `SSO_PROVIDERS` (#224) |
+| `auth.sso.unlinked` | user | sso_link (label: the provider's label) | `provider` (the stored `oidc:<issuer>` once the provider is no longer configured), `sessionsRevoked`: the sessions opened with the identity (#224) |
+| `auth.sso.link_refused` (failure) | user, or no id when no live session named one | | `provider`, `reason` (`wrong_password`, `second_factor_required`, `provider_already_linked`, `already_linked`, `session_changed`, and `flow_failed` for a failed provider round trip while the browser's session is live) (#224) |
+| `auth.sso.unlink_refused` (failure) | user | sso_link (label: the provider's label) | `provider`, `reason` (`wrong_password`) (#224) |
 | `auth.password.changed` | user | user | `sessionsRevoked` |
 | `auth.password_reset.issued` | user (the issuer) | user | `expiresAt`, `linksReplaced` |
 | `auth.password_reset.completed` | user | user | `issuedBy`, `sessionsRevoked` |
@@ -94,6 +99,8 @@ recordAuditEvent(input, tx?)
 | `audit_log.purged` | system (`retention purge`) | audit_log | `deleted`, `retentionDays` |
 
 The human labels the page shows live in `AUDIT_ACTION_LABELS` (a `Record` over every action, so an action without a label does not compile).
+
+SSO rows (#224) never carry the subject (`sub`), the provider email, the code or any token: some providers use the email as the subject, so a link is named by its row id and its provider. A failed provider round trip while linking (bad `state`, a replay, a refused ID token) is recorded as `flow_failed` only when the browser's live session names the account, without any value of the flow; otherwise it is only logged.
 
 Not recorded (yet): SMTP submission AUTH failures and REST requests with an invalid API key (high volume, unauthenticated; they are logged), template changes, email sends.
 

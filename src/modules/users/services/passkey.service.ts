@@ -33,6 +33,10 @@ import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 import { verifyPassword } from "./password.service.ts";
 import { passkeyChallenges } from "./passkey-challenge.service.ts";
 import {
+  recordFactorRemovalRefused,
+  removalBreaksOwnerSsoRule,
+} from "./sso-owner-rule.service.ts";
+import {
   PASSKEY_CEREMONY_TIMEOUT_MS,
   PASSKEY_RP_NAME,
   counterRegressed,
@@ -721,15 +725,26 @@ export async function renamePasskey(
 /** Result of removing a passkey: its name, or why nothing was removed. */
 type DeletePasskeyResult =
   | { ok: true; name: string }
-  | { ok: false; reason: "not_found" | "rate_limited" | "wrong_password" };
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "rate_limited"
+        | "wrong_password"
+        | "sso_link_requires_second_factor";
+    };
 
 /**
  * Removes one of the account's passkeys, after the current password. In
  * order: a passkey that is not this account's is answered `not_found` at
  * once, before any password work; the password budget (`limiter`, the
  * password change's keys) is checked and counted; one argon2id verify;
- * then the row is deleted (sessions opened with it go too: they are bound
- * to it) and `auth.passkey.removed` recorded, in one transaction.
+ * then, in one transaction, the account row is locked and the owner rule
+ * of SSO checked (#224: the owner's last second factor stays while it has
+ * an SSO link, `sso_link_requires_second_factor`, recorded as
+ * `auth.two_factor.removal_refused`), the row is deleted (sessions opened
+ * with it go too: they are bound to it) and `auth.passkey.removed`
+ * recorded.
  *
  * Removing the last second factor is allowed, as turning TOTP off is
  * (#220): under `REQUIRE_2FA` the guard then holds the account on its
@@ -762,8 +777,11 @@ export async function deletePasskey(
   }
   await limiter.clear();
 
-  return withSanitizedErrors(() =>
+  const result = await withSanitizedErrors(() =>
     db.transaction(async (tx): Promise<DeletePasskeyResult> => {
+      if (await removalBreaksOwnerSsoRule(tx, userId, passkeyId)) {
+        return { ok: false, reason: "sso_link_requires_second_factor" };
+      }
       const [removed] = await tx
         .delete(userCredentials)
         .where(
@@ -792,4 +810,8 @@ export async function deletePasskey(
       return { ok: true, name };
     }),
   );
+  if (!result.ok && result.reason === "sso_link_requires_second_factor") {
+    await recordFactorRemovalRefused(userId, "passkey", client);
+  }
+  return result;
 }

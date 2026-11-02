@@ -23,7 +23,7 @@ import {
   SSO_FLOW_TTL_SECONDS,
 } from "../../src/modules/users/services/sso-flow-cookie.service.ts";
 import {
-  MemorySsoReplayStore,
+  SharedSsoReplayStore,
   ssoReplayKey,
 } from "../../src/modules/users/services/sso-replay.service.ts";
 import {
@@ -33,6 +33,11 @@ import {
 } from "../../src/modules/users/services/sso.service.ts";
 import type { SsoCallbackResult } from "../../src/modules/users/types/sso.types.ts";
 import { encryptSecret } from "../../src/utils/crypto.ts";
+import {
+  MemoryOneTimeStore,
+  SharedStoreError,
+  type OneTimeStore,
+} from "../../src/utils/shared-store.ts";
 import { logger } from "../../src/utils/logger.ts";
 import {
   clearSsoFlowCookie,
@@ -370,33 +375,58 @@ describe("completeSsoCallback: the flow cookie and state", () => {
   });
 });
 
-describe("MemorySsoReplayStore", () => {
+describe("SharedSsoReplayStore (#185)", () => {
   test("consumes a key once until it expires", async () => {
-    const store = new MemorySsoReplayStore();
+    const store = new SharedSsoReplayStore(new MemoryOneTimeStore(10));
     expect(await store.consume("k", 100, 50)).toBe(true);
     expect(await store.consume("k", 100, 99)).toBe(false);
-    expect(await store.consume("k", 200, 100)).toBe(true);
+    expect(await store.consume("other", 100, 99)).toBe(true);
   });
 
   test("concurrent consumes of one key: exactly one wins", async () => {
-    const store = new MemorySsoReplayStore();
+    const store = new SharedSsoReplayStore(new MemoryOneTimeStore(10));
     const wins = await Promise.all(
       Array.from({ length: 10 }, () => store.consume("k", 100, 0)),
     );
     expect(wins.filter(Boolean)).toHaveLength(1);
   });
 
-  test("bounded: expired entries, then the oldest, make room", async () => {
-    const store = new MemorySsoReplayStore(3);
-    await store.consume("a", 10, 0);
-    await store.consume("b", 100, 0);
-    await store.consume("c", 100, 0);
-    await store.consume("d", 100, 20);
-    expect(store.size).toBe(3);
-    /** `a` expired and was swept; `b` is still held. */
-    expect(await store.consume("b", 100, 20)).toBe(false);
-    await store.consume("e", 100, 20);
-    expect(store.size).toBe(3);
+  test("holds a key for what is left of the flow plus 60 s of clock skew", async () => {
+    const claims: Array<{ key: string; ttlMs: number }> = [];
+    const recording: OneTimeStore = {
+      put: () => Promise.resolve(),
+      take: () => Promise.resolve({ status: "missing" }),
+      claim: (key, ttlMs) => {
+        claims.push({ key, ttlMs });
+        return Promise.resolve(true);
+      },
+    };
+    const store = new SharedSsoReplayStore(recording);
+    await store.consume("a", 1_000, 400);
+    await store.consume("b", 1_000, 1_000);
+    expect(claims).toEqual([
+      { key: "a", ttlMs: 660_000 },
+      { key: "b", ttlMs: 60_000 },
+    ]);
+  });
+
+  test("fails closed: an in-memory store full of live states rejects the next callback", async () => {
+    const store = new SharedSsoReplayStore(new MemoryOneTimeStore(1));
+    expect(await store.consume("first", 100, 0)).toBe(true);
+    const error = await store.consume("second", 100, 0).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SharedStoreError);
+    expect(await store.consume("first", 100, 0)).toBe(false);
+  });
+
+  test("fails closed: a store error rejects, never lets the state through", async () => {
+    const down: OneTimeStore = {
+      put: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
+      take: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
+      claim: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
+    };
+    const store = new SharedSsoReplayStore(down);
+    const error = await store.consume("k", 100, 0).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SharedStoreError);
   });
 
   test("the key is a SHA-256, never the state itself", () => {

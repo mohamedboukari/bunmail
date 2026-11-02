@@ -245,6 +245,8 @@ export type AccountAction =
  * - `confirm_mismatch`: the removal confirmation is not the target's email.
  * - `wrong_password`: the ownership transfer password is wrong.
  * - `not_eligible`: the transfer target is not an active admin.
+ * - `sso_link_without_second_factor`: the transfer target has an SSO link
+ *   and no BunMail second factor, which the owner may not (#224).
  * - `rate_limited`: too many failed ownership transfer password checks.
  * - `account_disabled`: a password reset for a deactivated account (#277):
  *   reactivate it first.
@@ -260,6 +262,7 @@ export type AccountRefusal =
   | "confirm_mismatch"
   | "wrong_password"
   | "not_eligible"
+  | "sso_link_without_second_factor"
   | "rate_limited"
   | "account_disabled";
 
@@ -536,6 +539,12 @@ export interface ActiveSession {
    * guard reads it for the `REQUIRE_2FA` policy.
    */
   hasSecondFactor: boolean;
+  /**
+   * The account has at least one SSO link (#224), from the same query
+   * (`hasSsoLink`): the sidebar shows Sign-in methods for it even when no
+   * provider is configured any more, so the link can still be removed.
+   */
+  hasSsoLink: boolean;
   /** Which of the session's two hashes the presented token matched. */
   matched: "current" | "previous";
   /** The current token is older than `SESSION_ROTATE_SECONDS`. */
@@ -670,7 +679,9 @@ export type TwoFactorRefusal =
   | "already_enabled"
   | "not_enabled"
   | "wrong_code"
-  | "wrong_password";
+  | "wrong_password"
+  /** Turning TOTP off would leave the owner with an SSO link and no second factor (#224). */
+  | "sso_link_requires_second_factor";
 
 /** Result of confirming an enrolment: the recovery codes, shown once. */
 export type ConfirmEnrolmentResult =
@@ -795,7 +806,9 @@ export type PasskeyRefusal =
   | "already_registered"
   | "account_disabled"
   | "not_found"
-  | "session_gone";
+  | "session_gone"
+  /** Removing this passkey would leave the owner with an SSO link and no second factor (#224). */
+  | "sso_link_requires_second_factor";
 
 /** A refused passkey action, with the passkey involved when one was found. */
 export interface PasskeyFailure<R extends PasskeyRefusal = PasskeyRefusal> {

@@ -91,6 +91,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/login/passkey": { access: "public" },
   "POST /dashboard/login/two-factor/passkey/options": { access: "public" },
   "POST /dashboard/login/two-factor/passkey": { access: "public" },
+  /** The SSO callback (#224): authorized by the `bm_sso` flow cookie, and for a link by the live session, checked in the handler. */
+  "GET /dashboard/login/sso/:provider/callback": { access: "public" },
   /** The self-hosted stylesheet and script every page loads, login included (#255). */
   "GET /dashboard/assets/dashboard.css": { access: "public" },
   "GET /dashboard/assets/dashboard.js": { access: "public" },
@@ -136,6 +138,10 @@ const ROUTES: Record<string, RouteSpec> = {
     access: "member",
     body: { password: "x" },
   },
+  /** Every role manages its own SSO links (#224); a dummy provider or link id changes nothing. */
+  "GET /dashboard/account/sso": { access: "member" },
+  "POST /dashboard/account/sso/:id/link": { access: "member", body: { password: "x" } },
+  "POST /dashboard/account/sso/:id/unlink": { access: "member", body: { password: "x" } },
   "GET /dashboard/send": { access: "member" },
   "POST /dashboard/send": {
     access: "member",

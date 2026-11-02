@@ -5,7 +5,7 @@ import { setLogContextUser } from "../../utils/log-context.ts";
 import { resolveClientIp } from "../../middleware/login-rate-limit.ts";
 import { readSessionCookie } from "../session.ts";
 import { toDashboardAuth } from "../guards.tsx";
-import { setViewerRole } from "../viewer.ts";
+import { setViewerHasSsoLink, setViewerRole } from "../viewer.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
 import {
@@ -202,6 +202,8 @@ export function withSessionGuard(app: PublicDashboard) {
 
     /** The sidebar hides admin-only links from members (#218). */
     setViewerRole(session.role);
+    /** Sign-in methods stays in the sidebar while the account has an SSO link (#224). */
+    setViewerHasSsoLink(session.hasSsoLink);
     return { auth: toDashboardAuth(session) };
   });
 }

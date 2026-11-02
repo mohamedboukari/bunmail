@@ -79,7 +79,7 @@ interface SsoFlowContext {
   now?: number;
   /** HTTP settings of the provider requests (tests shorten the timeout). */
   http?: SsoHttpSettings;
-  /** Where consumed flow states are kept; this process's memory by default. */
+  /** Where consumed flow states are kept; the shared one-time store by default (#185). */
   replayStore?: SsoReplayStore;
 }
 

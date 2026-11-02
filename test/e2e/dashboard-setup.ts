@@ -217,6 +217,8 @@ export const findActiveSession = mock((token: string): Promise<ActiveSession | n
       assurance: s.assurance,
       /** No second factor (#220, #223): its SQL and the 2FA flows are integration-tested. */
       hasSecondFactor: false,
+      /** No SSO link (#224): integration-tested. */
+      hasSsoLink: false,
       matched: current === token ? "current" : "previous",
       rotationDue: s.rotationDue,
       graceOver: s.graceOver,
@@ -894,6 +896,8 @@ export function registerDashboardMocks(): void {
     markSessionMfa: mock(() => Promise.resolve()),
     /** Passkeys (#223); covered by the integration test. */
     raiseSessionToMfa: mock(() => Promise.resolve()),
+    /** SSO links (#224); covered by the integration test. */
+    lockLiveSession: mock(() => Promise.resolve(false)),
   }));
   void mock.module("../../src/modules/users/services/login.service.ts", () => ({
     verifyPasswordLogin,
