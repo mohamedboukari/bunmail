@@ -172,8 +172,8 @@ await encryptWebhookSecrets();
 /**
  * Shared state for several replicas (#185): with `REDIS_URL`, rate limits
  * (API, SMTP connections and AUTH, DNS verify), login throttles, the
- * `last_used_at` write claims, the outbound MX session slots and
- * one-time reveals live in Redis,
+ * `last_used_at` write claims, the outbound MX session slots and rate
+ * buckets (#391) and one-time reveals live in Redis,
  * installed before the server takes a request. A Redis that does not answer at boot refuses the
  * start, like an unreachable database (Docker restarts and retries); a
  * later outage degrades instead (see `src/utils/shared-store.ts`).

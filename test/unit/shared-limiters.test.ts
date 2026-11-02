@@ -41,6 +41,7 @@ import {
   type SharedStoreBackend,
 } from "../../src/utils/shared-store.ts";
 import { MemorySlotSemaphore } from "../../src/utils/shared-slots.ts";
+import { MemoryTokenBuckets } from "../../src/utils/shared-tokens.ts";
 import { connectRedisBackend } from "../../src/utils/redis-store.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -80,6 +81,7 @@ function memoryBackend(): SharedStoreBackend {
     },
     oneTime: () => new MemoryOneTimeStore(10),
     slots: () => new MemorySlotSemaphore(),
+    tokens: () => new MemoryTokenBuckets(),
     close: () => {},
   };
 }
@@ -95,6 +97,7 @@ const down: SharedStoreBackend = {
   }),
   oneTime: () => new MemoryOneTimeStore(10),
   slots: () => new MemorySlotSemaphore(),
+  tokens: () => new MemoryTokenBuckets(),
   close: () => {},
 };
 

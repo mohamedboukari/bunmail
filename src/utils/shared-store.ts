@@ -1,11 +1,13 @@
 import { logger } from "./logger.ts";
 import type { SlotSemaphore } from "./shared-slots.ts";
+import type { TokenBucketStore } from "./shared-tokens.ts";
 
 /**
  * State that several replicas must share (#185): fixed-window counters
  * (rate limits, failed-attempt budgets), one-time entries (reveal tokens,
- * and the claimed `state` of each SSO callback, #224), and counting
- * semaphores with leased slots (the per-MX session limit, `shared-slots.ts`).
+ * and the claimed `state` of each SSO callback, #224), counting semaphores
+ * with leased slots (the per-MX session limit, `shared-slots.ts`) and token
+ * buckets (the per-MX rate budget, `shared-tokens.ts`, #391).
  *
  * Every store has a process-memory implementation, the default: one
  * replica, nothing else to run. With `REDIS_URL` set, the boot installs a
@@ -14,9 +16,10 @@ import type { SlotSemaphore } from "./shared-slots.ts";
  * another one stored. Callers never know which backend answers.
  *
  * When Redis fails mid-operation:
- * - **counters and semaphores fall back to this replica's memory** (the
- *   single-replica behaviour): limits keep holding, per replica, and
- *   nobody is locked out. One `error` line per namespace a minute says so.
+ * - **counters, semaphores and token buckets fall back to this replica's
+ *   memory** (the single-replica behaviour): limits keep holding, per
+ *   replica, and nobody is locked out. One `error` line per namespace a
+ *   minute says so.
  * - **one-time entries fail closed**: the error reaches the caller, which
  *   then shows nothing. A secret is never revealed from a store that
  *   might be stale, and never to anyone else.
@@ -135,6 +138,8 @@ export interface SharedStoreBackend {
   oneTime(namespace: string): OneTimeStore;
   /** The counting semaphores of `namespace`. */
   slots(namespace: string): SlotSemaphore;
+  /** The token buckets of `namespace` (#391). */
+  tokens(namespace: string): TokenBucketStore;
   /** Closes the connection; later operations fail. */
   close(): void;
 }

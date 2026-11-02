@@ -22,7 +22,7 @@ import { runQueueCycle } from "../../src/modules/emails/services/queue.service.t
 import {
   createRateBudget,
   setMxRateBudget,
-  type RateBudget,
+  type LocalRateBudget,
 } from "../../src/modules/emails/services/rate-budget.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import type { DeliveryState } from "../../src/modules/emails/models/email.schema.ts";
@@ -138,7 +138,7 @@ describe("rate budget through the queue", () => {
   let apiKeyId = "";
   let webhookId = "";
   let clock = fakeClock();
-  let budget: RateBudget = createRateBudget(1, clock.now);
+  let budget: LocalRateBudget = createRateBudget(1, clock.now);
 
   beforeEach(async () => {
     await truncateAll();

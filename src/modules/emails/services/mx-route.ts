@@ -268,12 +268,12 @@ export type MxLock = <T>(bucket: string, fn: () => Promise<T>) => Promise<T>;
 /**
  * The rate budget of a provider bucket (#250, `rate-budget.ts`): takes up
  * to `count` tokens and says how many it got, and, short of `count`, how
- * long until the next one.
+ * long until the next one. Asynchronous when the budget is shared (#391).
  */
 export type MxAdmit = (
   bucket: string,
   count: number,
-) => { granted: number; waitMs: number };
+) => { granted: number; waitMs: number } | Promise<{ granted: number; waitMs: number }>;
 
 /** The error of an attempt whose session time ran out before every host was tried. */
 function attemptDeadlineError(deadlineMs: number): Error {
@@ -288,17 +288,17 @@ function attemptDeadlineError(deadlineMs: number): Error {
  * without one, with the wait until the bucket's next token; none without a
  * budget.
  */
-function admitTransactions(
+async function admitTransactions(
   transactions: MxSessionTransaction[],
   bucket: string,
   charged: Map<string, Set<string>>,
   admit: MxAdmit | undefined,
-): Map<string, number> {
+): Promise<Map<string, number>> {
   const deferred = new Map<string, number>();
   if (admit === undefined) return deferred;
   const uncharged = transactions.filter((t) => !charged.get(t.key)?.has(bucket));
   if (uncharged.length === 0) return deferred;
-  const { granted, waitMs } = admit(bucket, uncharged.length);
+  const { granted, waitMs } = await admit(bucket, uncharged.length);
   uncharged.forEach((t, index) => {
     if (index < granted) {
       const buckets = charged.get(t.key) ?? new Set<string>();
@@ -416,7 +416,12 @@ export async function deliverWithFailover(args: {
           const error = attemptDeadlineError(deadlineMs);
           return candidates.map((t) => ({ key: t.key, error, tls: null }));
         }
-        const deferredMs = admitTransactions(candidates, bucket, charged, args.admit);
+        const deferredMs = await admitTransactions(
+          candidates,
+          bucket,
+          charged,
+          args.admit,
+        );
         for (const [key, waitMs] of deferredMs) {
           done.set(key, { key, tls: null, mxHost, deferredMs: waitMs });
         }
