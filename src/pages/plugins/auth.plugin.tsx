@@ -55,6 +55,7 @@ import { errorMessage } from "../lib/error-message.ts";
 import { isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
 import { twoFactorLoginLimiter } from "../lib/two-factor-limiter.ts";
+import type { WindowTicket } from "../../utils/shared-store.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 import {
   UNKNOWN_ACCOUNT,
@@ -201,12 +202,15 @@ export function authPages(app: PublicDashboard) {
            * gives back only its own count: earlier failures stay until the
            * window ends (#256).
            */
+          /** The window this attempt was counted in, for the refund on success. */
+          let attemptTicket: WindowTicket = new Map();
           if (loginRateLimit.enabled) {
-            const { limited, retryAfterSec } = await takeLoginAttempt(
+            const { limited, retryAfterSec, ticket } = await takeLoginAttempt(
               [ip],
               loginRateLimit.maxAttempts,
               loginRateLimit.windowSec * 1000,
             );
+            attemptTicket = ticket;
             if (limited) {
               logger.warn("Dashboard login blocked: too many attempts", {
                 ip,
@@ -332,7 +336,7 @@ export function authPages(app: PublicDashboard) {
              * this address stay (#256), or anyone could sign in to their own
              * account between guesses at someone else's password.
              */
-            if (loginRateLimit.enabled) await refundLoginAttempt(ip);
+            if (loginRateLimit.enabled) await refundLoginAttempt(ip, attemptTicket);
 
             /** Second factor required (#220): only the second step opens this session. */
             if (result.assurance === "pending") {

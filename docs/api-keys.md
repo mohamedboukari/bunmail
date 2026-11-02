@@ -14,7 +14,7 @@ Client                     Server
   |                          | 2. SHA-256 hash the token
   |                          | 3. SELECT from api_keys WHERE key_hash = <hash>
   |                          | 4. Check is_active = true
-  |                          | 5. Update last_used_at (fire-and-forget)
+  |                          | 5. Update last_used_at (fire-and-forget, once a minute per key)
   |                          | 6. Inject apiKeyId into request context
   |  200 OK (or 401)         |
   | <:, |
@@ -31,6 +31,10 @@ Client                     Server
 - **Storage:** in process memory (resets on restart, per replica), or in Redis shared by every replica when `REDIS_URL` is set (#185); check and count are atomic, and a Redis outage falls back to memory
 - **Response:** `429 Too Many Requests` with `Retry-After` header
 
+## `last_used_at`
+
+Written in the background after a successful auth, at most once a minute per key (`src/middleware/last-used-throttle.ts`): the first use of a key in a one-minute window claims the write, later uses in that window skip it, so a hot key does not fire one `UPDATE` per request. The value can lag by up to that minute. The claims live in the same store as the rate limit: per replica in memory, or in Redis with `REDIS_URL` (#185, `throttle:last-used`), so N replicas write once a minute per key, not N times. Every claim expires with its window, so the memory no longer grows with every key ever used. During a Redis outage the claims fall back to each replica's memory (at worst a few extra writes).
+
 ## Schema
 
 **Table:** `api_keys`
@@ -44,7 +48,7 @@ Client                     Server
 | `is_active`   | boolean        | NOT NULL, default true | Soft-delete flag                        |
 | `is_admin`    | boolean        | NOT NULL, default false | Admin (management-plane) vs restricted / send-only (#130). Operator-set only. |
 | `allowed_senders` | jsonb      | NOT NULL, default `[]` | Allowlist of `From` addresses this key may send from (#126). Empty = unrestricted. |
-| `last_used_at`| timestamp      | nullable             | Updated on each successful auth           |
+| `last_used_at`| timestamp      | nullable             | Updated on a successful auth, at most once a minute per key (see below) |
 | `created_at`  | timestamp      | NOT NULL, default now | Creation timestamp                       |
 | `created_by_user_id` | varchar(36) | nullable, FK `users(id)` ON DELETE SET NULL, indexed | The dashboard user the key belongs to (#219). NULL = the owner. |
 | `disabled_reason` | varchar(20) | nullable, CHECK `revoked` / `creator_deactivated` / `creator_removed` | Why an inactive key is inactive (#219). NULL on active keys and on keys revoked before #219. |
@@ -150,5 +154,6 @@ By default a key can send `From:` any address on any registered domain. Because 
 
 - `src/utils/crypto.ts`: `hashApiKey()` and `generateApiKey()` functions
 - `src/middleware/auth.ts`: Bearer token validation middleware
+- `src/middleware/last-used-throttle.ts`: once-a-minute claim of the `last_used_at` write (#185)
 - `src/middleware/rate-limit.ts`: Per-key rate limiting middleware
 - `src/db/seed.ts`: Creates the initial development API key

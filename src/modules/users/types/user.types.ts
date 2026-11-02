@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 import type { db } from "../../../db/index.ts";
+import type { WindowTicket } from "../../../utils/shared-store.ts";
 
 /**
  * Value sets for the dashboard accounts schema (#214). Each is enforced by
@@ -859,6 +860,8 @@ export type PasskeySignInResult =
       email: string;
       /** `user_credentials.id` of the passkey used; the caller binds the new session to it. */
       credentialId: string;
+      /** The login-budget windows the options request counted in; the refund goes there (#185). */
+      loginTicket?: WindowTicket;
     }
   | (PasskeyFailure<
       | "no_challenge"

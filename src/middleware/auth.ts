@@ -4,7 +4,9 @@ import { db } from "../db/index.ts";
 import { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
 import { users } from "../modules/users/models/user.schema.ts";
 import { hashApiKey } from "../utils/crypto.ts";
+import { loggableError } from "../utils/db-error.ts";
 import { logger } from "../utils/logger.ts";
+import { claimLastUsedWrite } from "./last-used-throttle.ts";
 
 /**
  * Per-request stash for the looked-up API key, keyed on the Request
@@ -26,18 +28,6 @@ interface AuthenticatedKey {
   createdByUserId: string | null;
 }
 const authCache = new WeakMap<Request, AuthenticatedKey>();
-
-/**
- * Minimum interval between `last_used_at` writes for the same API key.
- * Without this throttle a hot key under sustained load would fire one
- * `UPDATE` per request: pure write amplification with no observable
- * benefit (the timestamp is only used for "stale key" UX, not security).
- *
- * Trade-off: `last_used_at` can lag by up to this window. 60 seconds
- * is well below any human-relevant precision.
- */
-const LAST_USED_THROTTLE_MS = 60_000;
-const lastUsedWriteAt = new Map<string, number>();
 
 /**
  * Auth middleware: validates Bearer tokens on every request.
@@ -162,28 +152,27 @@ export const authMiddleware = new Elysia({ name: "auth-middleware" })
     }
 
     /**
-     * Update `last_used_at`: throttled per key so a hot caller doesn't
-     * fire one `UPDATE` per request. The previous-write timestamp lives
-     * in `lastUsedWriteAt`; we only enqueue a new write when the
-     * throttle window has elapsed. Fire-and-forget; errors logged.
+     * Update `last_used_at`: at most once a minute per key, across
+     * replicas with `REDIS_URL` (#185, see `last-used-throttle.ts`), so a
+     * hot caller doesn't fire one `UPDATE` per request. Fire-and-forget:
+     * the request waits for neither the claim nor the write; errors logged.
      */
-    const now = Date.now();
-    const lastWrite = lastUsedWriteAt.get(cached.id) ?? 0;
-    if (now - lastWrite >= LAST_USED_THROTTLE_MS) {
-      lastUsedWriteAt.set(cached.id, now);
-      db.update(apiKeys)
-        .set({ lastUsedAt: new Date(now) })
-        .where(eq(apiKeys.id, cached.id))
-        .then(() => {
-          logger.debug("Updated last_used_at", { apiKeyId: cached.id });
-        })
-        .catch((error: unknown) => {
-          logger.error("Failed to update last_used_at", {
-            apiKeyId: cached.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
+    const usedAt = new Date();
+    claimLastUsedWrite(cached.id)
+      .then(async (claimed) => {
+        if (!claimed) return;
+        await db
+          .update(apiKeys)
+          .set({ lastUsedAt: usedAt })
+          .where(eq(apiKeys.id, cached.id));
+        logger.debug("Updated last_used_at", { apiKeyId: cached.id });
+      })
+      .catch((error: unknown) => {
+        logger.error("Failed to update last_used_at", {
+          apiKeyId: cached.id,
+          error: loggableError(error),
         });
-    }
+      });
 
     logger.debug("Auth successful", { apiKeyId: cached.id, apiKeyName: cached.name });
 

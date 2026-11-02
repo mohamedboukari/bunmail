@@ -13,6 +13,7 @@ import { isoBase64URL } from "@simplewebauthn/server/helpers";
 import { db } from "../../../db/index.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import type { WindowTicket } from "../../../utils/shared-store.ts";
 import { UserStoreError, withSanitizedErrors } from "../errors.ts";
 import { sessions } from "../models/session.schema.ts";
 import { users } from "../models/user.schema.ts";
@@ -605,10 +606,13 @@ export async function completePasskeyTwoFactor(
  */
 export async function startPasskeySignIn(
   rp: RelyingParty,
+  loginTicket?: WindowTicket,
 ): Promise<{ binding: string; options: PublicKeyCredentialRequestOptionsJSON }> {
   const binding = mintToken().token;
+  /** The login-budget windows the options request counted in (#185). */
   const challenge = passkeyChallenges.issue("sign_in", hashToken(binding), {
     userId: null,
+    loginTicket,
   });
   return { binding, options: await requestOptions(rp, challenge, undefined) };
 }
@@ -663,7 +667,13 @@ export async function completePasskeySignIn(
         return { ok: false, reason: "account_disabled", userId: row.userId };
       }
       await markPasskeyUsed(tx, row.id, check.newCounter);
-      return { ok: true, userId: row.userId, email: account.email, credentialId: row.id };
+      return {
+        ok: true,
+        userId: row.userId,
+        email: account.email,
+        credentialId: row.id,
+        loginTicket: taken.loginTicket,
+      };
     }),
   );
 }

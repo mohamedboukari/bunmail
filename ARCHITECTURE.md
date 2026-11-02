@@ -95,6 +95,7 @@ bunmail/
 │   │   ├── request-context.ts            ← Request ID, X-Request-Id and the per-request log line (#284)
 │   │   ├── security-headers.ts           ← CSP (page policy on / and /dashboard, baseline elsewhere), nosniff, X-Frame-Options, Referrer-Policy, HSTS, dashboard no-store (#255)
 │   │   ├── auth.ts                       ← API key bearer auth
+│   │   ├── last-used-throttle.ts         ← Once-a-minute claim of the last_used_at write per key, shared store (#185)
 │   │   ├── rate-limit.ts                 ← Per-API-key rate limiter: Elysia wiring + cleanup timer
 │   │   ├── rate-limit-core.ts            ← Pure fixed-window algorithm (unit-tested, #174)
 │   │   └── login-rate-limit.ts           ← Per-IP dashboard login brute-force limiter (#109)
@@ -254,6 +255,7 @@ bunmail/
 │   │   │   ├── inbound.plugin.ts         ← Routes: list, get, trash/restore/permanent/empty
 │   │   │   ├── services/
 │   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server)
+│   │   │   │   ├── connection-limit.ts   ← Per-IP connection rate limit, shared store (#185)
 │   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
 │   │   │   │   ├── dkim-verifier.service.ts ← DKIM signature verification (RFC 6376, rsa-sha256 and ed25519-sha256) for feedback reports (#373)
@@ -275,6 +277,7 @@ bunmail/
 │   │   │   ├── errors.ts                    ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 │   │   │   ├── services/
 │   │   │   │   ├── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
+│   │   │   │   ├── submission-limits.ts     ← Per-IP connection and failed-AUTH throttles, shared store (#185)
 │   │   │   │   └── usage.service.ts         ← per-(key,day) usage counters + quota read (#123)
 │   │   │   ├── message-mapper.ts           ← pure message → SendEmailInput mapping (BCC-aware)
 │   │   │   ├── dtos/                        ← stats-query.dto
@@ -376,7 +379,7 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
 │       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), sign-in helpers shared by password and passkey sign-in (#223)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password and passkey sign-in (#223)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
@@ -1242,7 +1245,7 @@ Not under `/api/v1` and outside the auth middleware: the token (an HMAC over ema
 
 ## Rate Limiting
 
-Two independent fixed-window limiters, in the shared store (`src/utils/shared-store.ts`, #185): Redis when `REDIS_URL` is set, else process memory:
+Independent fixed-window limiters, in the shared store (`src/utils/shared-store.ts`, #185): Redis when `REDIS_URL` is set, else process memory:
 
 **API requests** (`src/middleware/rate-limit.ts`, algorithm in `rate-limit-core.ts`)
 - **Default limit:** 100 requests per minute per API key
@@ -1256,7 +1259,16 @@ Two independent fixed-window limiters, in the shared store (`src/utils/shared-st
 - **Response on limit:** `429 Too Many Requests` with `Retry-After`; a successful login gives back only its own attempt, earlier failures stay until the window ends (#256); IPv6 clients counted per `/64`
 - **Tunable:** `DASHBOARD_LOGIN_RATE_LIMIT_{ENABLED,MAX,WINDOW}` (MAX 1 to 100, WINDOW 60 to 86400 seconds, validated at boot, #220; two-factor code checks keep a fixed 5 per 15 minutes)
 
-Check and count are one atomic step (a Lua script in Redis), so a parallel burst cannot pass a limit, on one replica or several. Without `REDIS_URL` the counters live in memory: they reset on restart and are per replica (one replica only). See [Several replicas](#several-replicas) below.
+**SMTP submission** (`src/modules/smtp-submission/services/submission-limits.ts`, #120, #190)
+- **Connections:** 30 per 60 s per IP (`SMTP_SUBMISSION_RATE_LIMIT_*`), then `421`
+- **Failed AUTH:** 10 per 900 s per IP (`SMTP_SUBMISSION_AUTH_RATE_LIMIT_*`), then `454` before the key is looked up; each AUTH is counted before the lookup and a valid key gives back its own count, into that window only; earlier failures stay
+- **Client address:** the socket's, IPv6 per /64 and IPv4-mapped as IPv4 (the login's buckets, #256); a load balancer in front must preserve the client source address (no SNAT; PROXY protocol is not supported yet)
+
+**Inbound SMTP connections** (`src/modules/inbound/services/connection-limit.ts`): 10 per 60 s per IP (`SMTP_RATE_LIMIT_*`), then `421`
+
+**Dashboard DNS verify** (`src/pages/lib/dns-verify-throttle.ts`, #133): 5 DNS checks per minute per domain id (verify and the DKIM rotation's complete step)
+
+Check and count are one atomic step (a Lua script in Redis), so a parallel burst cannot pass a limit, on one replica or several. Without `REDIS_URL` the counters live in memory: they reset on restart and are per replica (one replica only); one sweep every 5 minutes drops ended windows from every in-memory counter (`startLocalCounterSweep`). See [Several replicas](#several-replicas) below.
 
 ---
 
@@ -1363,9 +1375,12 @@ The send queue, webhook deliveries, the domain re-verification and the owner boo
 |---|---|---|---|
 | API rate limit (`rl:api`) | per replica, in memory | one budget per key across replicas | falls back to per-replica memory, `error` line once a minute |
 | Login, passkey sign-in, ownership transfer, password re-check and two-factor code budgets (`rl:login`) | per replica | shared | falls back to per-replica memory (still throttled, nobody locked out) |
+| SMTP submission failed-AUTH and connection limits (`rl:smtp-auth`, `rl:smtp-submission`) | per replica (N replicas allow N times the API-key guesses) | one budget per IP across replicas | falls back to per-replica memory |
+| Inbound SMTP connection limit (`rl:smtp-inbound`), dashboard DNS-verify throttle (`rl:dns-verify`) | per replica | shared | falls back to per-replica memory |
+| `last_used_at` write claim, once a minute per API key (`throttle:last-used`) | per replica | one write a minute per key across replicas | falls back to per-replica memory (a few extra writes) |
 | One-time reveal tokens (`reveal`) | per replica: the GET after a create must reach the same replica | any replica redeems; the key is the token's SHA-256, the secret AES-256-GCM encrypted with `DKIM_ENCRYPTION_KEY` | fails closed: the secret is not shown (revoke and recreate), `error` line |
 
-Every Redis key expires (counters with their window, reveals after 60 s). Redis must answer a `PING` at boot or the app refuses to start; a later outage degrades as above, reconnects on demand (backoff from 500 ms to 30 s, 1 s command timeout) and logs `Redis connection lost` / `Redis connection restored`. Still per replica (follow-ups of #185): the SMTP connection and failed-AUTH throttles, passkey challenges (sticky sessions needed), the two-factor alert mark, the notification, replay, unsubscribe and DNS-verify budgets, and the outbound MX concurrency and rate budget (N replicas open N times `MAIL_MX_CONCURRENCY`).
+Every Redis key expires (counters with their window, reveals after 60 s). Redis must answer a `PING` at boot or the app refuses to start; a later outage degrades as above, reconnects on demand (backoff from 500 ms to 30 s, 1 s command timeout) and logs `Redis connection lost` / `Redis connection restored`. Still per replica (follow-ups of #185): the outbound MX concurrency and rate budget (N replicas open N times `MAIL_MX_CONCURRENCY`; part 3, a distributed semaphore), passkey challenges (sticky sessions needed), the two-factor alert mark, and the notification, replay and unsubscribe budgets.
 
 ---
 
@@ -1399,5 +1414,5 @@ Every Redis key expires (counters with their window, reveals after 60 s). Redis 
 - CLI tool (`bunx bunmail init`)
 - Scheduled emails
 - Bun-native SMTP client (subsumes #37, #42, see #60)
-- Redis backing for the remaining per-replica state: SMTP throttles, passkey challenges, the other budgets, the outbound MX throttle (#185, part 1 shipped the rate limits, login throttles and reveals)
+- Redis backing for the remaining per-replica state: the outbound MX throttle, passkey challenges, the other budgets (#185; parts 1 and 2 shipped the rate limits, login throttles, reveals, SMTP throttles, DNS-verify throttle and `last_used_at` claims)
 - Dashboard account follow-ups: passkeys (#223), SSO (#224)

@@ -47,6 +47,7 @@ import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
 import type { GuardedDashboard, PublicDashboard } from "../lib/session-guard.ts";
 import { UNKNOWN_ACCOUNT, requestIp, setAuthPageHeaders } from "../lib/sign-in.tsx";
+import type { WindowTicket } from "../../utils/shared-store.ts";
 
 /**
  * Single sign-on (OpenID Connect, #224) in the dashboard: linking an
@@ -175,8 +176,10 @@ export function ssoLoginPages(app: PublicDashboard) {
           : toSsoPage(set, message, "error");
 
       const { loginRateLimit } = config.dashboard;
+      /** The take's window ids, so a success refunds only into that window. */
+      let attemptTicket: WindowTicket = new Map();
       if (loginRateLimit.enabled) {
-        const { limited, retryAfterSec } = await takeLoginAttempt(
+        const { limited, retryAfterSec, ticket } = await takeLoginAttempt(
           [ip],
           loginRateLimit.maxAttempts,
           loginRateLimit.windowSec * 1000,
@@ -194,6 +197,7 @@ export function ssoLoginPages(app: PublicDashboard) {
           }
           return fail(LINK_REFUSAL.rate_limited);
         }
+        attemptTicket = ticket;
       }
 
       const flowCookie = readSsoFlowCookie(cookieHeader);
@@ -228,7 +232,7 @@ export function ssoLoginPages(app: PublicDashboard) {
           return fail(LINK_REFUSAL[outcome.reason]);
         }
 
-        if (loginRateLimit.enabled) await refundLoginAttempt(ip);
+        if (loginRateLimit.enabled) await refundLoginAttempt(ip, attemptTicket);
         logger.warn("SSO identity linked", {
           userId: outcome.userId,
           sessionId: outcome.sessionId,

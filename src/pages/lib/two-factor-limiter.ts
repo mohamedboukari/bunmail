@@ -10,6 +10,7 @@ import {
   refundLoginAttempt,
   takeLoginAttempt,
 } from "../../middleware/login-rate-limit.ts";
+import type { WindowTicket } from "../../utils/shared-store.ts";
 
 /**
  * Failed-attempt budgets for checks of a second factor (#220), on the
@@ -49,14 +50,19 @@ function limiterFor(ownKey: string, ip: string): TwoFactorLimiter {
   const keys = [ownKey, ipKey];
   const limited = async (key: string): Promise<boolean> =>
     (await isLoginRateLimited(key, TWO_FACTOR_MAX_FAILURES)).limited;
+  /** The windows this limiter's take counted in: `clear` refunds only there. */
+  let ticket: WindowTicket = new Map();
   return {
-    take: async () =>
-      (await takeLoginAttempt(keys, TWO_FACTOR_MAX_FAILURES, WINDOW_MS)).limited,
+    take: async () => {
+      const decision = await takeLoginAttempt(keys, TWO_FACTOR_MAX_FAILURES, WINDOW_MS);
+      ticket = decision.ticket;
+      return decision.limited;
+    },
     isLimited: async () => (await limited(ownKey)) || (await limited(ipKey)),
     ownKeyLimited: () => limited(ownKey),
     clear: async () => {
       await clearLoginAttempts([ownKey]);
-      await refundLoginAttempt(ipKey);
+      await refundLoginAttempt(ipKey, ticket);
     },
   };
 }

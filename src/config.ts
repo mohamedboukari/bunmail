@@ -96,11 +96,19 @@ export {
   BYTES_PER_MB,
   DEFAULT_ATTACHMENTS_MAX_TOTAL_MB,
   MAX_ATTACHMENTS_MAX_TOTAL_MB,
+  MAX_SMTP_AUTH_ATTEMPTS,
+  MAX_SMTP_CONNECTIONS_PER_WINDOW,
+  MAX_SMTP_LIMIT_WINDOW_SEC,
   MIN_ATTACHMENTS_MAX_TOTAL_MB,
   base64Length,
   maxRequestBodyBytesFor,
   readAttachmentsMaxTotalMb,
+  readInboundConnectionLimit,
+  readSubmissionAuthLimit,
+  readSmtpLimitSwitch,
+  readSubmissionConnectionLimit,
   readSubmissionTls,
+  SMTP_LIMIT_SWITCHES,
 } from "./config/smtp.ts";
 export * from "./config/observability.ts";
 export * from "./config/storage.ts";

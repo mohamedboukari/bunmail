@@ -5,6 +5,7 @@ import {
   MemoryOneTimeStore,
   MemoryWindowCounter,
   SharedStoreError,
+  pruneLocalCounters,
   sharedOneTimeStore,
   sharedStoreErrorCode,
   sharedWindowCounter,
@@ -99,7 +100,7 @@ function contract(impl: Implementation): void {
       const c = impl.counter();
       const k = key("a");
       for (let i = 1; i <= 3; i++) {
-        expect(await c.take([k], { max: 3, windowMs: WINDOW })).toEqual({
+        expect(await c.take([k], { max: 3, windowMs: WINDOW })).toMatchObject({
           limited: false,
           count: i,
         });
@@ -117,13 +118,13 @@ function contract(impl: Implementation): void {
       const c = impl.counter();
       const k = key("w");
       const opts = { max: 5, windowMs: WINDOW, refusedWeight: 1 };
-      expect(await c.take([k], { ...opts, weight: 3 })).toEqual({
+      expect(await c.take([k], { ...opts, weight: 3 })).toMatchObject({
         limited: false,
         count: 3,
       });
       expect((await c.take([k], { ...opts, weight: 3 })).limited).toBe(true);
       expect((await c.peek(k))?.count).toBe(4);
-      expect(await c.take([k], opts)).toEqual({ limited: false, count: 5 });
+      expect(await c.take([k], opts)).toMatchObject({ limited: false, count: 5 });
       expect((await c.take([k], opts)).limited).toBe(true);
     });
 
@@ -153,7 +154,7 @@ function contract(impl: Implementation): void {
       expect(await c.peek(other)).toBeNull();
       const a = key("a");
       const b = key("b");
-      expect(await c.take([a, b], { max: 2, windowMs: WINDOW })).toEqual({
+      expect(await c.take([a, b], { max: 2, windowMs: WINDOW })).toMatchObject({
         limited: false,
         count: 1,
       });
@@ -178,7 +179,7 @@ function contract(impl: Implementation): void {
       expect((await c.take([k], { max: 1, windowMs: 150 })).limited).toBe(true);
       await Bun.sleep(250);
       expect(await c.peek(k)).toBeNull();
-      expect(await c.take([k], { max: 1, windowMs: 150 })).toEqual({
+      expect(await c.take([k], { max: 1, windowMs: 150 })).toMatchObject({
         limited: false,
         count: 1,
       });
@@ -198,16 +199,52 @@ function contract(impl: Implementation): void {
     test("refund: one back, never below zero, no window started", async () => {
       const c = impl.counter();
       const k = key("refund");
+      const first = await c.take([k], { max: 9, windowMs: WINDOW });
       await c.take([k], { max: 9, windowMs: WINDOW });
-      await c.take([k], { max: 9, windowMs: WINDOW });
-      await c.refund(k);
+      const id = first.windows.get(k);
+      if (id === undefined) throw new Error("no window id");
+      await c.refund(k, id);
       expect((await c.peek(k))?.count).toBe(1);
-      await c.refund(k);
-      await c.refund(k);
+      await c.refund(k, id);
+      await c.refund(k, id);
       expect((await c.peek(k))?.count).toBe(0);
       const none = key("none");
-      await c.refund(none);
+      await c.refund(none, id);
       expect(await c.peek(none)).toBeNull();
+    });
+
+    test("take names each key's window: the same id within a window, a new one after", async () => {
+      const c = impl.counter();
+      const a = key("ida");
+      const b = key("idb");
+      const first = await c.take([a, b], { max: 9, windowMs: 150 });
+      const second = await c.take([a], { max: 9, windowMs: 150 });
+      expect(first.windows.get(a)).toBeDefined();
+      expect(first.windows.get(a)).toBe(second.windows.get(a));
+      /** Ids are per key: two keys may share one, a refund names its key too. */
+      expect(first.windows.get(b)).toBeDefined();
+      /** A refused take that counts nothing names no window for a fresh key. */
+      const fresh = key("idfresh");
+      const refused = await c.take([a, fresh], { max: 2, windowMs: 150 });
+      expect(refused.limited).toBe(true);
+      expect(refused.windows.has(fresh)).toBe(false);
+      await Bun.sleep(250);
+      const next = await c.take([a], { max: 9, windowMs: 150 });
+      expect(next.windows.get(a)).not.toBe(first.windows.get(a));
+    });
+
+    test("a refund with an ended window's id never reaches the next window", async () => {
+      const c = impl.counter();
+      const k = key("late");
+      const taken = await c.take([k], { max: 9, windowMs: 150 });
+      const id = taken.windows.get(k);
+      if (id === undefined) throw new Error("no window id");
+      await Bun.sleep(250);
+      await c.take([k], { max: 9, windowMs: 60_000 });
+      await c.refund(k, id);
+      expect((await c.peek(k))?.count).toBe(1);
+      await c.refund(k, "not-a-window");
+      expect((await c.peek(k))?.count).toBe(1);
     });
 
     test("delete forgets the keys", async () => {
@@ -449,6 +486,21 @@ describe.skipIf(!REDIS_TEST_URL)("Redis stores (REDIS_TEST_URL)", () => {
     }
   });
 
+  test("a counter written before window ids gets one on its next take", async () => {
+    if (!redisBackend) throw new Error("no Redis backend");
+    const ns = `legacy-${randomBytes(4).toString("hex")}`;
+    const name = `${PREFIX}${ns}:ip`;
+    await raw().send("HSET", [name, "c", "2"]);
+    await raw().send("PEXPIRE", [name, "60000"]);
+    const c = redisBackend.counter(ns);
+    const taken = await c.take(["ip"], { max: 9, windowMs: 60_000 });
+    const id = taken.windows.get("ip");
+    expect(typeof id).toBe("string");
+    await c.refund("ip", id ?? "");
+    expect((await c.peek("ip"))?.count).toBe(2);
+    expect(await raw().pttl(name)).toBeGreaterThan(50_000);
+  });
+
   test("the shared facade uses Redis when installed: two replicas share one budget", async () => {
     if (!redisBackend) throw new Error("no Redis backend");
     const ns = `facade-${randomBytes(4).toString("hex")}`;
@@ -490,6 +542,82 @@ describe("backend selection and outage behaviour", () => {
     }),
     close: () => {},
   };
+
+  test("the sweep drops ended windows from every counter's memory, and only those", async () => {
+    const a = sharedWindowCounter(`sweep-a-${randomBytes(4).toString("hex")}`);
+    const b = sharedWindowCounter(`sweep-b-${randomBytes(4).toString("hex")}`);
+    await a.take(["short"], { max: 9, windowMs: 50 });
+    await b.take(["short"], { max: 9, windowMs: 50 });
+    await b.take(["long"], { max: 9, windowMs: 60_000 });
+    await Bun.sleep(100);
+    expect(pruneLocalCounters()).toBeGreaterThanOrEqual(2);
+    expect(a.local.entries.size).toBe(0);
+    expect([...b.local.entries.keys()]).toEqual(["long"]);
+  });
+
+  /** A healthy backend held in memory: what Redis is to several replicas. */
+  function memoryBackend(): {
+    backend: SharedStoreBackend;
+    counter: MemoryWindowCounter;
+  } {
+    const counter = new MemoryWindowCounter();
+    return {
+      counter,
+      backend: {
+        counter: () => counter,
+        oneTime: () => new MemoryOneTimeStore(10),
+        close: () => {},
+      },
+    };
+  }
+
+  /** The window id `decision` gives `key`. */
+  function idOf(
+    decision: { windows: ReadonlyMap<string, string> },
+    name: string,
+  ): string {
+    const id = decision.windows.get(name);
+    if (id === undefined) throw new Error("no window id");
+    return id;
+  }
+
+  test("a refund goes to the store that counted the take, only while it is installed", async () => {
+    const error = spyOn(logger, "error").mockImplementation(() => {});
+    try {
+      const healthy = memoryBackend();
+      const c = sharedWindowCounter(`refund-${randomBytes(4).toString("hex")}`);
+      const opts = { max: 9, windowMs: 60_000 };
+
+      /** Same backend: refunded there. */
+      useSharedBackend(healthy.backend);
+      const a = await c.take(["k"], opts);
+      await c.take(["k"], opts);
+      await c.refund("k", idOf(a, "k"));
+      expect(healthy.counter.entries.get("k")?.count).toBe(1);
+
+      /** The backend failed (or changed) since the take: skipped, nothing else touched. */
+      const b = await c.take(["k"], opts);
+      useSharedBackend(down);
+      await c.refund("k", idOf(b, "k"));
+      useSharedBackend(healthy.backend);
+      await c.refund("k", idOf(b, "k"));
+      useSharedBackend(null);
+      await c.refund("k", idOf(b, "k"));
+      expect(healthy.counter.entries.get("k")?.count).toBe(2);
+      expect(c.local.entries.size).toBe(0);
+
+      /** Taken in memory during an outage: refunded in memory, even after recovery. */
+      useSharedBackend(down);
+      const d = await c.take(["k"], opts);
+      await c.take(["k"], opts);
+      useSharedBackend(healthy.backend);
+      await c.refund("k", idOf(d, "k"));
+      expect(c.local.entries.get("k")?.count).toBe(1);
+      expect(healthy.counter.entries.get("k")?.count).toBe(2);
+    } finally {
+      error.mockRestore();
+    }
+  });
 
   test("without a backend, process memory answers", async () => {
     const c = sharedWindowCounter("mem-only");

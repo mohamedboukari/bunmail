@@ -34,10 +34,18 @@ export interface WindowOptions {
   refusedWeight?: number;
 }
 
+/**
+ * Which window each key of a {@link WindowCounter.take} counted in, by
+ * key: an opaque id, absent for a key left without a live window. A
+ * {@link WindowCounter.refund} gives back only into the window it names,
+ * never into a later one.
+ */
+export type WindowTicket = ReadonlyMap<string, string>;
+
 /** Outcome of a {@link WindowCounter.take}. */
 export type WindowDecision =
-  | { limited: false; count: number }
-  | { limited: true; count: number; retryAfterMs: number };
+  | { limited: false; count: number; windows: WindowTicket }
+  | { limited: true; count: number; retryAfterMs: number; windows: WindowTicket };
 
 /** A key's live window. */
 export interface WindowState {
@@ -58,13 +66,18 @@ export interface WindowCounter {
    * for any key, its count plus `weight` would pass `max`. A refusal adds
    * `refusedWeight` to every key instead; `retryAfterMs` is the longest
    * wait among the keys over the limit. `count` is the highest count
-   * among the keys afterwards.
+   * among the keys afterwards; `windows` names each key's live window.
    */
   take(keys: readonly string[], options: WindowOptions): Promise<WindowDecision>;
   /** The key's live window, or `null` when it has none. */
   peek(key: string): Promise<WindowState | null>;
-  /** Takes one back from a live window, never below zero; no-op without one. */
-  refund(key: string): Promise<void>;
+  /**
+   * Takes one back from the key's live window, never below zero, only
+   * while it is still the window `windowId` (from a take's `windows`): a
+   * no-op once that window has ended, so a refund that arrives late never
+   * gives back a count of the next window.
+   */
+  refund(key: string, windowId: string): Promise<void>;
   /** Forgets the keys' windows. */
   delete(keys: readonly string[]): Promise<void>;
   /**
@@ -157,7 +170,12 @@ interface MemoryWindow {
   expiresAt: number;
   /** {@link WindowCounter.markOnce} already answered true in this window. */
   marked: boolean;
+  /** The window's identity, for {@link WindowCounter.refund}. */
+  id: string;
 }
+
+/** The last memory window id handed out; ids never repeat in a process. */
+let memoryWindowSeq = 0;
 
 /** {@link WindowCounter} in process memory: exact for one replica. */
 export class MemoryWindowCounter implements WindowCounter {
@@ -188,19 +206,29 @@ export class MemoryWindowCounter implements WindowCounter {
     }
     const add = limited ? refusedWeight : weight;
     let count = 0;
+    const windows = new Map<string, string>();
     for (const key of keys) {
       let entry = this.live(key, at);
       if (add > 0) {
         if (!entry) {
-          entry = { count: 0, expiresAt: at + windowMs, marked: false };
+          memoryWindowSeq += 1;
+          entry = {
+            count: 0,
+            expiresAt: at + windowMs,
+            marked: false,
+            id: String(memoryWindowSeq),
+          };
           this.entries.set(key, entry);
         }
         entry.count += add;
       }
+      if (entry) windows.set(key, entry.id);
       count = Math.max(count, entry?.count ?? 0);
     }
     return Promise.resolve(
-      limited ? { limited: true, count, retryAfterMs } : { limited: false, count },
+      limited
+        ? { limited: true, count, retryAfterMs, windows }
+        : { limited: false, count, windows },
     );
   }
 
@@ -212,9 +240,9 @@ export class MemoryWindowCounter implements WindowCounter {
     );
   }
 
-  refund(key: string): Promise<void> {
+  refund(key: string, windowId: string): Promise<void> {
     const entry = this.live(key, now());
-    if (entry) entry.count = Math.max(0, entry.count - 1);
+    if (entry && entry.id === windowId) entry.count = Math.max(0, entry.count - 1);
     return Promise.resolve();
   }
 
@@ -329,18 +357,27 @@ export class MemoryOneTimeStore implements OneTimeStore {
 let backend: SharedStoreBackend | null = null;
 
 /**
+ * Bumped whenever the backend changes: a window id from a take names the
+ * store that answered it (this generation's backend, or memory), so a
+ * refund never lands on another store.
+ */
+let backendGeneration = 0;
+
+/**
  * Installs the shared backend (boot, when `REDIS_URL` is set), or `null`
  * to go back to process memory (tests). Stores created earlier switch
  * with it: they look the backend up on every call.
  */
 export function useSharedBackend(next: SharedStoreBackend | null): void {
   backend = next;
+  backendGeneration += 1;
 }
 
 /** Closes the shared backend, if any (graceful shutdown). */
 export function closeSharedStore(): void {
   const current = backend;
   backend = null;
+  backendGeneration += 1;
   current?.close();
 }
 
@@ -378,6 +415,52 @@ export interface SharedWindowCounter extends WindowCounter {
   readonly local: MemoryWindowCounter;
 }
 
+/* ─── Sweep of the in-memory counters ─── */
+
+/**
+ * The memory side of every counter {@link sharedWindowCounter} made. The
+ * stores are module constants, so this holds one entry per namespace.
+ */
+const localCounters = new Set<MemoryWindowCounter>();
+
+/** How often the sweep drops ended windows from the memory counters. */
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/** The periodic sweep timer; null when not running. */
+let sweepInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Drops the ended windows of every in-memory counter; returns how many.
+ * A key's window is dropped when it is next read anyway; the sweep is for
+ * keys never seen again (rotating client IPs, deleted API keys, unknown
+ * domain ids), which would otherwise stay in the map for good.
+ */
+export function pruneLocalCounters(): number {
+  let removed = 0;
+  for (const counter of localCounters) removed += counter.prune();
+  return removed;
+}
+
+/**
+ * Starts the periodic sweep of every in-memory counter (the default
+ * store, and the fallback while Redis is down; Redis expires its keys on
+ * its own). Idempotent: calling twice is a no-op while it runs.
+ */
+export function startLocalCounterSweep(): void {
+  if (sweepInterval) return;
+  sweepInterval = setInterval(() => pruneLocalCounters(), SWEEP_INTERVAL_MS);
+  logger.debug("Shared-store memory sweep started", { intervalMs: SWEEP_INTERVAL_MS });
+}
+
+/** Stops the periodic sweep: called from the graceful shutdown handler. */
+export function stopLocalCounterSweep(): void {
+  if (sweepInterval) {
+    clearInterval(sweepInterval);
+    sweepInterval = null;
+    logger.debug("Shared-store memory sweep stopped");
+  }
+}
+
 /**
  * The fixed-window counters of `namespace`: the shared backend's when one
  * is installed, falling back to process memory when it fails (see the
@@ -385,6 +468,7 @@ export interface SharedWindowCounter extends WindowCounter {
  */
 export function sharedWindowCounter(namespace: string): SharedWindowCounter {
   const local = new MemoryWindowCounter();
+  localCounters.add(local);
   /** Runs `op` on the shared backend, or on `local` without one or when it fails. */
   async function run<T>(op: (counter: WindowCounter) => Promise<T>): Promise<T> {
     const shared = backend;
@@ -396,14 +480,64 @@ export function sharedWindowCounter(namespace: string): SharedWindowCounter {
       return op(local);
     }
   }
+  /**
+   * Takes on the shared backend, or on `local` without one or when it
+   * fails, and prefixes every window id with the store that answered:
+   * `s<generation>:` for the backend, `l:` for memory (see `refund`).
+   */
+  async function take(
+    keys: readonly string[],
+    options: WindowOptions,
+  ): Promise<WindowDecision> {
+    const shared = backend;
+    if (shared) {
+      const generation = backendGeneration;
+      try {
+        return tagWindows(
+          await shared.counter(namespace).take(keys, options),
+          `s${generation}:`,
+        );
+      } catch (error: unknown) {
+        reportFallback(namespace, error);
+      }
+    }
+    return tagWindows(await local.take(keys, options), "l:");
+  }
+  /**
+   * Refunds into the store that counted the take, and only there: a take
+   * that fell back to memory refunds memory; one the backend answered
+   * refunds the backend only while that same backend is installed and
+   * answers. Anything else (the backend changed, or fails now) skips the
+   * refund: the count stays, which errs on the side of the limit.
+   */
+  async function refund(key: string, windowId: string): Promise<void> {
+    const split = windowId.indexOf(":");
+    const store = windowId.slice(0, split);
+    const id = windowId.slice(split + 1);
+    if (store === "l") return local.refund(key, id);
+    const shared = backend;
+    if (!shared || store !== `s${backendGeneration}`) return;
+    try {
+      await shared.counter(namespace).refund(key, id);
+    } catch (error: unknown) {
+      reportFallback(namespace, error);
+    }
+  }
   return {
     local,
-    take: (keys, options) => run((c) => c.take(keys, options)),
+    take,
     peek: (key) => run((c) => c.peek(key)),
-    refund: (key) => run((c) => c.refund(key)),
+    refund,
     delete: (keys) => run((c) => c.delete(keys)),
     markOnce: (key) => run((c) => c.markOnce(key)),
   };
+}
+
+/** The decision with every window id prefixed by `tag`. */
+function tagWindows(decision: WindowDecision, tag: string): WindowDecision {
+  const windows = new Map<string, string>();
+  for (const [key, id] of decision.windows) windows.set(key, `${tag}${id}`);
+  return { ...decision, windows };
 }
 
 /** A one-time store that also exposes its in-memory side (the default). */

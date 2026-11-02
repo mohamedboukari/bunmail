@@ -208,7 +208,7 @@ describe("takeLoginAttempt (#185)", () => {
       );
     }
     const refused = await takeLoginAttempt(["192.0.2.20"], MAX, WINDOW_MS);
-    expect(refused).toEqual({ limited: true, retryAfterSec: 60 });
+    expect(refused).toMatchObject({ limited: true, retryAfterSec: 60 });
     expect(loginAttemptMap.get("192.0.2.20")?.count).toBe(MAX);
   });
 
@@ -284,26 +284,45 @@ describe("refundLoginAttempt (#256)", () => {
   test("a successful login keeps the earlier failures", async () => {
     for (let i = 0; i < 4; i++) await recordFailedLogin("192.0.2.9", windowMs);
     /** The login counts itself first, then refunds on success. */
-    await recordFailedLogin("192.0.2.9", windowMs);
-    await refundLoginAttempt("192.0.2.9");
+    const { ticket } = await takeLoginAttempt(["192.0.2.9"], 9, windowMs);
+    await refundLoginAttempt("192.0.2.9", ticket);
     await recordFailedLogin("192.0.2.9", windowMs);
     expect((await isLoginRateLimited("192.0.2.9", 5)).limited).toBe(true);
   });
 
   test("successful logins alone never lock an address out", async () => {
     for (let i = 0; i < 20; i++) {
-      await recordFailedLogin("192.0.2.10", windowMs);
-      await refundLoginAttempt("192.0.2.10");
+      const { ticket } = await takeLoginAttempt(["192.0.2.10"], 5, windowMs);
+      await refundLoginAttempt("192.0.2.10", ticket);
     }
     expect((await isLoginRateLimited("192.0.2.10", 5)).limited).toBe(false);
   });
 
   test("does nothing once the window has expired", async () => {
-    await recordFailedLogin("192.0.2.11", windowMs);
+    const { ticket } = await takeLoginAttempt(["192.0.2.11"], 5, windowMs);
     at(1_000_000 + windowMs);
-    await refundLoginAttempt("192.0.2.11");
+    await refundLoginAttempt("192.0.2.11", ticket);
     /** The expired window is gone; a new one is not started by a refund. */
     expect(loginAttemptMap.has("192.0.2.11")).toBe(false);
+  });
+
+  test("a login straddling the end of a window never refunds a failure of the next", async () => {
+    const max = 3;
+    /** The login is counted in the first window, then its check runs long. */
+    const { ticket } = await takeLoginAttempt(["192.0.2.12"], max, windowMs);
+    at(1_000_000 + windowMs);
+    for (let i = 0; i < max; i++) {
+      expect((await takeLoginAttempt(["192.0.2.12"], max, windowMs)).limited).toBe(false);
+    }
+    /** Its success arrives now: the next window's failures all stay. */
+    await refundLoginAttempt("192.0.2.12", ticket);
+    expect((await takeLoginAttempt(["192.0.2.12"], max, windowMs)).limited).toBe(true);
+  });
+
+  test("an IPv6 client refunds into its /64 bucket", async () => {
+    const { ticket } = await takeLoginAttempt(["2001:db8:5:5::1"], 5, windowMs);
+    await refundLoginAttempt("2001:db8:5:5::1", ticket);
+    expect(loginAttemptMap.get("2001:db8:5:5::/64")?.count).toBe(0);
   });
 });
 
