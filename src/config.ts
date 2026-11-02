@@ -1090,6 +1090,311 @@ export function readTracingSettings(
   };
 }
 
+/** An SSO provider id (#224): lowercase letters, digits and `-`, 1 to 32. */
+const SSO_PROVIDER_ID_RE = /^[a-z0-9-]{1,32}$/;
+
+/** Scopes requested when `SSO_<ID>_SCOPES` is unset. */
+export const DEFAULT_SSO_SCOPES = "openid email profile";
+
+/**
+ * Longest issuer URL accepted, in characters. A link is stored as
+ * `oidc:<issuer>` in `user_credentials.provider`, which SSO widens to 255
+ * characters (#224), so the issuer may take 250 of them.
+ */
+export const MAX_SSO_ISSUER_LENGTH = 250;
+
+/** Longest `SSO_<ID>_LABEL`, in characters (it is button text). */
+const MAX_SSO_LABEL_LENGTH = 64;
+
+/**
+ * Client ids and secrets: printable ASCII without spaces, as every
+ * provider issues them, so a value pasted with a stray quote or line break
+ * refuses to boot instead of failing every sign-in.
+ */
+const SSO_CLIENT_VALUE_RE = /^[\x21-\x7e]{1,512}$/;
+
+/** One scope token (RFC 6749 section 3.3): printable ASCII but `"` and `\`. */
+const SSO_SCOPE_TOKEN_RE = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
+
+/** One label of a domain name in `SSO_<ID>_ALLOWED_DOMAINS`. */
+const DOMAIN_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Lower-cases ASCII letters only (#224). `String#toLowerCase` folds some
+ * non-ASCII characters into ASCII ones (the Kelvin sign U+212A becomes
+ * `k`), which would let a look-alike pass a domain or email comparison.
+ */
+export function asciiLowerCase(value: string): string {
+  return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+/**
+ * True for a lower-case ASCII fully qualified domain name of at most 253
+ * characters (#224): labels of letters, digits and inner hyphens, at
+ * least two of them. Used for `SSO_<ID>_ALLOWED_DOMAINS` and for the email
+ * and `hd` claims of an ID token.
+ */
+export function isLowerAsciiDomain(value: string): boolean {
+  return (
+    value.length <= 253 &&
+    value.includes(".") &&
+    value.split(".").every((label) => DOMAIN_LABEL_RE.test(label))
+  );
+}
+
+/** One OpenID Connect provider configured in `SSO_PROVIDERS` (#224). */
+export interface SsoProviderSettings {
+  /** The id from `SSO_PROVIDERS`; also the path segment of its routes. */
+  id: string;
+  /** `SSO_<ID>_ISSUER`, exactly as configured: compared byte for byte. */
+  issuer: string;
+  /** `SSO_<ID>_CLIENT_ID`. */
+  clientId: string;
+  /** `SSO_<ID>_CLIENT_SECRET`. Never logged, never rendered. */
+  clientSecret: string;
+  /** `SSO_<ID>_LABEL`, the button text; the id when unset. Rendered escaped. */
+  label: string;
+  /** `SSO_<ID>_SCOPES`, space-separated, always with `openid`. */
+  scopes: string;
+  /** `SSO_<ID>_ALLOWED_DOMAINS`, lower-cased; empty means any domain. */
+  allowedDomains: readonly string[];
+  /** `SSO_<ID>_AUTO_LINK`: link by verified email (needs allowed domains). */
+  autoLink: boolean;
+}
+
+/** The SSO settings (#224), see {@link readSsoSettings}. */
+export interface SsoSettings {
+  /** The configured providers, validated; empty when `SSO_PROVIDERS` is unset. */
+  providers: readonly SsoProviderSettings[];
+  /**
+   * The `APP_BASE_URL` the redirect URIs are built on, without a trailing
+   * slash, or `null` when it is not `https://` (or plain `http://` on a
+   * loopback host). `null` with providers configured means SSO is off;
+   * `src/index.ts` warns once at boot (this file cannot log).
+   */
+  baseUrl: string | null;
+}
+
+/**
+ * True for the host names that never leave the machine: `localhost`,
+ * `127.0.0.1` and `[::1]` (as `URL.hostname` spells it). Plain `http://`
+ * is accepted for these only.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
+ * The base URL SSO redirect URIs are built on (#224), or `null` when
+ * `raw` cannot carry them: empty, not a URL, a query or fragment, or not
+ * `https://` (plain `http://` only on a loopback host). Trailing slashes
+ * are dropped, as for `config.appBaseUrl`.
+ */
+export function ssoBaseUrlFrom(raw: string): string | null {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  if (trimmed === "") return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (
+    url.search !== "" ||
+    url.hash !== "" ||
+    url.username !== "" ||
+    url.password !== ""
+  ) {
+    return null;
+  }
+  if (url.protocol === "https:") return trimmed;
+  if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return trimmed;
+  return null;
+}
+
+/** The env-var prefix of a provider id: `my-idp` reads `SSO_MY_IDP_*`. */
+export function ssoEnvPrefix(id: string): string {
+  return `SSO_${id.toUpperCase().replace(/-/g, "_")}_`;
+}
+
+/**
+ * Reads `SSO_<ID>_ISSUER`: an absolute `https://` URL (plain `http://`
+ * only on a loopback host) with no credentials, query or fragment (OpenID
+ * Connect Discovery section 2), at most {@link MAX_SSO_ISSUER_LENGTH}
+ * characters. Kept exactly as written: the discovery document and every
+ * ID token must carry this exact string.
+ */
+function readSsoIssuer(key: string, raw: string | undefined): string {
+  const issuer = raw?.trim() ?? "";
+  if (issuer === "") {
+    throw new Error(`[config] ${key} must be set: the provider's issuer URL.`);
+  }
+  if (issuer.length > MAX_SSO_ISSUER_LENGTH) {
+    throw new Error(
+      `[config] ${key} must be at most ${MAX_SSO_ISSUER_LENGTH} characters, got ${issuer.length}.`,
+    );
+  }
+  /**
+   * The value is echoed only once it is known to hold no credentials,
+   * query or fragment: a URL that fails to parse, or carries
+   * `user:pass@` or a token in its query, must never reach the boot log.
+   */
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    throw new Error(`[config] ${key} must be an absolute URL (value not shown).`);
+  }
+  if (
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error(
+      `[config] ${key} must not carry credentials, a query or a fragment (value not shown).`,
+    );
+  }
+  const secure =
+    url.protocol === "https:" ||
+    (url.protocol === "http:" && isLoopbackHost(url.hostname));
+  if (!secure) {
+    throw new Error(
+      `[config] ${key} must be an https:// URL (plain http:// only for localhost), got "${issuer}".`,
+    );
+  }
+  return issuer;
+}
+
+/** Reads a client id or secret; the value is never echoed in the error. */
+function readSsoClientValue(key: string, raw: string | undefined): string {
+  const value = raw?.trim() ?? "";
+  if (!SSO_CLIENT_VALUE_RE.test(value)) {
+    throw new Error(
+      `[config] ${key} must be set: 1 to 512 printable characters without spaces.`,
+    );
+  }
+  return value;
+}
+
+/** Reads `SSO_<ID>_LABEL`: 1 to 64 characters, no control characters; the id when unset. */
+function readSsoLabel(key: string, id: string, raw: string | undefined): string {
+  const label = raw?.trim() ?? "";
+  if (label === "") return id;
+  if (label.length > MAX_SSO_LABEL_LENGTH || /\p{Cc}/u.test(label)) {
+    throw new Error(
+      `[config] ${key} must be 1 to ${MAX_SSO_LABEL_LENGTH} characters with no control characters.`,
+    );
+  }
+  return label;
+}
+
+/**
+ * Reads `SSO_<ID>_SCOPES`: scope tokens separated by spaces, which must
+ * include `openid`. Unset or blank: {@link DEFAULT_SSO_SCOPES}. Repeated
+ * spaces and duplicate tokens are folded.
+ */
+function readSsoScopes(key: string, raw: string | undefined): string {
+  const trimmed = raw?.trim() ?? "";
+  if (trimmed === "") return DEFAULT_SSO_SCOPES;
+  const tokens = [...new Set(trimmed.split(/\s+/))];
+  if (!tokens.every((token) => SSO_SCOPE_TOKEN_RE.test(token))) {
+    throw new Error(
+      `[config] ${key} must be scope names separated by spaces, got "${raw}".`,
+    );
+  }
+  if (!tokens.includes("openid")) {
+    throw new Error(`[config] ${key} must include "openid", got "${raw}".`);
+  }
+  return tokens.join(" ");
+}
+
+/**
+ * Reads `SSO_<ID>_ALLOWED_DOMAINS`: email domains separated by commas,
+ * lower-cased, each a fully qualified domain name (no `@`, no wildcard).
+ * Unset or blank: none.
+ */
+function readSsoAllowedDomains(key: string, raw: string | undefined): string[] {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => asciiLowerCase(entry.trim()).replace(/\.$/, ""))
+    .filter((entry) => entry.length > 0);
+  for (const entry of entries) {
+    if (!isLowerAsciiDomain(entry)) {
+      throw new Error(
+        `[config] ${key} must be email domains separated by commas (e.g. example.com), got "${entry}".`,
+      );
+    }
+  }
+  return [...new Set(entries)];
+}
+
+/**
+ * Reads the SSO settings (#224): `SSO_PROVIDERS` (ids separated by
+ * commas, each `^[a-z0-9-]{1,32}$`, no duplicates) and, per id, the
+ * `SSO_<ID>_*` variables (see `ssoEnvPrefix`): `ISSUER`, `CLIENT_ID`,
+ * `CLIENT_SECRET` (required), `LABEL` (default: the id), `SCOPES`
+ * (default `openid email profile`), `ALLOWED_DOMAINS` (optional) and
+ * `AUTO_LINK` (strict boolean, default false; `true` needs allowed
+ * domains). Unset `SSO_PROVIDERS`: no providers, nothing else is read.
+ *
+ * Strict, in every environment: any malformed value refuses to boot, so a
+ * typo cannot silently widen who may sign in. The base URL is checked
+ * separately ({@link ssoBaseUrlFrom}): one that cannot carry SSO turns it
+ * off with a boot warning instead, as passkeys do. Exported for tests.
+ */
+export function readSsoSettings(
+  env: Record<string, string | undefined> = process.env,
+): SsoSettings {
+  const baseUrl = ssoBaseUrlFrom(env["APP_BASE_URL"] ?? "");
+  const ids = (env["SSO_PROVIDERS"] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const providers: SsoProviderSettings[] = [];
+  for (const id of ids) {
+    if (!SSO_PROVIDER_ID_RE.test(id)) {
+      throw new Error(
+        `[config] SSO_PROVIDERS entries must be 1 to 32 lowercase letters, digits or '-', got "${id}".`,
+      );
+    }
+    if (providers.some((provider) => provider.id === id)) {
+      throw new Error(`[config] SSO_PROVIDERS lists "${id}" twice.`);
+    }
+    const prefix = ssoEnvPrefix(id);
+    const allowedDomains = readSsoAllowedDomains(
+      `${prefix}ALLOWED_DOMAINS`,
+      env[`${prefix}ALLOWED_DOMAINS`],
+    );
+    const autoLink = optionalStrictBoolean(
+      `${prefix}AUTO_LINK`,
+      false,
+      env[`${prefix}AUTO_LINK`],
+    );
+    if (autoLink && allowedDomains.length === 0) {
+      throw new Error(
+        `[config] ${prefix}AUTO_LINK=true needs ${prefix}ALLOWED_DOMAINS:\n` +
+          "  → Linking by email is only safe for the email domains you control.",
+      );
+    }
+    providers.push({
+      id,
+      issuer: readSsoIssuer(`${prefix}ISSUER`, env[`${prefix}ISSUER`]),
+      clientId: readSsoClientValue(`${prefix}CLIENT_ID`, env[`${prefix}CLIENT_ID`]),
+      clientSecret: readSsoClientValue(
+        `${prefix}CLIENT_SECRET`,
+        env[`${prefix}CLIENT_SECRET`],
+      ),
+      label: readSsoLabel(`${prefix}LABEL`, id, env[`${prefix}LABEL`]),
+      scopes: readSsoScopes(`${prefix}SCOPES`, env[`${prefix}SCOPES`]),
+      allowedDomains,
+      autoLink,
+    });
+  }
+  return { providers, baseUrl };
+}
+
 /**
  * Central application configuration.
  *
@@ -1407,6 +1712,14 @@ export const config = {
    * set. See `readGeoipSettings`.
    */
   geoip: readGeoipSettings(),
+
+  /**
+   * OpenID Connect single sign-on (#224): the providers from
+   * `SSO_PROVIDERS` and the base URL their redirect URIs use. Off when no
+   * provider is configured, or when `APP_BASE_URL` is not `https://` (or
+   * loopback `http://`). See `readSsoSettings`.
+   */
+  sso: readSsoSettings(),
 
   /** Dashboard invitations (#217). */
   invites: {

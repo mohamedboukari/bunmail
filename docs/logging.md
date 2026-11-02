@@ -60,7 +60,7 @@ The `path` of the request line never contains the query string (owner setup link
 
 ## What is never logged
 
-- **Secrets, by rule and by safety net.** Call sites never pass passwords, API keys, tokens, token hashes or private keys. On top of that, the logger itself replaces the value of any field whose name ends in `password`, `passwd`, `secret`, `token`, `tokenHash`, `secretHash`, `privateKey`, `authorization`, `cookie`, `setCookie` or `apiKey` (any case, `_` and `-` ignored, at any depth) with `[REDACTED]`. Identifiers stay readable: `apiKeyId`, `sessionId`, `tokenCount` are not secrets.
+- **Secrets, by rule and by safety net.** Call sites never pass passwords, API keys, tokens, token hashes or private keys. On top of that, the logger itself replaces the value of any field whose name ends in `password`, `passwd`, `secret`, `token`, `tokenHash`, `secretHash`, `privateKey`, `authorization`, `cookie`, `setCookie`, `apiKey`, `nonce` or `codeVerifier` (any case, `_` and `-` ignored, at any depth), and of a field named exactly `state` (the OAuth flow value, #224; `deliveryState` and `sqlState` stay readable), with `[REDACTED]`. Identifiers stay readable: `apiKeyId`, `sessionId`, `tokenCount` are not secrets.
 - **Request and message bodies.** Validation errors log the failing field paths only, never the submitted values.
 - **Attachment filenames and content** (#181). Filenames may carry personal data, so attachment log lines carry counts, sizes, indexes and positions only.
 - **Recipient addresses in clear** when `LOG_REDACT_PII=true` (the production default): `a***@example.com`, including addresses quoted inside remote SMTP replies (`550 5.1.1 <u***@example.org>: ...`, #260).
