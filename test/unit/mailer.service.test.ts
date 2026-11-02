@@ -1,4 +1,15 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import {
+  describe,
+  test,
+  expect,
+  mock,
+  beforeEach,
+  beforeAll,
+  afterAll,
+  spyOn,
+} from "bun:test";
+import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { InMemorySpanExporter } from "@opentelemetry/sdk-trace";
 
 /** Narrow a captured nodemailer option (typed `unknown`) to a plain record for assertions. */
 function asRecord(value: unknown): Record<string, unknown> {
@@ -162,6 +173,9 @@ void mock.module("nodemailer", () => ({
 }));
 
 const { sendMail } = await import("../../src/modules/emails/services/mailer.service.ts");
+const { startTracing, stopTracing, withSpan } =
+  await import("../../src/utils/tracing.ts");
+const { logger } = await import("../../src/utils/logger.ts");
 const { parseReturnPath, recipientOrder, returnPathMacMatches } =
   await import("../../src/modules/bounces/services/return-path.ts");
 
@@ -1430,5 +1444,121 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
     );
     expect(parseReturnPath(String(fromsByHost.get("smtp.gmail.com")))?.index).toBe(0);
     expect(parseReturnPath(String(fromsByHost.get("smtp.outlook.com")))?.index).toBe(1);
+  });
+});
+
+/**
+ * Trace spans of a send (#363): under the queue's root span, one
+ * `mx.deliver` per MX group and one `mx.session` per connection tried,
+ * with host names, TLS and counts, never an address. Read back from an
+ * in-memory exporter installed through the real setup.
+ */
+describe("sendMail: trace spans (#363)", () => {
+  const exporter = new InMemorySpanExporter();
+
+  beforeAll(async () => {
+    const quiet = spyOn(logger, "info").mockImplementation(() => {});
+    await startTracing(
+      {
+        enabled: true,
+        endpoint: "http://collector.invalid:4318/v1/traces",
+        serviceName: "bunmail-test",
+        sampler: "parentbased_always_on",
+        samplerRatio: 1,
+      },
+      "0.0.0",
+      exporter,
+    );
+    quiet.mockRestore();
+  });
+
+  afterAll(async () => {
+    await stopTracing();
+  });
+
+  beforeEach(() => {
+    exporter.reset();
+    mxResult = [
+      { exchange: "mx2.example.org", priority: 20 },
+      { exchange: "mx1.example.org", priority: 10 },
+    ];
+  });
+
+  /** Sends one email inside a root span, as the queue does. */
+  async function sendTraced(): Promise<void> {
+    await withSpan("email.send_attempt", { root: true }, () =>
+      sendMail({
+        from: "hello@example.com",
+        to: "alice@example.org, bob@example.org",
+        subject: "traced subject",
+        text: "traced body",
+        messageId: MID,
+      }),
+    );
+  }
+
+  test("the group and each session tried nest under the attempt, with hosts, TLS and counts", async () => {
+    sessionTls = "starttls";
+    sendBehaviour = (host) =>
+      host === "mx1.example.org"
+        ? new Error("connect ECONNREFUSED 203.0.113.10:25")
+        : undefined;
+    await sendTraced();
+
+    const spans = exporter.getFinishedSpans();
+    const root = spans.find((s) => s.name === "email.send_attempt");
+    const group = spans.find((s) => s.name === "mx.deliver");
+    const sessions = spans.filter((s) => s.name === "mx.session");
+    expect(group?.parentSpanContext?.spanId).toBe(root?.spanContext().spanId);
+    expect(sessions).toHaveLength(2);
+    for (const session of sessions) {
+      expect(session.kind).toBe(SpanKind.CLIENT);
+      expect(session.parentSpanContext?.spanId).toBe(group?.spanContext().spanId);
+    }
+    expect(sessions.map((s) => s.attributes["server.address"])).toEqual([
+      "mx1.example.org",
+      "mx2.example.org",
+    ]);
+    expect(sessions[0]?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(sessions[1]?.attributes["bunmail.mx.tls"]).toBe("starttls");
+    expect(group?.attributes).toMatchObject({
+      "bunmail.mx.recipient_count": 2,
+      "bunmail.mx.transaction_count": 1,
+      "server.address": "mx2.example.org",
+      "bunmail.mx.tls": "starttls",
+      "bunmail.mx.delivered": 1,
+      "bunmail.mx.failed": 0,
+    });
+    expect(group?.status.code).toBe(SpanStatusCode.UNSET);
+  });
+
+  test("no address, subject or body in any span, a quoted recipient in a reply included", async () => {
+    sendBehaviour = () =>
+      Object.assign(new Error("550 5.1.1 <alice@example.org>: user unknown"), {
+        responseCode: 550,
+        response: "550 5.1.1 <alice@example.org>: user unknown",
+      });
+    await sendTraced();
+
+    const spans = exporter.getFinishedSpans();
+    const group = spans.find((s) => s.name === "mx.deliver");
+    expect(group?.status.code).toBe(SpanStatusCode.ERROR);
+    expect(group?.status.message).toContain("a***@example.org");
+    const shipped = JSON.stringify(
+      spans.map((s) => ({
+        attributes: s.attributes,
+        events: s.events,
+        status: s.status,
+      })),
+    );
+    for (const text of [
+      "alice@example.org",
+      "bob@example.org",
+      "hello@example.com",
+      "traced subject",
+      "traced body",
+    ]) {
+      expect(shipped).not.toContain(text);
+    }
   });
 });

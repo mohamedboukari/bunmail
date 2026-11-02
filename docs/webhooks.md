@@ -81,7 +81,7 @@ Indexes:
 
 | Event              | Fired when                                                     |
 |--------------------|----------------------------------------------------------------|
-| `email.queued`     | An email is inserted into the queue                            |
+| `email.queued`     | An email is accepted and inserted into the queue, from any path (REST send, batch item, SMTP submission, dashboard), in the same transaction as the email row (#371). Not for a refused send, and not again for an idempotent replay |
 | `email.sent`       | An email is successfully delivered                             |
 | `email.failed`     | An email permanently fails (temporary failures are retried with backoff until it is `MAIL_RETRY_MAX_AGE_HOURS` old). `data.blocked: true` when a receiver refused the sender (blocklist, reputation, SPF/DKIM/DMARC), not the recipient (#246). Also fired, with `blocked: true`, when a DSN at a signed return path reports such a block (`5.7.x`) for a `sent` email, which it marks `failed` (#250) |
 | `email.bounced`    | The recipient's MX accepted the SMTP transaction but later returned a Delivery Status Notification to the recipient's signed return path (#236): DSN parsed by the bounce module, original `emails` row marked `bounced`, that recipient auto-suppressed (#24). Not for a DSN reporting a sender policy block (`5.7.x`, #250): that one fires `email.failed` with `blocked: true` and suppresses nobody. Also fired for a hard `5xx` at send time (`source: "inline"`), and with `bounceType: "soft"` for a recipient whose mailbox stayed full (`4.2.2`) until the retry window ran out (#250, `source: "inline"`, alongside the email's `email.failed`). See [docs/bounces.md](bounces.md). |
@@ -103,6 +103,23 @@ Events are scoped to the API key that owns the webhook:
 
 ## Webhook Payload
 
+`email.queued` (#371): the email as accepted, before any delivery; `source` is `api` or `smtp`:
+
+```json
+{
+  "event": "email.queued",
+  "timestamp": "2026-03-15T12:00:00.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "from": "hello@example.com",
+    "to": "user@example.com",
+    "subject": "Welcome!",
+    "tags": { "flow": "welcome" },
+    "source": "api"
+  }
+}
+```
+
 `email.sent`:
 
 ```json
@@ -122,7 +139,7 @@ Events are scoped to the API key that owns the webhook:
 
 **`to`** is the email's `to` list as stored: one address, or several comma-separated (`"a@example.com, b@example.org"`) for a send with an array `to` (#178). It stays a string, unlike the REST email's `to`, so existing consumers keep working.
 
-**`tags`** (#189): every `email.*` event built from an email row (`email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
+**`tags`** (#189): every `email.*` event built from an email row (`email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
 
 `email.bounced`:
 
@@ -207,6 +224,8 @@ Every webhook delivery carries three headers:
 | `X-BunMail-Signature` | HMAC-SHA256 of `<timestamp>.<raw-body>` using the webhook's signing secret, hex-encoded |
 | `X-BunMail-Timestamp` | Unix-seconds timestamp the signature was computed at (one signed block per delivery attempt, see [Replay protection](#replay-protection)) |
 | `X-BunMail-Event` | The event type (e.g. `email.sent`): for routing only, not authenticated |
+
+With tracing on ([tracing.md](tracing.md), #363), a delivery also carries a W3C `traceparent` header naming its `webhook.deliver` span, so a traced receiver continues the trace. It is not signed: use it for correlation only.
 
 To verify a delivery, recompute the HMAC over `<header-timestamp>.<raw-body>` and compare against the `X-BunMail-Signature` header in constant time. **Use the raw request body**: JSON re-serialization changes whitespace and breaks the signature.
 
@@ -377,7 +396,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
 | **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
 | **Connection** | Sent to the address the SSRF guard validated for this attempt (see [URL requirements](#url-requirements--ssrf-guard-128)), one fresh connection per attempt; `Host`, SNI and the certificate check use the configured host name |
-| **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
+| **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity`, and `traceparent` when tracing is on (#363) |
 | **Signing** | Re-computed per attempt with a fresh timestamp so a retry an hour later still passes the consumer's freshness window |
 
 ### Delivery row lifecycle

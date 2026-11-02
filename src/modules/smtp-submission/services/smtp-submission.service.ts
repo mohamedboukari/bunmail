@@ -14,6 +14,7 @@ import type { AddressObject } from "mailparser";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
+import { smtpSessionTracer } from "../../../utils/tracing.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { hashApiKey } from "../../../utils/crypto.ts";
 import { findByHash } from "../../api-keys/services/api-key.service.ts";
@@ -253,6 +254,20 @@ function sessionContext(session: { id: string }): LogContext {
   return { smtpSessionId: session.id, listener: "submission" };
 }
 
+/** The trace spans of submission connections and the messages they submit (#363). */
+const sessionSpans = smtpSessionTracer("submission");
+
+/**
+ * Runs `fn` in one connection's log context (#284) and, with tracing on,
+ * with its span active (#363). smtp-server calls every handler on its own,
+ * so each one enters both again.
+ */
+function inSession<T>(session: { id: string }, fn: () => T): T {
+  return runWithLogContext(sessionContext(session), () =>
+    sessionSpans.run(session.id, fn),
+  );
+}
+
 /** A session id in smtp-server's own format (10 random bytes in base 32). */
 function newSessionId(): string {
   return BigInt(`0x${randomBytes(10).toString("hex")}`)
@@ -454,7 +469,7 @@ export function start(portOverride?: number): void {
     onClose(session) {
       const stats = sessionStats.get(session.id);
       sessionStats.delete(session.id);
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         logger.info("SMTP session closed", {
           remoteAddress: session.remoteAddress,
           messages: stats?.messages ?? 0,
@@ -462,6 +477,7 @@ export function start(portOverride?: number): void {
             stats === undefined ? null : Math.round(performance.now() - stats.startedAt),
         });
       });
+      sessionSpans.close(session.id, stats?.messages ?? 0);
     },
 
     /**
@@ -469,7 +485,8 @@ export function start(portOverride?: number): void {
      * to blunt connection churn. SMTP 421 = temporary rejection.
      */
     onConnect(session: SMTPServerSession, callback: (err?: Error) => void) {
-      runWithLogContext(sessionContext(session), () => {
+      sessionSpans.open(session.id);
+      inSession(session, () => {
         sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
         recordSmtpConnection("submission");
         const ip = session.remoteAddress;
@@ -505,7 +522,7 @@ export function start(portOverride?: number): void {
         response?: SMTPServerAuthenticationResponse,
       ) => void,
     ) {
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         const ip = session.remoteAddress;
         const { authRateLimit } = config.smtpSubmission;
 
@@ -571,7 +588,7 @@ export function start(portOverride?: number): void {
       session: SMTPServerSession,
       callback: (err?: Error) => void,
     ) {
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         const acceptedSoFar = session.envelope.rcptTo?.length ?? 0;
         if (acceptedSoFar >= MAX_RECIPIENTS_PER_TRANSACTION) {
           logger.warn("SMTP submission RCPT TO rejected: too many recipients", {
@@ -597,9 +614,15 @@ export function start(portOverride?: number): void {
     onData(
       stream: SMTPServerDataStream,
       session: SMTPServerSession,
-      callback: (err?: Error) => void,
+      smtpCallback: (err?: Error) => void,
     ) {
-      runWithLogContext(sessionContext(session), () => {
+      /** Ends the message's trace span (#363) with the reply, then replies. */
+      const callback = sessionSpans.message(
+        session.id,
+        session.envelope.rcptTo?.length ?? 0,
+        smtpCallback,
+      );
+      inSession(session, () => {
         const stats = sessionStats.get(session.id);
         if (stats) stats.messages += 1;
         const chunks: Buffer[] = [];
@@ -607,7 +630,7 @@ export function start(portOverride?: number): void {
         let aborted = false;
 
         stream.on("data", (chunk: Buffer) => {
-          runWithLogContext(sessionContext(session), () => {
+          inSession(session, () => {
             if (aborted) return;
             totalBytes += chunk.length;
             if (totalBytes > maxMessageBytes) {
@@ -628,7 +651,7 @@ export function start(portOverride?: number): void {
         });
 
         stream.on("end", () => {
-          runWithLogContext(sessionContext(session), () => {
+          inSession(session, () => {
             /** The listener must return void; the body is guarded by its own
              *  try/catch, and `void` keeps a rejected promise from escaping
              *  as an unhandled rejection. */

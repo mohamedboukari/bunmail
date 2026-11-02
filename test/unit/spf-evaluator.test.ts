@@ -32,8 +32,8 @@ import {
  *   commit 4bf96ea `test/`) and BunMail's own cases
  *   (`bunmail-spf-tests.yml`), each case against its fake DNS zone.
  * - A differential check: every case gives the result mailauth 7.1.1
- *   gave (`mailauth-results.json`, recorded by
- *   `record-mailauth-results.mjs` before mailauth was removed), except the
+ *   gave (`mailauth-results.json`, recorded before mailauth
+ *   was removed in #373; the recording script went with it), except the
  *   differences listed in `INTENDED_DIFFERENCES`.
  * - Macro expansion (the examples of RFC 7208 7.4), syntax, addresses,
  *   DNS error mapping and the deadline, with injected resolvers.

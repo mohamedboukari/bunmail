@@ -21,6 +21,7 @@ import {
 import { logger } from "../../../utils/logger.ts";
 import { loggableError, sqlStateOf } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
+import { withSpan } from "../../../utils/tracing.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { parseSmtpError, type ParsedSmtpError } from "../../../utils/smtp-error.ts";
@@ -641,8 +642,24 @@ async function processEmail(email: ClaimedEmail, deps: QueueDeps): Promise<void>
    */
   const startedAt = performance.now();
   try {
+    /**
+     * With tracing on (#363), each attempt is the root of its own trace:
+     * the mailer's MX deliveries nest under it. The email id, attempt
+     * number and source only, never an address.
+     */
     await runWithLogContext({ job: "email-send", jobId: email.id }, () =>
-      sendClaimedEmail(email, claim, deps),
+      withSpan(
+        "email.send_attempt",
+        {
+          root: true,
+          attributes: {
+            "bunmail.email.id": email.id,
+            "bunmail.email.attempt": email.attempts,
+            "bunmail.email.source": metricSource(email),
+          },
+        },
+        () => sendClaimedEmail(email, claim, deps),
+      ),
     );
   } finally {
     clearInterval(renewal);
