@@ -22,7 +22,13 @@ src/modules/webhooks/
 ├── services/
 │   ├── webhook.service.ts           ← CRUD operations, per-key webhook cap
 │   ├── webhook-dispatch.service.ts  ← Outbox: one delivery per subscribed webhook, in the caller's transaction (#184)
-│   ├── webhook-delivery.service.ts  ← Fair claim, attempts, replay, retention purge
+│   ├── webhook-delivery.service.ts  ← Fair claim, attempts, replay, retention purge: the public surface, re-exported from the files below (#387)
+│   ├── webhook-delivery-schedule.service.ts ← Retry backoff (1m, 5m, 15m, 1h) and the 5-attempt cap
+│   ├── webhook-delivery-claim.service.ts ← Fair claim across API keys (#258), attempt lease, signing secret decryption (#259)
+│   ├── webhook-delivery-attempt.service.ts ← One HTTP attempt: SSRF re-validation, DNS pinning (#128), no redirects, no decompression, bounded read
+│   ├── webhook-delivery-query.service.ts ← List, get and replay (replay budget, #258), scoped by API key
+│   ├── webhook-delivery-outcome.service.ts ← Records an attempt: delivered, rescheduled or failed
+│   ├── webhook-delivery-retention.service.ts ← Retention purge of finished rows (#258)
 │   ├── webhook-delivery-worker.service.ts ← Poll loop and hourly cleanup
 │   └── replay-limit.service.ts      ← Replay budget per delivery (in memory)
 ├── dtos/
@@ -451,9 +457,11 @@ Single-webhook lookup scoped to an API key. Used by the deliveries endpoint to d
 The outbox insert (#184): in the caller's transaction `tx`, one `INSERT ... SELECT` writes a `pending` `webhook_deliveries` row for every active webhook of an active key subscribed to `event`, limited by `scope` (`DispatchScope`): `{ apiKeyId }` for an email's own events (only that key's webhooks), or `{ adminOnly: true }` for `email.received` and the domain events (only admin keys' webhooks). Owner and event are matched in SQL. Returns the number of rows; zero is success. Throws `WebhookEnqueueError` (SQLSTATE only) when the insert fails. See [Transactional outbox](#transactional-outbox-184).
 
 #### `signPayload(timestamp, body, secret): string`
-HMAC-SHA256 over `<timestamp>.<body>`. Re-exported and called by the worker once per attempt.
+HMAC-SHA256 over `<timestamp>.<body>`. Called once per attempt by `performHttpAttempt` (`webhook-delivery-attempt.service.ts`).
 
 ### webhook-delivery.service.ts (#30)
+
+The service's public surface; the code sits in the `webhook-delivery-*.service.ts` files beside it, one per concern (#387, see the module layout above).
 
 #### `claimDueDeliveries(n, now?): Promise<Array<...>>`
 Atomically claims up to `n` due rows with `FOR UPDATE SKIP LOCKED`, shared round-robin across the API keys owning their webhooks (#258: a `LATERAL` per webhook takes its first `n` due rows, ranked within the owning key, lowest ranks first), and increments their `attempts` (each row's returned `attempts` is the count before this attempt). Inactive webhooks' rows are flipped to `failed` rather than delivered, and so are rows over `MAX_DELIVERY_ATTEMPTS` (attempts that never reached `recordAttempt` because the process died).

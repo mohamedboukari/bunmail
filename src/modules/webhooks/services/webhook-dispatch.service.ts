@@ -27,7 +27,7 @@ interface WebhookPayload {
  * Stripe / Slack use the same construction. The string form is stable
  * and easy to reproduce in any language without parsing the JSON.
  *
- * Re-exported by `webhook-delivery.service.ts` so the worker can sign
+ * Used by `webhook-delivery-attempt.service.ts` so the worker can sign
  * each retry attempt with a fresh timestamp.
  */
 export function signPayload(timestamp: string, body: string, secret: string): string {
