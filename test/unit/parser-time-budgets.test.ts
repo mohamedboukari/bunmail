@@ -217,7 +217,7 @@ describe("verifyDkimSignatures at 10 MB (#373)", () => {
 
   /** sha256 of an empty relaxed body, so the header canonicalization runs too. */
   const EMPTY_BODY_HASH = "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=";
-  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 1024 });
+  const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
   const dns = keyRecord(`v=DKIM1; p=${publicKeyValue(publicKey)}`);
   const resolveTxt = (name: string): Promise<string[][]> =>
     name === keyName("sel") && "txt" in dns

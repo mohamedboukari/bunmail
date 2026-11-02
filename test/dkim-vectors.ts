@@ -231,12 +231,20 @@ function verdict(result: string): ExpectedResult {
 }
 
 /**
+ * A fixed 512-bit RSA public key (SPKI, base64) for the "key too short"
+ * vector. The verifier refuses it while parsing the key record, before any
+ * signature check, so only the public half is needed: no weak key is
+ * generated (CodeQL `js/insufficient-key-size`) and no private key is stored.
+ */
+const RSA_512_PUBLIC_KEY =
+  "MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBANUdUkRmU1Nb/HZwBsVU4Pv2ceiLtPrMsG2i8r88HvSvDQ/gO1V2qWOz1nwwMtagaiZ3OtTJ4FJKDgTrVR0NH0UCAwEAAQ==";
+
+/**
  * Builds every vector with fresh keys. Each case's DNS holds only the key
  * records it needs; any other name is NXDOMAIN.
  */
 export async function buildDkimCases(): Promise<DkimCase[]> {
   const rsa = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const rsaShort = generateKeyPairSync("rsa", { modulusLength: 512 });
   const ed = generateKeyPairSync("ed25519");
   const rsaTxt = `v=DKIM1; k=rsa; p=${publicKeyValue(rsa.publicKey)}`;
   const rsaDns = { [keyName("rsa")]: keyRecord(rsaTxt) };
@@ -442,15 +450,14 @@ export async function buildDkimCases(): Promise<DkimCase[]> {
     ),
     nodemailerCase(
       "512-bit RSA key",
+      /** Signed with the 2048-bit key: the short published key is refused first. */
       await signWithNodemailer(BASE_MESSAGE, {
-        privateKey: rsaShort.privateKey,
+        privateKey: rsa.privateKey,
         selector: "short",
       }),
       [verdict("policy")],
       {
-        [keyName("short")]: keyRecord(
-          `v=DKIM1; k=rsa; p=${publicKeyValue(rsaShort.publicKey)}`,
-        ),
+        [keyName("short")]: keyRecord(`v=DKIM1; k=rsa; p=${RSA_512_PUBLIC_KEY}`),
       },
     ),
     nodemailerCase(
