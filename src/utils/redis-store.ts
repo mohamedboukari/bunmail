@@ -2,6 +2,8 @@ import { RedisClient } from "bun";
 import { createHash, randomUUID } from "crypto";
 import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { logger } from "./logger.ts";
+import { RedisSlotSemaphore } from "./redis-slots.ts";
+import type { SlotSemaphore } from "./shared-slots.ts";
 import {
   SharedStoreError,
   sharedStoreErrorCode,
@@ -24,7 +26,8 @@ import {
  *   the check and the count of a rate limit cannot interleave with
  *   another replica's.
  * - **Every key expires:** counters with their window, one-time entries
- *   with their lifetime. Keys are `<prefix><namespace>:<key>`.
+ *   with their lifetime, semaphore slots with their latest lease
+ *   (`redis-slots.ts`). Keys are `<prefix><namespace>:<key>`.
  * - **One-time entries are not readable in Redis:** the key is the
  *   SHA-256 of the token and the value is AES-256-GCM encrypted with
  *   `DKIM_ENCRYPTION_KEY` (the same on every replica), so a dump or a
@@ -535,6 +538,7 @@ export async function connectRedisBackend(
   });
   const counters = new Map<string, WindowCounter>();
   const oneTimes = new Map<string, OneTimeStore>();
+  const slots = new Map<string, SlotSemaphore>();
   return {
     counter(namespace) {
       let counter = counters.get(namespace);
@@ -555,6 +559,14 @@ export async function connectRedisBackend(
         oneTimes.set(namespace, store);
       }
       return store;
+    },
+    slots(namespace) {
+      let semaphore = slots.get(namespace);
+      if (!semaphore) {
+        semaphore = new RedisSlotSemaphore(connection, `${prefix}${namespace}:`);
+        slots.set(namespace, semaphore);
+      }
+      return semaphore;
     },
     close: () => connection.close(),
   };

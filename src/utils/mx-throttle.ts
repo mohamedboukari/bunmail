@@ -1,3 +1,8 @@
+import { randomUUID } from "crypto";
+import { hostname } from "os";
+import { logger } from "./logger.ts";
+import { sharedSlotSemaphore } from "./shared-slots.ts";
+
 /**
  * Per-provider concurrency throttle for outbound SMTP delivery.
  *
@@ -19,7 +24,67 @@
  * Concurrency is set per-call by the mailer service (which reads
  * `config.mail.mxConcurrency`); this module stays config-agnostic so
  * unit tests can drive scenarios directly without a config shim.
+ *
+ * **Several replicas (#185).** The semaphore above is per process, so N
+ * replicas would open N times the limit. With a shared store installed
+ * (`REDIS_URL`), a caller that got its local slot also takes a slot of
+ * the bucket's shared semaphore (`shared-slots.ts`) before `fn` runs, so
+ * the limit holds across every replica. The local semaphore stays in
+ * front: it keeps this replica's waiters FIFO and asks the store for at
+ * most `max` slots per bucket at a time.
+ * - **Lease of 60 s, renewed every 20 s** while `fn` runs. A session may
+ *   last up to `SMTP_SESSION_DEADLINE_MS` (20 min); a lease that long
+ *   would block a bucket for every replica for 20 min after a crash. A
+ *   short lease kept alive frees a crashed replica's slot within a
+ *   minute, and survives two failed renewals in a row.
+ * - **Waiting** polls the store, 50 ms doubling to 500 ms with jitter;
+ *   the store serves waiters first come, first served across replicas.
+ *   The wait has no deadline, as the local one never had: each holder
+ *   ahead is bounded by its session deadline, or by its lease if its
+ *   replica died.
+ * - **Outage:** the store falls back to this replica's memory (logged once
+ *   a minute), which is the single-replica limit, per replica: N times the
+ *   limit, as before Redis. A release goes to the store that granted the
+ *   slot, or is left to lapse with its lease.
+ * - **Without a shared store** nothing of this runs: exactly the local
+ *   semaphore.
  */
+
+/** Timing of the shared slots; see the module comment for the values. */
+interface SlotTiming {
+  /** How long a shared slot lives unless renewed. */
+  leaseMs: number;
+  /** How often a holder renews its lease while `fn` runs. */
+  renewMs: number;
+  /** How long a waiter keeps its place in line between two polls. */
+  queueTtlMs: number;
+  /** First pause between two polls of a waiter. */
+  pollMinMs: number;
+  /** Longest pause between two polls (the doubling stops there). */
+  pollMaxMs: number;
+}
+
+/**
+ * The defaults. `queueTtlMs` must outlast the longest pause between two
+ * polls plus a Redis command timeout (1 s), or a waiter would lose its
+ * place while still waiting.
+ */
+const DEFAULT_SLOT_TIMING: SlotTiming = {
+  leaseMs: 60_000,
+  renewMs: 20_000,
+  queueTtlMs: 5_000,
+  pollMinMs: 50,
+  pollMaxMs: 500,
+};
+
+/** The timing in use; tests shorten it with {@link _setMxSlotTiming}. */
+let slotTiming = DEFAULT_SLOT_TIMING;
+
+/** The shared semaphore of every bucket, with its memory fallback. */
+const mxSlots = sharedSlotSemaphore("slots:mx");
+
+/** This process, in every holder id: which replica holds a slot. */
+const REPLICA = `${hostname()}:${process.pid}`;
 
 interface MxLock {
   /** Slots currently held by callers running `fn`. */
@@ -76,7 +141,7 @@ export async function withMxLock<T>(
   }
 
   try {
-    return await fn();
+    return await withSharedSlot(key, max, fn);
   } finally {
     const next = lock.queue.shift();
     if (next) {
@@ -89,6 +154,94 @@ export async function withMxLock<T>(
       locks.delete(key);
     }
   }
+}
+
+/**
+ * Runs `fn` holding a slot of the bucket's shared semaphore, or just runs
+ * it without a shared store. The slot is released (to the store that
+ * granted it) before the caller's local slot goes to the next waiter, so
+ * that waiter queues behind the ones of other replicas.
+ */
+async function withSharedSlot<T>(
+  key: string,
+  max: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!mxSlots.isShared()) return fn();
+  /** Unique per acquisition: a late renewal or release only touches its own slot. */
+  const holder = `${REPLICA}:${randomUUID()}`;
+  const grant = await waitForSlot(key, holder, max);
+  const renewal = keepRenewed(key, holder, grant);
+  try {
+    return await fn();
+  } finally {
+    renewal.stop();
+    await mxSlots.release(key, holder, grant);
+  }
+}
+
+/**
+ * Asks the shared semaphore for a slot until it grants one, pausing
+ * between asks (doubling, with jitter, up to `pollMaxMs`). Returns the
+ * grant. Never rejects: during an outage the memory fallback grants.
+ */
+async function waitForSlot(key: string, holder: string, max: number): Promise<string> {
+  const timing = slotTiming;
+  const options = { max, leaseMs: timing.leaseMs, queueTtlMs: timing.queueTtlMs };
+  const startedAt = Date.now();
+  let pauseMs = timing.pollMinMs;
+  let waited = false;
+  for (;;) {
+    const grant = await mxSlots.acquire(key, holder, options);
+    if (grant !== null) {
+      if (waited) {
+        logger.debug("MX slot taken after waiting for other replicas", {
+          bucket: key,
+          waitedMs: Date.now() - startedAt,
+        });
+      }
+      return grant;
+    }
+    waited = true;
+    await Bun.sleep(pauseMs * (0.8 + Math.random() * 0.4));
+    pauseMs = Math.min(pauseMs * 2, timing.pollMaxMs);
+  }
+}
+
+/**
+ * Renews the slot's lease every `renewMs` until stopped. A lease found
+ * lost (it lapsed, or the store changed) stops the renewals and logs a
+ * `warn`: the session goes on (cutting an SMTP session halfway would do
+ * more harm), so the shared limit may be passed by one until it ends. A
+ * store that does not answer is logged by the store and tried again.
+ */
+function keepRenewed(key: string, holder: string, grant: string): { stop(): void } {
+  const timing = slotTiming;
+  let stopped = false;
+  const timer = setInterval(() => {
+    void mxSlots.renew(key, holder, grant, timing.leaseMs).then((renewal) => {
+      if (renewal !== "lost" || stopped) return;
+      stop();
+      logger.warn("MX slot lease lost: the session goes on past the shared limit", {
+        bucket: key,
+      });
+    });
+  }, timing.renewMs);
+  /** Never what keeps the process alive at shutdown. */
+  timer.unref();
+  function stop(): void {
+    stopped = true;
+    clearInterval(timer);
+  }
+  return { stop };
+}
+
+/**
+ * Test-only override of the shared slots' timing (short leases and polls),
+ * merged over the defaults; `null` restores them.
+ */
+export function _setMxSlotTiming(next: Partial<SlotTiming> | null): void {
+  slotTiming = { ...DEFAULT_SLOT_TIMING, ...next };
 }
 
 /**
