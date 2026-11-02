@@ -1,0 +1,1689 @@
+# BunMail's own SPF test cases (#373), in the format of the OpenSPF RFC 7208
+# suite (rfc7208-tests.yml next to this file): each document has `tests` and
+# the `zonedata` they run against. Every test cites the RFC 7208 section it
+# checks. Written by hand for this project; results are for strict mode.
+#
+# Zone conventions (see test/spf-zone.ts): names are case-insensitive, a name
+# or type that is absent answers ENOTFOUND (a void lookup), TIMEOUT answers
+# ETIMEOUT (a temperror), CNAMEs are followed.
+---
+description: Appendix A.1, +all
+tests:
+  a1-plus-all:
+    spec: A.1
+    helo: mail.example.net
+    host: 192.0.2.200
+    mailfrom: foo@example.com
+    result: pass
+zonedata:
+  example.com:
+    - TXT: "v=spf1 +all"
+---
+description: Appendix A.1, a -all
+tests:
+  a1-a-10:
+    spec: A.1, 5.3
+    helo: mail.example.net
+    host: 192.0.2.10
+    mailfrom: foo@example.com
+    result: pass
+  a1-a-11:
+    spec: A.1, 5.3
+    helo: mail.example.net
+    host: 192.0.2.11
+    mailfrom: foo@example.com
+    result: pass
+  a1-a-65:
+    spec: A.1, 5.3
+    helo: mail.example.net
+    host: 192.0.2.65
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 a -all"
+    - A: 192.0.2.10
+    - A: 192.0.2.11
+    - MX: [10, mail-a.example.com]
+    - MX: [20, mail-b.example.com]
+---
+description: Appendix A.1, a:example.org -all (example.org has no A record)
+tests:
+  a1-a-example-org:
+    spec: A.1, 5.3
+    helo: mail.example.net
+    host: 192.0.2.140
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 a:example.org -all"
+  example.org:
+    - MX: [10, mail-c.example.org]
+  mail-c.example.org:
+    - A: 192.0.2.140
+---
+description: Appendix A.1, mx -all
+tests:
+  a1-mx-129:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.129
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx-130:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.130
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx-10:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.10
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 mx -all"
+    - A: 192.0.2.10
+    - A: 192.0.2.11
+    - MX: [10, mail-a.example.com]
+    - MX: [20, mail-b.example.com]
+  mail-a.example.com:
+    - A: 192.0.2.129
+  mail-b.example.com:
+    - A: 192.0.2.130
+---
+description: Appendix A.1, mx:example.org -all
+tests:
+  a1-mx-org-140:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.140
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx-org-129:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.129
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 mx:example.org -all"
+    - MX: [10, mail-a.example.com]
+  mail-a.example.com:
+    - A: 192.0.2.129
+  example.org:
+    - MX: [10, mail-c.example.org]
+  mail-c.example.org:
+    - A: 192.0.2.140
+---
+description: Appendix A.1, mx mx:example.org -all
+tests:
+  a1-mx-both-129:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.129
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx-both-140:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.140
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx-both-65:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.65
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 mx mx:example.org -all"
+    - MX: [10, mail-a.example.com]
+    - MX: [20, mail-b.example.com]
+  mail-a.example.com:
+    - A: 192.0.2.129
+  mail-b.example.com:
+    - A: 192.0.2.130
+  example.org:
+    - MX: [10, mail-c.example.org]
+  mail-c.example.org:
+    - A: 192.0.2.140
+---
+description: Appendix A.1, mx/30 mx:example.org/30 -all
+tests:
+  a1-mx30-131:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.131
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx30-143:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.143
+    mailfrom: foo@example.com
+    result: pass
+  a1-mx30-132:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.132
+    mailfrom: foo@example.com
+    result: fail
+  a1-mx30-144:
+    spec: A.1, 5.4
+    helo: mail.example.net
+    host: 192.0.2.144
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 mx/30 mx:example.org/30 -all"
+    - MX: [10, mail-a.example.com]
+    - MX: [20, mail-b.example.com]
+  mail-a.example.com:
+    - A: 192.0.2.129
+  mail-b.example.com:
+    - A: 192.0.2.130
+  example.org:
+    - MX: [10, mail-c.example.org]
+  mail-c.example.org:
+    - A: 192.0.2.140
+---
+description: Appendix A.1, ptr -all
+tests:
+  a1-ptr-65:
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 192.0.2.65
+    mailfrom: foo@example.com
+    result: pass
+  a1-ptr-66:
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 192.0.2.66
+    mailfrom: foo@example.com
+    result: pass
+  a1-ptr-129:
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 192.0.2.129
+    mailfrom: foo@example.com
+    result: pass
+  a1-ptr-domain-itself:
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 192.0.2.10
+    mailfrom: foo@example.com
+    result: pass
+  a1-ptr-other-domain:
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 192.0.2.140
+    mailfrom: foo@example.com
+    result: fail
+  a1-ptr-not-validated:
+    description: bob.example.com does not resolve back to 10.0.0.10.
+    spec: A.1, 5.5
+    helo: mail.example.net
+    host: 10.0.0.10
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 ptr -all"
+    - A: 192.0.2.10
+    - A: 192.0.2.11
+  amy.example.com:
+    - A: 192.0.2.65
+  bob.example.com:
+    - A: 192.0.2.66
+  mail-a.example.com:
+    - A: 192.0.2.129
+  mail-c.example.org:
+    - A: 192.0.2.140
+  10.2.0.192.in-addr.arpa:
+    - PTR: example.com
+  65.2.0.192.in-addr.arpa:
+    - PTR: amy.example.com
+  66.2.0.192.in-addr.arpa:
+    - PTR: bob.example.com
+  129.2.0.192.in-addr.arpa:
+    - PTR: mail-a.example.com
+  140.2.0.192.in-addr.arpa:
+    - PTR: mail-c.example.org
+  10.0.0.10.in-addr.arpa:
+    - PTR: bob.example.com
+---
+description: Appendix A.1, ip4:192.0.2.128/28 -all
+tests:
+  a1-ip4-129:
+    spec: A.1, 5.6
+    helo: mail.example.net
+    host: 192.0.2.129
+    mailfrom: foo@example.com
+    result: pass
+  a1-ip4-143:
+    spec: A.1, 5.6
+    helo: mail.example.net
+    host: 192.0.2.143
+    mailfrom: foo@example.com
+    result: pass
+  a1-ip4-144:
+    spec: A.1, 5.6
+    helo: mail.example.net
+    host: 192.0.2.144
+    mailfrom: foo@example.com
+    result: fail
+  a1-ip4-65:
+    spec: A.1, 5.6
+    helo: mail.example.net
+    host: 192.0.2.65
+    mailfrom: foo@example.com
+    result: fail
+zonedata:
+  example.com:
+    - TXT: "v=spf1 ip4:192.0.2.128/28 -all"
+---
+description: Macro expansion, the examples of section 7.4 and more
+comment: >-
+  The 7.4 examples use <sender> strong-bad@email.example.com; here the
+  domain is mN.example.com, so %{d2} is still example.com.
+tests:
+  macro-ir-v-d2-ip4:
+    description: "%{ir}.%{v}._spf.%{d2} is 3.2.0.192.in-addr._spf.example.com"
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m1.example.com
+    result: pass
+  macro-ir-v-d2-ip4-other:
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.4
+    mailfrom: strong-bad@m1.example.com
+    result: fail
+  macro-ir-v-d2-ip6:
+    description: "%{ir}.%{v}._spf.%{d2} for 2001:db8::cb01 uses the reversed nibbles and ip6"
+    spec: 7.4
+    helo: mail.example.net
+    host: 2001:db8::cb01
+    mailfrom: strong-bad@m1.example.com
+    result: pass
+  macro-lr-dash:
+    description: "%{lr-}.lp._spf.%{d2} is bad.strong.lp._spf.example.com"
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m2.example.com
+    result: pass
+  macro-lr-dash-ir:
+    description: "%{lr-}.lp.%{ir}.%{v}._spf.%{d2}"
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m3.example.com
+    result: pass
+  macro-l1r-dash:
+    description: "%{ir}.%{v}.%{l1r-}.lp._spf.%{d2}"
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m4.example.com
+    result: pass
+  macro-d2-trusted:
+    description: "%{d2}.trusted-domains.example.net"
+    spec: 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m5.example.com
+    result: pass
+  macro-dr:
+    description: "%{dr} reverses all the labels"
+    spec: 7.3, 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m6.example.com
+    result: pass
+  macro-d2r:
+    description: "%{d2r} keeps the right-hand two labels after reversal"
+    spec: 7.3, 7.4
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m7.example.com
+    result: pass
+  macro-s:
+    description: "%{s} is the whole sender"
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m8.example.com
+    result: pass
+  macro-h:
+    description: "%{h} is the HELO name"
+    spec: 7.3
+    helo: mx.sender.example
+    host: 192.0.2.3
+    mailfrom: strong-bad@m9.example.com
+    result: pass
+  macro-more-parts-than-available:
+    description: "%{d9} uses all the labels"
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m10.example.com
+    result: pass
+  macro-uppercase-url-escape:
+    description: "%{L} is URL-escaped: o'brien+x becomes o%27brien%2Bx"
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: "o'brien+x@m11.example.com"
+    result: pass
+  macro-truncation:
+    description: >-
+      An expansion over 253 characters loses labels on the left until it
+      fits: five 60-character labels plus trunc.example.net keep three.
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@m12.example.com
+    result: pass
+  macro-p-unknown:
+    description: "%{p} without a validated name is unknown"
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m13.example.com
+    result: pass
+  macro-i-ip4-mapped:
+    description: "%{i} of an IPv4-mapped client is the dotted quad"
+    spec: 5, 7.3
+    helo: mail.example.net
+    host: "::ffff:192.0.2.3"
+    mailfrom: strong-bad@m14.example.com
+    result: pass
+  macro-i-ip6:
+    description: "%{i} of an IPv6 client is its 32 nibbles, dot separated"
+    spec: 7.3
+    helo: mail.example.net
+    host: 2001:db8::1
+    mailfrom: strong-bad@m15.example.com
+    result: pass
+  macro-d-is-current-domain:
+    description: "%{d} in an included record is the include target, %{o} stays the sender domain"
+    spec: 5.2, 7.3
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: strong-bad@m16.example.com
+    result: pass
+zonedata:
+  m1.example.com:
+    - TXT: "v=spf1 exists:%{ir}.%{v}._spf.%{d2} -all"
+  3.2.0.192.in-addr._spf.example.com:
+    - A: 127.0.0.2
+  1.0.b.c.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6._spf.example.com:
+    - A: 127.0.0.2
+  m2.example.com:
+    - TXT: "v=spf1 exists:%{lr-}.lp._spf.%{d2} -all"
+  bad.strong.lp._spf.example.com:
+    - A: 127.0.0.2
+  m3.example.com:
+    - TXT: "v=spf1 exists:%{lr-}.lp.%{ir}.%{v}._spf.%{d2} -all"
+  bad.strong.lp.3.2.0.192.in-addr._spf.example.com:
+    - A: 127.0.0.2
+  m4.example.com:
+    - TXT: "v=spf1 exists:%{ir}.%{v}.%{l1r-}.lp._spf.%{d2} -all"
+  3.2.0.192.in-addr.strong.lp._spf.example.com:
+    - A: 127.0.0.2
+  m5.example.com:
+    - TXT: "v=spf1 exists:%{d2}.trusted-domains.example.net -all"
+  example.com.trusted-domains.example.net:
+    - A: 127.0.0.2
+  m6.example.com:
+    - TXT: "v=spf1 exists:%{dr}.dr.example.net -all"
+  com.example.m6.dr.example.net:
+    - A: 127.0.0.2
+  m7.example.com:
+    - TXT: "v=spf1 exists:%{d2r}.d2r.example.net -all"
+  example.m7.d2r.example.net:
+    - A: 127.0.0.2
+  m8.example.com:
+    - TXT: "v=spf1 exists:%{s}.s.example.net -all"
+  strong-bad@m8.example.com.s.example.net:
+    - A: 127.0.0.2
+  m9.example.com:
+    - TXT: "v=spf1 exists:%{h}.h.example.net -all"
+  mx.sender.example.h.example.net:
+    - A: 127.0.0.2
+  m10.example.com:
+    - TXT: "v=spf1 exists:%{d9}.n.example.net -all"
+  m10.example.com.n.example.net:
+    - A: 127.0.0.2
+  m11.example.com:
+    - TXT: "v=spf1 exists:%{L}.u.example.net -all"
+  o%27brien%2bx.u.example.net:
+    - A: 127.0.0.2
+  m12.example.com:
+    - TXT: "v=spf1 exists:%{l}.%{l}.%{l}.%{l}.%{l}.trunc.example.net -all"
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.trunc.example.net:
+    - A: 127.0.0.2
+  m13.example.com:
+    - TXT: "v=spf1 exists:%{p}.p.example.net -all"
+  unknown.p.example.net:
+    - A: 127.0.0.2
+  m14.example.com:
+    - TXT: "v=spf1 exists:%{i}.%{v}.i.example.net -all"
+  192.0.2.3.in-addr.i.example.net:
+    - A: 127.0.0.2
+  m15.example.com:
+    - TXT: "v=spf1 exists:%{i}.i6.example.net -all"
+  2.0.0.1.0.d.b.8.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.1.i6.example.net:
+    - A: 127.0.0.2
+  m16.example.com:
+    - TXT: "v=spf1 include:inc.m16.example.com -all"
+  inc.m16.example.com:
+    - TXT: "v=spf1 exists:%{d}.%{o}.d.example.net -all"
+  inc.m16.example.com.m16.example.com.d.example.net:
+    - A: 127.0.0.2
+---
+description: Macro syntax errors
+tests:
+  macro-zero-digit:
+    description: "%{d0}: the digit transformer must be nonzero"
+    spec: 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e1.example.com
+    result: permerror
+  macro-unknown-letter:
+    spec: 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e2.example.com
+    result: permerror
+  macro-exp-letter-c:
+    description: "%{c} is only allowed in explanation text"
+    spec: 7.2
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e3.example.com
+    result: permerror
+  macro-exp-letter-t:
+    spec: 7.2
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e4.example.com
+    result: permerror
+  macro-unterminated:
+    spec: 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e5.example.com
+    result: permerror
+  macro-error-after-match:
+    description: A bad macro anywhere in the record is a permerror, even after a match.
+    spec: 4.6, 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e6.example.com
+    result: permerror
+  macro-unknown-modifier-exp-letter:
+    description: An unknown modifier may use any macro letter; it is never expanded.
+    spec: 6, 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e7.example.com
+    result: pass
+  macro-escapes-in-domain:
+    description: "%% %_ %- expand to %, a space and %20"
+    spec: 7.1
+    helo: mail.example.net
+    host: 192.0.2.3
+    mailfrom: foo@e8.example.com
+    result: pass
+zonedata:
+  e1.example.com:
+    - TXT: "v=spf1 exists:%{d0}.example.net -all"
+  e2.example.com:
+    - TXT: "v=spf1 exists:%{x}.example.net -all"
+  e3.example.com:
+    - TXT: "v=spf1 exists:%{c}.example.net -all"
+  e4.example.com:
+    - TXT: "v=spf1 a:%{t}.example.net -all"
+  e5.example.com:
+    - TXT: "v=spf1 exists:%{d.example.net -all"
+  e6.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.3 exists:%{q}.example.net"
+  e7.example.com:
+    - TXT: "v=spf1 note=%{t}%{c}%{r} ip4:192.0.2.3 -all"
+  e8.example.com:
+    - TXT: "v=spf1 a:x%%y%_z%-w.example.net -all"
+  "x%y z%20w.example.net":
+    - A: 192.0.2.3
+---
+description: DNS lookup limits
+tests:
+  limit-include-chain-10:
+    description: Ten nested includes are ten lookups, within the limit.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@chain10.example.com
+    result: pass
+  limit-include-chain-11:
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@chain11.example.com
+    result: permerror
+  limit-redirect-chain-10:
+    spec: 4.6.4, 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r1.example.com
+    result: pass
+  limit-redirect-chain-11:
+    spec: 4.6.4, 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r0.example.com
+    result: permerror
+  limit-counted-across-include:
+    description: Six a terms, the include, then four more inside it make eleven.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@across.example.com
+    result: permerror
+  limit-across-include-at-ten:
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@across10.example.com
+    result: pass
+  limit-ip-terms-not-counted:
+    description: ip4, ip6 and all make no DNS query and are not counted.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@manyip.example.com
+    result: pass
+  limit-p-macro-counts:
+    description: Nine a terms, then exists with %{p}, whose PTR lookup also counts.
+    spec: 4.6.4, 7.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@pmacro.example.com
+    result: permerror
+  limit-include-loop-via-redirect:
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@loop1.example.com
+    result: permerror
+zonedata:
+  chain10.example.com:
+    - TXT: "v=spf1 include:c1.example.com -all"
+  c1.example.com:
+    - TXT: "v=spf1 include:c2.example.com -all"
+  c2.example.com:
+    - TXT: "v=spf1 include:c3.example.com -all"
+  c3.example.com:
+    - TXT: "v=spf1 include:c4.example.com -all"
+  c4.example.com:
+    - TXT: "v=spf1 include:c5.example.com -all"
+  c5.example.com:
+    - TXT: "v=spf1 include:c6.example.com -all"
+  c6.example.com:
+    - TXT: "v=spf1 include:c7.example.com -all"
+  c7.example.com:
+    - TXT: "v=spf1 include:c8.example.com -all"
+  c8.example.com:
+    - TXT: "v=spf1 include:c9.example.com -all"
+  c9.example.com:
+    - TXT: "v=spf1 include:c10.example.com -all"
+  c10.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+  chain11.example.com:
+    - TXT: "v=spf1 include:c0.example.com -all"
+  c0.example.com:
+    - TXT: "v=spf1 include:c1.example.com -all"
+  r0.example.com:
+    - TXT: "v=spf1 redirect=r1.example.com"
+  r1.example.com:
+    - TXT: "v=spf1 redirect=r2.example.com"
+  r2.example.com:
+    - TXT: "v=spf1 redirect=r3.example.com"
+  r3.example.com:
+    - TXT: "v=spf1 redirect=r4.example.com"
+  r4.example.com:
+    - TXT: "v=spf1 redirect=r5.example.com"
+  r5.example.com:
+    - TXT: "v=spf1 redirect=r6.example.com"
+  r6.example.com:
+    - TXT: "v=spf1 redirect=r7.example.com"
+  r7.example.com:
+    - TXT: "v=spf1 redirect=r8.example.com"
+  r8.example.com:
+    - TXT: "v=spf1 redirect=r9.example.com"
+  r9.example.com:
+    - TXT: "v=spf1 redirect=r10.example.com"
+  r10.example.com:
+    - TXT: "v=spf1 redirect=r11.example.com"
+  r11.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+  across.example.com:
+    - TXT: "v=spf1 a a a a a a include:inner4.example.com -all"
+    - A: 198.51.100.1
+  inner4.example.com:
+    - TXT: "v=spf1 a a a a ip4:192.0.2.1 -all"
+    - A: 198.51.100.2
+  across10.example.com:
+    - TXT: "v=spf1 a a a a a a include:inner3.example.com -all"
+    - A: 198.51.100.1
+  inner3.example.com:
+    - TXT: "v=spf1 a a a ip4:192.0.2.1 -all"
+    - A: 198.51.100.2
+  manyip.example.com:
+    - TXT: "v=spf1 ip4:198.51.100.1 ip4:198.51.100.2 ip4:198.51.100.3 ip4:198.51.100.4 ip4:198.51.100.5 ip4:198.51.100.6 ip6:2001:db8::1 ip6:2001:db8::2 ip6:2001:db8::3 ip6:2001:db8::4 ip6:2001:db8::5 a a a a a a a a a a ip4:192.0.2.1 -all"
+    - A: 198.51.100.9
+  pmacro.example.com:
+    - TXT: "v=spf1 a a a a a a a a a exists:%{p}.p.example.net -all"
+    - A: 198.51.100.9
+  unknown.p.example.net:
+    - A: 127.0.0.2
+  loop1.example.com:
+    - TXT: "v=spf1 include:loop2.example.com -all"
+  loop2.example.com:
+    - TXT: "v=spf1 redirect=loop1.example.com"
+---
+description: Void lookup limit
+tests:
+  void-two-a:
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@v1.example.com
+    result: pass
+  void-three-a:
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@v2.example.com
+    result: permerror
+  void-mx-and-exists:
+    description: An empty MX answer and an empty exists answer count too.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@v3.example.com
+    result: permerror
+  void-mx-hosts-not-counted:
+    description: MX host names without addresses are not void lookups of a term.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@v4.example.com
+    result: pass
+  void-a-wrong-family-counts:
+    description: An IPv4 client's A query of an IPv6-only name finds nothing.
+    spec: 4.6.4, 5.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@v5.example.com
+    result: permerror
+zonedata:
+  v1.example.com:
+    - TXT: "v=spf1 a:nx1.example.com a:nx2.example.com ip4:192.0.2.1 -all"
+  v2.example.com:
+    - TXT: "v=spf1 a:nx1.example.com a:nx2.example.com a:nx3.example.com ip4:192.0.2.1 -all"
+  v3.example.com:
+    - TXT: "v=spf1 mx:nomx.example.com exists:nx1.example.com a:nx2.example.com ip4:192.0.2.1 -all"
+  nomx.example.com:
+    - A: 198.51.100.1
+  v4.example.com:
+    - TXT: "v=spf1 mx:threehosts.example.com a:nx1.example.com a:nx2.example.com ip4:192.0.2.1 -all"
+  threehosts.example.com:
+    - MX: [10, nx3.example.com]
+    - MX: [20, nx4.example.com]
+    - MX: [30, nx5.example.com]
+  v5.example.com:
+    - TXT: "v=spf1 a:six1.example.com a:six2.example.com a:six3.example.com ip4:192.0.2.1 -all"
+  six1.example.com:
+    - AAAA: 2001:db8::1
+  six2.example.com:
+    - AAAA: 2001:db8::2
+  six3.example.com:
+    - AAAA: 2001:db8::3
+---
+description: Names per MX and PTR answer
+tests:
+  mx-ten-names:
+    description: Ten MX names are allowed; the tenth matches.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.10
+    mailfrom: foo@mx10.example.com
+    result: pass
+  mx-eleven-names:
+    description: More than ten MX names is a permerror, even if one would match.
+    spec: 4.6.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@mx11.example.com
+    result: permerror
+  mx-null:
+    description: A null MX names no host.
+    spec: 5.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@nullmx.example.com
+    result: fail
+  mx-trailing-dot-exchange:
+    spec: 5.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@dotmx.example.com
+    result: pass
+  ptr-tenth-name:
+    description: The tenth PTR name is still checked.
+    spec: 4.6.4, 5.5
+    helo: mail.example.net
+    host: 192.0.2.20
+    mailfrom: foo@ptr10.example.com
+    result: pass
+  ptr-eleventh-name:
+    description: Only the first ten PTR names are checked.
+    spec: 4.6.4, 5.5
+    helo: mail.example.net
+    host: 192.0.2.21
+    mailfrom: foo@ptr11.example.com
+    result: fail
+zonedata:
+  mx10.example.com:
+    - TXT: "v=spf1 mx -all"
+    - MX: [1, h1.example.com]
+    - MX: [2, h2.example.com]
+    - MX: [3, h3.example.com]
+    - MX: [4, h4.example.com]
+    - MX: [5, h5.example.com]
+    - MX: [6, h6.example.com]
+    - MX: [7, h7.example.com]
+    - MX: [8, h8.example.com]
+    - MX: [9, h9.example.com]
+    - MX: [10, h10.example.com]
+  mx11.example.com:
+    - TXT: "v=spf1 mx -all"
+    - MX: [1, h1.example.com]
+    - MX: [2, h2.example.com]
+    - MX: [3, h3.example.com]
+    - MX: [4, h4.example.com]
+    - MX: [5, h5.example.com]
+    - MX: [6, h6.example.com]
+    - MX: [7, h7.example.com]
+    - MX: [8, h8.example.com]
+    - MX: [9, h9.example.com]
+    - MX: [10, h10.example.com]
+    - MX: [11, h11.example.com]
+  h1.example.com:
+    - A: 192.0.2.1
+  h2.example.com:
+    - A: 192.0.2.2
+  h3.example.com:
+    - A: 192.0.2.3
+  h4.example.com:
+    - A: 192.0.2.4
+  h5.example.com:
+    - A: 192.0.2.5
+  h6.example.com:
+    - A: 192.0.2.6
+  h7.example.com:
+    - A: 192.0.2.7
+  h8.example.com:
+    - A: 192.0.2.8
+  h9.example.com:
+    - A: 192.0.2.9
+  h10.example.com:
+    - A: 192.0.2.10
+  h11.example.com:
+    - A: 192.0.2.11
+  nullmx.example.com:
+    - TXT: "v=spf1 mx -all"
+    - MX: [0, ""]
+    - A: 192.0.2.1
+  dotmx.example.com:
+    - TXT: "v=spf1 mx -all"
+    - MX: [10, h1.example.com.]
+  ptr10.example.com:
+    - TXT: "v=spf1 ptr -all"
+  ptr11.example.com:
+    - TXT: "v=spf1 ptr -all"
+  20.2.0.192.in-addr.arpa:
+    - PTR: p1.example.org
+    - PTR: p2.example.org
+    - PTR: p3.example.org
+    - PTR: p4.example.org
+    - PTR: p5.example.org
+    - PTR: p6.example.org
+    - PTR: p7.example.org
+    - PTR: p8.example.org
+    - PTR: p9.example.org
+    - PTR: host.ptr10.example.com
+  host.ptr10.example.com:
+    - A: 192.0.2.20
+  21.2.0.192.in-addr.arpa:
+    - PTR: p1.example.org
+    - PTR: p2.example.org
+    - PTR: p3.example.org
+    - PTR: p4.example.org
+    - PTR: p5.example.org
+    - PTR: p6.example.org
+    - PTR: p7.example.org
+    - PTR: p8.example.org
+    - PTR: p9.example.org
+    - PTR: p10.example.org
+    - PTR: host.ptr11.example.com
+  host.ptr11.example.com:
+    - A: 192.0.2.21
+---
+description: include and redirect
+tests:
+  include-pass-matches:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i1.example.com
+    result: pass
+  include-minus-pass-is-fail:
+    description: The include's own qualifier gives the result when it matches.
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i2.example.com
+    result: fail
+  include-question-pass-is-neutral:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i3.example.com
+    result: neutral
+  include-fail-does-not-match:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i4.example.com
+    result: softfail
+  include-softfail-does-not-match:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i5.example.com
+    result: softfail
+  include-neutral-does-not-match:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i6.example.com
+    result: softfail
+  include-none-is-permerror:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i7.example.com
+    result: permerror
+  include-nxdomain-is-permerror:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i8.example.com
+    result: permerror
+  include-permerror-propagates:
+    description: A permerror inside the include ends the evaluation, despite a later +all.
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i9.example.com
+    result: permerror
+  include-temperror-propagates:
+    spec: 5.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@i10.example.com
+    result: temperror
+  include-invalid-target:
+    description: An include target that expands to an invalid name is a permerror.
+    spec: 4.3, 5.2
+    helo: singlelabel
+    host: 192.0.2.1
+    mailfrom: foo@i11.example.com
+    result: permerror
+  redirect-result:
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d1.example.com
+    result: pass
+  redirect-none-is-permerror:
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d2.example.com
+    result: permerror
+  redirect-temperror:
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d3.example.com
+    result: temperror
+  redirect-not-used-after-match:
+    description: redirect only applies when no mechanism matched.
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d4.example.com
+    result: pass
+  redirect-ignored-with-all:
+    description: With an all mechanism the redirect is never used, so its broken target does not matter.
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d5.example.com
+    result: fail
+  redirect-before-mechanisms:
+    description: A redirect written first still applies after all the mechanisms.
+    spec: 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d6.example.com
+    result: softfail
+  redirect-invalid-target:
+    spec: 6.1
+    helo: singlelabel
+    host: 192.0.2.1
+    mailfrom: foo@d7.example.com
+    result: permerror
+  redirect-default-neutral:
+    description: A redirected record without a match is neutral.
+    spec: 4.7, 6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@d8.example.com
+    result: neutral
+zonedata:
+  pass.example.org:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+  fail.example.org:
+    - TXT: "v=spf1 -all"
+  softfail.example.org:
+    - TXT: "v=spf1 ~all"
+  neutral.example.org:
+    - TXT: "v=spf1 ?all"
+  nospf.example.org:
+    - TXT: "google-site-verification=abc"
+  broken.example.org:
+    - TXT: "v=spf1 frobnicate -all"
+  slow.example.org:
+    - TIMEOUT
+  i1.example.com:
+    - TXT: "v=spf1 include:pass.example.org -all"
+  i2.example.com:
+    - TXT: "v=spf1 -include:pass.example.org +all"
+  i3.example.com:
+    - TXT: "v=spf1 ?include:pass.example.org -all"
+  i4.example.com:
+    - TXT: "v=spf1 include:fail.example.org ~all"
+  i5.example.com:
+    - TXT: "v=spf1 include:softfail.example.org ~all"
+  i6.example.com:
+    - TXT: "v=spf1 include:neutral.example.org ~all"
+  i7.example.com:
+    - TXT: "v=spf1 include:nospf.example.org +all"
+  i8.example.com:
+    - TXT: "v=spf1 include:nowhere.example.org +all"
+  i9.example.com:
+    - TXT: "v=spf1 include:broken.example.org +all"
+  i10.example.com:
+    - TXT: "v=spf1 include:slow.example.org +all"
+  i11.example.com:
+    - TXT: "v=spf1 include:%{h} +all"
+  d1.example.com:
+    - TXT: "v=spf1 redirect=pass.example.org"
+  d2.example.com:
+    - TXT: "v=spf1 redirect=nospf.example.org"
+  d3.example.com:
+    - TXT: "v=spf1 redirect=slow.example.org"
+  d4.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 redirect=fail.example.org"
+  d5.example.com:
+    - TXT: "v=spf1 redirect=nowhere.example.org -all"
+  d6.example.com:
+    - TXT: "v=spf1 redirect=softfail.example.org ip4:198.51.100.1"
+  d7.example.com:
+    - TXT: "v=spf1 redirect=%{h}"
+  d8.example.com:
+    - TXT: "v=spf1 redirect=d8target.example.org"
+  d8target.example.org:
+    - TXT: "v=spf1 ip4:198.51.100.1"
+---
+description: CIDR matching
+tests:
+  cidr-ip4-zero:
+    spec: 5.6
+    helo: mail.example.net
+    host: 203.0.113.77
+    mailfrom: foo@c1.example.com
+    result: pass
+  cidr-ip4-32-exact:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@c2.example.com
+    result: pass
+  cidr-ip4-32-neighbour:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.2
+    mailfrom: foo@c2.example.com
+    result: fail
+  cidr-ip4-31-in:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@c3.example.com
+    result: pass
+  cidr-ip4-31-out:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.2
+    mailfrom: foo@c3.example.com
+    result: fail
+  cidr-ip4-25-edge:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.127
+    mailfrom: foo@c4.example.com
+    result: pass
+  cidr-ip4-25-past-edge:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.128
+    mailfrom: foo@c4.example.com
+    result: fail
+  cidr-ip6-zero:
+    spec: 5.6
+    helo: mail.example.net
+    host: 2001:db8:ffff::1
+    mailfrom: foo@c5.example.com
+    result: pass
+  cidr-ip6-zero-ip4-client:
+    description: An IPv4 client never matches an ip6 term, even ::/0.
+    spec: 5, 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@c5.example.com
+    result: fail
+  cidr-ip6-128-exact:
+    spec: 5.6
+    helo: mail.example.net
+    host: 2001:db8::1
+    mailfrom: foo@c6.example.com
+    result: pass
+  cidr-ip6-128-neighbour:
+    spec: 5.6
+    helo: mail.example.net
+    host: 2001:db8::2
+    mailfrom: foo@c6.example.com
+    result: fail
+  cidr-ip6-uncompressed-client:
+    spec: 5.6
+    helo: mail.example.net
+    host: "2001:0db8:0000:0000:0000:0000:0000:0001"
+    mailfrom: foo@c6.example.com
+    result: pass
+  cidr-ip6-127:
+    spec: 5.6
+    helo: mail.example.net
+    host: 2001:db8::1
+    mailfrom: foo@c7.example.com
+    result: pass
+  cidr-ip6-127-out:
+    spec: 5.6
+    helo: mail.example.net
+    host: 2001:db8::2
+    mailfrom: foo@c7.example.com
+    result: fail
+  cidr-ip4-mapped-dotted:
+    description: An IPv4-mapped client matches ip4 terms.
+    spec: 5
+    helo: mail.example.net
+    host: "::ffff:192.0.2.1"
+    mailfrom: foo@c2.example.com
+    result: pass
+  cidr-ip4-mapped-hex:
+    description: The hex form of an IPv4-mapped client is IPv4 too.
+    spec: 5
+    helo: mail.example.net
+    host: "::ffff:c000:201"
+    mailfrom: foo@c2.example.com
+    result: pass
+  cidr-ip4-mapped-not-ip6:
+    description: An IPv4-mapped client does not match an ip6 term naming the same mapped address.
+    spec: 5
+    helo: mail.example.net
+    host: "::ffff:192.0.2.1"
+    mailfrom: foo@c8.example.com
+    result: fail
+  cidr-a-zero-any-record:
+    spec: 5.3
+    helo: mail.example.net
+    host: 203.0.113.9
+    mailfrom: foo@c9.example.com
+    result: pass
+  cidr-a-dual-ip6:
+    spec: 5.3
+    helo: mail.example.net
+    host: 2001:db8:1::abcd
+    mailfrom: foo@c10.example.com
+    result: pass
+  cidr-a-dual-ip4:
+    spec: 5.3
+    helo: mail.example.net
+    host: 192.0.2.200
+    mailfrom: foo@c10.example.com
+    result: pass
+  cidr-a-dual-ip4-out:
+    spec: 5.3
+    helo: mail.example.net
+    host: 192.0.3.1
+    mailfrom: foo@c10.example.com
+    result: fail
+  cidr-a-ip4-mapped-queries-a:
+    description: An IPv4-mapped client is looked up in A records, not AAAA.
+    spec: 5, 5.3
+    helo: mail.example.net
+    host: "::ffff:192.0.2.1"
+    mailfrom: foo@c11.example.com
+    result: pass
+  cidr-exists-ip6-client-queries-a:
+    spec: 5.7
+    helo: mail.example.net
+    host: 2001:db8::1
+    mailfrom: foo@c12.example.com
+    result: pass
+zonedata:
+  c1.example.com:
+    - TXT: "v=spf1 ip4:0.0.0.0/0 -all"
+  c2.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1/32 -all"
+  c3.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.0/31 -all"
+  c4.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.0/25 -all"
+  c5.example.com:
+    - TXT: "v=spf1 ip6:::/0 -all"
+  c6.example.com:
+    - TXT: "v=spf1 ip6:2001:db8::1/128 -all"
+  c7.example.com:
+    - TXT: "v=spf1 ip6:2001:db8::/127 -all"
+  c8.example.com:
+    - TXT: "v=spf1 ip6:::ffff:192.0.2.1 -all"
+  c9.example.com:
+    - TXT: "v=spf1 a:any.example.com/0 -all"
+  any.example.com:
+    - A: 198.51.100.1
+  c10.example.com:
+    - TXT: "v=spf1 a:dual.example.com/24//48 -all"
+  dual.example.com:
+    - A: 192.0.2.1
+    - AAAA: 2001:db8:1::1
+  c11.example.com:
+    - TXT: "v=spf1 a:v4only.example.com -all"
+  v4only.example.com:
+    - A: 192.0.2.1
+  c12.example.com:
+    - TXT: "v=spf1 exists:v4only.example.com -all"
+---
+description: Record syntax errors
+tests:
+  syntax-unknown-mechanism:
+    spec: 4.6.1, 5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s1.example.com
+    result: permerror
+  syntax-ip4-cidr-33:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s2.example.com
+    result: permerror
+  syntax-ip4-leading-zero:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s3.example.com
+    result: permerror
+  syntax-ip4-octet-256:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s4.example.com
+    result: permerror
+  syntax-ip6-cidr-129:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s5.example.com
+    result: permerror
+  syntax-ip6-zone-index:
+    spec: 5.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s6.example.com
+    result: permerror
+  syntax-a-cidr-33:
+    spec: 5.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s7.example.com
+    result: permerror
+  syntax-mx-single-slash-dual:
+    spec: 5.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s8.example.com
+    result: permerror
+  syntax-duplicate-exp:
+    spec: 6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s9.example.com
+    result: permerror
+  syntax-duplicate-redirect:
+    spec: 6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s10.example.com
+    result: permerror
+  syntax-error-after-match:
+    description: Strict mode checks the whole record before evaluating it.
+    spec: 4.6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s11.example.com
+    result: permerror
+  syntax-double-qualifier:
+    spec: 4.6.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s12.example.com
+    result: permerror
+  syntax-all-suffix:
+    spec: 5.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s13.example.com
+    result: permerror
+  syntax-ptr-cidr:
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s14.example.com
+    result: permerror
+  syntax-tab-separator:
+    description: Terms are separated by spaces only.
+    spec: 4.6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s15.example.com
+    result: permerror
+  syntax-single-label-domain:
+    spec: 7.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s16.example.com
+    result: permerror
+  syntax-exp-ignored:
+    description: A valid exp is accepted and does not change the result.
+    spec: 6.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s17.example.com
+    result: fail
+  syntax-unknown-modifier-empty:
+    description: An unknown modifier may have an empty value.
+    spec: 6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s18.example.com
+    result: pass
+  syntax-include-as-modifier:
+    description: include=... is an unknown modifier, not an include.
+    spec: 4.6.1, 6
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@s19.example.com
+    result: fail
+zonedata:
+  s1.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 frobnicate -all"
+  s2.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1/33 -all"
+  s3.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.01 -all"
+  s4.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.256 -all"
+  s5.example.com:
+    - TXT: "v=spf1 ip6:2001:db8::/129 -all"
+  s6.example.com:
+    - TXT: "v=spf1 ip6:fe80::1%eth0 -all"
+  s7.example.com:
+    - TXT: "v=spf1 a/33 -all"
+  s8.example.com:
+    - TXT: "v=spf1 mx/24/64 -all"
+  s9.example.com:
+    - TXT: "v=spf1 -all exp=a.example.org exp=b.example.org"
+  s10.example.com:
+    - TXT: "v=spf1 redirect=a.example.org redirect=b.example.org"
+  s11.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all ip4:999.0.0.1"
+  s12.example.com:
+    - TXT: "v=spf1 -+all"
+  s13.example.com:
+    - TXT: "v=spf1 allx"
+  s14.example.com:
+    - TXT: "v=spf1 ptr:example.org/24 -all"
+  s15.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1\t-all"
+  s16.example.com:
+    - TXT: "v=spf1 a:localhost -all"
+  s17.example.com:
+    - TXT: "v=spf1 -all exp=explain.example.org"
+  explain.example.org:
+    - TXT: "You are not allowed"
+  s18.example.com:
+    - TXT: "v=spf1 note= ip4:192.0.2.1 -all"
+  s19.example.com:
+    - TXT: "v=spf1 include=pass.example.org -all"
+  pass.example.org:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+---
+description: Record selection and case
+tests:
+  select-two-records:
+    spec: 4.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r1.example.com
+    result: permerror
+  select-no-record:
+    spec: 4.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r2.example.com
+    result: none
+  select-nxdomain:
+    spec: 4.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@nowhere.example.com
+    result: none
+  select-version-prefix:
+    description: v=spf10 is not an SPF record.
+    spec: 4.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r3.example.com
+    result: none
+  select-leading-space:
+    description: A record that does not start with v=spf1 is discarded.
+    spec: 4.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r4.example.com
+    result: none
+  select-version-only:
+    spec: 4.7
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r5.example.com
+    result: neutral
+  select-uppercase:
+    description: Version, mechanism and modifier names are case-insensitive.
+    spec: 4.5, 4.6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r6.example.com
+    result: pass
+  select-uppercase-redirect:
+    spec: 4.6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r7.example.com
+    result: pass
+  select-split-strings:
+    description: The strings of one TXT record are joined without spaces.
+    spec: 3.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r8.example.com
+    result: pass
+  select-extra-spaces:
+    spec: 4.6.1
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r9.example.com
+    result: pass
+  select-txt-timeout:
+    spec: 4.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@r10.example.com
+    result: temperror
+  select-ptr-case:
+    description: PTR names and the ptr target compare case-insensitively.
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.30
+    mailfrom: foo@r11.example.com
+    result: pass
+zonedata:
+  r1.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+    - TXT: "v=spf1 -all"
+  r2.example.com:
+    - TXT: "google-site-verification=abc"
+  r3.example.com:
+    - TXT: "v=spf10 ip4:192.0.2.1 -all"
+  r4.example.com:
+    - TXT: " v=spf1 ip4:192.0.2.1 -all"
+  r5.example.com:
+    - TXT: "v=spf1"
+  r6.example.com:
+    - TXT: "V=SPF1 IP4:192.0.2.1 -ALL"
+  r7.example.com:
+    - TXT: "v=spf1 REDIRECT=target.example.org"
+  target.example.org:
+    - TXT: "v=spf1 Include:inc.example.org -All"
+  inc.example.org:
+    - TXT: "v=spf1 Ip4:192.0.2.0/24 -all"
+  r8.example.com:
+    - TXT: ["v=spf1 ip4:192.0", ".2.1 -all"]
+  r9.example.com:
+    - TXT: "v=spf1   ip4:192.0.2.1    -all   "
+  r10.example.com:
+    - TIMEOUT
+  r11.example.com:
+    - TXT: "v=spf1 ptr:R11.Example.COM -all"
+  30.2.0.192.in-addr.arpa:
+    - PTR: MAIL.r11.example.com
+  mail.r11.example.com:
+    - A: 192.0.2.30
+---
+description: Trailing dots
+tests:
+  dot-include:
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@t1.example.com
+    result: pass
+  dot-a:
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@t2.example.com
+    result: pass
+  dot-mx:
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@t3.example.com
+    result: pass
+  dot-redirect-macro:
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@t4.example.com
+    result: pass
+  dot-ptr:
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@t5.example.com
+    result: pass
+  dot-ptr-answer:
+    description: A PTR answer with a trailing dot is the same name.
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.2
+    mailfrom: foo@t6.example.com
+    result: pass
+zonedata:
+  t1.example.com:
+    - TXT: "v=spf1 include:inc.example.org. -all"
+  inc.example.org:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+  t2.example.com:
+    - TXT: "v=spf1 a:host.example.org. -all"
+  host.example.org:
+    - A: 192.0.2.1
+  t3.example.com:
+    - TXT: "v=spf1 mx:mx.example.org. -all"
+  mx.example.org:
+    - MX: [10, host.example.org.]
+  t4.example.com:
+    - TXT: "v=spf1 redirect=%{d}.r.example.org."
+  t4.example.com.r.example.org:
+    - TXT: "v=spf1 ip4:192.0.2.1 -all"
+  t5.example.com:
+    - TXT: "v=spf1 ptr:example.org. -all"
+  1.2.0.192.in-addr.arpa:
+    - PTR: host.example.org
+  t6.example.com:
+    - TXT: "v=spf1 ptr:example.org -all"
+  2.2.0.192.in-addr.arpa:
+    - PTR: host2.example.org.
+  host2.example.org:
+    - A: 192.0.2.2
+---
+description: Temporary DNS errors
+tests:
+  temp-a:
+    spec: 5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x1.example.com
+    result: temperror
+  temp-mx-query:
+    spec: 5.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x2.example.com
+    result: temperror
+  temp-mx-host:
+    spec: 5.4
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x3.example.com
+    result: temperror
+  temp-exists:
+    spec: 5.7
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x4.example.com
+    result: temperror
+  temp-match-before-error:
+    description: A match before the failing term ends the evaluation first.
+    spec: 4.6.2
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x5.example.com
+    result: pass
+  temp-ptr-lookup-no-match:
+    description: A DNS error on the PTR lookup makes ptr not match.
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.99
+    mailfrom: foo@x6.example.com
+    result: fail
+  temp-ptr-validation-skipped:
+    description: A DNS error validating one PTR name skips that name only.
+    spec: 5.5
+    helo: mail.example.net
+    host: 192.0.2.98
+    mailfrom: foo@x7.example.com
+    result: pass
+  temp-p-macro-unknown:
+    description: A DNS error on the %{p} PTR lookup gives unknown.
+    spec: 7.3
+    helo: mail.example.net
+    host: 192.0.2.99
+    mailfrom: foo@x8.example.com
+    result: pass
+  temp-cname-loop:
+    description: A CNAME loop on an a target is a DNS error, so a temperror.
+    spec: 5
+    helo: mail.example.net
+    host: 192.0.2.1
+    mailfrom: foo@x9.example.com
+    result: temperror
+zonedata:
+  slow.example.org:
+    - TIMEOUT
+  x1.example.com:
+    - TXT: "v=spf1 a:slow.example.org -all"
+  x2.example.com:
+    - TXT: "v=spf1 mx:slow.example.org -all"
+  x3.example.com:
+    - TXT: "v=spf1 mx:slowmx.example.org -all"
+  slowmx.example.org:
+    - MX: [10, slow.example.org]
+  x4.example.com:
+    - TXT: "v=spf1 exists:slow.example.org -all"
+  x5.example.com:
+    - TXT: "v=spf1 ip4:192.0.2.1 a:slow.example.org -all"
+  x6.example.com:
+    - TXT: "v=spf1 ptr -all"
+  99.2.0.192.in-addr.arpa:
+    - TIMEOUT
+  x7.example.com:
+    - TXT: "v=spf1 ptr:x7.example.com -all"
+  98.2.0.192.in-addr.arpa:
+    - PTR: slow.example.org
+    - PTR: ok.x7.example.com
+  ok.x7.example.com:
+    - A: 192.0.2.98
+  x8.example.com:
+    - TXT: "v=spf1 exists:%{p}.p.example.net -all"
+  unknown.p.example.net:
+    - A: 127.0.0.2
+  x9.example.com:
+    - TXT: "v=spf1 a:loop.example.org -all"
+  loop.example.org:
+    - CNAME: loop.example.org

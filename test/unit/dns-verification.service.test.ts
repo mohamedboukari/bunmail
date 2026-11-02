@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
-import type { DNSResolver } from "mailauth";
 import type { VerificationDeps } from "../../src/modules/domains/services/dns-verification.service.ts";
+import type { SpfDnsResolver } from "../../src/modules/domains/types/spf.types.ts";
 
 /**
  * Unit tests for the DNS verification service.
@@ -71,7 +71,7 @@ void mock.module("../../src/db/index.ts", () => ({
 
 const { verifyDomain } =
   await import("../../src/modules/domains/services/dns-verification.service.ts");
-const { spf: mailauthSpf } = await import("mailauth/lib/spf");
+const { checkHost } = await import("../../src/modules/domains/services/spf-evaluator.ts");
 
 const baseDomain = {
   id: "dom_test",
@@ -115,33 +115,48 @@ beforeEach(() => {
 /** A and AAAA records for the fake SPF resolver. */
 let addressRecords: Record<string, string[]> = {};
 
-/** DNS for mailauth: TXT from `txtRecords`, A/AAAA from `addressRecords`. */
-const fakeResolver: DNSResolver = async (name, rrtype) => {
-  if (rrtype === "TXT" && name in txtRecords) return txtRecords[name] ?? [];
-  if ((rrtype === "A" || rrtype === "AAAA") && name in addressRecords) {
-    return addressRecords[name] ?? [];
-  }
-  throw Object.assign(new Error(`ENOTFOUND ${name}`), { code: "ENOTFOUND" });
+/** A "no such name" DNS error, as Bun reports it. */
+function notFound(name: string): Error {
+  return Object.assign(new Error(`ENOTFOUND ${name}`), { code: "ENOTFOUND" });
+}
+
+/** The addresses of `name` in one family, or ENOTFOUND. */
+async function addressesOf(name: string, ipv6: boolean): Promise<string[]> {
+  const found = (addressRecords[name] ?? []).filter((ip) => ip.includes(":") === ipv6);
+  if (found.length === 0) throw notFound(name);
+  return found;
+}
+
+/** DNS for the SPF evaluator: TXT from `txtRecords`, A/AAAA from `addressRecords`. */
+const fakeResolver: SpfDnsResolver = {
+  resolveTxt: async (name) => {
+    if (name in txtRecords) return txtRecords[name] ?? [];
+    throw notFound(name);
+  },
+  resolve4: (name) => addressesOf(name, false),
+  resolve6: (name) => addressesOf(name, true),
+  resolveMx: async (name) => {
+    throw notFound(name);
+  },
+  resolvePtr: async (name) => {
+    throw notFound(name);
+  },
 };
 
-/** Real RFC 7208 evaluation (mailauth, strict) over the fake DNS, for the given sending IPs. */
+/** Real RFC 7208 evaluation (built-in, strict) over the fake DNS, for the given sending IPs. */
 function spfDeps(ips: string[]): VerificationDeps {
   return {
     resolveTxt: async (hostname) => {
       if (hostname in txtRecords) return txtRecords[hostname] ?? [];
-      throw Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+      throw notFound(hostname);
     },
     evaluateSpf: async (domain, ip) =>
       (
-        await mailauthSpf({
-          sender: `postmaster@${domain}`,
-          ip,
-          helo: "mail.example.com",
-          mta: "test",
-          strict: true,
-          resolver: fakeResolver,
-        })
-      ).status.result,
+        await checkHost(
+          { ip, domain, sender: `postmaster@${domain}`, helo: "mail.example.com" },
+          { resolver: fakeResolver },
+        )
+      ).result,
     sendingIps: async () => ({ ips, source: "MAIL_PUBLIC_IP" }),
   };
 }

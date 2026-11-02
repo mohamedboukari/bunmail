@@ -3,3 +3,5 @@ drizzle/
 node_modules/
 bun.lock
 *.md
+# Vendored verbatim from pyspf (BSD-3-Clause), never reformatted (#373)
+test/fixtures/spf/rfc7208-tests.yml
