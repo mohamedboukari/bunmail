@@ -29,6 +29,26 @@ export function setViewerRole(role: UserRole): void {
   if (store) viewerRoles.set(store, role);
 }
 
+/** Viewers known to hold an SSO link (#224), by request context. */
+const viewersWithSsoLink = new WeakSet<object>();
+
+/**
+ * Records that the viewer holds an SSO link (#224), so the sidebar shows
+ * Sign-in methods even when no provider is configured any more (the link
+ * can still be removed). Called by the session guard. No-op outside a
+ * context.
+ */
+export function setViewerHasSsoLink(linked: boolean): void {
+  const store = getLogContext();
+  if (store && linked) viewersWithSsoLink.add(store);
+}
+
+/** True when the viewer is known to hold an SSO link (#224). */
+export function viewerHasSsoLink(): boolean {
+  const store = getLogContext();
+  return store !== undefined && viewersWithSsoLink.has(store);
+}
+
 /** True when the viewer is known to be an admin or the owner. */
 export function viewerIsAdmin(): boolean {
   const store = getLogContext();

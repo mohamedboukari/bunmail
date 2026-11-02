@@ -3,13 +3,16 @@ import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
 import {
   clearSessionCookie,
+  clearSsoFlowCookie,
   deviceSetCookie,
   sessionSetCookie,
+  ssoFlowSetCookie,
   webAuthnSetCookie,
 } from "../session.ts";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { SESSION_ABSOLUTE_SECONDS } from "../../modules/users/services/session-policy.service.ts";
 import { DEVICE_COOKIE_MAX_AGE_SECONDS } from "../../modules/users/services/device-policy.service.ts";
+import { SSO_FLOW_TTL_SECONDS } from "../../modules/users/services/sso-flow-cookie.service.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 
 /* ─── Session Helpers ─── */
@@ -80,6 +83,20 @@ export function issueWebAuthnCookie(
 /** Removes the `bm_wa` cookie (#223): its challenge is spent. Appended. */
 export function clearWebAuthnCookie(set: Context["set"]): void {
   appendSetCookie(set, webAuthnSetCookie("", secureCookies(), 0));
+}
+
+/**
+ * Sets the `bm_sso` cookie (#224) carrying a sealed SSO flow, for the
+ * flow's 10 minutes (`SameSite=Lax`: the callback comes from the
+ * provider's site). Appended.
+ */
+export function issueSsoFlowCookie(set: Context["set"], value: string): void {
+  appendSetCookie(set, ssoFlowSetCookie(value, secureCookies(), SSO_FLOW_TTL_SECONDS));
+}
+
+/** Removes the `bm_sso` cookie (#224): the callback read it, whatever its outcome. Appended. */
+export function clearSsoFlow(set: Context["set"]): void {
+  appendSetCookie(set, clearSsoFlowCookie(secureCookies()));
 }
 
 /** Removes the `bm_session` cookie from the browser (same attributes, Max-Age=0). */

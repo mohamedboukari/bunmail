@@ -3,7 +3,7 @@ import { logger } from "./logger.ts";
 /**
  * State that several replicas must share (#185): fixed-window counters
  * (rate limits, failed-attempt budgets) and one-time entries (reveal
- * tokens).
+ * tokens, and the claimed `state` of each SSO callback, #224).
  *
  * Every store has a process-memory implementation, the default: one
  * replica, nothing else to run. With `REDIS_URL` set, the boot installs a
@@ -100,6 +100,16 @@ export interface OneTimeStore {
   put(key: string, entry: OneTimeEntry, ttlMs: number): Promise<void>;
   /** Takes the entry if `guard` matches, atomically: two takes never both get it. */
   take(key: string, guard: string): Promise<OneTimeTake>;
+  /**
+   * Records `key` for `ttlMs` when nothing live is stored under it, and
+   * says whether it did: true the first time, false while the key lives.
+   * Atomic: two concurrent claims of one key never both get true. The
+   * single use of an SSO callback's `state` (#224) rests on it. Holds no
+   * value: a claimed key is only ever claimed, never taken. Rejects when
+   * the store cannot record it (an outage; in memory, every slot taken by
+   * a live entry): never a silent `true`.
+   */
+  claim(key: string, ttlMs: number): Promise<boolean>;
 }
 
 /** A shared backend (Redis), installed at boot when `REDIS_URL` is set. */
@@ -252,6 +262,12 @@ export class MemoryOneTimeStore implements OneTimeStore {
   constructor(private readonly maxEntries: number) {}
 
   put(key: string, entry: OneTimeEntry, ttlMs: number): Promise<void> {
+    this.store(key, entry, ttlMs);
+    return Promise.resolve();
+  }
+
+  /** Writes an entry, after dropping the expired ones and, at the cap, the oldest. */
+  private store(key: string, entry: OneTimeEntry, ttlMs: number): void {
     const at = now();
     for (const [k, e] of this.entries) {
       if (e.expiresAt <= at) this.entries.delete(k);
@@ -265,7 +281,31 @@ export class MemoryOneTimeStore implements OneTimeStore {
       value: entry.value,
       expiresAt: at + ttlMs,
     });
-    return Promise.resolve();
+  }
+
+  /**
+   * Atomic within the process: the check and the write run with no await
+   * between them. Unlike `put`, a full store never evicts a live entry for
+   * a claim (that would let the evicted key be claimed again): expired
+   * entries are swept, and when every one is still live the claim rejects
+   * (`ONE_TIME_FULL`), so the caller fails closed as on a store error.
+   */
+  claim(key: string, ttlMs: number): Promise<boolean> {
+    const at = now();
+    const entry = this.entries.get(key);
+    if (entry && entry.expiresAt > at) return Promise.resolve(false);
+    if (this.entries.size >= this.maxEntries) {
+      for (const [k, e] of this.entries) {
+        if (e.expiresAt <= at) this.entries.delete(k);
+      }
+      if (this.entries.size >= this.maxEntries) {
+        return Promise.reject(
+          new SharedStoreError("ONE_TIME_FULL", "One-time store full of live entries"),
+        );
+      }
+    }
+    this.store(key, { guard: "", value: "" }, ttlMs);
+    return Promise.resolve(true);
   }
 
   take(key: string, guard: string): Promise<OneTimeTake> {
@@ -388,5 +428,6 @@ export function sharedOneTimeStore(
     local,
     put: (key, entry, ttlMs) => store().put(key, entry, ttlMs),
     take: (key, guard) => store().take(key, guard),
+    claim: (key, ttlMs) => store().claim(key, ttlMs),
   };
 }

@@ -564,6 +564,8 @@ const ACCOUNT_REFUSAL: Partial<Record<PasskeyRefusal, string>> = {
   rejected: "The passkey could not be verified. Start again.",
   already_registered: "That passkey is already registered.",
   not_found: "That passkey was not found: nothing was changed.",
+  sso_link_requires_second_factor:
+    "You are the owner and have a single sign-on account linked: unlink it on the Sign-in methods page before removing your last second factor.",
 };
 
 /** The account's own passkey change, emailed in the background (never awaited). */

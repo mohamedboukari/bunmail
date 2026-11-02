@@ -170,7 +170,7 @@ Every signed-in account, the owner included, sees and signs out its own sessions
 
 **Approximate location** is off by default. With `GEOIP_DB_PATH` (an offline DB-IP Lite or GeoLite2 `.mmdb` file) or the opt-in online provider (`GEOIP_PROVIDER=ipinfo` with `GEOIP_API_TOKEN`, which sends every sign-in IP to ipinfo.io), the location of a new session's IP is looked up once, in the background, after the session is created (login, owner setup, invitation accept, password reset, password change), and stored on the session; it never delays or fails a sign-in. Setup: [docs/self-hosting.md](self-hosting.md#approximate-session-locations-geoip-281).
 
-**Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself.
+**Sidebar by role.** Members do not see links to admin-only pages: the Users entry (and the Invitations link on the home page) are shown to admins and the owner only. API Keys is a member page since #219 (a member's own keys). The session guard records the viewer's role in a request-scoped holder (`src/pages/viewer.ts`, keyed on the request's log context, never added to log lines), which the sidebar reads; when the role is unknown the links are hidden (fail closed). Display only: every route checks the role itself. The same holder records whether the viewer holds an SSO link (#224), from the guard's one query, so Sign-in methods stays in the sidebar for it even when no provider is configured.
 
 ### New-device alerts (#282)
 
@@ -239,11 +239,26 @@ Each ceremony is two requests, run by `dashboard.js` (no inline script): an **op
 
 **Logs.** `debug` `Passkey sign-in started`; `warn` `Passkey sign-in failed` (`ip`, `reason`: `no_challenge`, `rejected`, `unknown_credential`, `counter_regressed`, `account_disabled`, `passkey_removed`; `userId` when the passkey was found); `info` `Dashboard login successful` (`method: "passkey"`, `passkeyId`); `warn` `Two-factor sign-in failed: passkey not accepted` (`reason`); `warn` `Passkey refused: signature counter did not increase (possible clone)` (`userId`, `passkeyId`, `ip`); `info` `Passkey registration started`; `warn` `Passkey registration start refused` / `Passkey registration refused` (`reason`); `warn` `Passkey added` (`passkeyId`, `sessionsRevoked`), `Passkey removed`, `Passkey removal refused`, `Passkey rename refused`; `info` `Passkey renamed`; `debug` `Passkey registration did not verify` / `Passkey assertion did not verify` (the library error's class only: its messages quote the challenge). Never a public key, a challenge or a response.
 
+### Sign-in methods (#224)
+
+Single sign-on with an OpenID Connect provider, **in progress**: linking and unlinking work; signing in with a linked identity comes next (until then a sign-in flow reaching the callback is refused). Every account, the owner included, manages its own links at **Sign-in methods** (`/dashboard/account/sso`, in the Account group of the sidebar when `SSO_PROVIDERS` is set or the account holds a link). The providers come from `.env` (`SSO_PROVIDERS` and `SSO_<ID>_*`, see [docs/users.md](users.md#single-sign-on-224)); SSO also needs an `https://` `APP_BASE_URL`. Internals and every rule: [docs/users.md](users.md#linking-an-identity-account--sign-in-methods).
+
+1. `GET /dashboard/account/sso` (`no-store`): one row per configured provider (linked: the provider email at link time, when it was linked and last used, an Unlink form; not linked: a Link form), then any link whose provider is no longer configured (by its issuer's host, Unlink only). A note replaces the Link forms when SSO is not set up, when it is off (`APP_BASE_URL` not `https://`), or for the owner without a second factor.
+2. `POST /dashboard/account/sso/:id/link` (`:id` the provider's id; field `password`): first the password change's budget (`password:user:<id>`, `password:ip:<bucket>`; `Too many attempts. Try again later.`); then the owner without a second factor is refused (`As the owner, you need a second factor before you can link a single sign-on account.`), and so is a second link at the same provider (`Your account already has an account linked at that provider.`), both before the password work; then the **current password** (`Current password is incorrect.`). Then the encrypted `bm_sso` cookie (`purpose: "link"`, this session's id, 10 minutes, `SameSite=Lax`) and a `302` to the provider's authorization endpoint. A provider that cannot be reached: `<label> could not be reached. Try again later.`
+3. `GET /dashboard/login/sso/:provider/callback` (public, the redirect URI registered at the provider): auth-page headers with `Referrer-Policy: no-referrer`; the per-IP login limiter (`DASHBOARD_LOGIN_RATE_LIMIT_*`, counted first, given back on success); the `bm_sso` cookie read and **cleared** whatever follows; the path's provider must be configured; then every flow check (cookie, `state`, one callback per flow, `iss`, the code exchange, the ID token), a `link` purpose, the browser's live session (the same one that started the link), and the link rules. Success: `302` to the page with `<label> linked.` Refusals: `That account at the provider is already linked to another BunMail account.`, `Your account already has an account linked at that provider.`, `Your session changed while you were at the provider. Sign in and try again.`, and for any failed flow check `Linking did not complete: the provider's answer was not accepted. Try again.` A failed flow check is also recorded (`auth.sso.link_refused`, `flow_failed`) when the browser's session is live. A browser with no session cookie, and any sign-in flow, goes to `/dashboard/login?error=sso` (`Single sign-on did not complete. Try again, or sign in with your password.`). Redirects are fixed: no return parameter is read.
+4. `POST /dashboard/account/sso/:id/unlink` (`:id` the link's id; field `password`, the same budget): only the account's own links (`That link was not found: nothing was changed.`); a wrong password is recorded (`auth.sso.unlink_refused`). Unlinking signs out every session the identity opened. `Account unlinked.`
+
+**The owner keeps a second factor while linked.** The owner cannot turn TOTP off or remove its last passkey while it has an SSO link (`You are the owner and have a single sign-on account linked: unlink it on the Sign-in methods page before ...`, recorded as `auth.two_factor.removal_refused`), and ownership cannot be transferred to an admin with a link and no second factor (`That admin has a single sign-on account linked and no second factor: they must set up a second factor before becoming the owner.`). A reset link or `reset-owner` is never refused.
+
+**Security emails** (no links, in the background): `A single sign-on account was linked to your BunMail account` (the provider account "is now linked to your BunMail account") and `A single sign-on account was unlinked from your BunMail account`, with the provider's label and the provider account, masked.
+
+**Logs.** `info` `SSO link started` (`userId`, `sessionId`, `ip`, `provider`); `warn` `SSO link refused` (`reason`: `provider_unavailable`, `second_factor_required`, `provider_already_linked`, `rate_limited`, `wrong_password` at the start; `already_linked`, `provider_already_linked`, `second_factor_required`, `session_changed` at the callback; `provider`, `userId` when known, `ip`); `warn` `SSO link not started` (`reason: discovery_failed`); `warn` `SSO callback refused` (`provider`, `reason`, `detail`, from the flow checks), `SSO callback refused: sign-in flows are not handled`, `SSO callback refused: provider not configured or SSO off`, `SSO callback blocked: too many attempts` (`ip`, `retryAfterSec`); `warn` `SSO identity linked` (`userId`, `sessionId`, `linkId`, `provider`, `ip`), `SSO identity unlinked` (`linkId`, `sessionsRevoked`), `SSO unlink refused` (`reason`); `error` `SSO callback failed: store error`, `SSO link start failed`, `SSO unlink failed`, `Sign-in methods page failed`. Never the code, a token, the ID token, the subject or the provider email.
+
 ### Audit log (#221)
 
 `GET /dashboard/audit-log`, **Audit log** in the sidebar (admins and the owner; `adminGuard`, a member gets the 403 page and no sidebar link). Security-relevant actions, newest first: time (UTC), actor (an account's email, an API key's name, or BunMail itself for the boot, `reset-owner`, token reuse detection and the retention purge), action, target, outcome (`success`/`failure`) and client (IP and user agent). Filters by action, actor and outcome (unknown values are ignored); 50 per page. Read-only and `Cache-Control: no-store`; every value is escaped. What is recorded, how, and the append-only trigger: [docs/audit-log.md](audit-log.md).
 
-Recorded from the dashboard: sign-in (success, each failure with its reason, a lockout once per address and window, the 2FA step and its lock), sign-out, session revocations and token reuse, two-factor changes, password change, reset links issued and completed, owner setup, invitations, role changes, deactivation, reactivation, removal, ownership transfer (and a wrong-password attempt), API key, domain, webhook and suppression changes. The REST API records its API key, domain, webhook and suppression changes with the calling key as the actor.
+Recorded from the dashboard: sign-in (success, each failure with its reason, a lockout once per address and window, the 2FA step and its lock), sign-out, session revocations and token reuse, two-factor changes, passkey changes, single sign-on links (linked, unlinked, refused), password change, reset links issued and completed, owner setup, invitations, role changes, deactivation, reactivation, removal, ownership transfer (and a wrong-password attempt), API key, domain, webhook and suppression changes. The REST API records its API key, domain, webhook and suppression changes with the calling key as the actor.
 
 ### Brute-force protection (#109)
 
@@ -300,6 +315,7 @@ a Redis outage it falls back to per-replica memory).
 | GET /dashboard/account/sessions  | Your own live sessions: device, IP, approximate location, signed in, last active, this device marked; sign out one or all others (any role, #281) |
 | GET /dashboard/account/two-factor | Your own two-factor authentication: set up (QR code and key), recovery codes left, new recovery codes, turn off; recovery codes shown once (any role, #220) |
 | GET /dashboard/account/passkeys  | Your own passkeys: name, added, last used; add (name and current password, then the browser prompt), rename, remove (current password) (any role, #223) |
+| GET /dashboard/account/sso       | Sign-in methods: your own single sign-on links, one row per configured provider; link (current password, then the provider), unlink (current password) (any role, #224) |
 | GET /dashboard/send              | Compose & send emails from dashboard; the key picker lists every active key (admins, owner) or the member's own active keys (#219). No attachments: use the REST API or SMTP submission for those (#181) |
 | GET /dashboard/emails            | Email logs with status tabs (All / Queued / Sending / Sent / Failed / Bounced) + **Source** (API / SMTP) and **API-key** dropdown filters (#137), a **Tag** `key:value` text filter (#189; an invalid one lists nothing and shows why), a per-row source badge, bulk-select, per-row trash. Filters compose and are preserved across pagination. An email with several `to` addresses (#178) shows the first one and `+N` (the trash and tombstone lists too), with the whole list, escaped, in the tooltip and on the email page. |
 | GET /dashboard/emails/trash      | Trashed emails: bulk Restore / Delete-forever / Empty trash      |
@@ -381,6 +397,8 @@ src/pages/
 │   ├── invitations.plugin.tsx ← Invitations
 │   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
 │   ├── audit-log.plugin.tsx  ← Audit log page (#221)
+│   ├── passkeys.plugin.tsx   ← Passkey sign-in and second step (public), the Passkeys page (#223)
+│   ├── sso.plugin.tsx        ← The SSO callback (public) and the Sign-in methods page: link, unlink (#224)
 │   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), DKIM key rotation (#250), detail
 │   ├── templates.plugin.tsx  ← Templates
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
@@ -401,7 +419,7 @@ src/pages/
 ├── guards.tsx                ← Role and assurance checks per route (#222)
 ├── reveal-store.ts           ← One-time secret reveal (API keys, webhook secrets, invitation and password reset links, recovery codes), bound to kind, user and session (#132, #280, #217, #277, #220)
 ├── session.ts                ← Session cookie read/set/clear (pure, unit-tested; sessions live in the users module)
-├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218)
+├── viewer.ts                 ← Request-scoped viewer role for the sidebar (#218), and whether the viewer holds an SSO link (#224)
 ├── landing.plugin.tsx        ← Public landing page at /
 ├── unsubscribe.plugin.tsx    ← Public one-click unsubscribe pages at /u/:token (#249, see suppressions.md)
 ├── static-assets.tsx         ← Serves dashboard.css / dashboard.js, content-hash URLs, 1-year cache (#255)
@@ -423,6 +441,7 @@ src/pages/
 │   ├── account-password.tsx  ← Change password form for the signed-in user (#279)
 │   ├── account-sessions.tsx  ← Active sessions page for the signed-in user (#281)
 │   ├── account-two-factor.tsx ← Two-factor page for the signed-in user: QR code, recovery codes, disable (#220)
+│   ├── account-sso.tsx       ← Sign-in methods page: SSO links, link and unlink forms (#224)
 │   ├── home.tsx              ← Stats cards grid
 │   ├── landing.tsx           ← Public marketing landing page
 │   ├── unsubscribe.tsx       ← Unsubscribe confirm / done / invalid / rate-limited pages: stylesheet only, no script (#249)
@@ -512,6 +531,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Second login step → `POST /dashboard/login/two-factor` (public, needs a pending session; form field: `code`, #220)
 - Add a passkey → `POST /dashboard/account/passkeys/options` (any role; fields `name`, `password`; JSON) then `POST /dashboard/account/passkeys` (field `credential`; the first second factor signs out every other session, #223)
 - Rename a passkey → `POST /dashboard/account/passkeys/:id/rename` (field `name`, #223); remove one → `POST /dashboard/account/passkeys/:id/delete` (field `password`, #223)
+- Link a single sign-on account → `POST /dashboard/account/sso/:id/link` (any role; `:id` the provider; field `password`; sets `bm_sso` and goes to the provider, which comes back to `GET /dashboard/login/sso/:id/callback`, #224); unlink one → `POST /dashboard/account/sso/:id/unlink` (`:id` the link; field `password`, #224)
 - Sign in with a passkey → `POST /dashboard/login/passkey/options` (public; sets `bm_wa`; JSON) then `POST /dashboard/login/passkey` (field `credential`, #223)
 - Second login step with a passkey → `POST /dashboard/login/two-factor/passkey/options` (JSON) then `POST /dashboard/login/two-factor/passkey` (public, needs a pending session; field `credential`, #223)
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)

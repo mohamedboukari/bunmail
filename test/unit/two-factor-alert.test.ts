@@ -27,6 +27,8 @@ const EVENTS: TwoFactorAlertEvent[] = [
   "passkey_added",
   "passkey_removed",
   "passkey_counter_regressed",
+  "sso_linked",
+  "sso_unlinked",
 ];
 
 describe("buildTwoFactorAlertEmail", () => {
@@ -90,6 +92,30 @@ describe("buildTwoFactorAlertEmail", () => {
     expect(reset({ totp: true, passkeys: 0 })).toContain(
       "Removed: authenticator app (and its recovery codes)\n",
     );
+  });
+
+  test("an SSO link's provider and its account, masked, are listed (#224), escaped", () => {
+    const linked = buildTwoFactorAlertEmail({
+      event: "sso_linked",
+      email: "a@example.com",
+      ip: null,
+      at: new Date(),
+      sso: { provider: "<i>Corp</i>", account: "attacker@evil.example" },
+    });
+    expect(linked.text).toContain("Provider: <i>Corp</i>");
+    expect(linked.text).toContain("Provider account: a***@evil.example");
+    expect(linked.text).not.toContain("attacker@");
+    expect(linked.html).toContain("&lt;i&gt;Corp&lt;/i&gt;");
+    expect(linked.text).toContain("Account > Sign-in methods");
+
+    const unnamed = buildTwoFactorAlertEmail({
+      event: "sso_unlinked",
+      email: "a@example.com",
+      ip: null,
+      at: new Date(),
+      sso: { provider: "Corp", account: null },
+    });
+    expect(unnamed.text).toContain("Provider account: not shown");
   });
 
   test("hostile values are escaped in HTML and flattened in text", () => {

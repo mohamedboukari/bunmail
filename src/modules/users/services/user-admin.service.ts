@@ -34,6 +34,7 @@ import {
   moveOwnerRecords,
 } from "./record-ownership.service.ts";
 import { revokeAllUserSessions } from "./session.service.ts";
+import { ssoLinkWithoutSecondFactor } from "./sso-owner-rule.service.ts";
 import {
   accountActionRefusal,
   removalConfirmed,
@@ -570,7 +571,10 @@ async function readAccount(id: string): Promise<AccountRow | null> {
  * owner's current password. In order:
  *
  * 1. The rules, on rows read without a lock: a request that would be
- *    refused anyway never reaches argon2id.
+ *    refused anyway never reaches argon2id. Among them the owner rule of
+ *    SSO (#224): a target holding an SSO link without a BunMail second
+ *    factor is refused (`sso_link_without_second_factor`), since an owner
+ *    with a link must keep one; checked again under the lock.
  * 2. The failed-attempt budget (`limiter`, per actor and per client IP,
  *    built by the route from the login limiter): over budget is refused
  *    (`rate_limited`) with no argon2id work. Otherwise the attempt is
@@ -615,7 +619,11 @@ export async function transferOwnership(
     logRefusal(action, actorId, targetId, { reason: "not_found", actorRole: actor.role });
     return { ok: false, reason: "not_found" };
   }
-  const early = accountActionRefusal(action, actor, target);
+  const early =
+    accountActionRefusal(action, actor, target) ??
+    ((await withSanitizedErrors(() => ssoLinkWithoutSecondFactor(db, targetId)))
+      ? "sso_link_without_second_factor"
+      : null);
   if (early) {
     logRefusal(action, actorId, targetId, {
       reason: early,
@@ -659,6 +667,10 @@ export async function transferOwnership(
     actorId,
     targetId,
     async (tx, owner, newOwner) => {
+      /** The owner rule of SSO (#224) on the locked target row. */
+      if (await ssoLinkWithoutSecondFactor(tx, newOwner.id)) {
+        return "sso_link_without_second_factor";
+      }
       /**
        * Before the role changes (#277): the previous owner's links for
        * admins, and every open link of the new owner whoever issued it.

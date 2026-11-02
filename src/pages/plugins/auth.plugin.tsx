@@ -85,6 +85,8 @@ const LOGIN_ERRORS = new Map<string, string>([
   ],
   /** A passwordless passkey sign-in failed (#223): one message for every reason. */
   ["passkey", "That passkey could not sign you in. Try again, or use your password."],
+  /** An SSO callback that did not complete (#224): one message for every reason. */
+  ["sso", "Single sign-on did not complete. Try again, or sign in with your password."],
 ]);
 
 /**

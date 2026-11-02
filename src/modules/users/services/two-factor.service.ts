@@ -37,6 +37,10 @@ import {
   totpPendingSecretOf,
 } from "./session.service.ts";
 import * as totp from "./totp.service.ts";
+import {
+  recordFactorRemovalRefused,
+  removalBreaksOwnerSsoRule,
+} from "./sso-owner-rule.service.ts";
 import { recordAuditEvent } from "../../audit/services/audit.service.ts";
 
 /**
@@ -475,9 +479,12 @@ export async function completeTwoFactorLogin(
  * before any password work (so this form never says whether a password
  * is right on such an account); the budget (`limiter`: this session's,
  * never the account's login budget) is checked and counted; one argon2id
- * verify outside the transaction; then, in one transaction, the code is
- * spent and the `totp` credential deleted (its recovery codes go with it,
- * by cascade). Sessions are kept.
+ * verify outside the transaction; then, in one transaction, the account
+ * row is locked and the owner rule of SSO checked (#224: an owner with an
+ * SSO link and no passkey may not turn TOTP off, `sso_link_requires_second_factor`,
+ * recorded as `auth.two_factor.removal_refused`; the owner unlinks first),
+ * then the code is spent and the `totp` credential deleted (its recovery
+ * codes go with it, by cascade). Sessions are kept.
  */
 export async function disableTwoFactor(
   userId: string,
@@ -487,9 +494,8 @@ export async function disableTwoFactor(
   client: SessionClient = NO_CLIENT,
   nowMs: number = Date.now(),
 ): Promise<DisableTwoFactorResult> {
-  if (!(await withSanitizedErrors(() => totpCredentialOf(db, userId)))) {
-    return { ok: false, reason: "not_enabled" };
-  }
+  const credential = await withSanitizedErrors(() => totpCredentialOf(db, userId));
+  if (!credential) return { ok: false, reason: "not_enabled" };
   if (await limiter.take()) return { ok: false, reason: "rate_limited" };
 
   const hash = await passwordHashOf(userId);
@@ -497,8 +503,11 @@ export async function disableTwoFactor(
     return { ok: false, reason: "wrong_password" };
   }
 
-  return withSanitizedErrors(() =>
+  const result = await withSanitizedErrors(() =>
     db.transaction(async (tx): Promise<DisableTwoFactorResult> => {
+      if (await removalBreaksOwnerSsoRule(tx, userId, credential.id)) {
+        return { ok: false, reason: "sso_link_requires_second_factor" };
+      }
       const match = await matchSecondFactor(tx, userId, code, nowMs, true);
       if (!match.ok) return { ok: false, reason: match.reason };
       await tx.delete(userCredentials).where(eq(userCredentials.id, match.credentialId));
@@ -518,6 +527,10 @@ export async function disableTwoFactor(
       return { ok: true, method };
     }),
   );
+  if (!result.ok && result.reason === "sso_link_requires_second_factor") {
+    await recordFactorRemovalRefused(userId, "totp", client);
+  }
+  return result;
 }
 
 /**
