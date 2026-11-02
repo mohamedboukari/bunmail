@@ -144,7 +144,13 @@ bunmail/
 │   │   │   │   ├── attachment-storage.ts ← Storage interface for attachment bytes (Postgres) + metadata reads (#181)
 │   │   │   │   ├── message-body.ts       ← Send-time HTML wrapper and text alternative (#250)
 │   │   │   │   ├── html-to-text.ts       ← Bounded, linear HTML-to-text converter (#250)
-│   │   │   │   ├── queue.service.ts      ← Queue processor + retries
+│   │   │   │   ├── queue.service.ts      ← Queue processor + retries: public surface, re-exports the queue-*.service.ts files (#380)
+│   │   │   │   ├── queue-worker.service.ts ← Poll loop and its state, send slots, lease renewal
+│   │   │   │   ├── queue-claim.service.ts ← Fair claim, lease, fenced row release
+│   │   │   │   ├── queue-send.service.ts ← One claimed email's send attempt
+│   │   │   │   ├── queue-domain.service.ts ← Sender domain lookup for DKIM and List-Unsubscribe
+│   │   │   │   ├── queue-outcome.service.ts ← Outcome transaction: bounces, suppressions, status, events (#184)
+│   │   │   │   ├── queue-decision.service.ts ← Deferred, retry or terminal decision
 │   │   │   │   ├── retry-schedule.ts     ← Retry backoff of temporary failures (#180)
 │   │   │   │   ├── stats.service.ts      ← Dashboard stats aggregation
 │   │   │   │   └── delivery-rates.ts     ← Success and bounce rate math (#250)
@@ -1259,7 +1265,7 @@ Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Goo
 - Decrypted in memory on each send and handed to nodemailer's signer. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
-- **Inline 5xx** during the SMTP transaction → classified per group, or per refused recipient when the MX accepted others (#250) ([`classifySendFailure`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue.service.ts](src/modules/emails/services/queue.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
+- **Inline 5xx** during the SMTP transaction → classified per group, or per refused recipient when the MX accepted others (#250) ([`classifySendFailure`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue-outcome.service.ts](src/modules/emails/services/queue-outcome.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).
 - **Async DSN** received at the inbound SMTP → routed to the bounce module ([src/modules/bounces/](src/modules/bounces/)) before generic inbound storage (#24). Only a DSN delivered to a verified **signed return path** counts (#236): with `SMTP_ENABLED=true` and the sender domain's MX naming `MAIL_HOSTNAME` (cached per domain; other domains keep the From address as envelope sender), each recipient is sent in its own SMTP transaction with envelope sender `b+<email id hex>.<recipient index>.<MAC>@<sender domain>` (HMAC under a key derived from `DKIM_ENCRYPTION_KEY`), the receiver refuses (`550`) a `b+` address that does not verify, and the DSN then applies to exactly that email and recipient, whatever its body says. A DSN to any other address (the Message-ID link of before #236) has no effect; non-DSN mail to a return path (auto-replies) is dropped. Same sender domain as before, so SPF and DMARC alignment are unchanged. See [docs/bounces.md](docs/bounces.md#signed-return-paths-236).
 - Hard bounces (5.x.x) → permanent per-API-key suppression in either path. A sender policy block (5.7.x, or a reply naming a blocklist, reputation or SPF/DKIM/DMARC failure) suppresses nobody, inline (#246: the group fails with `blocked: true` and `email.failed` carries `blocked: true`) or in an async DSN, which is classified by the same `parseSmtpError` rules (#250: a `sent` email is marked `failed` with the reason and `email.failed` fires with `blocked: true`, no `email.bounced`).
 - A bounce never weakens a suppression (#191): `addFromBounce` only rewrites a temporary row; a permanent one (complaint, unsubscribe, manual, earlier hard bounce) is kept, and the email is still marked `bounced` and `email.bounced` still fires. Precedence: complaint > unsubscribe / manual / hard bounce > temporary. See [docs/suppressions.md](docs/suppressions.md#precedence).
