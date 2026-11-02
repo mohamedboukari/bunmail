@@ -121,7 +121,11 @@ bunmail/
 │   │   │   ├── emails.plugin.ts          ← POST /send, GET /emails
 │   │   │   ├── errors.ts                 ← Typed send rejections with status + code (#245)
 │   │   │   ├── services/
-│   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore
+│   │   │   │   ├── email.service.ts      ← Email CRUD + trash/restore: public surface, re-exports the email-*.service.ts files (#380)
+│   │   │   │   ├── email-create.service.ts ← createEmail, idempotent send, insert
+│   │   │   │   ├── email-prepare.service.ts ← Every check a send passes before insert
+│   │   │   │   ├── email-query.service.ts ← Reads, lists, tag filters, attachment lookups
+│   │   │   │   ├── email-trash.service.ts ← Trash, restore, permanent delete
 │   │   │   │   ├── idempotency.service.ts ← Idempotency keys of the send API (#188)
 │   │   │   │   ├── tombstone.service.ts  ← Post-purge audit snapshots: hard delete with tombstone, retention (#34)
 │   │   │   │   ├── custom-headers.ts     ← Custom header rules shared by REST, SMTP submission and the mailer (#177)

@@ -106,7 +106,11 @@ src/modules/emails/
 │   ├── batch-send-email.dto.ts     ← Batch envelope and per-item validation, per-item idempotencyKey (#178)
 │   └── list-emails.dto.ts          ← List query param validation
 ├── services/
-│   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking
+│   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking: the public surface, re-exported from the files below (#380)
+│   ├── email-create.service.ts     ← createEmail, the idempotent send (#188) and the insert with attachments and `email.queued`
+│   ├── email-prepare.service.ts    ← Every check a send passes before it is inserted (`prepareEmail`)
+│   ├── email-query.service.ts      ← Reads and lists, tag filters (#189), attachment metadata and download lookups
+│   ├── email-trash.service.ts      ← Trash, restore, permanent delete and empty trash, scoped and unscoped
 │   ├── batch-send.service.ts       ← POST /batch: items in order, each created or refused on its own (#178)
 │   ├── recipient-limits.ts         ← Pure `to` list normalization and the 50 / 100 recipient caps (#178)
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
@@ -221,7 +225,7 @@ BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound no
 
 **Flow:** `createEmail` checks the tags with the other pure input rules, before any database work, and inserts them with the row; the serializer returns them as `tags`. The idempotency snapshot (#188) keeps them, since they are labels, not message content. The queue, bounce, complaint and unsubscribe paths copy `tags` into the `email.*` webhook payloads they build from the row ([webhooks.md](webhooks.md)).
 
-**Filter:** `GET /api/v1/emails?tag=key:value` (repeatable, at most 10, every tag must match) and the dashboard's tag input. `parseTagFilters` splits each on the first `:`, so a value may contain `:`, and checks key and value with the same rules (`checkTagFilters` in `email.service.ts` logs and throws `InvalidTagError`, path `/tag`). The REST route reads every `tag` from the raw query string, because Elysia's query parser splits array values on commas. Each filter becomes `emails.tags @> jsonb_build_object(${key}::text, ${value}::text)`, ANDed with the other filters, which the GIN index `idx_emails_tags` serves. The jsonb is built in SQL from text parameters: a stringified `::jsonb` parameter would be bound as a jsonb string by bun-sql and match nothing (#261, `src/db/jsonb.ts`).
+**Filter:** `GET /api/v1/emails?tag=key:value` (repeatable, at most 10, every tag must match) and the dashboard's tag input. `parseTagFilters` splits each on the first `:`, so a value may contain `:`, and checks key and value with the same rules (`checkTagFilters` in `email-query.service.ts` logs and throws `InvalidTagError`, path `/tag`). The REST route reads every `tag` from the raw query string, because Elysia's query parser splits array values on commas. Each filter becomes `emails.tags @> jsonb_build_object(${key}::text, ${value}::text)`, ANDed with the other filters, which the GIN index `idx_emails_tags` serves. The jsonb is built in SQL from text parameters: a stringified `::jsonb` parameter would be bound as a jsonb string by bun-sql and match nothing (#261, `src/db/jsonb.ts`).
 
 **Logging:** tag keys only (`tagKeys` on `Email created and queued` at `debug` and on the list lines, the key on a refusal), never values: tags may hold customer or tenant ids.
 
@@ -287,7 +291,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 
 **Why a table and not a column on `emails`:** the issue proposed an `idempotency_key` column with a unique index on `(api_key_id, idempotency_key)`. That index cannot express the TTL (an expired key must become reusable while its email stays), and a key would follow its email through trash and purge. A separate table keeps the key's lifetime independent of the email's, and stores the response snapshot a replay needs after the email is gone.
 
-**Flow** (`createEmailIdempotent` in `email.service.ts`, storage in `idempotency.service.ts`):
+**Flow** (`createEmailIdempotent` in `email-create.service.ts`, storage in `idempotency.service.ts`):
 
 1. Hash the validated body: SHA-256 of its canonical JSON (object keys sorted at every depth), so the same JSON with members in another order matches.
 2. A live row for `(api_key_id, key)` (`expires_at > now()`) answers at once: replay when the hash matches, `IdempotencyKeyReusedError` when not. This runs before the send is checked, so a replay returns the original result even if, for example, the recipient was suppressed since.
@@ -344,6 +348,8 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header, except `tr
 ## Service Methods
 
 ### email.service.ts
+
+The module's service surface; the code sits in the `email-*.service.ts` files beside it, one per concern (#380, see the module layout above).
 
 All read methods exclude trashed rows (`deleted_at IS NULL`) by default. Trash-specific methods explicitly target trashed rows.
 
