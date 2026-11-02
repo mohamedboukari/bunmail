@@ -1,12 +1,16 @@
 import type { SsoProviderSettings } from "../../../config.ts";
-import type { SsoIdentity, SsoSignInRefusal } from "../types/sso.types.ts";
+import type {
+  SsoAutoLinkRefusal,
+  SsoIdentity,
+  SsoSignInRefusal,
+} from "../types/sso.types.ts";
 
 /**
  * The pure rules of SSO links (#224): how a link is keyed and named, how a
- * stored link is matched back to a configured provider, and who may sign
- * in with one. No database,
- * no config read: `sso-link.service.ts` and the Sign-in methods page pass
- * the providers in.
+ * stored link is matched back to a configured provider, who may sign in
+ * with one, and when an unknown identity is linked by its email. No
+ * database, no config read: `sso-link.service.ts`, the sign-in and the
+ * Sign-in methods page pass the providers in.
  */
 
 /** The credential type of an SSO link. */
@@ -120,5 +124,86 @@ export function ssoSignInRefusal(
   if (ownerNeedsSecondFactor(account.role, account.hasSecondFactor)) {
     return "owner_second_factor_required";
   }
+  return null;
+}
+
+/** Google's issuer: its `hd` claim says whether Google is authoritative for an address. */
+const GOOGLE_ISSUER = "https://accounts.google.com";
+
+/** The one domain Google is authoritative for without an `hd` claim. */
+const GMAIL_DOMAIN = "gmail.com";
+
+/**
+ * The email an unknown identity may be linked by (#224, part 4:
+ * `SSO_<ID>_AUTO_LINK=true`), or why not. Pure: the claims only, before
+ * any account is looked up. In order:
+ *
+ * 1. `email_unverified`: the ID token's email was not kept (absent, not
+ *    plain ASCII) or `email_verified` was not the boolean `true`
+ *    (`SsoIdentity.emailVerified`, set by `completeSsoCallback`).
+ * 2. `domain_not_allowed`: the email's domain (already ASCII lower-cased)
+ *    is not in `SSO_<ID>_ALLOWED_DOMAINS`, compared exactly: no
+ *    subdomains, so `corp.com` does not let `x.corp.com` in.
+ * 3. `hosted_domain_not_allowed`: Google's `hd` claim, when present, must
+ *    be an allowed domain too (the Workspace organization the account
+ *    belongs to; a user of a secondary domain carries the primary one).
+ *    For Google's issuer, `hd` is required unless the address is
+ *    `gmail.com`: a consumer Google account can carry any address that
+ *    was verified once, and Google is not authoritative for it after
+ *    that (a former employee keeps a Google account on their old work
+ *    address).
+ *
+ * The configuration guarantees allowed domains whenever auto-link is on;
+ * an empty list refuses everything here anyway.
+ */
+export function ssoAutoLinkEmail(
+  provider: Pick<SsoProviderSettings, "issuer" | "allowedDomains">,
+  identity: Pick<SsoIdentity, "email" | "emailVerified" | "hostedDomain">,
+): { ok: true; email: string } | { ok: false; reason: SsoAutoLinkRefusal } {
+  const { email } = identity;
+  if (email === null || !identity.emailVerified) {
+    return { ok: false, reason: "email_unverified" };
+  }
+  const domain = email.slice(email.lastIndexOf("@") + 1);
+  if (!provider.allowedDomains.includes(domain)) {
+    return { ok: false, reason: "domain_not_allowed" };
+  }
+  const hd = identity.hostedDomain;
+  const hdRefused =
+    hd === null
+      ? provider.issuer === GOOGLE_ISSUER && domain !== GMAIL_DOMAIN
+      : !provider.allowedDomains.includes(hd);
+  if (hdRefused) return { ok: false, reason: "hosted_domain_not_allowed" };
+  return { ok: true, email };
+}
+
+/**
+ * Why the account an email matched may not be linked automatically
+ * (#224, part 4), or `null` when it may. Only an enabled **member without
+ * a BunMail second factor** and without an identity at this provider is.
+ * `accounts` are the accounts with that address (emails are unique, so at
+ * most one; anything but exactly one is `no_account_for_email`). In
+ * order: none, a disabled account (`deactivated`), the owner
+ * (`owner_not_auto_linked`), an admin (`admin_not_auto_linked`), an
+ * account with a second factor (`second_factor_enrolled`: the link would
+ * be written before that factor is passed and outlive it, a dormant
+ * single-factor way in once the factor is removed; such accounts link
+ * explicitly, behind the password), then an account that already has an
+ * identity at this provider (`provider_already_linked`).
+ * `identityLinkedElsewhere` is true when the identity itself is linked to
+ * another account (only possible through a racing link): `already_linked`.
+ */
+export function ssoAutoLinkRefusal(
+  accounts: ReadonlyArray<{ disabled: boolean; role: string; hasSecondFactor: boolean }>,
+  links: { providerLinked: boolean; identityLinkedElsewhere: boolean },
+): SsoAutoLinkRefusal | null {
+  const [account] = accounts;
+  if (account === undefined || accounts.length !== 1) return "no_account_for_email";
+  if (account.disabled) return "deactivated";
+  if (account.role === "owner") return "owner_not_auto_linked";
+  if (account.role !== "member") return "admin_not_auto_linked";
+  if (account.hasSecondFactor) return "second_factor_enrolled";
+  if (links.providerLinked) return "provider_already_linked";
+  if (links.identityLinkedElsewhere) return "already_linked";
   return null;
 }

@@ -222,6 +222,56 @@ export type UnlinkSsoIdentityResult =
 export type SsoSignInRefusal =
   "unknown_identity" | "deactivated" | "owner_second_factor_required";
 
+/**
+ * Why an unknown identity was not linked by its verified email (#224,
+ * part 4: `SSO_<ID>_AUTO_LINK=true`). The sign-in is then refused like an
+ * unknown identity (same message, same counting); each one is recorded as
+ * the `reason` of `auth.login.failed` (`step: "sso"`):
+ *
+ * - `email_unverified`: no usable `email` claim, or `email_verified` is
+ *   not the boolean `true` (the string `"true"` does not count);
+ * - `domain_not_allowed`: the email's domain is not in
+ *   `SSO_<ID>_ALLOWED_DOMAINS`;
+ * - `hosted_domain_not_allowed`: Google's `hd` claim (the Workspace
+ *   domain) is not in the allowed domains, or a Google account outside
+ *   `gmail.com` has none (Google is then not authoritative for the
+ *   address);
+ * - `no_account_for_email`: no account has that address;
+ * - `deactivated`: the account is disabled;
+ * - `owner_not_auto_linked`: the account is the owner, which is never
+ *   linked automatically;
+ * - `admin_not_auto_linked`: the account is an admin, never linked
+ *   automatically either (only members are);
+ * - `second_factor_enrolled`: the account has a BunMail second factor: a
+ *   link written before that factor is passed would outlive it, so these
+ *   accounts link explicitly (Account > Sign-in methods, password asked);
+ * - `provider_already_linked`: the account already has an identity at this
+ *   provider (possibly linked a moment ago by a racing link);
+ * - `already_linked`: the identity was linked to another account a moment
+ *   ago (a racing explicit link).
+ */
+export type SsoAutoLinkRefusal =
+  | "email_unverified"
+  | "domain_not_allowed"
+  | "hosted_domain_not_allowed"
+  | "no_account_for_email"
+  | "deactivated"
+  | "owner_not_auto_linked"
+  | "admin_not_auto_linked"
+  | "second_factor_enrolled"
+  | "provider_already_linked"
+  | "already_linked";
+
+/** Whether an unknown identity may be linked by its email (`resolveSsoAutoLink`). */
+export type SsoAutoLinkDecision =
+  | { ok: true; userId: string }
+  | {
+      ok: false;
+      reason: SsoAutoLinkRefusal;
+      /** The account the address matched; `null` when none did. */
+      userId: string | null;
+    };
+
 /** Whether a proven identity may sign in, and with which assurance (`resolveSsoSignIn`). */
 export type SsoSignInDecision =
   | {
@@ -251,6 +301,17 @@ export type OpenSsoSessionResult =
   | Extract<SsoSignInDecision, { ok: false }>;
 
 /**
+ * What linking an identity by its email and opening its session gives
+ * (`autoLinkSsoIdentity`): the session, with the new link, or the refusal.
+ */
+export type AutoLinkSsoResult =
+  | (Extract<OpenSsoSessionResult, { ok: true }> & {
+      /** The link just written: its label (the provider email), for the security email. */
+      autoLinked: { name: string | null };
+    })
+  | Extract<SsoAutoLinkDecision, { ok: false }>;
+
+/**
  * The outcome of a sign-in callback (`finishSsoSignInCallback`): the new
  * session, or the stage that refused it.
  *
@@ -258,13 +319,24 @@ export type OpenSsoSessionResult =
  *   token), see {@link SsoFailureReason};
  * - `purpose`: a valid flow that was not started to sign in;
  * - `account`: the identity is proven but may not sign in, see
- *   {@link SsoSignInRefusal}.
+ *   {@link SsoSignInRefusal}, or an unknown identity could not be linked
+ *   by its email, see {@link SsoAutoLinkRefusal}.
+ *
+ * A success carries `autoLinked` when the identity was linked by its
+ * email on the way (the account is emailed about it).
  */
 export type SsoSignInCallbackOutcome =
-  | Extract<OpenSsoSessionResult, { ok: true }>
+  | (Extract<OpenSsoSessionResult, { ok: true }> & {
+      autoLinked?: { name: string | null };
+    })
   | { ok: false; stage: "flow"; reason: SsoFailureReason }
   | { ok: false; stage: "purpose" }
-  | { ok: false; stage: "account"; reason: SsoSignInRefusal; userId: string | null };
+  | {
+      ok: false;
+      stage: "account";
+      reason: SsoSignInRefusal | SsoAutoLinkRefusal;
+      userId: string | null;
+    };
 
 /**
  * The outcome of a link callback (`finishSsoLinkCallback`): the link, or

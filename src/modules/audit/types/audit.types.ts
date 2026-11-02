@@ -97,7 +97,13 @@ export type AuditLoginFailureReason =
  * `unknown_identity` (no account linked to the identity), `deactivated`
  * (shared with the other steps) and `owner_second_factor_required` (the
  * owner has no BunMail second factor: SSO never opens a one-factor
- * session for the owner).
+ * session for the owner). With `SSO_<ID>_AUTO_LINK=true`, an unknown
+ * identity that could not be linked by its email records why instead of
+ * `unknown_identity` (`SsoAutoLinkRefusal`, part 4): `email_unverified`,
+ * `domain_not_allowed`, `hosted_domain_not_allowed`,
+ * `no_account_for_email`, `deactivated`, `owner_not_auto_linked`,
+ * `admin_not_auto_linked`, `second_factor_enrolled`,
+ * `provider_already_linked`, `already_linked`.
  */
 type AuditSsoLoginFailureReason =
   | "discovery_failed"
@@ -111,7 +117,16 @@ type AuditSsoLoginFailureReason =
   | "provider_error"
   | "id_token_invalid"
   | "unknown_identity"
-  | "owner_second_factor_required";
+  | "owner_second_factor_required"
+  | "email_unverified"
+  | "domain_not_allowed"
+  | "hosted_domain_not_allowed"
+  | "no_account_for_email"
+  | "owner_not_auto_linked"
+  | "admin_not_auto_linked"
+  | "second_factor_enrolled"
+  | "provider_already_linked"
+  | "already_linked";
 
 /**
  * Why linking an SSO identity was refused (#224), recorded as the `reason`
@@ -209,6 +224,8 @@ export interface AuditMetadataByAction {
    * providers use as the subject: the target carries the link's row id.
    */
   "auth.sso.linked": { provider: string };
+  /** Linked at sign-in by the identity's verified email (`SSO_<ID>_AUTO_LINK`, part 4). */
+  "auth.sso.auto_linked": { provider: string };
   "auth.sso.unlinked": { provider: string; sessionsRevoked: number };
   "auth.sso.link_refused": { provider: string; reason: AuditSsoLinkRefusal };
   "auth.sso.unlink_refused": { provider: string; reason: "wrong_password" };
@@ -273,6 +290,7 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "auth.passkey.counter_regressed":
     "Passkey refused: signature counter went back (possible clone)",
   "auth.sso.linked": "Single sign-on identity linked",
+  "auth.sso.auto_linked": "Single sign-on identity linked by verified email",
   "auth.sso.unlinked": "Single sign-on identity unlinked",
   "auth.sso.link_refused": "Single sign-on link refused",
   "auth.sso.unlink_refused": "Single sign-on unlink refused",

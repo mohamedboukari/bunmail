@@ -3,7 +3,6 @@ import * as oauth from "oauth4webapi";
 import {
   asciiLowerCase,
   isLowerAsciiDomain,
-  ssoEnvPrefix,
   type SsoProviderSettings,
 } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -93,26 +92,6 @@ interface SsoFlowContext {
  */
 export function ssoRedirectUri(baseUrl: string, providerId: string): string {
   return `${baseUrl}/dashboard/login/sso/${providerId}/callback`;
-}
-
-/**
- * Linking by verified email (`SSO_<ID>_AUTO_LINK=true`) is validated by
- * the config but not implemented yet (#224, part 4): warns once per
- * provider that sets it, at boot, so the setting is never silently
- * ignored. Identities are linked only under Account > Sign-in methods
- * until then. Returns the ids warned about.
- */
-export function warnSsoAutoLinkNotImplemented(
-  providers: readonly SsoProviderSettings[],
-): string[] {
-  const ids = providers.filter((provider) => provider.autoLink).map((p) => p.id);
-  for (const id of ids) {
-    logger.warn(
-      "SSO auto-link is not implemented yet; identities must be linked under Account > Sign-in methods",
-      { provider: id, setting: `${ssoEnvPrefix(id)}AUTO_LINK` },
-    );
-  }
-  return ids;
 }
 
 /** The `oauth4webapi` client of a provider. */
@@ -240,7 +219,8 @@ function classifyExchangeError(error: unknown): Refusal {
  * `SSO_<ID>_ALLOWED_DOMAINS`, at most 254 characters in all. ASCII
  * letters are lower-cased and nothing else: Unicode case folding would
  * turn a look-alike (the Kelvin sign in `Kate@corp.com`) into a real
- * address, and the link by email (a later PR) matches on this value.
+ * address, and the link by verified email (`ssoAutoLinkEmail`) matches on
+ * this value.
  */
 function emailClaim(value: unknown): string | null {
   if (typeof value !== "string" || value.length > MAX_EMAIL_LENGTH) return null;

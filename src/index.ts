@@ -43,7 +43,6 @@ import {
 import { encryptWebhookSecrets } from "./db/encrypt-webhook-secrets.ts";
 import { logReverseDnsAtBoot } from "./modules/domains/services/sending-ips.service.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
-import { warnSsoAutoLinkNotImplemented } from "./modules/users/services/sso.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
 import { loggableError } from "./utils/db-error.ts";
@@ -281,9 +280,6 @@ if (config.sso.providers.length > 0 && config.sso.baseUrl === null) {
     hint: "set APP_BASE_URL to this server's public https:// URL (http:// only for localhost)",
   });
 }
-
-/** `SSO_<ID>_AUTO_LINK=true` does nothing yet (#224, part 4): one `warn` per provider. */
-warnSsoAutoLinkNotImplemented(config.sso.providers);
 
 /**
  * Main Elysia application.

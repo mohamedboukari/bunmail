@@ -28,6 +28,7 @@ const EVENTS: TwoFactorAlertEvent[] = [
   "passkey_removed",
   "passkey_counter_regressed",
   "sso_linked",
+  "sso_auto_linked",
   "sso_unlinked",
 ];
 
@@ -116,6 +117,25 @@ describe("buildTwoFactorAlertEmail", () => {
       sso: { provider: "Corp", account: null },
     });
     expect(unnamed.text).toContain("Provider account: not shown");
+  });
+
+  test("a link by verified email (#224 part 4) says it was automatic, names the provider and the masked account, no link", () => {
+    const auto = buildTwoFactorAlertEmail({
+      event: "sso_auto_linked",
+      email: "alice@example.com",
+      ip: "203.0.113.5",
+      at: new Date(),
+      sso: { provider: "Corp", account: "alice@example.com" },
+    });
+    expect(auto.subject).toBe(
+      "A sign-in method was linked automatically to your BunMail account",
+    );
+    expect(auto.text).toContain("linked automatically");
+    expect(auto.text).toContain("Provider: Corp");
+    expect(auto.text).toContain("Provider account: a***@example.com");
+    expect(auto.text).not.toContain("alice@example.com");
+    expect(auto.text).toContain("Account > Sign-in methods");
+    expect(`${auto.text}${auto.html}`).not.toMatch(/https?:|href=|www\./);
   });
 
   test("a reset lists the SSO links it removed (#224): counted, each provider with its masked account, escaped, no link", () => {

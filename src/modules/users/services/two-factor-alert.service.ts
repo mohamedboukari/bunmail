@@ -22,7 +22,8 @@ import {
  * correct password followed by a run of wrong codes, a passkey whose
  * signature counter went back (a possible cloned authenticator, #223), or
  * a single sign-on identity linked or unlinked (#224: a stolen session
- * and password could plant the thief's own identity).
+ * and password could plant the thief's own identity), or linked
+ * automatically by its verified email at sign-in (#224, part 4).
  *
  * Callers never await it on the request path (`void`): a slow or failing
  * send never delays or breaks the action. It never throws.
@@ -39,6 +40,7 @@ export type TwoFactorAlertEvent =
   | "passkey_removed"
   | "passkey_counter_regressed"
   | "sso_linked"
+  | "sso_auto_linked"
   | "sso_unlinked";
 
 /** Subject and first line per event: static text, nothing to inject. */
@@ -87,6 +89,11 @@ const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }
     subject: "A single sign-on account was linked to your BunMail account",
     intro:
       "An account at a single sign-on provider is now linked to your BunMail account.",
+  },
+  sso_auto_linked: {
+    subject: "A sign-in method was linked automatically to your BunMail account",
+    intro:
+      "An account at a single sign-on provider was linked automatically to your BunMail account, because it signed in with your verified email address. It can now sign in to your BunMail account.",
   },
   sso_unlinked: {
     subject: "A single sign-on account was unlinked from your BunMail account",
