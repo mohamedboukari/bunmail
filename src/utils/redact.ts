@@ -64,6 +64,15 @@ const EMAIL_IN_TEXT = /[^\s<>()[\]"',;:@]+@[A-Za-z0-9.-]+/g;
  */
 export function redactEmailsInText(value: string): string {
   if (!config.logRedactPii) return value;
+  return maskEmailsInText(value);
+}
+
+/**
+ * Masks every email address inside free text whatever `LOG_REDACT_PII`
+ * says: for text that leaves the server, such as a trace span's error
+ * message (#363), which goes to a tracing backend.
+ */
+export function maskEmailsInText(value: string): string {
   return value.replace(EMAIL_IN_TEXT, (address) => maskEmail(address));
 }
 

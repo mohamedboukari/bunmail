@@ -1,6 +1,6 @@
 # Metrics (#362)
 
-BunMail serves Prometheus metrics at `GET /metrics`, in the text exposition format (`text/plain; version=0.0.4`). Prometheus scrapes it directly; the OpenTelemetry Collector (`prometheus` receiver) and the Datadog Agent (OpenMetrics check) read the same endpoint, so one setup covers every common stack. Logs stay the place for individual events ([logging.md](logging.md)); metrics are for rates, trends and alerts.
+BunMail serves Prometheus metrics at `GET /metrics`, in the text exposition format (`text/plain; version=0.0.4`). Prometheus scrapes it directly; the OpenTelemetry Collector (`prometheus` receiver) and the Datadog Agent (OpenMetrics check) read the same endpoint, so one setup covers every common stack. Logs stay the place for individual events ([logging.md](logging.md)); metrics are for rates, trends and alerts; OpenTelemetry traces, off by default, show where one request or one send spent its time ([tracing.md](tracing.md)).
 
 ## Turning it on
 

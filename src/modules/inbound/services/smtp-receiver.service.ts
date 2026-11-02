@@ -28,6 +28,7 @@ import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
 import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
+import { smtpSessionTracer } from "../../../utils/tracing.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { tokenFromUnsubscribeAddress } from "../../suppressions/services/unsubscribe-token.ts";
 import {
@@ -135,6 +136,20 @@ function sessionContext(session: { id: string }): LogContext {
   return { smtpSessionId: session.id, listener: "inbound" };
 }
 
+/** The trace spans of inbound connections and the messages they deliver (#363). */
+const sessionSpans = smtpSessionTracer("inbound");
+
+/**
+ * Runs `fn` in one connection's log context (#284) and, with tracing on,
+ * with its span active (#363). smtp-server calls every handler on its own,
+ * so each one enters both again.
+ */
+function inSession<T>(session: { id: string }, fn: () => T): T {
+  return runWithLogContext(sessionContext(session), () =>
+    sessionSpans.run(session.id, fn),
+  );
+}
+
 /**
  * Verifies an `unsub+<token>@<domain>` recipient (#249): the token must be
  * valid and the domain must be the sender domain of the email it names.
@@ -226,7 +241,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
     onClose(session) {
       const stats = sessionStats.get(session.id);
       sessionStats.delete(session.id);
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         logger.info("SMTP session closed", {
           remoteAddress: session.remoteAddress,
           messages: stats?.messages ?? 0,
@@ -234,6 +249,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
             stats === undefined ? null : Math.round(performance.now() - stats.startedAt),
         });
       });
+      sessionSpans.close(session.id, stats?.messages ?? 0);
     },
 
     /**
@@ -242,7 +258,8 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * to reject bad IPs before they can send any data.
      */
     onConnect(session, callback) {
-      runWithLogContext(sessionContext(session), () => {
+      sessionSpans.open(session.id);
+      inSession(session, () => {
         sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
         recordSmtpConnection("inbound");
         const ip = session.remoteAddress;
@@ -285,7 +302,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * themselves per RFC 3464.
      */
     onMailFrom(address, session, callback) {
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         const value = address.address;
 
         /** Empty envelope sender = legitimate DSN bounce; let it through. */
@@ -318,7 +335,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * Rejects mail to unknown domains with SMTP 550.
      */
     onRcptTo(address, session, callback) {
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         /**
          * Cap recipients per transaction. `session.envelope.rcptTo` is the
          * already-accepted list; this hook fires before the new address is
@@ -445,12 +462,18 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * and fires an `email.received` webhook event.
      */
     onData(stream, session, callback) {
+      /** The message's trace span (#363), ended with the reply it gets. */
+      const reply = sessionSpans.message(
+        session.id,
+        session.envelope.rcptTo?.length ?? 0,
+        callback,
+      );
       /** Every outcome goes through here; a success counts as an accepted message (#362). */
       const done = (error?: Error | null): void => {
         if (!error) recordSmtpMessageAccepted("inbound");
-        callback(error);
+        reply(error);
       };
-      runWithLogContext(sessionContext(session), () => {
+      inSession(session, () => {
         const stats = sessionStats.get(session.id);
         if (stats) stats.messages += 1;
         const chunks: Buffer[] = [];
@@ -463,7 +486,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
         let aborted = false;
 
         stream.on("data", (chunk: Buffer) => {
-          runWithLogContext(sessionContext(session), () => {
+          inSession(session, () => {
             if (aborted) return;
             totalBytes += chunk.length;
 
@@ -493,7 +516,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
         });
 
         stream.on("end", () => {
-          runWithLogContext(sessionContext(session), () => {
+          inSession(session, () => {
             /** The listener must return void; the body is guarded by its own
              *  try/catch, and `void` keeps a rejected promise from escaping
              *  as an unhandled rejection. */

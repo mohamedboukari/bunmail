@@ -1,3 +1,4 @@
+import { isSpanContextValid, trace, TraceFlags } from "@opentelemetry/api";
 import { config } from "../config.ts";
 import { getLogContext } from "./log-context.ts";
 
@@ -112,12 +113,33 @@ export function redactSecrets(value: unknown, depth: number = 0): unknown {
 }
 
 /**
+ * The trace and span IDs of the active span (#363), so a log line leads to
+ * its trace; nothing when no sampled span is active, which is always the
+ * case while tracing is off.
+ */
+function traceFields(): { traceId?: string; spanId?: string } {
+  const spanContext = trace.getActiveSpan()?.spanContext();
+  if (
+    spanContext === undefined ||
+    !isSpanContextValid(spanContext) ||
+    (spanContext.traceFlags & TraceFlags.SAMPLED) === 0
+  ) {
+    return {};
+  }
+  return { traceId: spanContext.traceId, spanId: spanContext.spanId };
+}
+
+/**
  * The fields of one log line: the current log context (request, job or
- * SMTP session IDs, #284) first, then the call's own data, with secrets
- * redacted.
+ * SMTP session IDs, #284) first, then the active span's trace and span IDs
+ * (#363), then the call's own data, with secrets redacted.
  */
 function lineFields(data?: Record<string, unknown>): Record<string, unknown> {
-  const merged: Record<string, unknown> = { ...getLogContext(), ...data };
+  const merged: Record<string, unknown> = {
+    ...getLogContext(),
+    ...traceFields(),
+    ...data,
+  };
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(merged)) {
     fields[key] = isSensitiveKey(key) ? REDACTED : redactSecrets(value, 1);
