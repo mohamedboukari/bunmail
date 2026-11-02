@@ -160,5 +160,7 @@ Inputs are generated in the test, never stored as fixtures. Budgets are delibera
 
 ## DKIM verifier vectors (#373)
 
+`test/fake-dns.ts` is a fake DNS server on 127.0.0.1 (UDP and TCP on one port, answers built byte for byte by the test) for the TXT resolver `src/utils/dns-txt.ts`: `useFakeDns()` runs one per file, `test/unit/dns-txt.test.ts` and `dns-txt-hardening.test.ts` pass it as `servers` (the parser alone, with its fixed-seed fuzz, is `dns-wire.test.ts`), and `test/unit/dns-txt-callers.test.ts` points `dns.setServers` at it (restored after) to check each caller's default TXT path with multi-string records. Tests that reach a TXT lookup by default stub it through the module's seam (`setDomainDnsDeps`, `setMtaStsDeps`) rather than `mock.module("dns/promises")`, which does not reach the helper.
+
 `test/dkim-vectors.ts` builds signed messages (nodemailer's own signer for relaxed/relaxed RSA, a plain RFC 6376 signer for simple, `l=`, `i=`, `x=` and ed25519-sha256), each with the DNS answers it needs and the expected verdict; `test/unit/dkim-verifier.test.ts` runs them with fresh keys over an injected `resolveTxt`, no `mock.module`. `test/fixtures/dkim-differential.json` is one run of the same vectors with mailauth's verdicts (default and strict mode), recorded with mailauth 7.1.1 before it was removed (#373; the recording script went with it); `test/unit/dkim-differential.test.ts` checks the verifier against it and lists every intended difference with its reason.
 

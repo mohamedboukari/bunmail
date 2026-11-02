@@ -1,5 +1,6 @@
-import { lookup, resolveTxt } from "dns/promises";
+import { lookup } from "dns/promises";
 import { isIP } from "net";
+import { resolveTxtRecords } from "../../../utils/dns-txt.ts";
 import { logger } from "../../../utils/logger.ts";
 import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
 import type { LookupAll } from "./mx-address.ts";
@@ -103,8 +104,8 @@ export interface MtaStsDeps {
 }
 
 const realDeps: MtaStsDeps = {
-  /** Called through, so a replaced `dns/promises` export is honoured. */
-  resolveTxt: (name) => resolveTxt(name),
+  /** Our own TXT lookup: Bun's `resolveTxt` splits multi-string records (oven-sh/bun#44692). */
+  resolveTxt: (name) => resolveTxtRecords(name),
   lookup: (host) => lookup(host, { all: true }),
   fetch: (url, init) => fetch(url, init),
   httpsPort: 443,

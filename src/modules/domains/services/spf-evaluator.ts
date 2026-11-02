@@ -1,4 +1,5 @@
-import { resolve4, resolve6, resolveMx, resolvePtr, resolveTxt } from "dns/promises";
+import { resolve4, resolve6, resolveMx, resolvePtr } from "dns/promises";
+import { resolveTxtRecords } from "../../../utils/dns-txt.ts";
 import type {
   SpfCheckInput,
   SpfCheckOptions,
@@ -42,13 +43,19 @@ import {
  *   is a `permerror`. The whole evaluation has a deadline (10 s by
  *   default), past which the result is `temperror`.
  * - DNS errors: `ENOTFOUND` and `ENODATA` are an empty answer (Bun reports
- *   both NXDOMAIN and no data as `ENOTFOUND`); anything else (`ETIMEOUT`,
+ *   both NXDOMAIN and no data as `ENOTFOUND`, the TXT lookup tells them
+ *   apart); anything else (`ETIMEOUT`,
  *   `ESERVFAIL`, `ECONNREFUSED`, ...) is a `temperror`, except in the
  *   `ptr` lookups, where RFC 7208 5.5 makes it a non-match.
  */
 
+/**
+ * TXT goes through `utils/dns-txt.ts`: Bun's `resolveTxt` splits a record
+ * of several strings into several records (oven-sh/bun#44692), which turns
+ * an SPF record over 255 characters into a cut-off one.
+ */
 const defaultResolver: SpfDnsResolver = {
-  resolveTxt,
+  resolveTxt: (name) => resolveTxtRecords(name),
   resolve4,
   resolve6,
   resolveMx,

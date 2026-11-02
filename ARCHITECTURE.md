@@ -111,6 +111,8 @@ bunmail/
 │   │   ├── recipients.ts                 ← Recipient parsing and grouping per recipient domain (#87)
 │   │   ├── smtp-error.ts                 ← Classifies an SMTP reply as hard, policy or soft (#68, #246, #250)
 │   │   ├── ssrf-guard.ts                 ← Non-public address checks for webhook URLs, MX hosts and other outbound lookups (#128)
+│   │   ├── dns-txt.ts                    ← TXT lookups over UDP/TCP sockets, record boundaries kept (Bun splits them, oven-sh/bun#44692)
+│   │   ├── dns-wire.ts                   ← DNS wire format for dns-txt.ts: name checks, query, strict response parse (pure)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
 │   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
@@ -599,6 +601,8 @@ The same loop also deletes expired dashboard sessions (`runSessionSweep` → `pu
 ## Domain DNS Re-verification (#250)
 
 `domain-reverify.service.ts` re-checks every domain's SPF, DKIM and DMARC records in the background (`DOMAIN_REVERIFY_ENABLED`, default `true`). It wakes every 5 minutes (plus or minus 20%) and claims due domains in one statement, `UPDATE domains SET next_check_at = NOW() + 15 min WHERE id IN (SELECT ... WHERE next_check_at IS NULL OR next_check_at <= NOW() ORDER BY next_check_at NULLS FIRST LIMIT 50 FOR UPDATE SKIP LOCKED)`, so replicas never check one domain at once. It checks them 8 at a time with Verify's code and reschedules: `DOMAIN_REVERIFY_INTERVAL_HOURS` (default 24) plus or minus an hour after a pass, an hour after a failure or a failed lookup. A failed lookup (`unknown`) never counts; two definitive failures in a row flip a verified domain to failing (`verified_at` cleared, flags follow the result) in one transaction with `domain.verification_failed` through the webhook outbox. Each run logs one line under `job: "domain-reverify"`. It never sends mail. See [docs/domains.md](docs/domains.md#scheduled-re-verification-250).
+
+Every TXT lookup (Verify's SPF, DKIM and DMARC checks, the SPF evaluator, DKIM rotation, inbound DKIM verification and outbound MTA-STS) goes through `src/utils/dns-txt.ts`, not `dns/promises`: Bun's `resolveTxt` (1.3.14, oven-sh/bun#44692) returns each string of a multi-string record as a record of its own, which breaks 2048-bit DKIM keys and SPF records over 255 characters. The helper queries the resolvers of `dns.getServers()` itself (UDP with EDNS0, once more without it after a FORMERR, TCP when truncated, an unreachable server skipped for the next; every response checked against the query ID and question and parsed with bounds checks in `dns-wire.ts`) and returns Node's shape and `node:dns` error codes. Other record types still use `dns/promises`.
 
 ## Sending IP DNSBL Self-check (#250)
 
