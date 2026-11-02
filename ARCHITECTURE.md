@@ -232,6 +232,7 @@ bunmail/
 │   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server)
 │   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
+│   │   │   │   ├── dkim-verifier.service.ts ← DKIM signature verification (RFC 6376, rsa-sha256 and ed25519-sha256) for feedback reports (#373)
 │   │   │   │   ├── inbound-notify.service.ts ← "New email for <address>" notifications: plain text, no inbound content by default, automatic mail skipped (#106, #250)
 │   │   │   │   ├── notify-throttle.ts    ← Notification budgets: 5 per address, 30 per domain, per 10 min, in memory (#250)
 │   │   │   │   ├── threading.ts          ← Pure Message-ID extraction and reply chain rules (#192)
@@ -1247,7 +1248,7 @@ Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Goo
 
 **Unsubscribe → Suppression (#249):** `transactional` mail and BunMail's own mail carry no `List-Unsubscribe`, and `marketing` mail is accepted only when it can carry the per-recipient link (#250). Single-recipient mail carries a per-recipient `List-Unsubscribe` (`<APP_BASE_URL/u/<token>>` + One-Click, and `<mailto:unsub+<token>@<domain>>` when `SMTP_ENABLED`). A one-click POST, the confirmation page or a message to that mailbox (handled before generic inbound storage) becomes a permanent `unsubscribe` suppression under the sending key and fires `email.unsubscribed` once.
 
-**Complaint → Suppression (#191):** ARF feedback reports (RFC 5965, `multipart/report; report-type=feedback-report`) from mailbox-provider feedback loops arrive at the inbound SMTP and are routed to the feedback handler before the bounce parser, never stored as inbound mail. A report counts only when its Original-Message-ID (feedback part, or the reported message's headers) exactly matches the Message-ID of an email BunMail sent; unlinkable reports are logged and dropped. `abuse` / `fraud` (or no type) → permanent `complaint` suppression for the recipient under the email's key (strongest reason: replaces any other) + `email.complained`; `opt-out` → the #249 unsubscribe path (`source: "fbl"`); `not-spam`, `virus` and the rest are dropped. DKIM on the report is checked with mailauth and logged, not required. See [docs/feedback-loops.md](docs/feedback-loops.md).
+**Complaint → Suppression (#191):** ARF feedback reports (RFC 5965, `multipart/report; report-type=feedback-report`) from mailbox-provider feedback loops arrive at the inbound SMTP and are routed to the feedback handler before the bounce parser, never stored as inbound mail. A report counts only when its Original-Message-ID (feedback part, or the reported message's headers) exactly matches the Message-ID of an email BunMail sent; unlinkable reports are logged and dropped. `abuse` / `fraud` (or no type) → permanent `complaint` suppression for the recipient under the email's key (strongest reason: replaces any other) + `email.complained`; `opt-out` → the #249 unsubscribe path (`source: "fbl"`); `not-spam`, `virus` and the rest are dropped. DKIM on the report is checked by the built-in verifier (`dkim-verifier.service.ts`, #373) and logged, not required. See [docs/feedback-loops.md](docs/feedback-loops.md).
 
 ---
 

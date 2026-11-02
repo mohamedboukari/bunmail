@@ -56,6 +56,7 @@ src/modules/inbound/
 │   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
 │   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
+│   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373)
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
 │   ├── smtp-listen.ts               ← Port bind failures of both SMTP servers: explain and exit (#167)
@@ -319,9 +320,9 @@ The reply headers for a dashboard reply, recovering the ids from `raw_message` o
 #### `getRepliedEmail(inbound)`
 The linked email (id, subject, sent time) for the detail page.
 
-### arf-parser.service.ts / feedback-handler.service.ts
+### arf-parser.service.ts / feedback-handler.service.ts / dkim-verifier.service.ts
 
-`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `handleFeedbackReport`, `handleInboundFeedbackReport`: see [feedback-loops.md](feedback-loops.md#service-methods).
+`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `handleFeedbackReport`, `handleInboundFeedbackReport`, `verifyDkimSignatures`: see [feedback-loops.md](feedback-loops.md#service-methods).
 
 ### dnsbl.service.ts
 
