@@ -159,10 +159,12 @@ jobs:
       - name: Test (shared-store contract against real Redis)
         # Runs the in-memory store's contract against Redis too (#185):
         # atomic limits under a parallel burst, window expiry, one-time
-        # entries hashed and encrypted at rest. Skipped without the URL.
+        # entries hashed and encrypted at rest, and the leased MX slots
+        # (limit across two clients, lease expiry and renewal, arrival
+        # order). Skipped without the URL.
         env:
           REDIS_TEST_URL: redis://localhost:6379
-        run: bun test test/unit/shared-store.test.ts
+        run: bun test test/unit/shared-store.test.ts test/unit/shared-slots.test.ts test/unit/mx-throttle-shared.test.ts
 
       - name: Coverage floor (unit + e2e merged)
         # Merges both LCOVs and fails below 64% lines / 73% functions.

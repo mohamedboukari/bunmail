@@ -40,6 +40,7 @@ import {
   useSharedBackend,
   type SharedStoreBackend,
 } from "../../src/utils/shared-store.ts";
+import { MemorySlotSemaphore } from "../../src/utils/shared-slots.ts";
 import { connectRedisBackend } from "../../src/utils/redis-store.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -78,6 +79,7 @@ function memoryBackend(): SharedStoreBackend {
       return counter;
     },
     oneTime: () => new MemoryOneTimeStore(10),
+    slots: () => new MemorySlotSemaphore(),
     close: () => {},
   };
 }
@@ -92,6 +94,7 @@ const down: SharedStoreBackend = {
     markOnce: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
   }),
   oneTime: () => new MemoryOneTimeStore(10),
+  slots: () => new MemorySlotSemaphore(),
   close: () => {},
 };
 

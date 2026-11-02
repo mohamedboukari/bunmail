@@ -1,9 +1,11 @@
 import { logger } from "./logger.ts";
+import type { SlotSemaphore } from "./shared-slots.ts";
 
 /**
  * State that several replicas must share (#185): fixed-window counters
- * (rate limits, failed-attempt budgets) and one-time entries (reveal
- * tokens, and the claimed `state` of each SSO callback, #224).
+ * (rate limits, failed-attempt budgets), one-time entries (reveal tokens,
+ * and the claimed `state` of each SSO callback, #224), and counting
+ * semaphores with leased slots (the per-MX session limit, `shared-slots.ts`).
  *
  * Every store has a process-memory implementation, the default: one
  * replica, nothing else to run. With `REDIS_URL` set, the boot installs a
@@ -12,9 +14,9 @@ import { logger } from "./logger.ts";
  * another one stored. Callers never know which backend answers.
  *
  * When Redis fails mid-operation:
- * - **counters fall back to this replica's memory** (the single-replica
- *   behaviour): limits keep holding, per replica, and nobody is locked
- *   out. One `error` line per namespace a minute says so.
+ * - **counters and semaphores fall back to this replica's memory** (the
+ *   single-replica behaviour): limits keep holding, per replica, and
+ *   nobody is locked out. One `error` line per namespace a minute says so.
  * - **one-time entries fail closed**: the error reaches the caller, which
  *   then shows nothing. A secret is never revealed from a store that
  *   might be stale, and never to anyone else.
@@ -131,6 +133,8 @@ export interface SharedStoreBackend {
   counter(namespace: string): WindowCounter;
   /** The one-time entries of `namespace`. */
   oneTime(namespace: string): OneTimeStore;
+  /** The counting semaphores of `namespace`. */
+  slots(namespace: string): SlotSemaphore;
   /** Closes the connection; later operations fail. */
   close(): void;
 }
@@ -373,6 +377,18 @@ export function useSharedBackend(next: SharedStoreBackend | null): void {
   backendGeneration += 1;
 }
 
+/**
+ * The installed backend with its generation, or `null` for process
+ * memory: for the stores kept in other modules (`shared-slots.ts`), which
+ * tag what they hand out with the generation as the counters do.
+ */
+export function installedSharedBackend(): {
+  backend: SharedStoreBackend;
+  generation: number;
+} | null {
+  return backend ? { backend, generation: backendGeneration } : null;
+}
+
 /** Closes the shared backend, if any (graceful shutdown). */
 export function closeSharedStore(): void {
   const current = backend;
@@ -388,10 +404,10 @@ const FALLBACK_LOG_INTERVAL_MS = 60_000;
 const fallbackLogged = new Map<string, { at: number; suppressed: number }>();
 
 /**
- * Logs a counter falling back to memory: `error`, at most once a minute
+ * Logs a store falling back to memory: `error`, at most once a minute
  * per namespace, with the count of the ones held back in between.
  */
-function reportFallback(namespace: string, error: unknown): void {
+export function reportFallback(namespace: string, error: unknown): void {
   const at = Date.now();
   const last = fallbackLogged.get(namespace);
   if (last && at - last.at < FALLBACK_LOG_INTERVAL_MS) {
@@ -417,11 +433,22 @@ export interface SharedWindowCounter extends WindowCounter {
 
 /* ─── Sweep of the in-memory counters ─── */
 
+/** A memory store the sweep prunes: drops what has ended, returns how many. */
+interface LocalSweepTarget {
+  prune(): number;
+}
+
 /**
- * The memory side of every counter {@link sharedWindowCounter} made. The
- * stores are module constants, so this holds one entry per namespace.
+ * The memory side of every counter {@link sharedWindowCounter} made, and
+ * of every semaphore `shared-slots.ts` made. The stores are module
+ * constants, so this holds one entry per namespace.
  */
-const localCounters = new Set<MemoryWindowCounter>();
+const localCounters = new Set<LocalSweepTarget>();
+
+/** Adds a memory store of another module to the periodic sweep. */
+export function addToLocalSweep(target: LocalSweepTarget): void {
+  localCounters.add(target);
+}
 
 /** How often the sweep drops ended windows from the memory counters. */
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
@@ -430,7 +457,8 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 let sweepInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Drops the ended windows of every in-memory counter; returns how many.
+ * Drops the ended windows of every in-memory counter, and the lapsed
+ * leases and waiters of every memory semaphore; returns how many.
  * A key's window is dropped when it is next read anyway; the sweep is for
  * keys never seen again (rotating client IPs, deleted API keys, unknown
  * domain ids), which would otherwise stay in the map for good.
