@@ -59,7 +59,17 @@ const SENSITIVE_KEYS = [
   "cookie",
   "setcookie",
   "apikey",
+  /** OpenID Connect flow values (#224): they bind a sign-in to one browser. */
+  "nonce",
+  "codeverifier",
 ] as const;
+
+/**
+ * Key names that are secrets only when they match exactly (#224): the
+ * OAuth `state`. A suffix match would also hide `deliveryState` or
+ * `sqlState`, which are diagnostics.
+ */
+const SENSITIVE_EXACT_KEYS = ["state"] as const;
 
 /** Deepest nesting the redactor walks; deeper values are replaced whole. */
 const REDACT_MAX_DEPTH = 6;
@@ -67,7 +77,10 @@ const REDACT_MAX_DEPTH = 6;
 /** True when `key` names a secret (see {@link SENSITIVE_KEYS}). */
 function isSensitiveKey(key: string): boolean {
   const normalized = key.toLowerCase().replace(/[^a-z]/g, "");
-  return SENSITIVE_KEYS.some((name) => normalized === name || normalized.endsWith(name));
+  return (
+    SENSITIVE_EXACT_KEYS.some((name) => normalized === name) ||
+    SENSITIVE_KEYS.some((name) => normalized === name || normalized.endsWith(name))
+  );
 }
 
 /** What drizzle puts between the SQL and its bound values in a query error message. */

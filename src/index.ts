@@ -262,6 +262,19 @@ if (config.dashboard.legacyAuthEnv.length > 0) {
 }
 
 /**
+ * SSO (#224) builds its redirect URIs on `APP_BASE_URL`, which must be
+ * `https://` (plain `http://` only on a loopback host). Providers
+ * configured without one leave SSO off; say so once, as the operator
+ * otherwise sees no reason.
+ */
+if (config.sso.providers.length > 0 && config.sso.baseUrl === null) {
+  logger.warn("SSO is off: APP_BASE_URL is not an https:// URL", {
+    providers: config.sso.providers.map((provider) => provider.id),
+    hint: "set APP_BASE_URL to this server's public https:// URL (http:// only for localhost)",
+  });
+}
+
+/**
  * Main Elysia application.
  *
  * Registers all plugins (route groups) and starts listening.
