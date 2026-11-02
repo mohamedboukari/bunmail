@@ -89,7 +89,7 @@ src/utils/
 └── tracing-sdk.ts   ← The SDK setup, loaded by a dynamic import only when tracing is on
 ```
 
-The settings are read by `readTracingSettings` in `src/config.ts` (`config.tracing`). Tracing starts in `src/index.ts` before the boot work and stops in the shutdown handler. The spans are made in `src/middleware/request-context.ts` (HTTP), `processEmail` in the queue, the mailer (`mx.deliver`, `mx.session`), `performHttpAttempt` (webhooks, with the `traceparent` injection) and both SMTP listeners. Spans become active only through `startActiveSpan` and `context.with`, which use `AsyncLocalStorage.run`; never call `context.attach()`, which uses `enterWith` on Bun and segfaults inside Elysia hooks ([logging.md](logging.md)).
+The settings are read by `readTracingSettings` in `src/config/observability.ts` (`config.tracing`). Tracing starts in `src/index.ts` before the boot work and stops in the shutdown handler. The spans are made in `src/middleware/request-context.ts` (HTTP), `processEmail` in the queue, the mailer (`mx.deliver`, `mx.session`), `performHttpAttempt` (webhooks, with the `traceparent` injection) and both SMTP listeners. Spans become active only through `startActiveSpan` and `context.with`, which use `AsyncLocalStorage.run`; never call `context.attach()`, which uses `enterWith` on Bun and segfaults inside Elysia hooks ([logging.md](logging.md)).
 
 Dependencies: the OpenTelemetry JS 3.x minimal set (`@opentelemetry/api`, `sdk-trace`, `context-async-hooks`, `core`, `resources`, `exporter-trace-otlp-proto`), 11 packages from the OpenTelemetry project with no other dependencies and no install scripts.
 

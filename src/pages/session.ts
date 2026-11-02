@@ -28,6 +28,14 @@ export const DEVICE_COOKIE = "bm_device";
 export const WEBAUTHN_COOKIE = "bm_wa";
 
 /**
+ * Name of the SSO flow cookie (#224): the encrypted `state`, `nonce` and
+ * PKCE verifier of one sign-in or link flow
+ * (`src/modules/users/services/sso-flow-cookie.service.ts`). Not a
+ * credential: it opens nothing by itself, and it lives 10 minutes.
+ */
+export const SSO_FLOW_COOKIE = "bm_sso";
+
+/**
  * Cookie attributes shared by every `Set-Cookie` of the session (#133):
  * `HttpOnly` (no JS access), `SameSite=Lax` (baseline CSRF defense),
  * `Secure` when requested (production: never over plaintext HTTP), and
@@ -135,4 +143,40 @@ export function webAuthnSetCookie(
   maxAgeSec: number,
 ): string {
   return `${WEBAUTHN_COOKIE}=${value}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}; Path=/dashboard; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
+}
+
+/**
+ * Reads the SSO flow cookie (#224) from a `Cookie` header. The value is
+ * returned as sent; decrypting it is the SSO service's check.
+ */
+export function readSsoFlowCookie(cookieHeader: string | null): string | undefined {
+  return readCookie(cookieHeader, SSO_FLOW_COOKIE);
+}
+
+/**
+ * `Set-Cookie` value of the SSO flow cookie (#224): `HttpOnly`, `Secure`
+ * when asked, `Path=/dashboard`, and as long as the flow lives.
+ *
+ * It must be `SameSite=Lax`, unlike `bm_wa`: the callback is a top-level
+ * navigation coming from the provider's site, and a `Strict` cookie is not
+ * sent on a navigation that starts on another site, so every callback
+ * would arrive without it. `Lax` still keeps it off cross-site
+ * subrequests and POSTs, which is also why the callback must use the
+ * query response mode, never `form_post`.
+ *
+ * @param value     - The sealed flow (`sealSsoFlow`).
+ * @param secure    - Add `Secure` (production).
+ * @param maxAgeSec - Cookie lifetime in seconds (`SSO_FLOW_TTL_SECONDS`).
+ */
+export function ssoFlowSetCookie(
+  value: string,
+  secure: boolean,
+  maxAgeSec: number,
+): string {
+  return `${SSO_FLOW_COOKIE}=${value}; ${attributes(secure)}; Max-Age=${Math.max(0, Math.trunc(maxAgeSec))}`;
+}
+
+/** `Set-Cookie` value that removes the SSO flow cookie (#224) from the browser. */
+export function clearSsoFlowCookie(secure: boolean): string {
+  return `${SSO_FLOW_COOKIE}=; ${attributes(secure)}; Max-Age=0`;
 }

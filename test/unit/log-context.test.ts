@@ -122,6 +122,28 @@ describe("redactSecrets", () => {
     expect(redactSecrets(fields)).toEqual(fields);
   });
 
+  test("OpenID Connect flow values are redacted; state only by its exact name (#224)", () => {
+    expect(
+      redactSecrets({
+        state: "s",
+        nonce: "n",
+        code_verifier: "v",
+        codeVerifier: "v",
+        idTokenNonce: "n",
+        deliveryState: "queued",
+        sqlState: "23505",
+      }),
+    ).toEqual({
+      state: "[REDACTED]",
+      nonce: "[REDACTED]",
+      code_verifier: "[REDACTED]",
+      codeVerifier: "[REDACTED]",
+      idTokenNonce: "[REDACTED]",
+      deliveryState: "queued",
+      sqlState: "23505",
+    });
+  });
+
   test("non-plain objects pass through and depth is bounded", () => {
     const when = new Date(0);
     expect(redactSecrets({ when })).toEqual({ when });

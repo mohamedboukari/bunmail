@@ -133,7 +133,16 @@ describe("resolveTxtRecords: spoof resistance", () => {
   });
 
   test("an answer with the right ID from another port is ignored", async () => {
-    const spoofer = await Bun.udpSocket({ hostname: "127.0.0.1", port: 0 });
+    /**
+     * Linux drops the forged datagram at the connected socket and answers the
+     * spoofer with an ICMP port unreachable, which Bun raises on the spoofer's
+     * socket as ECONNREFUSED: expected here, so it is swallowed.
+     */
+    const spoofer = await Bun.udpSocket({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: { error() {} },
+    });
     try {
       serve((query) => {
         spoofer.send(
