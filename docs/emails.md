@@ -119,7 +119,12 @@ src/modules/emails/
 │   ├── attachment-storage.ts       ← Storage interface for attachment bytes (Postgres today) and the metadata reads (#181)
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
-│   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing
+│   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing: `sendMail`, and the rest of the public surface re-exported from the files below (#380)
+│   ├── mailer-message.service.ts   ← One transaction's message: headers, DKIM signed headers, List-Unsubscribe, Feedback-ID, attachments
+│   ├── mailer-state.service.ts     ← Starting delivery state: entries per domain, pre-#250 entries, signed return paths (#236)
+│   ├── mailer-mta-sts.service.ts   ← MTA-STS mode, hosts to try and verified TLS of a domain (#250)
+│   ├── mailer-delivery.service.ts  ← MX sessions: failover, throttle, rate budget, `mx.deliver` and `mx.session` spans
+│   ├── mailer-outcome.service.ts   ← Each transaction's outcome on its entry: sent, retry, failed, partial rejections
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones, MAIL_IP_FAMILY order
 │   ├── provider-bucket.ts          ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
@@ -217,7 +222,7 @@ The mailer composes the body once per send attempt (`composeMessageBody`, `servi
 
 Gmail and Yahoo require bulk senders to offer working one-click unsubscribe; refusing a `marketing` send that could not carry it is safer than sending it without. The check is `oneClickBlocker` (`services/list-unsubscribe.ts`), the same conditions under which the token is minted. Should `APP_BASE_URL` change before a queued marketing email is sent, it goes out with the static header and a `warn` (`Marketing email sent without a one-click unsubscribe link`).
 
-BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer.service.ts` also refuses it for any `autoSubmitted` message).
+BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer-message.service.ts` also refuses it for any `autoSubmitted` message).
 
 ## Tags (#189)
 
@@ -343,7 +348,7 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header, except `tr
 
 **Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders (Gmail's "high volume" threshold, more than 5k a day to Gmail) need RFC 8058 one-click that is **honored within 2 days**: send each such message to one recipient and set an `https://` `APP_BASE_URL`, so it carries the per-recipient link. A static `unsubscribe_url` only meets that requirement if your own handler can identify the recipient from the URL itself.
 
-**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
+**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer-message.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
 
 **Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
 
@@ -420,6 +425,8 @@ Deletes expired rows in batches; run by the purge worker (`runIdempotencyKeySwee
 The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIED_DOMAIN` inline re-verification with its negative cache, and the warnings. `deps` (verifier, clock, cache) is injectable for tests.
 
 ### mailer.service.ts
+
+The mailer's public surface: `sendMail` is defined here, the rest is re-exported from the `mailer-*.service.ts` files beside it, one per concern (#380, see the module layout above). `buildMailOptions` is in `mailer-message.service.ts`.
 
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
