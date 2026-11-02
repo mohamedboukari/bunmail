@@ -126,7 +126,12 @@ bunmail/
 │   │   │   │   ├── tombstone.service.ts  ← Post-purge audit snapshots: hard delete with tombstone, retention (#34)
 │   │   │   │   ├── custom-headers.ts     ← Custom header rules shared by REST, SMTP submission and the mailer (#177)
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
-│   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM
+│   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM: `sendMail`, re-exports the mailer-*.service.ts files (#380)
+│   │   │   │   ├── mailer-message.service.ts ← One transaction's message: headers, DKIM, List-Unsubscribe, Feedback-ID
+│   │   │   │   ├── mailer-state.service.ts ← Starting delivery state and signed return paths (#236)
+│   │   │   │   ├── mailer-mta-sts.service.ts ← MTA-STS mode, hosts and verified TLS of a domain (#250)
+│   │   │   │   ├── mailer-delivery.service.ts ← MX sessions: failover, throttle, rate budget, spans
+│   │   │   │   ├── mailer-outcome.service.ts ← Each transaction's outcome on its delivery-state entry
 │   │   │   │   ├── mx-route.ts           ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   │   │   │   ├── mx-address.ts         ← Checked addresses of an MX host, in the MAIL_IP_FAMILY order (#250)
 │   │   │   │   ├── provider-bucket.ts    ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
