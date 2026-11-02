@@ -189,7 +189,7 @@ export function buildIdempotencyConfig() {
  * Webhook delivery queue (#30). Persisted retry loop config:
  * tuned for the realistic consumer-outage profile rather than burst
  * latency. The retry schedule itself (waits of 1m / 5m / 15m / 1h, so
- * 5 attempts over about 80 minutes) lives in `webhook-delivery.service.ts`
+ * 5 attempts over about 80 minutes) lives in `webhook-delivery-schedule.service.ts`
  * because it's a behavioural contract, not an operator knob.
  */
 export function buildWebhookDeliveryConfig() {

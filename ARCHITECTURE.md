@@ -223,7 +223,13 @@ bunmail/
 │   │   │   ├── services/
 │   │   │   │   ├── webhook.service.ts             ← CRUD
 │   │   │   │   ├── webhook-dispatch.service.ts    ← Outbox: enqueues webhook_deliveries in the caller's transaction (#30, #184)
-│   │   │   │   ├── webhook-delivery.service.ts    ← Claim / send / reschedule / replay (#30)
+│   │   │   │   ├── webhook-delivery.service.ts    ← Claim / send / reschedule / replay (#30): public surface, re-exports the webhook-delivery-*.service.ts files (#387)
+│   │   │   │   ├── webhook-delivery-schedule.service.ts ← Retry backoff and attempt cap
+│   │   │   │   ├── webhook-delivery-claim.service.ts ← Fair claim, attempt lease, signing secret
+│   │   │   │   ├── webhook-delivery-attempt.service.ts ← One HTTP attempt behind the SSRF guard (pinned, no redirects, no decompression)
+│   │   │   │   ├── webhook-delivery-query.service.ts ← List, get, replay
+│   │   │   │   ├── webhook-delivery-outcome.service.ts ← Records an attempt's outcome
+│   │   │   │   ├── webhook-delivery-retention.service.ts ← Retention purge
 │   │   │   │   ├── webhook-delivery-worker.service.ts ← Poll loop + retention cleanup (#30)
 │   │   │   │   └── replay-limit.service.ts        ← Replay budget per delivery, in memory (#258)
 │   │   │   ├── dtos/
