@@ -21,7 +21,10 @@ src/modules/domains/
 │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status, mail-flow summary (#250)
 │   ├── required-dns-records.ts     ← The DNS records to publish (`dnsRecords`, #250)
 │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
-│   └── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
+│   ├── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
+│   ├── spf-evaluator.ts            ← SPF `checkHost()`, RFC 7208 strict: lookups, limits, deadline (#373)
+│   ├── spf-syntax.ts               ← SPF record parsing, domain-spec and macro expansion (#373)
+│   └── spf-address.ts              ← IP parsing, IPv4-mapped clients, CIDR matching (#373)
 ├── dtos/
 │   ├── create-domain.dto.ts        ← POST body validation
 │   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings)
@@ -31,7 +34,8 @@ src/modules/domains/
 │   └── domain.serialization.ts     ← Strips private keys, exposes DKIM DNS record
 └── types/
     ├── domain.types.ts             ← Domain type + CreateDomainInput
-    └── domain-check.types.ts       ← Check outcome (`pass`, `fail`, `unknown`) and result (#250)
+    ├── domain-check.types.ts       ← Check outcome (`pass`, `fail`, `unknown`) and result (#250)
+    └── spf.types.ts                ← SPF result, DNS resolver, `checkHost()` input and options (#373)
 ```
 
 ## Database Schema
@@ -102,7 +106,7 @@ The `dns-verification.service.ts` checks three DNS record types:
 
 | Record | Host                                    | What it checks                              |
 |--------|-----------------------------------------|---------------------------------------------|
-| SPF    | `<domain>`                              | exactly one `v=spf1` record that gives `pass` (RFC 7208, evaluated with mailauth) for every sending IP of this server (#247) |
+| SPF    | `<domain>`                              | exactly one `v=spf1` record that gives `pass` (RFC 7208, evaluated by the built-in evaluator, #373) for every sending IP of this server (#247) |
 | DKIM   | `<selector>._domainkey.<domain>`        | TXT record containing the expected public key |
 | DMARC  | `_dmarc.<domain>`, else `_dmarc.<organizational domain>` | exactly one record matching `v=DMARC1` with a valid `p=` (#250, see below) |
 
@@ -148,6 +152,20 @@ Migration `0033` cleared `verified_at` on domains where a flag was false: it use
 **The organizational domain heuristic.** There is no Public Suffix List dependency: the organizational domain is the last two labels, or the last three when the second-to-last label is a common second-level label (`co`, `com`, `net`, `org`, `gov`, `ac`, `edu`, `ne`, `or`, `mil`) under a two-letter TLD, so `mail.example.co.uk` gives `example.co.uk`. It is wrong for other public suffixes (`github.io`, `pvt.k12.ma.us`, `blogspot.com`...): the fallback then queries a name above the real organizational domain, which normally has no record, so the check reports `missing` instead of a wrong policy, and the fix is to publish a record at `_dmarc.<domain>` itself.
 
 The result is returned as `dmarc` (below). `verifyDomain` stores `dmarc_verified` and refreshes the cached check, so the page shows it at once.
+
+### SPF evaluation (#373)
+
+`spf-evaluator.ts` is `check_host()` of RFC 7208 for one domain and one IP, strict mode only, on `dns/promises` with no dependency (it replaced mailauth's `spf()`):
+
+- **Record**: exactly one TXT record starting `v=spf1` (then a space or the end, any case), its strings joined: none is `none`, two or more a `permerror`. A domain that is not a valid multi-label name is `none`.
+- **Syntax**: the whole record is parsed before evaluation; any error anywhere is a `permerror`, even after a matching term. Terms are separated by spaces only. Mechanisms `all`, `include`, `a`, `mx`, `ptr`, `ip4`, `ip6`, `exists` (dual CIDR on `a` and `mx`), the `redirect` modifier; `exp` is checked for syntax but never evaluated; unknown modifiers must hold a valid macro-string. At most one `redirect` and one `exp`.
+- **Macros**: `s l o d i p v h` with digit and `r` transformers and delimiters, `%%`, `%_`, `%-`, uppercase letters URL-escaped; `c r t` (explanation only) and any other letter are a `permerror`. An expanded name loses labels on the left until it fits in 253 characters; an expansion that is not a valid name makes `a`, `mx`, `ptr` and `exists` not match and makes `include` and `redirect` a `permerror`.
+- **Limits**: at most 10 DNS-querying terms (`include`, `a`, `mx`, `ptr`, `exists`, `redirect`, plus the PTR lookup of each `%{p}`), counted when evaluated, across includes and redirects; an `mx` answer of more than 10 names is a `permerror`; only the first 10 `ptr` names are checked; more than 2 void lookups (empty answers to a term's query) is a `permerror`. Past the deadline (10 s) the result is `temperror`.
+- **Results**: `include` maps the inner result per RFC 7208 5.2 (pass matches; fail, softfail and neutral do not; none is a `permerror`; errors propagate); `redirect` takes the target's result, with none as a `permerror`. No match and no redirect is `neutral`.
+- **DNS errors**: `ENOTFOUND` and `ENODATA` are an empty answer (Bun reports both NXDOMAIN and no data as `ENOTFOUND`); anything else is a `temperror`, except in `ptr` and `%{p}` lookups, where a failed PTR lookup means no match (or `unknown`) and a failed address lookup skips that name.
+- **Addresses**: an IPv4-mapped IPv6 client (`::ffff:192.0.2.1` or `::ffff:c000:201`) is an IPv4 client: it matches `ip4` terms and A records, never `ip6` terms. CIDR matching is done on the address bytes.
+
+The tests run the OpenSPF RFC 7208 suite (`test/fixtures/spf/rfc7208-tests.yml`, BSD-3-Clause, vendored with its license) and BunMail's own cases (`bunmail-spf-tests.yml`), and compare every case with mailauth's recorded results (`mailauth-results.json`); see `test/unit/spf-evaluator.test.ts` for the two intended differences.
 
 ### Live DNS status: `dmarc` and `mx` (#250)
 
@@ -215,10 +233,16 @@ Pure helpers shared by create, rotation and Verify: `generateDkimKeyPair()`, `is
 ### dns-verification.service.ts
 
 #### `verifyDomain(domain, deps?, options?): Promise<VerificationResult>`
-Runs SPF, DKIM, and DMARC checks in parallel (`runDnsChecks`), stores the outcome with `applyDomainCheck` (the failure rule above), and returns `{ spf, dkim, dmarc, spfReason, dkimReason, dmarcReason, checks }`: the booleans are true only for `pass`, `checks` has each check's `status` and `reason`. `options.source` is `manual` (default) or `scheduled` (the loop: per-domain logs at `debug`, a failed DMARC lookup not cached). SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode with mailauth (10-lookup and 2-void-lookup limits, 10 s cap); a failed DNS lookup is reported as temporary. The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
+Runs SPF, DKIM, and DMARC checks in parallel (`runDnsChecks`), stores the outcome with `applyDomainCheck` (the failure rule above), and returns `{ spf, dkim, dmarc, spfReason, dkimReason, dmarcReason, checks }`: the booleans are true only for `pass`, `checks` has each check's `status` and `reason`. `options.source` is `manual` (default) or `scheduled` (the loop: per-domain logs at `debug`, a failed DMARC lookup not cached). SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode by `checkHost()` (see [SPF evaluation](#spf-evaluation-373)) with sender `postmaster@<domain>` and HELO `MAIL_HOSTNAME`; a failed DNS lookup or an SPF `temperror` is reported as temporary (`unknown`). The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
 
 #### `runDnsChecks(domain, deps?, options?): Promise<DomainCheckResult>`
 The three checks without storing anything. Never rejects on a DNS error: that check is `unknown`.
+
+### spf-evaluator.ts (#373)
+
+- `checkHost({ ip, domain, sender, helo }, { resolver?, timeoutMs? }): Promise<{ result, reason }>`: the evaluation described in [SPF evaluation](#spf-evaluation-373). `result` is `pass`, `fail`, `softfail`, `neutral`, `none`, `temperror` or `permerror`; `reason` says which term matched or what went wrong (for logs and tests). `resolver` (`SpfDnsResolver`: `resolveTxt`, `resolve4`, `resolve6`, `resolveMx`, `resolvePtr`) defaults to `dns/promises`; `timeoutMs` to 10 000. Never rejects for DNS errors; an invalid IP is a `temperror`.
+
+`spf-syntax.ts` holds `parseSpfRecord()`, `parseDomainSpec()`, `expandMacros()`, `targetName()` and `isValidDomainName()`; `spf-address.ts` holds `parseIp()`, `clientAddress()` (IPv4-mapped to IPv4), `inNetwork()`, `reverseName()` and `macroIp()`.
 
 ### domain-check-state.ts (#250)
 
