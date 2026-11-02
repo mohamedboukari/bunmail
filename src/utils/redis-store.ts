@@ -144,6 +144,19 @@ redis.call('DEL', KEYS[1])
 return { 2, value }
 `;
 
+/**
+ * KEYS[1]: the entry. ARGV[1]: ttlMs. 1 when no entry lived under the key
+ * and one is now held, 0 when one already lived (a claim or a stored
+ * value). A hash like every other one-time entry, holding nothing but a
+ * marker.
+ */
+const CLAIM_ONCE_SCRIPT = `
+if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
+redis.call('HSET', KEYS[1], 'c', '1')
+redis.call('PEXPIRE', KEYS[1], ARGV[1])
+return 1
+`;
+
 /* ─── Connection ─── */
 
 /** The URL without credentials, for logs: `redis://host:port/db`. */
@@ -448,6 +461,17 @@ class RedisOneTimeStore implements OneTimeStore {
         "One-time entry does not decrypt for this key and owner",
       );
     }
+  }
+
+  /** The key is hashed like a token's, and nothing else is stored. */
+  async claim(key: string, ttlMs: number): Promise<boolean> {
+    const reply: unknown = await this.connection.eval(
+      CLAIM_ONCE_SCRIPT,
+      [this.key(key)],
+      [String(Math.max(1, Math.trunc(ttlMs)))],
+    );
+    if (reply !== 0 && reply !== 1) throw badReply("claim once");
+    return reply === 1;
   }
 }
 

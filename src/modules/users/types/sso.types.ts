@@ -108,3 +108,111 @@ export type SsoCallbackResult =
       sessionId: string | null;
     }
   | { ok: false; reason: SsoFailureReason };
+
+/**
+ * Why linking an SSO identity to an account was refused (#224). Each one
+ * is recorded as the `reason` of `auth.sso.link_refused`:
+ *
+ * - `wrong_password`: the current password, asked before the redirect to
+ *   the provider, was wrong;
+ * - `second_factor_required`: the owner has no BunMail second factor;
+ * - `provider_already_linked`: the account already has an identity at this
+ *   provider (one per provider, `user_credentials_one_oauth_per_provider`);
+ * - `already_linked`: the identity is linked to another account
+ *   (`user_credentials_provider_account_unique`);
+ * - `session_changed`: at the callback, the browser's live session is not
+ *   the one that started the link (signed out, expired, revoked, replaced).
+ *
+ * A failed provider round trip is recorded too, as `flow_failed`, when the
+ * browser's live session names the account (`finishSsoLinkCallback`).
+ */
+export type SsoLinkRefusal =
+  | "wrong_password"
+  | "second_factor_required"
+  | "provider_already_linked"
+  | "already_linked"
+  | "session_changed";
+
+/**
+ * A linked identity, as the Sign-in methods page lists it. Never the
+ * subject: some providers use the email as the subject, and the page has
+ * no use for it.
+ */
+export interface SsoLinkSummary {
+  /** `user_credentials.id` of the link. */
+  id: string;
+  /** The stored `oidc:<issuer>`. */
+  provider: string;
+  /** The provider email (or name) at link time; `null` when none fitted. */
+  name: string | null;
+  /** When it was linked. */
+  createdAt: Date;
+  /** Its last sign-in; `null` until it signs in. */
+  lastUsedAt: Date | null;
+}
+
+/** What the checks before the redirect to the provider give (`authorizeSsoLink`). */
+export type AuthorizeSsoLinkResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | "rate_limited"
+        | "wrong_password"
+        | "second_factor_required"
+        | "provider_already_linked";
+    };
+
+/** What writing a link gives (`linkSsoIdentity`). */
+export type LinkSsoIdentityResult =
+  | {
+      ok: true;
+      /** `user_credentials.id` of the new link. */
+      linkId: string;
+      /** The label stored with it. */
+      name: string | null;
+    }
+  | {
+      ok: false;
+      reason: SsoLinkRefusal;
+      /** The account the refusal is recorded against; `null` when no live session named one. */
+      userId: string | null;
+    };
+
+/** What removing a link gives (`unlinkSsoIdentity`). */
+export type UnlinkSsoIdentityResult =
+  | {
+      ok: true;
+      /** The stored `oidc:<issuer>` of the removed link. */
+      provider: string;
+      /** Its label. */
+      name: string | null;
+      /** Sessions opened with the identity, signed out with it. */
+      sessionsRevoked: number;
+    }
+  | { ok: false; reason: "not_found" | "rate_limited" | "wrong_password" };
+
+/**
+ * The outcome of a link callback (`finishSsoLinkCallback`): the link, or
+ * the stage that refused it.
+ *
+ * - `flow`: the flow itself failed (cookie, state, replay, provider, ID
+ *   token), see {@link SsoFailureReason};
+ * - `purpose`: a valid flow that was not started to link (a sign-in flow:
+ *   not handled yet);
+ * - `link`: the identity is proven but may not be linked, see
+ *   {@link SsoLinkRefusal}.
+ */
+export type SsoLinkCallbackOutcome =
+  | {
+      ok: true;
+      userId: string;
+      /** The account's address, for the security email. PII: never logged raw. */
+      email: string;
+      sessionId: string;
+      linkId: string;
+      name: string | null;
+    }
+  | { ok: false; stage: "flow"; reason: SsoFailureReason }
+  | { ok: false; stage: "purpose" }
+  | { ok: false; stage: "link"; reason: SsoLinkRefusal; userId: string | null };

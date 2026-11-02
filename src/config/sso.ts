@@ -247,6 +247,9 @@ function readSsoAllowedDomains(key: string, raw: string | undefined): string[] {
  * (default `openid email profile`), `ALLOWED_DOMAINS` (optional) and
  * `AUTO_LINK` (strict boolean, default false; `true` needs allowed
  * domains). Unset `SSO_PROVIDERS`: no providers, nothing else is read.
+ * Two ids with the same issuer are refused: a link is keyed by the
+ * issuer (`oidc:<issuer>`), so they would share every link while keeping
+ * their own client settings and labels.
  *
  * Strict, in every environment: any malformed value refuses to boot, so a
  * typo cannot silently widen who may sign in. The base URL is checked
@@ -288,9 +291,17 @@ export function readSsoSettings(
           "  → Linking by email is only safe for the email domains you control.",
       );
     }
+    const issuer = readSsoIssuer(`${prefix}ISSUER`, env[`${prefix}ISSUER`]);
+    const sameIssuer = providers.find((provider) => provider.issuer === issuer);
+    if (sameIssuer) {
+      throw new Error(
+        `[config] ${prefix}ISSUER is also the issuer of "${sameIssuer.id}":\n` +
+          "  → Configure each identity provider once: its links are keyed by the issuer.",
+      );
+    }
     providers.push({
       id,
-      issuer: readSsoIssuer(`${prefix}ISSUER`, env[`${prefix}ISSUER`]),
+      issuer,
       clientId: readSsoClientValue(`${prefix}CLIENT_ID`, env[`${prefix}CLIENT_ID`]),
       clientSecret: readSsoClientValue(
         `${prefix}CLIENT_SECRET`,

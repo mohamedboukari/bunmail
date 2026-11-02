@@ -40,6 +40,8 @@ const ACCOUNT_REFUSAL_TEXT: Record<AccountRefusal, string> = {
   confirm_mismatch: "Type the account's email address exactly to remove it.",
   wrong_password: "Wrong password: ownership was not transferred.",
   not_eligible: "Ownership can only go to an active admin.",
+  sso_link_without_second_factor:
+    "That admin has a single sign-on account linked and no second factor: they must set up a second factor before becoming the owner.",
   rate_limited: "Too many failed attempts, try again later.",
   account_disabled: "Reactivate the account before resetting its password.",
 };

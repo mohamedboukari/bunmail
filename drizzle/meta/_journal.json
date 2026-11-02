@@ -281,6 +281,13 @@
       "when": 1792520458748,
       "tag": "0039_passkeys",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793586476842,
+      "tag": "0040_sso_links",
+      "breakpoints": true
     }
   ]
 }

@@ -138,6 +138,7 @@ describe("toDashboardAuth", () => {
         role: "admin",
         assurance: "mfa",
         hasSecondFactor: true,
+        hasSsoLink: false,
         matched: "current",
         rotationDue: false,
         graceOver: false,

@@ -776,4 +776,41 @@ describe("managing", () => {
       expect.objectContaining({ action: "auth.passkey.removed", targetId: "crd_1" }),
     );
   });
+
+  test("deletePasskey (#224): the owner's last second factor stays while it has an SSO link", async () => {
+    queues.select.push(
+      [{ id: "crd_1" }],
+      [{ secretHash: HASH }],
+      [{ role: "owner", linked: true, othersRemain: false }],
+    );
+    queues.delete.push([{ name: "Laptop" }]);
+    expect(
+      await passkeys.deletePasskey(USER.userId, "crd_1", PASSWORD, limiter()),
+    ).toEqual({
+      ok: false,
+      reason: "sso_link_requires_second_factor",
+    });
+    /** Nothing was deleted: the queued delete answer is still there. */
+    expect(queues.delete).toHaveLength(1);
+    expect(captured.values).toContainEqual(
+      expect.objectContaining({
+        action: "auth.two_factor.removal_refused",
+        outcome: "failure",
+        metadata: { factor: "passkey", reason: "owner_sso_link" },
+      }),
+    );
+
+    /** Another second factor remains, or no link, or not the owner: removed. */
+    for (const rule of [
+      { role: "owner", linked: true, othersRemain: true },
+      { role: "owner", linked: false, othersRemain: false },
+      { role: "admin", linked: true, othersRemain: false },
+    ]) {
+      queues.select.push([{ id: "crd_1" }], [{ secretHash: HASH }], [rule]);
+      queues.delete = [[{ name: "Laptop" }]];
+      expect(
+        await passkeys.deletePasskey(USER.userId, "crd_1", PASSWORD, limiter()),
+      ).toEqual({ ok: true, name: "Laptop" });
+    }
+  });
 });

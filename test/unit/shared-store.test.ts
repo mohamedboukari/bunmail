@@ -276,6 +276,32 @@ function contract(impl: Implementation): void {
       expect(results.filter((r) => r.status === "taken")).toHaveLength(1);
     });
 
+    test("claim (#224): true once while the key lives, then again once it expired", async () => {
+      const s = impl.oneTime();
+      const k = key("claim");
+      expect(await s.claim(k, 150)).toBe(true);
+      expect(await s.claim(k, 150)).toBe(false);
+      await Bun.sleep(250);
+      expect(await s.claim(k, 60_000)).toBe(true);
+    });
+
+    test("claim: concurrent claims of one key, exactly one wins", async () => {
+      const s = impl.oneTime();
+      const k = key("claim-race");
+      const wins = await Promise.all(
+        Array.from({ length: 10 }, () => s.claim(k, 60_000)),
+      );
+      expect(wins.filter(Boolean)).toHaveLength(1);
+    });
+
+    test("claim: a stored entry blocks the claim of its key", async () => {
+      const s = impl.oneTime();
+      const k = key("claim-held");
+      await s.put(k, { guard: "g", value: "v" }, 60_000);
+      expect(await s.claim(k, 60_000)).toBe(false);
+      expect(await s.take(k, "g")).toEqual({ status: "taken", value: "v" });
+    });
+
     test("a value with newlines and unicode round-trips", async () => {
       const s = impl.oneTime();
       const k = key("codes");
@@ -299,6 +325,27 @@ describe("in-memory stores", () => {
     await s.put("c", { guard: "g", value: "3" }, 60_000);
     expect(await s.take("a", "g")).toEqual({ status: "missing" });
     expect(await s.take("c", "g")).toEqual({ status: "taken", value: "3" });
+  });
+
+  test("claim (#224): a store full of live entries refuses, never evicts a live claim", async () => {
+    const s = new MemoryOneTimeStore(2);
+    expect(await s.claim("a", 60_000)).toBe(true);
+    expect(await s.claim("b", 60_000)).toBe(true);
+    const error = await s.claim("c", 60_000).catch((e: unknown) => e);
+    expect(sharedStoreErrorCode(error)).toBe("ONE_TIME_FULL");
+    /** Both live claims still hold. */
+    expect(await s.claim("a", 60_000)).toBe(false);
+    expect(await s.claim("b", 60_000)).toBe(false);
+  });
+
+  test("claim: expired entries are swept to make room", async () => {
+    const s = new MemoryOneTimeStore(2);
+    expect(await s.claim("short", 50)).toBe(true);
+    expect(await s.claim("long", 60_000)).toBe(true);
+    await Bun.sleep(100);
+    expect(await s.claim("new", 60_000)).toBe(true);
+    expect(s.entries.has("short")).toBe(false);
+    expect(await s.claim("long", 60_000)).toBe(false);
   });
 
   test("prune drops only ended windows", async () => {
@@ -439,6 +486,7 @@ describe("backend selection and outage behaviour", () => {
     oneTime: () => ({
       put: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
       take: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
+      claim: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
     }),
     close: () => {},
   };
@@ -478,6 +526,8 @@ describe("backend selection and outage behaviour", () => {
     expect(sharedStoreErrorCode(putError)).toBe("REDIS_UNAVAILABLE");
     const takeError = await s.take("t", "g").catch((e: unknown) => e);
     expect(sharedStoreErrorCode(takeError)).toBe("REDIS_UNAVAILABLE");
+    const claimError = await s.claim("t", 60_000).catch((e: unknown) => e);
+    expect(sharedStoreErrorCode(claimError)).toBe("REDIS_UNAVAILABLE");
     expect(s.local.entries.size).toBe(0);
   });
 

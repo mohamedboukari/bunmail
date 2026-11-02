@@ -19,8 +19,10 @@ import {
  * stolen session or password turning 2FA on (to lock them out) or off,
  * replacing the recovery codes, adding or removing a passkey (#223), an
  * admin-issued reset or `reset-owner` removing the second factors, a
- * correct password followed by a run of wrong codes, or a passkey whose
- * signature counter went back (a possible cloned authenticator, #223).
+ * correct password followed by a run of wrong codes, a passkey whose
+ * signature counter went back (a possible cloned authenticator, #223), or
+ * a single sign-on identity linked or unlinked (#224: a stolen session
+ * and password could plant the thief's own identity).
  *
  * Callers never await it on the request path (`void`): a slow or failing
  * send never delays or breaks the action. It never throws.
@@ -35,7 +37,9 @@ export type TwoFactorAlertEvent =
   | "login_codes_exhausted"
   | "passkey_added"
   | "passkey_removed"
-  | "passkey_counter_regressed";
+  | "passkey_counter_regressed"
+  | "sso_linked"
+  | "sso_unlinked";
 
 /** Subject and first line per event: static text, nothing to inject. */
 const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }> = {
@@ -79,12 +83,23 @@ const EVENT_TEXT: Record<TwoFactorAlertEvent, { subject: string; intro: string }
     intro:
       "A sign-in with one of your passkeys was refused: the passkey reported a signature counter that did not go up, which can mean the passkey was copied. If you did not just sign in, remove that passkey.",
   },
+  sso_linked: {
+    subject: "A single sign-on account was linked to your BunMail account",
+    intro:
+      "An account at a single sign-on provider is now linked to your BunMail account.",
+  },
+  sso_unlinked: {
+    subject: "A single sign-on account was unlinked from your BunMail account",
+    intro:
+      "An account at a single sign-on provider was just unlinked from your BunMail account. It no longer signs in, and the sessions opened with it were signed out.",
+  },
 };
 
 /** What to do about it: the same words for every event. */
 const ADVICE =
   "If this was you, you can ignore this email. If it wasn't, sign in and change " +
-  "your password, check Account > Two-factor and Account > Passkeys, use " +
+  "your password, check Account > Two-factor, Account > Passkeys and " +
+  "Account > Sign-in methods, use " +
   "Account > Active sessions > " +
   "Sign out all other devices, and tell an administrator.";
 
@@ -100,6 +115,16 @@ function describeRemoved(removed: RemovedSecondFactors): string {
     parts.push(`${removed.passkeys} ${removed.passkeys === 1 ? "passkey" : "passkeys"}`);
   }
   return parts.length === 0 ? "nothing" : parts.join(" and ");
+}
+
+/**
+ * The link an SSO event is about (#224): the provider's label and the
+ * account at the provider as it was named at link time (its email, masked
+ * like the account's own address), or `null` when none was given.
+ */
+interface SsoAlertFacts {
+  provider: string;
+  account: string | null;
 }
 
 /** A composed alert. */
@@ -121,6 +146,7 @@ export function buildTwoFactorAlertEmail(input: {
   at: Date;
   passkeyName?: string;
   removed?: RemovedSecondFactors;
+  sso?: SsoAlertFacts;
 }): TwoFactorAlertContent {
   const { subject, intro } = EVENT_TEXT[input.event];
   const facts: Array<[string, string]> = [
@@ -128,6 +154,17 @@ export function buildTwoFactorAlertEmail(input: {
     ...(input.passkeyName === undefined
       ? []
       : [["Passkey", oneLine(input.passkeyName)] satisfies [string, string]]),
+    ...(input.sso === undefined
+      ? []
+      : ([
+          ["Provider", oneLine(input.sso.provider)],
+          [
+            "Provider account",
+            input.sso.account === null
+              ? "not shown"
+              : oneLine(maskEmail(input.sso.account)),
+          ],
+        ] satisfies Array<[string, string]>)),
     ...(input.removed === undefined
       ? []
       : [["Removed", describeRemoved(input.removed)] satisfies [string, string]]),
@@ -177,6 +214,8 @@ export interface SendTwoFactorAlertInput {
   passkeyName?: string;
   /** What a reset removed (`removed_by_reset`, #223). */
   removed?: RemovedSecondFactors;
+  /** The SSO link (#224 events): escaped in the email. */
+  sso?: SsoAlertFacts;
 }
 
 /**
@@ -199,6 +238,7 @@ export async function sendTwoFactorAlert(
       at: input.at ?? new Date(),
       passkeyName: input.passkeyName,
       removed: input.removed,
+      sso: input.sso,
     });
     const result = await sendSystemMail(
       { to: input.email, ...content },
