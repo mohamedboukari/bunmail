@@ -29,6 +29,8 @@ Every line written while handling a piece of work carries that work's ID, automa
 
 Contexts nest: a webhook fired while sending an email logs with the email's `jobId`.
 
+With tracing on ([tracing.md](tracing.md), #363), a line written while a sampled span is active also carries `traceId` and `spanId`, which lead to its trace in the tracing backend. With tracing off (the default), lines carry neither.
+
 ### X-Request-Id
 
 - Every HTTP response carries `X-Request-Id`. Ask users to quote it in bug reports: it finds every line of that request.

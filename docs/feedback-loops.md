@@ -36,7 +36,7 @@ Program names, URLs and requirements change: follow each provider's current post
 2. **Parsing** (`arf-parser.service.ts`, pure): the `message/feedback-report` part gives `Feedback-Type`, `User-Agent`, `Version`, `Original-Mail-From`, every `Original-Rcpt-To`, `Arrival-Date` (or `Received-Date`), `Reported-Domain`, `Source-IP`. The Message-ID of the reported message comes from the feedback part's `Original-Message-ID`, else from the `Message-ID` header of the third part (`message/rfc822` or `text/rfc822-headers`; providers often redact the body). A base64 part is decoded.
 3. **Type.** `abuse`, `fraud`, or no type at all: a complaint. `opt-out`: an unsubscribe. `not-spam`, `virus`, `other` and anything else: logged at `info` and dropped.
 4. **Link.** The Message-ID must exactly match the stored Message-ID of an email BunMail sent. (Bounces no longer link this way: since #236 they are bound by a signed return path, see [bounces.md](bounces.md#signed-return-paths-236). Feedback reports go to the address registered with the provider, not to the return path, so they keep the Message-ID link.) No Message-ID, or one that matches nothing: logged at `warn` and dropped.
-5. **DKIM.** The report's own DKIM signature is verified with mailauth and the result logged (`dkim`, `dkimDomain`). It is **not required**: not every provider signs its reports. The check runs only for linked reports, makes no DNS lookup for an unsigned report, is skipped for more than five signatures or a header section over 64 KB, and gives up after 10 seconds.
+5. **DKIM.** The report's own DKIM signatures are verified by `dkim-verifier.service.ts` (RFC 6376, #373) and the verdict logged (`dkim`, `dkimDomain`): the first signature that passes, else the first one. It is **not required**: not every provider signs its reports. The check runs only for linked reports, makes no DNS lookup for an unsigned report, is skipped for more than five DKIM-Signature fields or a header section over 64 KB, and gives up after 10 seconds (`temperror`). ARC header fields are not DKIM signatures and are neither counted nor verified. Verdicts: `pass`, `fail` (body hash or signature mismatch), `neutral` (signature syntax error, unknown algorithm or canonicalization, `h=` without From, `i=` outside `d=`, expired `x=`), `policy` (rsa-sha1, an RSA key under 1024 bits), `permerror` (no key record, a revoked or unusable key), `temperror` (any other DNS failure or the 10 s cap), `none` (unsigned), `skipped`.
 6. **Recipient.** The first `Original-Rcpt-To` that was a recipient (to, cc or bcc) of the email, compared case-insensitively; else, if the email had exactly one recipient, that one; else none.
 7. **Effect.**
    - Complaint with a recipient: `addFromComplaint`, a permanent `complaint` suppression under the email's API key (see [precedence](suppressions.md#precedence): complaint > unsubscribe / manual / hard bounce > temporary entries, and nothing that arrives later, a late bounce included, weakens it). When the row was created or changed, `email.complained` fires to that key's webhooks. When the address already had a permanent `complaint`, nothing changes and nothing fires (logged at `debug`).
@@ -74,6 +74,7 @@ The parser is bounded for the 10 MB inbound cap: header sections are read from t
 src/modules/inbound/
 ├── services/
 │   ├── arf-parser.service.ts        ← isFeedbackReport, parseFeedbackReport (pure)
+│   ├── dkim-verifier.service.ts     ← verifyDkimSignatures: DKIM verdict per signature (#373)
 │   ├── feedback-handler.service.ts  ← handleFeedbackReport (core, injected deps), handleInboundFeedbackReport (wired)
 │   └── smtp-receiver.service.ts     ← the feedback branch, before the bounce parser
 └── types/
@@ -97,7 +98,15 @@ The type rule of step 3.
 Steps 3 to 7 with injected dependencies (lookup, `transaction`, `addFromComplaint`, `unsubscribe`, `enqueueEvent`, DKIM check). The complaint suppression and `email.complained` are written in one transaction (#184); a failure is logged (`Complaint not recorded`) and thrown, so the receiver answers `451` and the provider resends the report. Outcomes: `complained`, `complained-no-recipient`, `already-complained`, `unsubscribed`, `already-unsubscribed`, `dropped-unparseable`, `dropped-ignored-type`, `dropped-no-original`, `dropped-no-recipient`.
 
 #### `handleInboundFeedbackReport(raw, rawBytes): Promise<{ outcome, emailId? }>`
-Parses and handles with the real database, webhook and mailauth dependencies. Called by the receiver.
+Parses and handles with the real database, webhook and DKIM verifier dependencies. Called by the receiver.
+
+#### `verifyDkimSignatures(message, deps?): Promise<DkimSignatureResult[]>`
+`dkim-verifier.service.ts` (#373), on `node:crypto` and `dns/promises`, no dependency. One result per DKIM-Signature field, in header order, empty for an unsigned message; never rejects. Each result has `result` (`pass`, `fail`, `neutral`, `temperror`, `permerror` or `policy`, as in step 5), `signingDomain` and `selector` as written, `reason` (null on `pass`) and `testing` (the key record has `t=y`).
+
+- **Signature (RFC 6376 section 3.5):** the tag-list must be well formed (case-sensitive names, no repeated tag) with `v=1`, `a`, `b`, `bh`, `d`, `h` and `s`; `h=` must list From; `i=` must be `d=` or a subdomain of it; `x=` must be after `t=`, and an `x=` in the past is `neutral`. `a=rsa-sha256` and `a=ed25519-sha256` (RFC 8463) are verified, `a=rsa-sha1` is refused as `policy` (RFC 8301).
+- **Canonicalization:** `simple` and `relaxed` for the header and the body, `l=` honoured. Header fields named in `h=` are taken bottom up, one instance per name; a name listed more often than the field occurs selects nothing, so a field added after signing breaks an over-signed signature. The signature field itself is hashed with only its `b=` value emptied. Bare LF line ends are read as CRLF.
+- **Key record** at `<s>._domainkey.<d>` (TXT, the strings of the first record joined): `v=DKIM1` first when present, `k=rsa` (SubjectPublicKeyInfo or bare RSAPublicKey, at least 1024 bits) or `k=ed25519` (the raw 32-byte key), `h=` must allow sha256, `s=` must allow email, `t=s` refuses an `i=` subdomain; an empty `p=` is a revoked key. One lookup per key per message.
+- **DNS:** NXDOMAIN or no data (`ENOTFOUND`, `ENODATA`) is `permerror`, any other failure `temperror`. `deps.resolveTxt` and `deps.now` replace the lookup and the clock in tests.
 
 ## Not handled
 

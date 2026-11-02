@@ -18,7 +18,6 @@
  */
 
 import { eq } from "drizzle-orm";
-import { dkimVerify } from "mailauth/lib/dkim/verify";
 import { db, type Tx } from "../../../db/index.ts";
 import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
 import { addFromComplaint } from "../../suppressions/services/suppression.service.ts";
@@ -33,6 +32,7 @@ import { loggableError } from "../../../utils/db-error.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseFeedbackReport } from "./arf-parser.service.ts";
+import { verifyDkimSignatures } from "./dkim-verifier.service.ts";
 import type {
   FeedbackAction,
   FeedbackOutcome,
@@ -331,35 +331,33 @@ async function findEmailByMessageId(messageId: string): Promise<LinkedEmail | un
 }
 
 /**
- * DKIM verdict on the report with mailauth, bounded: no signature means no
- * lookup at all; a header section past 64 KB or more than five signatures
- * (each a DNS lookup) is `skipped`; the whole check gives up after 10 s.
- * Runs only after the report was linked to one of our emails, so an
- * unlinkable flood never reaches DNS.
+ * DKIM verdict on the report (`dkim-verifier.service.ts`), bounded: no
+ * DKIM-Signature means no lookup at all; a header section past 64 KB or
+ * more than five signatures (each a DNS lookup) is `skipped`; the whole
+ * check gives up after 10 s. Runs only after the report was linked to one
+ * of our emails, so an unlinkable flood never reaches DNS. ARC header
+ * fields are not DKIM signatures and are not counted or verified.
  */
 async function verifyReportDkim(raw: string, rawBytes: Buffer): Promise<DkimCheck> {
   const end = /\r?\n\r?\n/.exec(raw.slice(0, MAX_DKIM_HEADER_BYTES));
   if (!end) return { result: "skipped", signingDomain: null };
   const signatures =
-    raw.slice(0, end.index).match(/^(?:dkim-signature|arc-message-signature)[ \t]*:/gim)
-      ?.length ?? 0;
+    raw.slice(0, end.index).match(/^dkim-signature[ \t]*:/gim)?.length ?? 0;
   if (signatures === 0) return { result: "none", signingDomain: null };
   if (signatures > MAX_DKIM_SIGNATURES) return { result: "skipped", signingDomain: null };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const verified = await Promise.race([
-      dkimVerify(rawBytes),
+      verifyDkimSignatures(rawBytes),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), DKIM_TIMEOUT_MS);
       }),
     ]);
     if (verified === null) return { result: "temperror", signingDomain: null };
-    const best =
-      verified.results.find((result) => result.status.result === "pass") ??
-      verified.results[0];
+    const best = verified.find((result) => result.result === "pass") ?? verified[0];
     return {
-      result: best?.status.result ?? "none",
+      result: best?.result ?? "none",
       signingDomain: best?.signingDomain ?? null,
     };
   } catch (error) {

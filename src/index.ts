@@ -48,6 +48,7 @@ import { redactEmail } from "./utils/redact.ts";
 import { loggableError } from "./utils/db-error.ts";
 import { closeSharedStore, useSharedBackend } from "./utils/shared-store.ts";
 import { connectRedisBackend } from "./utils/redis-store.ts";
+import { startTracing, stopTracing } from "./utils/tracing.ts";
 
 /**
  * Last-resort crash lines. Without these, an uncaught error or an
@@ -103,6 +104,12 @@ async function readAppVersion(): Promise<string> {
 }
 
 const appVersion = await readAppVersion();
+
+/**
+ * OpenTelemetry tracing (#363), before the boot work and the listeners.
+ * Off unless an OTLP endpoint is configured; off, the SDK is never loaded.
+ */
+await startTracing(config.tracing, appVersion);
 
 /**
  * Encrypt any DKIM private keys still stored as plaintext PEM (legacy
@@ -633,7 +640,8 @@ function finishShutdown() {
   stopLoginRateLimitCleanup();
   closeSharedStore();
   void app.stop();
-  process.exit(0);
+  /** Export the last spans (#363), waiting at most 5 s, then exit. Never rejects. */
+  void stopTracing().finally(() => process.exit(0));
 }
 
 process.on("SIGINT", shutdown);

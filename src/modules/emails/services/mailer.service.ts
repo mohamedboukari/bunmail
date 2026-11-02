@@ -1,6 +1,8 @@
 import type Mail from "nodemailer/lib/mailer";
+import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { spanSafeMessage, withSpan } from "../../../utils/tracing.ts";
 import { redactEmail, redactEmailsInText } from "../../../utils/redact.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { parseRecipients, groupByDomain } from "../../../utils/recipients.ts";
@@ -12,6 +14,7 @@ import { providerBucket } from "./provider-bucket.ts";
 import { mxRateBudget, type RateBudget } from "./rate-budget.ts";
 import {
   runMxSession,
+  type MxSessionOutcome,
   type RejectedRecipient,
   type VerifiedTls,
 } from "./mx-transport.ts";
@@ -937,6 +940,69 @@ async function sendToMxHosts(
   plan: MxSessionPlan,
   message: MessageParts,
 ): Promise<RoutedOutcome[]> {
+  /**
+   * One `mx.deliver` span per group (#363), with an `mx.session` child per
+   * connection tried. Host names, TLS and counts only: never a recipient
+   * address or domain, never the message.
+   */
+  return withSpan(
+    "mx.deliver",
+    {
+      attributes: {
+        "bunmail.mx.host_count": plan.hosts.length,
+        "bunmail.mx.transaction_count": plan.transactions.length,
+        "bunmail.mx.recipient_count": plan.transactions.reduce(
+          (sum, t) => sum + t.recipients.length,
+          0,
+        ),
+        "bunmail.mx.verified_tls": plan.verifiedTls,
+      },
+    },
+    async (span) => {
+      const outcomes = await deliverToMxHosts(plan, message);
+      recordDeliverySpan(span, outcomes);
+      return outcomes;
+    },
+  );
+}
+
+/**
+ * Sets the outcome of an `mx.deliver` or `mx.session` span (#363): the MX
+ * host and TLS of the first outcome that has them, how many transactions
+ * were delivered, failed or deferred, and, when any failed, an error
+ * status with the first failure's sanitized text.
+ */
+function recordDeliverySpan(
+  span: Span,
+  outcomes: readonly (MxSessionOutcome &
+    Partial<Pick<RoutedOutcome, "mxHost" | "deferredMs">>)[],
+): void {
+  const host = outcomes.find((o) => typeof o.mxHost === "string")?.mxHost;
+  if (typeof host === "string") span.setAttribute("server.address", host);
+  const tls = outcomes.find((o) => o.tls !== null)?.tls;
+  if (typeof tls === "string") span.setAttribute("bunmail.mx.tls", tls);
+  const deferred = outcomes.filter((o) => o.deferredMs !== undefined);
+  const failed = outcomes.filter((o) => o.error !== undefined);
+  span.setAttribute(
+    "bunmail.mx.delivered",
+    outcomes.length - deferred.length - failed.length,
+  );
+  span.setAttribute("bunmail.mx.failed", failed.length);
+  span.setAttribute("bunmail.mx.deferred", deferred.length);
+  const firstFailure = failed[0];
+  if (firstFailure !== undefined) {
+    span.setStatus({
+      code: SpanStatusCode.ERROR,
+      message: spanSafeMessage(firstFailure.error),
+    });
+  }
+}
+
+/** {@link sendToMxHosts} without its span. */
+async function deliverToMxHosts(
+  plan: MxSessionPlan,
+  message: MessageParts,
+): Promise<RoutedOutcome[]> {
   return deliverWithFailover({
     domain: plan.domains.join(","),
     hosts: plan.hosts,
@@ -958,11 +1024,28 @@ async function sendToMxHosts(
     admit: admitFor(mxRateBudget(config.mail.mxRatePerMin)),
     ipFamily: config.mail.ipFamily,
     runSession: (session) =>
-      runMxSession({
-        ...session,
-        heloName: config.mail.hostname,
-        ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
-      }),
+      withSpan(
+        "mx.session",
+        {
+          kind: SpanKind.CLIENT,
+          attributes: {
+            "server.address": session.mxHost,
+            "server.port": session.port,
+            /** The MX's own IP address, which the session connected to. */
+            "network.peer.address": session.address,
+            "bunmail.mx.transaction_count": session.transactions.length,
+          },
+        },
+        async (span) => {
+          const outcomes = await runMxSession({
+            ...session,
+            heloName: config.mail.hostname,
+            ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
+          });
+          recordDeliverySpan(span, outcomes);
+          return outcomes;
+        },
+      ),
   });
 }
 
