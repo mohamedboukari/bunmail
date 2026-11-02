@@ -31,7 +31,7 @@ Receivers handle "address doesn't exist" / "address rejects mail" in **two disti
 
 | Flavour | When the receiver does this | Caught by |
 |---|---|---|
-| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's outcome path: [queue.service.ts → `recordSendOutcome`](../src/modules/emails/services/queue.service.ts) (#68) |
+| **Inline 5xx** | The MX checks the address synchronously and rejects during `RCPT TO` or `DATA` with a `550 5.1.1` style reply. No DSN is ever sent: the sending MTA already knows. | The queue's outcome path: [queue-outcome.service.ts → `recordSendOutcome`](../src/modules/emails/services/queue-outcome.service.ts) (#68) |
 | **Async DSN** | The MX accepts at 250, tries to deliver later, fails, sends a Delivery Status Notification back to the envelope sender. | The bounce module: [bounce-parser](../src/modules/bounces/services/bounce-parser.service.ts) + [bounce-handler](../src/modules/bounces/services/bounce-handler.service.ts) (#24) |
 
 Both paths converge on the same `suppressionService.addFromBounce()` call and fire the same `email.bounced` webhook (a sender policy block, inline (#246) or in an async DSN (#250), suppresses nobody and fires `email.failed` instead, see [Inline 5xx flow](#inline-5xx-flow-68) and [Policy DSNs](#policy-dsns-250)). From the consumer's perspective the signal is uniform: the only difference is the `source` field on the webhook payload (`"inline"` vs `"rfc3464"` / `"fallback"`).
