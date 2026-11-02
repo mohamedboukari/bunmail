@@ -1,5 +1,5 @@
 import { RedisClient } from "bun";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { decryptSecret, encryptSecret } from "./crypto.ts";
 import { logger } from "./logger.ts";
 import {
@@ -61,9 +61,12 @@ const DEFAULT_KEY_PREFIX = "bunmail:";
 /* ─── Lua scripts ─── */
 
 /**
- * KEYS: the counters. ARGV: max, windowMs, weight, refusedWeight.
- * Returns { limited (0/1), highest count after, retryAfterMs }.
- * A counter is a hash: `c` the count, `m` the markOnce flag.
+ * KEYS: the counters. ARGV: max, windowMs, weight, refusedWeight, and the
+ * id a window this take starts gets.
+ * Returns { limited (0/1), highest count after, retryAfterMs, then each
+ * key's window id ('' for a key without a window) }.
+ * A counter is a hash: `c` the count, `m` the markOnce flag, `w` the
+ * window's id (a refund names it, so it never reaches the next window).
  */
 const TAKE_SCRIPT = `
 local max = tonumber(ARGV[1])
@@ -84,11 +87,13 @@ end
 local add = weight
 if limited == 1 then add = refused end
 local top = 0
-for _, key in ipairs(KEYS) do
+local ids = {}
+for i, key in ipairs(KEYS) do
   local count
   if add > 0 then
     local fresh = redis.call('EXISTS', key) == 0
     count = redis.call('HINCRBY', key, 'c', add)
+    redis.call('HSETNX', key, 'w', ARGV[5])
     if fresh or redis.call('PTTL', key) < 0 then
       redis.call('PEXPIRE', key, win)
     end
@@ -96,8 +101,11 @@ for _, key in ipairs(KEYS) do
     count = tonumber(redis.call('HGET', key, 'c') or '0')
   end
   if count > top then top = count end
+  ids[i] = redis.call('HGET', key, 'w') or ''
 end
-return { limited, top, retry }
+local reply = { limited, top, retry }
+for i = 1, #ids do reply[3 + i] = ids[i] end
+return reply
 `;
 
 /** KEYS[1]: the counter. Returns { count, pttl }, or nil without a window. */
@@ -107,9 +115,12 @@ if not count then return nil end
 return { tonumber(count), redis.call('PTTL', KEYS[1]) }
 `;
 
-/** KEYS[1]: the counter. One back, never below zero, only on a live window. */
+/**
+ * KEYS[1]: the counter. ARGV[1]: the window id the take returned. One
+ * back, never below zero, only while that window is the live one.
+ */
 const REFUND_SCRIPT = `
-if redis.call('EXISTS', KEYS[1]) == 1 then
+if redis.call('HGET', KEYS[1], 'w') == ARGV[1] then
   if redis.call('HINCRBY', KEYS[1], 'c', -1) < 0 then
     redis.call('HSET', KEYS[1], 'c', 0)
   end
@@ -356,14 +367,25 @@ class RedisWindowCounter implements WindowCounter {
       await this.connection.eval(
         TAKE_SCRIPT,
         keys.map((k) => this.key(k)),
-        [String(max), String(windowMs), String(weight), String(refusedWeight)],
+        [
+          String(max),
+          String(windowMs),
+          String(weight),
+          String(refusedWeight),
+          randomUUID(),
+        ],
       ),
       "take",
     );
     const count = intAt(reply, 1, "take");
+    const windows = new Map<string, string>();
+    keys.forEach((key, i) => {
+      const id = stringAt(reply, 3 + i, "take");
+      if (id !== "") windows.set(key, id);
+    });
     return intAt(reply, 0, "take") === 1
-      ? { limited: true, count, retryAfterMs: intAt(reply, 2, "take") }
-      : { limited: false, count };
+      ? { limited: true, count, retryAfterMs: intAt(reply, 2, "take"), windows }
+      : { limited: false, count, windows };
   }
 
   async peek(key: string): Promise<WindowState | null> {
@@ -375,8 +397,8 @@ class RedisWindowCounter implements WindowCounter {
     return resetInMs > 0 ? { count: intAt(items, 0, "peek"), resetInMs } : null;
   }
 
-  async refund(key: string): Promise<void> {
-    await this.connection.eval(REFUND_SCRIPT, [this.key(key)], []);
+  async refund(key: string, windowId: string): Promise<void> {
+    await this.connection.eval(REFUND_SCRIPT, [this.key(key)], [windowId]);
   }
 
   async delete(keys: readonly string[]): Promise<void> {

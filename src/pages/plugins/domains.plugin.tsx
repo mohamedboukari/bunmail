@@ -19,41 +19,12 @@ import {
 import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
 import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
 import { toFlash } from "../lib/responses.ts";
+import { isDnsVerifyThrottled } from "../lib/dns-verify-throttle.ts";
 import { creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { config } from "../../config.ts";
-
-/* ─── DNS-verify throttle (#133) ─── */
-
-/**
- * `POST /dashboard/domains/:id/verify` runs live DNS lookups (SPF/DKIM/DMARC)
- * with no throttle; the API rate-limiter only covers `/api/v1/*`. A rapid
- * click-loop (or a same-origin script) could hammer the resolver. This is a
- * lightweight per-domain sliding window: at most `DNS_VERIFY_MAX` verifies
- * per `DNS_VERIFY_WINDOW_MS` per domain id. In-memory/per-process (same
- * caveat as the other dashboard limiters). Keyed by domain id, not IP, since
- * the dashboard is a single shared operator: the resource we're protecting
- * is the DNS lookup for that domain.
- */
-const DNS_VERIFY_MAX = 5;
-const DNS_VERIFY_WINDOW_MS = 60_000;
-const dnsVerifyHits = new Map<string, number[]>();
-
-/**
- * Records a verify attempt for `domainId` and returns true if it exceeds the
- * window budget (i.e. the caller should be throttled). Prunes timestamps
- * outside the window on each call so the map self-trims.
- */
-function isDnsVerifyThrottled(domainId: string): boolean {
-  const now = Date.now();
-  const cutoff = now - DNS_VERIFY_WINDOW_MS;
-  const recent = (dnsVerifyHits.get(domainId) ?? []).filter((ts) => ts > cutoff);
-  recent.push(now);
-  dnsVerifyHits.set(domainId, recent);
-  return recent.length > DNS_VERIFY_MAX;
-}
 
 /** Where a DKIM rotation step lands: the domain page with a flash. */
 function domainFlashUrl(id: string, message: string, type: "success" | "error"): string {
@@ -224,7 +195,7 @@ export function domainPages(app: GuardedDashboard) {
           }
 
           /** Throttle live DNS lookups per domain (#133). */
-          if (isDnsVerifyThrottled(params.id)) {
+          if (await isDnsVerifyThrottled(params.id)) {
             logger.warn("Domain DNS verification throttled", { id: params.id });
             set.status = 302;
             set.headers["location"] =
@@ -299,7 +270,7 @@ export function domainPages(app: GuardedDashboard) {
         "/domains/:id/dkim/rotate/complete",
         async ({ params, set, auth, request, server }) => {
           set.status = 302;
-          if (isDnsVerifyThrottled(params.id)) {
+          if (await isDnsVerifyThrottled(params.id)) {
             logger.warn("DKIM rotation complete throttled", { id: params.id });
             set.headers["location"] = domainFlashUrl(
               params.id,

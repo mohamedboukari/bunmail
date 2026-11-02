@@ -1,6 +1,7 @@
 import { t, type Context } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
+import type { WindowTicket } from "../../utils/shared-store.ts";
 import { UserStoreError } from "../../modules/users/errors.ts";
 import {
   refundLoginAttempt,
@@ -183,13 +184,16 @@ export function passkeyLoginPages(app: PublicDashboard) {
         if (!rp) return refuseOptions(set, 404, { error: PASSKEYS_OFF });
 
         const { loginRateLimit } = config.dashboard;
+        /** The window this attempt was counted in, kept with the challenge (#185). */
+        let loginTicket: WindowTicket | undefined;
         if (loginRateLimit.enabled) {
           /** Checked and counted in one atomic step, like the password login. */
-          const { limited, retryAfterSec } = await takeLoginAttempt(
+          const { limited, retryAfterSec, ticket } = await takeLoginAttempt(
             [ip],
             loginRateLimit.maxAttempts,
             loginRateLimit.windowSec * 1000,
           );
+          loginTicket = ticket;
           if (limited) {
             logger.warn("Passkey sign-in blocked: too many attempts", {
               ip,
@@ -213,7 +217,10 @@ export function passkeyLoginPages(app: PublicDashboard) {
           }
         }
 
-        const { binding, options } = await passkeyService.startPasskeySignIn(rp);
+        const { binding, options } = await passkeyService.startPasskeySignIn(
+          rp,
+          loginTicket,
+        );
         issueWebAuthnCookie(set, binding, PASSKEY_CHALLENGE_TTL_SECONDS);
         logger.debug("Passkey sign-in started", { ip });
         return { options };
@@ -326,8 +333,8 @@ export function passkeyLoginPages(app: PublicDashboard) {
             }
 
             const { loginRateLimit } = config.dashboard;
-            if (loginRateLimit.enabled) {
-              await refundLoginAttempt(ip);
+            if (loginRateLimit.enabled && result.loginTicket) {
+              await refundLoginAttempt(ip, result.loginTicket);
             }
             logger.info("Dashboard login successful", {
               userId: result.userId,

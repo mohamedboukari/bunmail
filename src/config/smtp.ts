@@ -199,8 +199,135 @@ export function buildAttachmentsConfig() {
   } as const;
 }
 
+/* ─── Per-IP SMTP limits (#185) ─── */
+
+/** Most connections per IP per window an SMTP connection limit accepts. */
+export const MAX_SMTP_CONNECTIONS_PER_WINDOW = 100_000;
+
+/** Most failed AUTHs per IP per window the submission throttle accepts. */
+export const MAX_SMTP_AUTH_ATTEMPTS = 10_000;
+
+/** Longest window, in seconds, of any per-IP SMTP limit (one day). */
+export const MAX_SMTP_LIMIT_WINDOW_SEC = 86_400;
+
+/** One per-IP limit: at most `max` events per `windowSec`. */
+export interface SmtpLimitNumbers {
+  max: number;
+  windowSec: number;
+}
+
+/**
+ * Reads one per-IP SMTP limit, `<prefix>_MAX` (1 to `maxCeiling`) and
+ * `<prefix>_WINDOW` (seconds, 1 to 86400). Unset or blank gives the
+ * default; anything else (0, a sign, a decimal, not a number, out of
+ * range) refuses to boot: a bare `parseInt` let 0 refuse every
+ * connection or AUTH, and a typo (`NaN`) turn the limit off silently.
+ */
+function readSmtpLimit(
+  prefix: string,
+  defaults: SmtpLimitNumbers,
+  maxCeiling: number,
+  env: { max: string | undefined; window: string | undefined },
+): SmtpLimitNumbers {
+  return {
+    max: optionalBoundedInt(`${prefix}_MAX`, defaults.max, 1, maxCeiling, env.max),
+    windowSec: optionalBoundedInt(
+      `${prefix}_WINDOW`,
+      defaults.windowSec,
+      1,
+      MAX_SMTP_LIMIT_WINDOW_SEC,
+      env.window,
+    ),
+  };
+}
+
+/**
+ * The inbound receiver's per-IP connection limit: `SMTP_RATE_LIMIT_MAX`
+ * (default 10, 1 to 100000) per `SMTP_RATE_LIMIT_WINDOW` (default 60 s,
+ * 1 to 86400). Exported for tests.
+ */
+export function readInboundConnectionLimit(
+  env: { max: string | undefined; window: string | undefined } = {
+    max: process.env["SMTP_RATE_LIMIT_MAX"],
+    window: process.env["SMTP_RATE_LIMIT_WINDOW"],
+  },
+): SmtpLimitNumbers {
+  return readSmtpLimit(
+    "SMTP_RATE_LIMIT",
+    { max: 10, windowSec: 60 },
+    MAX_SMTP_CONNECTIONS_PER_WINDOW,
+    env,
+  );
+}
+
+/**
+ * The submission server's per-IP connection limit:
+ * `SMTP_SUBMISSION_RATE_LIMIT_MAX` (default 30, 1 to 100000) per
+ * `SMTP_SUBMISSION_RATE_LIMIT_WINDOW` (default 60 s, 1 to 86400).
+ * Exported for tests.
+ */
+export function readSubmissionConnectionLimit(
+  env: { max: string | undefined; window: string | undefined } = {
+    max: process.env["SMTP_SUBMISSION_RATE_LIMIT_MAX"],
+    window: process.env["SMTP_SUBMISSION_RATE_LIMIT_WINDOW"],
+  },
+): SmtpLimitNumbers {
+  return readSmtpLimit(
+    "SMTP_SUBMISSION_RATE_LIMIT",
+    { max: 30, windowSec: 60 },
+    MAX_SMTP_CONNECTIONS_PER_WINDOW,
+    env,
+  );
+}
+
+/**
+ * The submission server's failed-AUTH throttle (API-key guessing):
+ * `SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX` (default 10, 1 to 10000) per
+ * `SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW` (default 900 s, 1 to 86400).
+ * Exported for tests.
+ */
+export function readSubmissionAuthLimit(
+  env: { max: string | undefined; window: string | undefined } = {
+    max: process.env["SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX"],
+    window: process.env["SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW"],
+  },
+): { maxAttempts: number; windowSec: number } {
+  const { max, windowSec } = readSmtpLimit(
+    "SMTP_SUBMISSION_AUTH_RATE_LIMIT",
+    { max: 10, windowSec: 900 },
+    MAX_SMTP_AUTH_ATTEMPTS,
+    env,
+  );
+  return { maxAttempts: max, windowSec };
+}
+
+/** The on/off switches of the per-IP SMTP limits. */
+export const SMTP_LIMIT_SWITCHES = [
+  "SMTP_RATE_LIMIT_ENABLED",
+  "SMTP_SUBMISSION_RATE_LIMIT_ENABLED",
+  "SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED",
+] as const;
+
+/** One of {@link SMTP_LIMIT_SWITCHES}. */
+export type SmtpLimitSwitch = (typeof SMTP_LIMIT_SWITCHES)[number];
+
+/**
+ * Reads a per-IP SMTP limit switch strictly (#185): `true` or `false`,
+ * unset or blank for on. Anything else (`TRUE`, `1`, `yes`, `off`)
+ * refuses to boot: a bare `=== "true"` turned a typo into "off", which
+ * for the failed-AUTH throttle silently removed the API-key brute-force
+ * guard. Exported for tests.
+ */
+export function readSmtpLimitSwitch(
+  name: SmtpLimitSwitch,
+  raw: string | undefined = process.env[name],
+): boolean {
+  return optionalStrictBoolean(name, true, raw);
+}
+
 /** Inbound SMTP server for receiving emails */
 export function buildSmtpConfig() {
+  const connectionLimit = readInboundConnectionLimit();
   return {
     /** Port for the inbound SMTP server (default 2525) */
     port: parseInt(optionalEnv("SMTP_PORT", "2525"), 10),
@@ -217,11 +344,11 @@ export function buildSmtpConfig() {
       recipientValidationEnabled:
         optionalEnv("SMTP_RECIPIENT_VALIDATION", "true") === "true",
       /** Per-IP SMTP connection rate limiting */
-      rateLimitEnabled: optionalEnv("SMTP_RATE_LIMIT_ENABLED", "true") === "true",
-      /** Max connections per IP per window */
-      rateLimitMax: parseInt(optionalEnv("SMTP_RATE_LIMIT_MAX", "10"), 10),
-      /** Rate limit window in seconds */
-      rateLimitWindowSec: parseInt(optionalEnv("SMTP_RATE_LIMIT_WINDOW", "60"), 10),
+      rateLimitEnabled: readSmtpLimitSwitch("SMTP_RATE_LIMIT_ENABLED"),
+      /** Max connections per IP per window (1 to 100000, #185) */
+      rateLimitMax: connectionLimit.max,
+      /** Rate limit window in seconds (1 to 86400, #185) */
+      rateLimitWindowSec: connectionLimit.windowSec,
     },
   } as const;
 }
@@ -289,9 +416,9 @@ export function buildSmtpSubmissionConfig(submissionTls: SubmissionTlsSettings) 
      * inbound receiver. Blunts abusive connection churn.
      */
     connectionRateLimit: {
-      enabled: optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_ENABLED", "true") === "true",
-      max: parseInt(optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_MAX", "30"), 10),
-      windowSec: parseInt(optionalEnv("SMTP_SUBMISSION_RATE_LIMIT_WINDOW", "60"), 10),
+      enabled: readSmtpLimitSwitch("SMTP_SUBMISSION_RATE_LIMIT_ENABLED"),
+      /** 1 to 100000 per 1 to 86400 seconds; anything else refuses to boot (#185). */
+      ...readSubmissionConnectionLimit(),
     },
 
     /**
@@ -303,12 +430,9 @@ export function buildSmtpSubmissionConfig(submissionTls: SubmissionTlsSettings) 
      * only with their window: a successful AUTH does not clear them (#190).
      */
     authRateLimit: {
-      enabled: optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED", "true") === "true",
-      maxAttempts: parseInt(optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX", "10"), 10),
-      windowSec: parseInt(
-        optionalEnv("SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW", "900"),
-        10,
-      ),
+      enabled: readSmtpLimitSwitch("SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED"),
+      /** 1 to 10000 per 1 to 86400 seconds; anything else refuses to boot (#185). */
+      ...readSubmissionAuthLimit(),
     },
   } as const;
 }

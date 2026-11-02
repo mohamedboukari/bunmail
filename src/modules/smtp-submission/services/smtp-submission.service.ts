@@ -13,6 +13,8 @@ import { simpleParser } from "mailparser";
 import type { AddressObject } from "mailparser";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
+import { sharedStoreErrorCode } from "../../../utils/shared-store.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { smtpSessionTracer } from "../../../utils/tracing.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -35,6 +37,11 @@ import {
 } from "../message-mapper.ts";
 import { SubmissionRejectedError } from "../errors.ts";
 import { recordOutcome, releaseReservation, reserveAccepted } from "./usage.service.ts";
+import {
+  resetSubmissionLimits,
+  takeSubmissionConnection,
+  throttledAuth,
+} from "./submission-limits.ts";
 import {
   describeListenError,
   isListenError,
@@ -125,80 +132,6 @@ let server: SMTPServer | null = null;
 
 /** The TLS listener in front of `server` in implicit mode (#349), or null. */
 let tlsListener: TlsServer | null = null;
-
-/** Interval handle for the periodic rate-limit map cleanup. */
-let cleanupInterval: ReturnType<typeof setInterval> | null = null;
-
-/* ─── Per-IP fixed-window counters ─── */
-
-interface WindowEntry {
-  /** Number of events in the current window. */
-  count: number;
-  /** Timestamp (ms) when the current window started. */
-  windowStart: number;
-}
-
-/** IP → connection-count state (connection rate limiting). */
-const connectionMap = new Map<string, WindowEntry>();
-/** IP → failed-AUTH-count state (key brute-force throttle). */
-const authFailureMap = new Map<string, WindowEntry>();
-
-/**
- * Counts one event for `ip` in its fixed window and returns the count so
- * far. A fresh window starts on the first event or after the previous one
- * expired. The counter alone (#190); {@link hitWindow} is the limiter.
- */
-function countInWindow(
-  map: Map<string, WindowEntry>,
-  ip: string,
-  windowSec: number,
-): number {
-  const now = Date.now();
-  const entry = map.get(ip);
-
-  if (!entry || now - entry.windowStart >= windowSec * 1000) {
-    map.set(ip, { count: 1, windowStart: now });
-    return 1;
-  }
-
-  entry.count += 1;
-  return entry.count;
-}
-
-/**
- * Counts one event for `ip` and returns true once it is over `max`
- * events within `windowSec`.
- */
-function hitWindow(
-  map: Map<string, WindowEntry>,
-  ip: string,
-  max: number,
-  windowSec: number,
-): boolean {
-  return countInWindow(map, ip, windowSec) > max;
-}
-
-/**
- * Read-only check of whether an IP is currently over the failed-AUTH
- * limit, without recording a new failure. Used to reject before the key
- * lookup so a locked-out IP can't keep probing keys.
- */
-function isAuthLockedOut(ip: string): boolean {
-  const { maxAttempts, windowSec } = config.smtpSubmission.authRateLimit;
-  const entry = authFailureMap.get(ip);
-  if (!entry || Date.now() - entry.windowStart >= windowSec * 1000) return false;
-  return entry.count >= maxAttempts;
-}
-
-/**
- * Records a failed AUTH for an IP. Failures only expire with their
- * window: a successful AUTH does not clear them (#190), or anyone holding
- * one valid key could reset their own count between guesses at others.
- */
-function recordAuthFailure(ip: string): void {
-  const { windowSec } = config.smtpSubmission.authRateLimit;
-  countInWindow(authFailureMap, ip, windowSec);
-}
 
 /* ─── Message parsing helpers ─── */
 
@@ -386,13 +319,14 @@ export function start(portOverride?: number): void {
   const port = portOverride ?? config.smtpSubmission.port;
 
   /**
-   * The per-IP counters belong to one running server: a server started
-   * again (the tests start and stop it per file) begins with none, as a
-   * restarted process does, instead of inheriting the previous run's
-   * connection and failed-AUTH budget.
+   * The per-IP counters in memory belong to one running server: a server
+   * started again (the tests start and stop it per file) begins with none,
+   * as a restarted process does, instead of inheriting the previous run's
+   * connection and failed-AUTH budget. Counts in Redis (#185) are shared
+   * by every replica and stay. Ended windows in memory are swept with every
+   * other shared-store counter (`startLocalCounterSweep`).
    */
-  connectionMap.clear();
-  authFailureMap.clear();
+  resetSubmissionLimits();
 
   /**
    * Load the TLS material when a mode needs it. A bad path fails loudly at
@@ -481,30 +415,57 @@ export function start(portOverride?: number): void {
     },
 
     /**
-     * Per-IP connection rate limiting (instant, no I/O). Runs before AUTH
-     * to blunt connection churn. SMTP 421 = temporary rejection.
+     * Per-IP connection rate limiting, in the shared store (#185): memory,
+     * or one Redis round trip with `REDIS_URL`. Runs before AUTH to blunt
+     * connection churn. SMTP 421 = temporary rejection.
      */
     onConnect(session: SMTPServerSession, callback: (err?: Error) => void) {
       sessionSpans.open(session.id);
       inSession(session, () => {
         sessionStats.set(session.id, { startedAt: performance.now(), messages: 0 });
         recordSmtpConnection("submission");
+        if (!connectionRateLimit.enabled) return callback();
         const ip = session.remoteAddress;
-        if (
-          connectionRateLimit.enabled &&
-          hitWindow(
-            connectionMap,
-            ip,
-            connectionRateLimit.max,
-            connectionRateLimit.windowSec,
+        takeSubmissionConnection(
+          ip,
+          connectionRateLimit.max,
+          connectionRateLimit.windowSec,
+        )
+          .then(
+            (limited) => {
+              if (!limited) return callback();
+              logger.warn("SMTP submission connection rate limited", { ip });
+              callback(
+                smtpError("Too many connections, try again later", 421, "rate_limited"),
+              );
+            },
+            (error: unknown) => {
+              /**
+               * Unexpected: the store falls back to memory on a Redis error.
+               * The connection limit only blunts churn (AUTH is the guard),
+               * so it lets the connection through rather than drop it.
+               */
+              logger.error(
+                "SMTP submission connection limit failed: connection allowed",
+                {
+                  ip,
+                  code: sharedStoreErrorCode(error),
+                },
+              );
+              callback();
+            },
           )
-        ) {
-          logger.warn("SMTP submission connection rate limited", { ip });
-          return callback(
-            smtpError("Too many connections, try again later", 421, "rate_limited"),
-          );
-        }
-        callback();
+          /**
+           * A throw inside a handler above (the reply already went out, or
+           * never will): logged only, no second reply, and never an
+           * unhandled rejection, which would end the process.
+           */
+          .catch((error: unknown) => {
+            logger.error("SMTP submission connect handler failed", {
+              ip,
+              error: loggableError(error),
+            });
+          });
       });
     },
 
@@ -512,7 +473,9 @@ export function start(portOverride?: number): void {
      * Authenticate the client. The password (falling back to the username
      * for clients that only fill one field) is treated as a `bm_live_` API
      * key: SHA-256 hashed and looked up. A per-IP failed-AUTH throttle
-     * blunts key brute-forcing; failures expire only with their window (#190).
+     * blunts key brute-forcing, shared by every replica with `REDIS_URL`
+     * (#185); failures expire only with their window (#190). See
+     * `submission-limits.ts`.
      */
     onAuth(
       auth: SMTPServerAuthentication,
@@ -524,55 +487,79 @@ export function start(portOverride?: number): void {
     ) {
       inSession(session, () => {
         const ip = session.remoteAddress;
-        const { authRateLimit } = config.smtpSubmission;
-
-        if (authRateLimit.enabled && isAuthLockedOut(ip)) {
-          logger.warn("SMTP submission AUTH rate limited", { ip });
-          /** 454 = temporary auth failure; client should back off. */
-          return callback(
-            smtpError(
-              "Too many failed authentication attempts",
-              454,
-              "auth_rate_limited",
-            ),
-          );
-        }
-
         /** Password is the API key; some clients only set the username. */
         const candidate = auth.password || auth.username || "";
-        if (!candidate) {
-          if (authRateLimit.enabled) recordAuthFailure(ip);
-          return callback(
-            smtpError("Authentication credentials required", 535, "auth_failed"),
-          );
-        }
 
-        findByHash(hashApiKey(candidate))
-          .then((apiKey) => {
-            if (!apiKey || !apiKey.isActive) {
-              if (authRateLimit.enabled) recordAuthFailure(ip);
-              logger.warn("SMTP submission AUTH failed: invalid or inactive key", { ip });
-              return callback(smtpError("Invalid API key", 535, "auth_failed"));
-            }
-            /**
-             * Success: stash the key id. The IP's failure count stays until
-             * its window expires (#190, see `recordAuthFailure`).
-             */
-            logger.info("SMTP submission client authenticated", {
+        throttledAuth(ip, candidate, config.smtpSubmission.authRateLimit, (password) =>
+          findByHash(hashApiKey(password)),
+        )
+          .then(
+            (outcome) => {
+              switch (outcome.status) {
+                case "rate_limited":
+                  logger.warn("SMTP submission AUTH rate limited", { ip });
+                  /** 454 = temporary auth failure; client should back off. */
+                  return callback(
+                    smtpError(
+                      "Too many failed authentication attempts",
+                      454,
+                      "auth_rate_limited",
+                    ),
+                  );
+                case "no_credentials":
+                  return callback(
+                    smtpError("Authentication credentials required", 535, "auth_failed"),
+                  );
+                case "invalid":
+                  logger.warn("SMTP submission AUTH failed: invalid or inactive key", {
+                    ip,
+                  });
+                  return callback(smtpError("Invalid API key", 535, "auth_failed"));
+                case "lookup_failed":
+                  logger.error("SMTP submission AUTH lookup failed", {
+                    ip,
+                    error: loggableError(outcome.error),
+                  });
+                  /** 451 = local error; don't leak details, not counted as a guess. */
+                  return callback(
+                    smtpError("Temporary authentication failure", 451, "temporary"),
+                  );
+                case "authenticated":
+                  /**
+                   * Success: stash the key id. The IP's earlier failures stay
+                   * until their window expires (#190).
+                   */
+                  logger.info("SMTP submission client authenticated", {
+                    ip,
+                    apiKeyId: outcome.key.id,
+                    /** Whether the session is TLS (#349): always true with a cert. */
+                    secure: session.secure,
+                  });
+                  return callback(null, { user: outcome.key.id });
+              }
+            },
+            (error: unknown) => {
+              /**
+               * Unexpected (the store falls back to memory on a Redis error):
+               * fail closed, the client retries later.
+               */
+              logger.error("SMTP submission AUTH throttle failed", {
+                ip,
+                code: sharedStoreErrorCode(error),
+              });
+              callback(smtpError("Temporary authentication failure", 451, "temporary"));
+            },
+          )
+          /**
+           * A throw inside a handler above (the reply already went out, or
+           * never will): logged only, no second reply, and never an
+           * unhandled rejection, which would end the process.
+           */
+          .catch((error: unknown) => {
+            logger.error("SMTP submission AUTH handler failed", {
               ip,
-              apiKeyId: apiKey.id,
-              /** Whether the session is TLS (#349): always true with a cert. */
-              secure: session.secure,
+              error: loggableError(error),
             });
-            callback(null, { user: apiKey.id });
-          })
-          .catch((error) => {
-            logger.error("SMTP submission AUTH lookup failed", {
-              ip,
-              error: error instanceof Error ? error.message : String(error),
-            });
-            /** 451 = local error; don't leak details, don't count as a guess. */
-            callback(smtpError("Temporary authentication failure", 451, "temporary"));
           });
       });
     },
@@ -925,30 +912,10 @@ export function start(portOverride?: number): void {
   } else {
     smtp.listen(port, onListening);
   }
-
-  /** Periodic sweep of expired rate-limit entries (every 5 minutes). */
-  cleanupInterval = setInterval(
-    () => {
-      const now = Date.now();
-      const connMs = connectionRateLimit.windowSec * 1000;
-      const authMs = config.smtpSubmission.authRateLimit.windowSec * 1000;
-      for (const [ip, entry] of connectionMap) {
-        if (now - entry.windowStart >= connMs) connectionMap.delete(ip);
-      }
-      for (const [ip, entry] of authFailureMap) {
-        if (now - entry.windowStart >= authMs) authFailureMap.delete(ip);
-      }
-    },
-    5 * 60 * 1000,
-  );
 }
 
 /** Stops the SMTP submission server gracefully (called on shutdown). */
 export function stop(): void {
-  if (cleanupInterval) {
-    clearInterval(cleanupInterval);
-    cleanupInterval = null;
-  }
   if (tlsListener) {
     tlsListener.close();
     tlsListener = null;

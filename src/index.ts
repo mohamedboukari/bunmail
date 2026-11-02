@@ -46,7 +46,12 @@ import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
 import { loggableError } from "./utils/db-error.ts";
-import { closeSharedStore, useSharedBackend } from "./utils/shared-store.ts";
+import {
+  closeSharedStore,
+  startLocalCounterSweep,
+  stopLocalCounterSweep,
+  useSharedBackend,
+} from "./utils/shared-store.ts";
 import { connectRedisBackend } from "./utils/redis-store.ts";
 import { startTracing, stopTracing } from "./utils/tracing.ts";
 
@@ -164,9 +169,10 @@ if (undecryptableKeys.pending.length > 0) {
 await encryptWebhookSecrets();
 
 /**
- * Shared state for several replicas (#185): with `REDIS_URL`, rate limits,
- * login throttles and one-time reveals live in Redis, installed before the
- * server takes a request. A Redis that does not answer at boot refuses the
+ * Shared state for several replicas (#185): with `REDIS_URL`, rate limits
+ * (API, SMTP connections and AUTH, DNS verify), login throttles, the
+ * `last_used_at` write claims and one-time reveals live in Redis,
+ * installed before the server takes a request. A Redis that does not answer at boot refuses the
  * start, like an unreachable database (Docker restarts and retries); a
  * later outage degrades instead (see `src/utils/shared-store.ts`).
  */
@@ -619,6 +625,14 @@ startRateLimitCleanup();
 startLoginRateLimitCleanup();
 
 /**
+ * Start the periodic sweep of every shared-store counter's memory side
+ * (#185): the SMTP connection and AUTH throttles, the DNS-verify throttle
+ * and the `last_used_at` claims. Their keys (client IPs, domain ids, API
+ * key ids) would otherwise stay in memory after their window ends.
+ */
+startLocalCounterSweep();
+
+/**
  * Graceful shutdown handler.
  * Stops the queue processor first (no new emails picked up),
  * then stops the HTTP server.
@@ -651,6 +665,7 @@ function finishShutdown() {
   sendingIpDnsbl.stop();
   stopRateLimitCleanup();
   stopLoginRateLimitCleanup();
+  stopLocalCounterSweep();
   closeSharedStore();
   void app.stop();
   /** Export the last spans (#363), waiting at most 5 s, then exit. Never rejects. */

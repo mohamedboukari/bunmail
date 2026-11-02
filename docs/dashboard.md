@@ -414,6 +414,7 @@ src/pages/
 │   ├── audit.ts              ← Audit context (user, IP, user agent) of a dashboard request (#221)
 │   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
 │   ├── two-factor-limiter.ts ← Failed-attempt budget of every two-factor code check (#220)
+│   ├── dns-verify-throttle.ts ← DNS-verify throttle: 5 checks per minute per domain, in the shared store (#133, #185)
 │   ├── error-message.ts      ← Error text for a log line
 │   └── form.ts               ← Repeated form field to `string[]`
 ├── guards.tsx                ← Role and assurance checks per route (#222)
@@ -537,7 +538,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Accept invitation → `POST /dashboard/invite` (public; form fields: `token`, `name`, `password`, `confirm`)
 - Add domain → `POST /dashboard/domains` (form fields: `name`, optional `dkimSelector`: one lowercase DNS label, empty for `bunmail`; an invalid one is an error flash, #250)
 - Delete domain → `POST /dashboard/domains/:id/delete` (hard delete; emails detach via `ON DELETE SET NULL`)
-- Verify domain DNS → `POST /dashboard/domains/:id/verify`
+- Verify domain DNS → `POST /dashboard/domains/:id/verify` (5 DNS checks per domain in a fixed one-minute window from the first one, else an error flash; per replica in memory, or shared by every replica in Redis with `REDIS_URL`, #185)
 - Start a DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate` (admin, #250; the **Rotate DKIM key** button asks for confirmation). The new key's record is listed under Required DNS Records with a `pending` badge; mail stays signed with the current key
 - Complete the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/complete` (admin, #250; confirmation; switches only once the pending record resolves with the new key, else an error flash with the reason; shares the Verify throttle, 5 DNS checks per minute per domain)
 - Cancel the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/cancel` (admin, #250; confirmation; a form cannot send `DELETE`, the REST route is `DELETE /api/v1/domains/:id/dkim/rotate`)

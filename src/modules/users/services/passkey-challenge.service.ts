@@ -1,4 +1,5 @@
 import { randomBytes } from "crypto";
+import type { WindowTicket } from "../../../utils/shared-store.ts";
 import { PASSKEY_CHALLENGE_TTL_SECONDS } from "./passkey-policy.service.ts";
 
 /**
@@ -35,6 +36,12 @@ export interface ChallengeBinding {
   userId: string | null;
   /** The new passkey's name (registration only). */
   name?: string;
+  /**
+   * The login-budget windows the sign-in's options request counted in
+   * (passwordless sign-in only, #185): a successful sign-in refunds there,
+   * never into a later window.
+   */
+  loginTicket?: WindowTicket;
 }
 
 /** A live challenge taken from the store. */
@@ -110,7 +117,12 @@ export function createChallengeStore(
       if (!entry) return null;
       entries.delete(key);
       if (entry.expiresAt <= now()) return null;
-      return { challenge: entry.challenge, userId: entry.userId, name: entry.name };
+      return {
+        challenge: entry.challenge,
+        userId: entry.userId,
+        name: entry.name,
+        loginTicket: entry.loginTicket,
+      };
     },
     size: () => entries.size,
     clear: () => entries.clear(),

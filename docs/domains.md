@@ -110,7 +110,7 @@ The `dns-verification.service.ts` checks three DNS record types:
 | DKIM   | `<selector>._domainkey.<domain>`        | TXT record containing the expected public key |
 | DMARC  | `_dmarc.<domain>`, else `_dmarc.<organizational domain>` | exactly one record matching `v=DMARC1` with a valid `p=` (#250, see below) |
 
-Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button, or let the scheduled loop run it (below).
+Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button, or let the scheduled loop run it (below). The dashboard button (and its **Complete rotation**) allows 5 DNS checks per domain per minute (`src/pages/lib/dns-verify-throttle.ts`, shared by every replica with `REDIS_URL`, #185); the API route is under the per-key API rate limit.
 
 Each check is `pass`, `fail` (a definitive answer: the record is missing or does not match) or `unknown` (the lookup itself failed: SERVFAIL, a timeout, the network, an SPF `temperror`, or no known sending IP). `verified_at` is set only when all three pass (#250).
 

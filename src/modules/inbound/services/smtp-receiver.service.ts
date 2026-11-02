@@ -11,6 +11,7 @@ import {
   type InboundNotifyDeps,
 } from "./inbound-notify.service.ts";
 import { isBlacklistedIp, selfTestDnsbl } from "./dnsbl.service.ts";
+import { takeInboundConnection } from "./connection-limit.ts";
 import { describeListenError, isListenError } from "./smtp-listen.ts";
 import { parseBounce } from "../../bounces/services/bounce-parser.service.ts";
 import {
@@ -27,6 +28,7 @@ import { config } from "../../../config.ts";
 import { MAX_ADDRESS_LENGTH } from "../../../utils/recipients.ts";
 import { logger } from "../../../utils/logger.ts";
 import { loggableError } from "../../../utils/db-error.ts";
+import { sharedStoreErrorCode } from "../../../utils/shared-store.ts";
 import { runWithLogContext, type LogContext } from "../../../utils/log-context.ts";
 import { smtpSessionTracer } from "../../../utils/tracing.ts";
 import { redactEmail } from "../../../utils/redact.ts";
@@ -71,46 +73,8 @@ const BASIC_ADDRESS_RE = /^[^\s@<>]+@[^\s@<>.]+(?:\.[^\s@<>.]+)+$/;
 /** Reference to the running SMTP server instance */
 let server: SMTPServer | null = null;
 
-/** Interval handle for rate limit map cleanup */
+/** Interval handle for the inbound notification budget cleanup */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
-
-/* ─── Per-IP SMTP connection rate limiting ─── */
-
-/** Tracks connection count and window start per IP */
-interface SmtpRateLimitEntry {
-  /** Number of connections in the current window */
-  count: number;
-  /** Timestamp (ms) when the current window started */
-  windowStart: number;
-}
-
-/** In-memory map of IP → rate limit state */
-const rateLimitMap = new Map<string, SmtpRateLimitEntry>();
-
-/**
- * Checks and increments the per-IP SMTP connection counter.
- * Returns true if the IP has exceeded the configured limit.
- *
- * Uses a fixed window identical to the HTTP rate limiter pattern
- * in src/middleware/rate-limit.ts.
- *
- * @param ip - The connecting client's IP address
- */
-function isRateLimited(ip: string): boolean {
-  const { rateLimitMax, rateLimitWindowSec } = config.smtp.spamProtection;
-  const windowMs = rateLimitWindowSec * 1000;
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
-
-  /** New IP or expired window: start fresh */
-  if (!entry || now - entry.windowStart >= windowMs) {
-    rateLimitMap.set(ip, { count: 1, windowStart: now });
-    return false;
-  }
-
-  entry.count += 1;
-  return entry.count > rateLimitMax;
-}
 
 /**
  * Starts the inbound SMTP server.
@@ -120,7 +84,8 @@ function isRateLimited(ip: string): boolean {
  * and forwarded to webhooks as an `email.received` event.
  *
  * Three spam protection layers run before message processing:
- * 1. Per-IP rate limiting (in-memory, instant)
+ * 1. Per-IP rate limiting (shared store: memory, or Redis, #185; see
+ *    `connection-limit.ts`)
  * 2. DNSBL IP check (async DNS lookup against Spamhaus ZEN)
  * 3. Recipient domain validation (DB check against registered domains)
  */
@@ -254,8 +219,8 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
 
     /**
      * Called when a client connects.
-     * Runs rate limiting (instant) and DNSBL check (async DNS)
-     * to reject bad IPs before they can send any data.
+     * Runs rate limiting (memory, or one Redis round trip) and the DNSBL
+     * check (async DNS) to reject bad IPs before they can send any data.
      */
     onConnect(session, callback) {
       sessionSpans.open(session.id);
@@ -264,32 +229,62 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
         recordSmtpConnection("inbound");
         const ip = session.remoteAddress;
 
-        /** Layer 2: Per-IP rate limiting (runs first, instant, no I/O) */
-        if (spamProtection.rateLimitEnabled && isRateLimited(ip)) {
-          logger.warn("SMTP connection rate limited", { ip });
-          return callback(
-            smtpError("Too many connections, try again later", 421, "rate_limited"),
-          );
-        }
-
         /** Layer 1: DNSBL check (async DNS lookup) */
-        if (!spamProtection.dnsblEnabled) {
-          return callback();
-        }
+        const checkDnsbl = (): void => {
+          if (!spamProtection.dnsblEnabled) return callback();
+          isBlacklistedIp(ip, spamProtection.dnsblZone)
+            .then((listed) => {
+              if (listed) {
+                logger.warn("SMTP connection rejected: IP blacklisted", { ip });
+                return callback(
+                  smtpError("Connection rejected: your IP is blacklisted", 554, "dnsbl"),
+                );
+              }
+              callback();
+            })
+            .catch(() => {
+              /** DNS lookup failed: allow connection (fail open) */
+              callback();
+            });
+        };
 
-        isBlacklistedIp(ip, spamProtection.dnsblZone)
-          .then((listed) => {
-            if (listed) {
-              logger.warn("SMTP connection rejected: IP blacklisted", { ip });
-              return callback(
-                smtpError("Connection rejected: your IP is blacklisted", 554, "dnsbl"),
+        /** Layer 2: Per-IP rate limiting (runs first, before any DNS) */
+        if (!spamProtection.rateLimitEnabled) return checkDnsbl();
+        takeInboundConnection(
+          ip,
+          spamProtection.rateLimitMax,
+          spamProtection.rateLimitWindowSec,
+        )
+          .then(
+            (limited) => {
+              if (!limited) return checkDnsbl();
+              logger.warn("SMTP connection rate limited", { ip });
+              callback(
+                smtpError("Too many connections, try again later", 421, "rate_limited"),
               );
-            }
-            callback();
-          })
-          .catch(() => {
-            /** DNS lookup failed: allow connection (fail open) */
-            callback();
+            },
+            (error: unknown) => {
+              /**
+               * Unexpected: the store falls back to memory on a Redis error.
+               * Fail open like the DNSBL layer: inbound mail keeps arriving.
+               */
+              logger.error("SMTP connection limit failed: connection allowed", {
+                ip,
+                code: sharedStoreErrorCode(error),
+              });
+              checkDnsbl();
+            },
+          )
+          /**
+           * A throw inside a handler above (the reply already went out, or
+           * never will): logged only, no second reply, and never an
+           * unhandled rejection, which would end the process.
+           */
+          .catch((error: unknown) => {
+            logger.error("SMTP connect handler failed", {
+              ip,
+              error: loggableError(error),
+            });
           });
       });
     },
@@ -811,17 +806,13 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
     });
   });
 
-  /** Periodic cleanup of expired rate limit entries (every 5 minutes) */
+  /**
+   * Periodic cleanup of the inbound notification budget (#250), every 5
+   * minutes. The per-IP connection counts are swept with every other
+   * shared-store counter (`startLocalCounterSweep`).
+   */
   cleanupInterval = setInterval(
     () => {
-      const now = Date.now();
-      const windowMs = spamProtection.rateLimitWindowSec * 1000;
-      for (const [ip, entry] of rateLimitMap) {
-        if (now - entry.windowStart >= windowMs) {
-          rateLimitMap.delete(ip);
-        }
-      }
-      /** Same sweep for the inbound notification budget (#250). */
       notifyDeps.throttle.prune(notifyDeps.now());
     },
     5 * 60 * 1000,

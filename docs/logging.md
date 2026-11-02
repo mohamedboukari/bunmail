@@ -51,7 +51,7 @@ With tracing on ([tracing.md](tracing.md), #363), a line written while a sampled
 | `Could not release email leases on shutdown; they expire on their own` | `warn` | `error` |
 | `Shared state in Redis: several replicas share limits and reveals` / `[boot] Redis did not answer: refusing to start` (#185) | `info` / `error`, once at start with `REDIS_URL` | `target` (the URL without credentials), `code` |
 | `Redis connection lost: shared state degraded` / `Redis connection restored` | `error` / `info`, once per outage | `target`, `code` / `downMs` |
-| `Shared store unavailable: rate limits fall back to this replica's memory` | `error`, at most once a minute per store | `namespace` (`rl:api`, `rl:login`), `code`, `suppressedSinceLast` |
+| `Shared store unavailable: rate limits fall back to this replica's memory` | `error`, at most once a minute per store | `namespace` (`rl:api`, `rl:login`, `rl:smtp-auth`, `rl:smtp-submission`, `rl:smtp-inbound`, `rl:dns-verify`, `throttle:last-used`), `code`, `suppressedSinceLast` |
 | `One-time reveal could not be stored: the secret will not be shown` / `... could not be read: the secret is not shown` | `error` | `kind`, `userId`, `sessionId`, `code` (never the token or the secret) |
 
 A database error is logged as `Database query failed (SQLSTATE <code>)`, or with the driver's code when there is no SQLSTATE (`ERR_POSTGRES_CONNECTION_CLOSED` for a lost connection), never with the query or its parameters.

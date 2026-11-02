@@ -69,12 +69,12 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | `SMTP_SUBMISSION_TLS_KEY` | _(empty)_ | PEM private-key path. |
 | `SMTP_SUBMISSION_TLS_MODE` | `implicit` with a cert | `implicit` (TLS from the first byte) or `starttls`. `starttls` refuses to boot on Bun, a mode without a cert refuses to boot, and so does any other value. See [TLS modes](#tls-modes-349). |
 | `SMTP_SUBMISSION_ALLOW_INSECURE` | `false` | Allow AUTH over plaintext (no TLS). The password is a full-privilege key, so this exposes it to link sniffers. With neither TLS nor this flag the server **refuses to start**. Set `true` only on a trusted network. Ignored with a cert: AUTH is then only accepted over TLS. |
-| `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting. |
-| `SMTP_SUBMISSION_RATE_LIMIT_MAX` | `30` | Max connections per IP per window. |
-| `SMTP_SUBMISSION_RATE_LIMIT_WINDOW` | `60` | Connection window (seconds). |
-| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` | `true` | Per-IP failed-AUTH throttle (anti key-brute-force). |
-| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX` | `10` | Failed AUTHs per IP before lockout. |
-| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW` | `900` | Failed-AUTH window (seconds). |
+| `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting: `true` or `false`, anything else refuses to boot. |
+| `SMTP_SUBMISSION_RATE_LIMIT_MAX` | `30` | Max connections per IP per window: 1 to 100000, anything else refuses to boot. |
+| `SMTP_SUBMISSION_RATE_LIMIT_WINDOW` | `60` | Connection window (seconds): 1 to 86400, anything else refuses to boot. |
+| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` | `true` | Per-IP failed-AUTH throttle (anti key-brute-force): `true` or `false`, anything else refuses to boot. |
+| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_MAX` | `10` | Failed AUTHs per IP before lockout: 1 to 10000, anything else refuses to boot. |
+| `SMTP_SUBMISSION_AUTH_RATE_LIMIT_WINDOW` | `900` | Failed-AUTH window (seconds): 1 to 86400, anything else refuses to boot. |
 
 ### TLS modes (#349)
 
@@ -100,7 +100,9 @@ The start line says which one runs: `SMTP submission server started` with `tls: 
 
 - **With a cert** (`SMTP_SUBMISSION_TLS_CERT` + `_KEY`): every connection is TLS from the first byte (implicit TLS, port 465) and AUTH is only accepted over TLS, so the API key never travels in the clear. This is the recommended posture whenever the port isn't strictly loopback.
 - **Without a cert**: plaintext `AUTH` is **refused by default** (#133): the server won't start, because the API key would travel in the clear. To run plaintext on a **trusted network** (app + BunMail sharing a host or a private Docker network), opt in explicitly with `SMTP_SUBMISSION_ALLOW_INSECURE=true`. Never expose a plaintext submission port to the public internet.
-- **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. Failures expire only with their window: a successful AUTH does not clear them (#190), so holding one valid key does not buy more guesses at others.
+- **Failed-AUTH throttle**: because the password is an API key, repeated failed AUTHs from one IP are counted and locked out (`454`) to blunt key brute-forcing. Each AUTH is counted before its key is looked up, in one atomic step with the lockout check, so parallel AUTHs cannot all slip past a check made before any of them failed; a valid key, or a lookup that fails on our side (`451`), gives its own count back. Failures expire only with their window: a successful AUTH does not clear them (#190), so holding one valid key does not buy more guesses at others.
+- **Client address**: both limits count the socket's peer address, IPv6 clients per /64 (which one client can rotate through) and an IPv4-mapped address as its IPv4, like the dashboard login (#256). A load balancer in front must preserve the client source address (no SNAT; for example Kubernetes `externalTrafficPolicy: Local`): otherwise every client shares the balancer's address, and with a shared Redis budget one client's failures lock out every client of the cluster. PROXY protocol is not supported yet.
+- **Several replicas** (#185): with `REDIS_URL` the failed-AUTH and connection counts per IP live in Redis (`rl:smtp-auth`, `rl:smtp-submission`), so N replicas allow one budget, not N. Without it they are per replica, in memory. During a Redis outage they fall back to each replica's memory (still throttled, per replica). See [self-hosting](self-hosting.md#running-several-replicas).
 
 ### First-boot checklist (Docker Compose)
 
@@ -231,6 +233,7 @@ src/modules/smtp-submission/
 ├── errors.ts                        ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 ├── services/
 │   ├── smtp-submission.service.ts   ← SMTPServer (AUTH) → createEmail; implicit-TLS listener (#349); start()/stop()
+│   ├── submission-limits.ts         ← per-IP connection and failed-AUTH throttles in the shared store (#185)
 │   └── usage.service.ts             ← per-(key,day) usage counters + quota read (#123)
 ├── message-mapper.ts                ← pure message → SendEmailInput mapping
 ├── dtos/

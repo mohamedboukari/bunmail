@@ -1,5 +1,5 @@
 import { logger } from "../utils/logger.ts";
-import { sharedWindowCounter } from "../utils/shared-store.ts";
+import { sharedWindowCounter, type WindowTicket } from "../utils/shared-store.ts";
 import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
 
 /**
@@ -163,6 +163,14 @@ export interface LoginLimitDecision {
   retryAfterSec: number;
 }
 
+/**
+ * Outcome of {@link takeLoginAttempt}: the decision, and the windows the
+ * attempt was counted in, for {@link refundLoginAttempt}.
+ */
+export interface LoginAttemptDecision extends LoginLimitDecision {
+  ticket: WindowTicket;
+}
+
 /** Whole seconds until a window ends, rounded up. */
 function toSeconds(ms: number): number {
   return Math.ceil(ms / 1000);
@@ -194,14 +202,18 @@ export async function takeLoginAttempt(
   ips: readonly string[],
   maxAttempts: number,
   windowMs: number,
-): Promise<LoginLimitDecision> {
+): Promise<LoginAttemptDecision> {
   const decision = await loginCounter.take(ips.map(rateLimitBucket), {
     max: maxAttempts,
     windowMs,
   });
   return decision.limited
-    ? { limited: true, retryAfterSec: toSeconds(decision.retryAfterMs) }
-    : { limited: false, retryAfterSec: 0 };
+    ? {
+        limited: true,
+        retryAfterSec: toSeconds(decision.retryAfterMs),
+        ticket: decision.windows,
+      }
+    : { limited: false, retryAfterSec: 0, ticket: decision.windows };
 }
 
 /**
@@ -232,9 +244,16 @@ export async function recordFailedLogin(ip: string, windowMs: number): Promise<v
  * stay until their window expires (#256): clearing them on success let
  * anyone with an account of their own sign in between guesses at another
  * account's password and keep guessing from the same address forever.
+ * `ticket` is the take's: the refund goes only into the window that take
+ * counted in, never into a later one (a login that straddles the end of
+ * a window must not give back a failure of the next).
  */
-export function refundLoginAttempt(ip: string): Promise<void> {
-  return loginCounter.refund(rateLimitBucket(ip));
+export function refundLoginAttempt(ip: string, ticket: WindowTicket): Promise<void> {
+  const bucket = rateLimitBucket(ip);
+  const windowId = ticket.get(bucket);
+  return windowId === undefined
+    ? Promise.resolve()
+    : loginCounter.refund(bucket, windowId);
 }
 
 /**

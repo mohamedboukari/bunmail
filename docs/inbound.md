@@ -54,6 +54,7 @@ src/modules/inbound/
 ├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
 ├── services/
 │   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser)
+│   ├── connection-limit.ts          ← per-IP connection rate limit in the shared store (#185)
 │   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373)
@@ -140,13 +141,15 @@ Addresses that aren't publicly routable skip the DNSBL check: private (`10/8`, `
 
 ### Layer 2: Connection Rate Limiting
 
-Per-IP fixed-window rate limit on SMTP connections. Exceeding the limit returns SMTP 421 (temporary rejection).
+Per-IP fixed-window rate limit on SMTP connections (`connection-limit.ts`): the window starts with an IP's first connection and every connection counts. Exceeding the limit returns SMTP 421 (temporary rejection). With `REDIS_URL` (#185) the counts live in Redis (`rl:smtp-inbound`), so every replica shares one budget per IP; without it they are per replica, in memory; during a Redis outage they fall back to each replica's memory.
+
+The limit counts the socket's peer address as is (a sending MTA's exact address, not its /64: large providers send from many addresses of one /64). A load balancer in front of port 25 must preserve the client source address (no SNAT; for example Kubernetes `externalTrafficPolicy: Local`): otherwise every sender shares the balancer's address, and with a shared Redis budget one busy sender blocks all inbound mail for the cluster. PROXY protocol is not supported yet.
 
 | Env Variable            | Default | Description                       |
 |-------------------------|---------|-----------------------------------|
-| `SMTP_RATE_LIMIT_ENABLED` | `true` | Enable/disable rate limiting     |
-| `SMTP_RATE_LIMIT_MAX`    | `10`   | Max connections per IP per window |
-| `SMTP_RATE_LIMIT_WINDOW` | `60`   | Window size in seconds           |
+| `SMTP_RATE_LIMIT_ENABLED` | `true` | Enable/disable rate limiting: `true` or `false`, anything else refuses to boot |
+| `SMTP_RATE_LIMIT_MAX`    | `10`   | Max connections per IP per window: 1 to 100000, anything else refuses to boot |
+| `SMTP_RATE_LIMIT_WINDOW` | `60`   | Window size in seconds: 1 to 86400, anything else refuses to boot |
 
 ### Layer 3: Recipient Domain Validation
 
@@ -170,7 +173,7 @@ Layers 1 to 3 fail open on errors (DNS timeout, DB unreachable). This means legi
 
 ## How It Works
 
-1. Client connects → rate limit check (instant) → DNSBL check (DNS lookup)
+1. Client connects → rate limit check (memory, or one Redis round trip) → DNSBL check (DNS lookup)
 2. RCPT TO command → `unsub+<token>` addresses (#249) and `b+` return paths (#236) verified, others validated against registered domains
 3. DATA command → `unsub+` recipients suppressed (#249), mail to verified return paths handled (DSNs bounce the bound recipient, the rest is dropped, #236), feedback-loop reports handled (#191), DSNs to any other address dropped, then the message is parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, raw message, the validated threading ids and the link to the email it replies to (#192) stored in `inbound_emails`

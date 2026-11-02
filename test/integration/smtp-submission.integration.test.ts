@@ -21,6 +21,7 @@ import {
 import { eq } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
+import { resetSubmissionLimits } from "../../src/modules/smtp-submission/services/submission-limits.ts";
 import { config } from "../../src/config.ts";
 import { emailAttachments } from "../../src/modules/emails/models/email-attachment.schema.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
@@ -166,11 +167,13 @@ describe("SMTP submission: failed-AUTH throttle (#190)", () => {
   });
 
   test("a successful AUTH does not clear the IP's earlier failures", async () => {
-    /** A short window starts a fresh count and keeps the lockout from leaking into other tests. */
     authLimit.maxAttempts = 3;
     authLimit.windowSec = 2;
-    /** Earlier tests' failures from this IP fall out of the short window. */
-    await Bun.sleep(2100);
+    /**
+     * Forget earlier tests' counts from this IP: a window keeps the length
+     * it started with (#185), so the short one above would not end them.
+     */
+    resetSubmissionLimits();
     const { rawKey } = await seed.apiKey();
     const message = {
       from: "hello@unregistered.test",
@@ -195,8 +198,8 @@ describe("SMTP submission: failed-AUTH throttle (#190)", () => {
     expect(await failureOf(transport(rawKey).sendMail(message))).toContain("454");
     expect(await db.select().from(emails)).toHaveLength(1);
 
-    /** Let the short window lapse so later tests start clean. */
-    await Bun.sleep(2100);
+    /** Later tests start clean. */
+    resetSubmissionLimits();
   });
 });
 
