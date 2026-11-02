@@ -6,6 +6,7 @@ import { authPages } from "./plugins/auth.plugin.tsx";
 import { homePages } from "./plugins/home.plugin.tsx";
 import { accountPages } from "./plugins/account.plugin.tsx";
 import { passkeyAccountPages, passkeyLoginPages } from "./plugins/passkeys.plugin.tsx";
+import { ssoAccountPages, ssoLoginPages } from "./plugins/sso.plugin.tsx";
 import { emailPages } from "./plugins/emails.plugin.tsx";
 import { apiKeyPages } from "./plugins/api-keys.plugin.tsx";
 import { invitationPages } from "./plugins/invitations.plugin.tsx";
@@ -33,6 +34,7 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/login/passkey   → verify the passkey, open an mfa session (public, #223)
  * - POST /dashboard/login/two-factor/passkey/options → second-step passkey options (public, pending session, #223)
  * - POST /dashboard/login/two-factor/passkey → second step with a passkey, mfa session (public, #223)
+ * - GET  /dashboard/login/sso/:provider/callback → the SSO provider's answer: finishes a link (public, bm_sso cookie, #224)
  * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
@@ -58,6 +60,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/account/passkeys → verify and store the new passkey (any role, #223)
  * - POST /dashboard/account/passkeys/:id/rename → rename an own passkey (any role, #223)
  * - POST /dashboard/account/passkeys/:id/delete → remove an own passkey, password needed (any role, #223)
+ * - GET  /dashboard/account/sso      → own SSO links, link / unlink forms (any role, #224)
+ * - POST /dashboard/account/sso/:id/link → password, then to the provider `:id` to link (any role, #224)
+ * - POST /dashboard/account/sso/:id/unlink → remove an own SSO link, password needed (any role, #224)
  * - GET  /dashboard/send            → send form (members: own keys only, #219)
  * - GET  /dashboard/emails          → email list with filters
  * - GET  /dashboard/emails/:id      → email detail
@@ -140,6 +145,9 @@ export const pagesPlugin = new Elysia({
   /** Passwordless passkey sign-in and the passkey second step (#223). */
   .use(passkeyLoginPages)
 
+  /** The SSO callback (#224): the provider sends the browser back there. */
+  .use(ssoLoginPages)
+
   /* ─── Session Guard ─── */
 
   /** Every route registered after it needs a live session (#216). */
@@ -150,6 +158,7 @@ export const pagesPlugin = new Elysia({
   .use(homePages)
   .use(accountPages)
   .use(passkeyAccountPages)
+  .use(ssoAccountPages)
   .use(emailPages)
   .use(apiKeyPages)
   .use(invitationPages)

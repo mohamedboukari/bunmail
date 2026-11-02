@@ -39,6 +39,8 @@ export type AuditTargetType =
   | "user"
   | "session"
   | "passkey"
+  /** An SSO identity linked to an account (#224): the `user_credentials` row id. */
+  | "sso_link"
   | "invitation"
   | "password_reset"
   | "owner_setup"
@@ -84,6 +86,34 @@ export type AuditLoginFailureReason =
   | "unknown_passkey"
   | "passkey_counter_regressed";
 
+/**
+ * Why linking an SSO identity was refused (#224), recorded as the `reason`
+ * of `auth.sso.link_refused`:
+ *
+ * - `wrong_password`: the current password asked before the redirect to
+ *   the provider was wrong;
+ * - `second_factor_required`: the owner has no BunMail second factor,
+ *   which linking needs (SSO must never become a one-factor path to the
+ *   owner);
+ * - `provider_already_linked`: the account already has an identity at
+ *   this provider (one per provider);
+ * - `already_linked`: the identity proven at the provider is linked to
+ *   another account;
+ * - `session_changed`: the session that started the link is gone or is
+ *   not the browser's session any more at the callback;
+ * - `flow_failed`: the provider round trip failed a check (cookie,
+ *   `state`, replay, `iss`, the code exchange, the ID token), recorded
+ *   when the browser's live session names the account; no value of the
+ *   flow is kept.
+ */
+export type AuditSsoLinkRefusal =
+  | "wrong_password"
+  | "second_factor_required"
+  | "provider_already_linked"
+  | "already_linked"
+  | "session_changed"
+  | "flow_failed";
+
 /** How a sign-in was completed (`passkey`: WebAuthn, alone or as the second step, #223). */
 type AuditSignInMethod = "password" | "totp" | "recovery_code" | "passkey";
 
@@ -111,6 +141,14 @@ export interface AuditMetadataByAction {
   "auth.two_factor.enabled": { sessionsRevoked: number };
   "auth.two_factor.disabled": { method: "totp" | "recovery_code" };
   "auth.two_factor.recovery_codes_regenerated": null;
+  /**
+   * Turning TOTP off or removing a passkey, refused because it would leave
+   * the owner with an SSO link and no second factor (#224).
+   */
+  "auth.two_factor.removal_refused": {
+    factor: "totp" | "passkey";
+    reason: "owner_sso_link";
+  };
   "auth.two_factor.removed": {
     via: "password_reset" | "owner_setup";
     /** Whether the TOTP credential went, and how many passkeys (#223). */
@@ -120,6 +158,16 @@ export interface AuditMetadataByAction {
   "auth.passkey.added": { sessionsRevoked: number };
   "auth.passkey.removed": null;
   "auth.passkey.counter_regressed": { storedCounter: number; receivedCounter: number };
+  /**
+   * SSO links (#224). `provider` is the provider's id in `SSO_PROVIDERS`
+   * (for an unlink whose provider is no longer configured, the stored
+   * `oidc:<issuer>`); never the subject or the provider email, which some
+   * providers use as the subject: the target carries the link's row id.
+   */
+  "auth.sso.linked": { provider: string };
+  "auth.sso.unlinked": { provider: string; sessionsRevoked: number };
+  "auth.sso.link_refused": { provider: string; reason: AuditSsoLinkRefusal };
+  "auth.sso.unlink_refused": { provider: string; reason: "wrong_password" };
   "auth.password.changed": { sessionsRevoked: number };
   "auth.password_reset.issued": { expiresAt: string; linksReplaced: number };
   "auth.password_reset.completed": { issuedBy: string; sessionsRevoked: number };
@@ -173,11 +221,17 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "auth.two_factor.enabled": "Two-factor authentication enabled",
   "auth.two_factor.disabled": "Two-factor authentication disabled",
   "auth.two_factor.recovery_codes_regenerated": "Recovery codes regenerated",
+  "auth.two_factor.removal_refused":
+    "Second factor removal refused: the owner has a single sign-on link",
   "auth.two_factor.removed": "Second factors removed by a reset",
   "auth.passkey.added": "Passkey added",
   "auth.passkey.removed": "Passkey removed",
   "auth.passkey.counter_regressed":
     "Passkey refused: signature counter went back (possible clone)",
+  "auth.sso.linked": "Single sign-on identity linked",
+  "auth.sso.unlinked": "Single sign-on identity unlinked",
+  "auth.sso.link_refused": "Single sign-on link refused",
+  "auth.sso.unlink_refused": "Single sign-on unlink refused",
   "auth.password.changed": "Password changed",
   "auth.password_reset.issued": "Password reset link issued",
   "auth.password_reset.completed": "Password reset completed",

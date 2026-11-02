@@ -103,6 +103,8 @@ const TWO_FACTOR_REFUSAL: Record<TwoFactorRefusal, string> = {
   not_enabled: "Two-factor authentication is off.",
   wrong_code: "Invalid code. Try again.",
   wrong_password: "The password or the code is incorrect.",
+  sso_link_requires_second_factor:
+    "You are the owner and have a single sign-on account linked: unlink it on the Sign-in methods page before turning two-factor authentication off.",
 };
 
 /** Redirects to the Two-factor page with a flash banner (and a reveal token). */

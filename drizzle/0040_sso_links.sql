@@ -1,0 +1,2 @@
+ALTER TABLE "user_credentials" ALTER COLUMN "provider" SET DATA TYPE varchar(255);--> statement-breakpoint
+CREATE UNIQUE INDEX "user_credentials_one_oauth_per_provider" ON "user_credentials" USING btree ("user_id","provider") WHERE type = 'oauth';

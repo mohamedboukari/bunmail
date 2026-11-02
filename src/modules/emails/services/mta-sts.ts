@@ -39,7 +39,7 @@ import { withTimeout } from "./mx-route.ts";
  * process trusts its first fetch (trust on first use, as the RFC accepts).
  *
  * What the mailer does with a policy (enforce, testing, none) is in
- * `mailer.service.ts`. Config-free: the caller passes `allowPrivate`, and
+ * `mailer.service.ts` and `mailer-mta-sts.service.ts`. Config-free: the caller passes `allowPrivate`, and
  * every lookup and the fetch are replaceable ({@link setMtaStsDeps}).
  */
 

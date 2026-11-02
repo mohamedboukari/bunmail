@@ -5,7 +5,7 @@ import { generateId } from "../../../utils/id.ts";
 import { sessions } from "../models/session.schema.ts";
 import { sessionTokenHistory } from "../models/session-token-history.schema.ts";
 import { users } from "../models/user.schema.ts";
-import { hasSecondFactor } from "../models/user-credential.schema.ts";
+import { hasSecondFactor, hasSsoLink } from "../models/user-credential.schema.ts";
 import {
   isSessionAssurance,
   isUserRole,
@@ -143,7 +143,8 @@ export async function createSession(
  * `password` or `mfa`, so a `pending` session (#220) can never open a
  * protected page. The same row carries the account's email and role, the
  * session's assurance (#222) and whether the account has a second factor
- * (#220, #223, for the `REQUIRE_2FA` policy): the guard builds the handlers'
+ * (#220, #223, for the `REQUIRE_2FA` policy) and whether it has an SSO link
+ * (#224, for the sidebar): the guard builds the handlers'
  * `auth` from it without a second query.
  */
 export async function findActiveSession(token: string): Promise<ActiveSession | null> {
@@ -157,6 +158,7 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
         role: users.role,
         assurance: sessions.assurance,
         hasSecondFactor: hasSecondFactor(sessions.userId),
+        hasSsoLink: hasSsoLink(sessions.userId),
         isCurrent: sql<boolean>`${sessions.tokenHash} = ${tokenHash}`,
         rotationDue: sql<boolean>`coalesce(${sessions.rotatedAt}, ${sessions.createdAt}) < now() - ${seconds(SESSION_ROTATE_SECONDS)}`,
         graceOver: sql<boolean>`coalesce(${sessions.rotatedAt} < now() - ${seconds(SESSION_ROTATION_GRACE_SECONDS)}, true)`,
@@ -188,6 +190,7 @@ export async function findActiveSession(token: string): Promise<ActiveSession | 
     role: row.role,
     assurance: row.assurance,
     hasSecondFactor: row.hasSecondFactor,
+    hasSsoLink: row.hasSsoLink,
     matched: row.isCurrent ? "current" : "previous",
     rotationDue: row.rotationDue,
     graceOver: row.graceOver,
@@ -459,6 +462,35 @@ export async function lockPendingSession(
         eq(sessions.tokenHash, hashToken(presentedToken)),
         eq(sessions.assurance, "pending"),
         sql`${sessions.expiresAt} > now()`,
+        sql`${users.disabledAt} IS NULL`,
+      ),
+    )
+    .for("update", { of: sessions });
+  return rows.length > 0;
+}
+
+/**
+ * Locks a live session of a user inside the caller's transaction (#224,
+ * linking an SSO identity): the row must be the user's, unexpired, admit
+ * the dashboard (`password` without a second factor, or `mfa`, the guard's
+ * own rule) and its user enabled. `SELECT ... FOR UPDATE`, so a logout or
+ * revocation racing the caller waits for it, and one that committed first
+ * makes this `false`.
+ */
+export async function lockLiveSession(
+  tx: Tx,
+  sessionId: string,
+  userId: string,
+): Promise<boolean> {
+  const rows = await tx
+    .select({ id: sessions.id })
+    .from(sessions)
+    .innerJoin(users, eq(users.id, sessions.userId))
+    .where(
+      and(
+        eq(sessions.id, sessionId),
+        eq(sessions.userId, userId),
+        liveSession(),
         sql`${users.disabledAt} IS NULL`,
       ),
     )

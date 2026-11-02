@@ -108,6 +108,17 @@ describe("readSsoSettings: refusals", () => {
     ],
     ["a duplicate id", { ...base, SSO_PROVIDERS: "corp,corp" }, /twice/],
     [
+      "two ids with the same issuer (#224: links are keyed by the issuer)",
+      {
+        ...base,
+        SSO_PROVIDERS: "corp,corp-2",
+        SSO_CORP_2_ISSUER: base["SSO_CORP_ISSUER"],
+        SSO_CORP_2_CLIENT_ID: "other",
+        SSO_CORP_2_CLIENT_SECRET: "other-secret",
+      },
+      /SSO_CORP_2_ISSUER is also the issuer of "corp"/,
+    ],
+    [
       "a missing issuer",
       { ...base, SSO_CORP_ISSUER: undefined },
       /SSO_CORP_ISSUER must be set/,

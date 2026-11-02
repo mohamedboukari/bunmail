@@ -123,7 +123,12 @@ src/modules/emails/
 │   ├── attachment-storage.ts       ← Storage interface for attachment bytes (Postgres today) and the metadata reads (#181)
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
-│   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing
+│   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing: `sendMail`, and the rest of the public surface re-exported from the files below (#380)
+│   ├── mailer-message.service.ts   ← One transaction's message: headers, DKIM signed headers, List-Unsubscribe, Feedback-ID, attachments
+│   ├── mailer-state.service.ts     ← Starting delivery state: entries per domain, pre-#250 entries, signed return paths (#236)
+│   ├── mailer-mta-sts.service.ts   ← MTA-STS mode, hosts to try and verified TLS of a domain (#250)
+│   ├── mailer-delivery.service.ts  ← MX sessions: failover, throttle, rate budget, `mx.deliver` and `mx.session` spans
+│   ├── mailer-outcome.service.ts   ← Each transaction's outcome on its entry: sent, retry, failed, partial rejections
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones, MAIL_IP_FAMILY order
 │   ├── provider-bucket.ts          ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
@@ -131,7 +136,13 @@ src/modules/emails/
 │   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
 │   ├── mta-sts.ts                  ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
-│   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
+│   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch: the public surface, re-exported from the files below (#380)
+│   ├── queue-worker.service.ts     ← Poll loop, its state (running, timer, sends in flight) and the per-attempt lease renewal
+│   ├── queue-claim.service.ts      ← Fair claim, lease, worker id and the fenced row release (drops attachment bytes at a final status)
+│   ├── queue-send.service.ts       ← One claimed email's attempt: key check, DKIM, unsubscribe, suppressions, attachments, mailer
+│   ├── queue-domain.service.ts     ← Sender domain lookup for DKIM signing and List-Unsubscribe overrides
+│   ├── queue-outcome.service.ts    ← Outcome transaction: inline bounces, suppressions, row status and webhook events (#184)
+│   ├── queue-decision.service.ts   ← Pure deferred, retry or terminal decision and the `last_error` digests
 │   ├── retry-schedule.ts           ← Pure retry backoff of temporary failures (#180)
 │   ├── stats.service.ts            ← Dashboard stats aggregation
 │   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
@@ -215,7 +226,7 @@ The mailer composes the body once per send attempt (`composeMessageBody`, `servi
 
 Gmail and Yahoo require bulk senders to offer working one-click unsubscribe; refusing a `marketing` send that could not carry it is safer than sending it without. The check is `oneClickBlocker` (`services/list-unsubscribe.ts`), the same conditions under which the token is minted. Should `APP_BASE_URL` change before a queued marketing email is sent, it goes out with the static header and a `warn` (`Marketing email sent without a one-click unsubscribe link`).
 
-BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer.service.ts` also refuses it for any `autoSubmitted` message).
+BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer-message.service.ts` also refuses it for any `autoSubmitted` message).
 
 ## Tags (#189)
 
@@ -242,7 +253,7 @@ A send may carry up to 10 files, `[{ filename, content, contentType?, contentId?
 
 **Delivery.** The queue loads the bytes for each attempt (`loadOutboundAttachments`) and passes them to `sendMail`; every transaction and every retry carries the same files. `buildMailOptions` gives each one to Nodemailer as inline content with its derived type: with a `contentId` it is an inline part (`cid`) in the `multipart/related` node beside the HTML, whose `cid:` references are left as they are; without one, `Content-Disposition: attachment`. Nodemailer never reads a file or a URL for a message (`disableFileAccess`, `disableUrlAccess`). DKIM signs the whole message, attachments included. An attachment whose bytes are missing while the email is still being sent fails the email (`email.failed`) instead of sending it without the file.
 
-**Retention.** The bytes are kept only while the email can still be sent. The outcome write that moves an email to `sent`, `failed` or `bounced` (`releaseRow` in `queue.service.ts`, inside the outcome transaction of #184, the degraded save included, and the revoked-key and unreadable-DKIM-key paths) also sets `content = NULL` for its attachments; the metadata stays, and responses report `available: false`. A temporary failure keeps them for the retry. The trash purge and every hard delete drop them through the storage interface before the FK cascade removes the rows. Tombstones keep `filename`, `contentType` and `size` only; the idempotency snapshot keeps the response's attachment metadata, never the bytes, and a replay returns that stored metadata.
+**Retention.** The bytes are kept only while the email can still be sent. The outcome write that moves an email to `sent`, `failed` or `bounced` (`releaseRow` in `queue-claim.service.ts`, inside the outcome transaction of #184, the degraded save included, and the revoked-key and unreadable-DKIM-key paths) also sets `content = NULL` for its attachments; the metadata stays, and responses report `available: false`. A temporary failure keeps them for the retry. The trash purge and every hard delete drop them through the storage interface before the FK cascade removes the rows. Tombstones keep `filename`, `contentType` and `size` only; the idempotency snapshot keeps the response's attachment metadata, never the bytes, and a replay returns that stored metadata.
 
 **Logs** carry attachment counts, sizes, indexes and positions, never a filename (it may carry personal data) or any content.
 
@@ -341,7 +352,7 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header, except `tr
 
 **Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders (Gmail's "high volume" threshold, more than 5k a day to Gmail) need RFC 8058 one-click that is **honored within 2 days**: send each such message to one recipient and set an `https://` `APP_BASE_URL`, so it carries the per-recipient link. A static `unsubscribe_url` only meets that requirement if your own handler can identify the recipient from the URL itself.
 
-**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
+**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer-message.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
 
 **Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
 
@@ -421,6 +432,8 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 
 ### mailer.service.ts
 
+The mailer's public surface: `sendMail` is defined here, the rest is re-exported from the `mailer-*.service.ts` files beside it, one per concern (#380, see the module layout above). `buildMailOptions` is in `mailer-message.service.ts`.
+
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
@@ -490,6 +503,8 @@ The body a message is sent with (#250): HTML wrapped when it is a fragment (`wra
 The bounded, linear converter behind the text alternative (#250); see [Body composition](#body-composition-250). Pure.
 
 ### queue.service.ts
+
+The queue's public surface; the code sits in the `queue-*.service.ts` files beside it, one per concern (#380, see the module layout above). `processEmail` is in `queue-worker.service.ts`.
 
 #### `start(): void`
 Starts the queue processor: polls every `QUEUE_POLL_INTERVAL_MS` (default 2 s, +/-10% jitter). Each poll is scheduled after the previous one has claimed its rows, so polls never overlap; the sends run in the background (#176). There is no boot-time recovery step: rows a dead worker left in `sending` are reclaimed by the normal claim once their lease expires (#180).

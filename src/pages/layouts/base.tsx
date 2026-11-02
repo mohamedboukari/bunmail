@@ -18,9 +18,11 @@ import {
   DevicesIcon,
   ShieldIcon,
   AuditIcon,
+  LinkIcon,
 } from "../assets/icons.tsx";
+import { config } from "../../config.ts";
 import { PageAssets } from "../static-assets.tsx";
-import { viewerIsAdmin } from "../viewer.ts";
+import { viewerHasSsoLink, viewerIsAdmin } from "../viewer.ts";
 
 /**
  * Props for the base HTML layout shell.
@@ -46,7 +48,8 @@ interface BaseLayoutProps {
     | "account"
     | "account-sessions"
     | "account-two-factor"
-    | "account-passkeys";
+    | "account-passkeys"
+    | "account-sso";
 }
 
 /**
@@ -184,7 +187,7 @@ function Nav({ activeNav }: { activeNav?: string }) {
 
       {/* Bottom actions: own account, docs, theme toggle + logout */}
       <div class="p-3 border-t border-gray-200 dark:border-gray-800 space-y-1">
-        {/* Account group: every role manages its own sessions (#281), password (#279), two-factor (#220) and passkeys (#223) */}
+        {/* Account group: every role manages its own sessions (#281), password (#279), two-factor (#220), passkeys (#223) and SSO links (#224) */}
         <p class="px-3 pt-1 pb-0.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
           Account
         </p>
@@ -232,6 +235,20 @@ function Nav({ activeNav }: { activeNav?: string }) {
           <PasskeyIcon />
           Passkeys
         </a>
+        {/* Sign-in methods (#224): when single sign-on providers are configured, or the viewer still holds a link */}
+        {(config.sso.providers.length > 0 || viewerHasSsoLink()) && (
+          <a
+            href="/dashboard/account/sso"
+            class={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full ${
+              activeNav === "account-sso"
+                ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                : "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800/50 hover:text-gray-900 dark:hover:text-gray-100"
+            }`}
+          >
+            <LinkIcon />
+            Sign-in methods
+          </a>
+        )}
         <a
           href="/api/docs"
           target="_blank"
