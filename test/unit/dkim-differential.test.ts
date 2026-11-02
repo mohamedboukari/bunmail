@@ -10,7 +10,7 @@ import { describe, test, expect } from "bun:test";
 import { verifyDkimSignatures } from "../../src/modules/inbound/services/dkim-verifier.service.ts";
 import type { DnsAnswer, ExpectedResult } from "../dkim-vectors.ts";
 
-/** One fixture case, as `generate-dkim-differential.ts` wrote it. */
+/** One fixture case, as recorded with mailauth 7.1.1 before its removal (#373). */
 interface FixtureCase {
   name: string;
   message: string;

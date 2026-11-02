@@ -182,7 +182,10 @@ bunmail/
 │   │   │   │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status per domain (#250)
 │   │   │   │   ├── required-dns-records.ts ← The DNS records to publish (`dnsRecords`, #250)
 │   │   │   │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
-│   │   │   │   └── sending-ips.service.ts ← Sending IPs and the reverse DNS check (#247, #248)
+│   │   │   │   ├── sending-ips.service.ts ← Sending IPs and the reverse DNS check (#247, #248)
+│   │   │   │   ├── spf-evaluator.ts      ← SPF check_host(), RFC 7208 strict: limits, deadline (#373)
+│   │   │   │   ├── spf-syntax.ts         ← SPF record parsing and macro expansion (#373)
+│   │   │   │   └── spf-address.ts        ← IP parsing and CIDR matching for SPF (#373)
 │   │   │   ├── dtos/
 │   │   │   │   ├── create-domain.dto.ts
 │   │   │   │   └── update-domain.dto.ts
@@ -192,7 +195,8 @@ bunmail/
 │   │   │   │   └── domain.serialization.ts
 │   │   │   └── types/
 │   │   │       ├── domain.types.ts
-│   │   │       └── domain-check.types.ts ← Check outcome and result (#250)
+│   │   │       ├── domain-check.types.ts ← Check outcome and result (#250)
+│   │   │       └── spf.types.ts          ← SPF result, resolver, check_host() input (#373)
 │   │   ├── webhooks/
 │   │   │   ├── webhooks.plugin.ts                 ← CRUD + deliveries inspection + replay
 │   │   │   ├── services/

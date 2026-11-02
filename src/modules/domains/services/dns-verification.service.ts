@@ -1,4 +1,3 @@
-import { spf as mailauthSpf } from "mailauth/lib/spf";
 import { logger } from "../../../utils/logger.ts";
 import type { Domain } from "../types/domain.types.ts";
 import { config } from "../../../config.ts";
@@ -7,6 +6,7 @@ import { checkDmarc } from "./dmarc-check.service.ts";
 import { dkimRecordHost, dkimRecordsMatchKey } from "./dkim-keys.ts";
 import { rememberDmarcCheck, resolveDomainTxt } from "./domain-dns-status.service.ts";
 import { applyDomainCheck } from "./domain-check.service.ts";
+import { checkHost } from "./spf-evaluator.ts";
 import type { DnsCheckOutcome, DomainCheckResult } from "../types/domain-check.types.ts";
 
 export interface VerificationResult {
@@ -46,26 +46,25 @@ export interface VerificationDeps {
 }
 
 /**
- * Evaluates SPF with mailauth in strict RFC 7208 mode: every mechanism,
- * macros, includes and redirects, the 10-lookup and 2-void-lookup limits,
- * capped at 10 seconds (a slow chain is a `temperror`, not a hang).
+ * Evaluates SPF with the built-in evaluator (#373, `spf-evaluator.ts`) in
+ * strict RFC 7208 mode: every mechanism, macros, includes and redirects,
+ * the 10-lookup and 2-void-lookup limits, capped at 10 seconds (a slow
+ * chain is a `temperror`, not a hang). The sender is `postmaster@<domain>`
+ * and the HELO name `MAIL_HOSTNAME`.
  */
-async function evaluateSpfWithMailauth(domain: string, ip: string): Promise<string> {
-  const result = await mailauthSpf({
-    sender: `postmaster@${domain}`,
-    ip,
-    helo: config.mail.hostname,
-    mta: config.mail.hostname,
-    strict: true,
-    maxElapsedTime: 10_000,
-  });
-  return result.status.result;
+async function evaluateDomainSpf(domain: string, ip: string): Promise<string> {
+  const { result, reason } = await checkHost(
+    { ip, domain, sender: `postmaster@${domain}`, helo: config.mail.hostname },
+    { timeoutMs: 10_000 },
+  );
+  logger.debug("SPF evaluated", { domain, ip, result, reason });
+  return result;
 }
 
 const defaultDeps: VerificationDeps = {
   /** The domains module's DNS seam (`setDomainDnsDeps` replaces it in tests). */
   resolveTxt: resolveDomainTxt,
-  evaluateSpf: evaluateSpfWithMailauth,
+  evaluateSpf: evaluateDomainSpf,
   sendingIps: () => resolveSendingIps(),
 };
 

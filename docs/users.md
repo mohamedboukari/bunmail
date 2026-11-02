@@ -407,7 +407,7 @@ WebAuthn passkeys, verified by `@simplewebauthn/server` (14.0.3, pinned exactly)
 
 **Security emails** (`two-factor-alert.service.ts`, no links, never awaited): `passkey_added` and `passkey_removed` (with the passkey's name, escaped), `passkey_counter_regressed`.
 
-**Dependency note.** `package.json` `overrides` pins every `@peculiar/asn1-*` package in the tree (`android`, `asym-key`, `cms`, `csr`, `ecc`, `pfx`, `pkcs8`, `pkcs9`, `rsa`, `schema`, `x509`, `x509-attr`, `x509-logotype`, `x509-post-quantum`) to 2.11.0, so the whole family shares one ASN.1 schema registry. `mailauth`'s `@postalsys/vmc` pins 2.8.0, which bun hoisted next to the library's newer copies, splitting the registry between them, and every ECDSA signature then failed to verify. BunMail uses only mailauth's SPF and DKIM code, never VMC. 2.11.0 is newer than the two-week rule allows; the owner approved it as an official release with no security advisories. After a dependency change, check `bun.lock` still lists one version of each `@peculiar/asn1-*` package.
+**Dependency note.** The `@peculiar/asn1-*` family must resolve to one version, so it shares one ASN.1 schema registry: two copies split the registry and every ECDSA signature then fails to verify. `mailauth`'s `@postalsys/vmc` used to pin 2.8.0 next to `@simplewebauthn/server`'s newer copies, so `package.json` `overrides` pinned the whole family to 2.11.0. Since mailauth was removed (#373, SPF and DKIM are built in), nothing pins an older version and the overrides are gone: the family resolves to one version (2.11.0) through `@simplewebauthn/server`'s ranges. After a dependency change, check `bun.lock` still lists one version of each `@peculiar/asn1-*` package.
 
 ## Service helpers
 
