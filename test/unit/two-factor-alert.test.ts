@@ -118,6 +118,42 @@ describe("buildTwoFactorAlertEmail", () => {
     expect(unnamed.text).toContain("Provider account: not shown");
   });
 
+  test("a reset lists the SSO links it removed (#224): counted, each provider with its masked account, escaped, no link", () => {
+    const mail = buildTwoFactorAlertEmail({
+      event: "removed_by_reset",
+      email: "a@example.com",
+      ip: null,
+      at: new Date(),
+      removed: { totp: true, passkeys: 0 },
+      removedSsoLinks: [
+        { provider: "<b>Corp</b>", account: "attacker@evil.example" },
+        { provider: "Google", account: null },
+      ],
+    });
+    expect(mail.text).toContain(
+      "Removed: authenticator app (and its recovery codes) and 2 single sign-on links",
+    );
+    expect(mail.text).toContain(
+      "Single sign-on removed: <b>Corp</b> (a***@evil.example)",
+    );
+    expect(mail.text).toContain("Single sign-on removed: Google\n");
+    expect(mail.text).toContain("single sign-on links were removed with it");
+    expect(`${mail.text}${mail.html}`).not.toContain("attacker@");
+    expect(mail.html).toContain("&lt;b&gt;Corp&lt;/b&gt;");
+    expect(mail.html).not.toContain("<b>Corp</b>");
+    expect(`${mail.text}${mail.html}`).not.toMatch(/https?:|href=|www\./);
+
+    const linksOnly = buildTwoFactorAlertEmail({
+      event: "removed_by_reset",
+      email: "a@example.com",
+      ip: null,
+      at: new Date(),
+      removed: { totp: false, passkeys: 0 },
+      removedSsoLinks: [{ provider: "Corp", account: null }],
+    });
+    expect(linksOnly.text).toContain("Removed: 1 single sign-on link\n");
+  });
+
   test("hostile values are escaped in HTML and flattened in text", () => {
     const mail = buildTwoFactorAlertEmail({
       event: "enabled",

@@ -3,6 +3,7 @@ import * as oauth from "oauth4webapi";
 import {
   asciiLowerCase,
   isLowerAsciiDomain,
+  ssoEnvPrefix,
   type SsoProviderSettings,
 } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -35,8 +36,9 @@ import {
 /**
  * The OpenID Connect authorization code flow of SSO (#224), on
  * `oauth4webapi`: building the authorization request and validating the
- * callback. No route, no session, no database: the sign-in and link
- * routes of later PRs call these two functions and decide what the
+ * callback. No route, no session, no database: the sign-in
+ * (`sso-sign-in-flow.service.ts`) and link (`sso-link-flow.service.ts`)
+ * halves of the callback call these two functions and decide what the
  * proven identity may do.
  *
  * Nothing secret is kept or logged: the code, the tokens and the ID token
@@ -91,6 +93,26 @@ interface SsoFlowContext {
  */
 export function ssoRedirectUri(baseUrl: string, providerId: string): string {
   return `${baseUrl}/dashboard/login/sso/${providerId}/callback`;
+}
+
+/**
+ * Linking by verified email (`SSO_<ID>_AUTO_LINK=true`) is validated by
+ * the config but not implemented yet (#224, part 4): warns once per
+ * provider that sets it, at boot, so the setting is never silently
+ * ignored. Identities are linked only under Account > Sign-in methods
+ * until then. Returns the ids warned about.
+ */
+export function warnSsoAutoLinkNotImplemented(
+  providers: readonly SsoProviderSettings[],
+): string[] {
+  const ids = providers.filter((provider) => provider.autoLink).map((p) => p.id);
+  for (const id of ids) {
+    logger.warn(
+      "SSO auto-link is not implemented yet; identities must be linked under Account > Sign-in methods",
+      { provider: id, setting: `${ssoEnvPrefix(id)}AUTO_LINK` },
+    );
+  }
+  return ids;
 }
 
 /** The `oauth4webapi` client of a provider. */
@@ -266,8 +288,8 @@ function extraClaimProblem(
  * The checks run in this order. Nothing reaches the network before steps
  * 1 to 3 pass, so a request reaches a provider only with the cookie of a
  * flow that was started (which itself only calls discovery), and only
- * once per flow; the per-IP rate limits on the start and callback routes
- * come with the sign-in routes (a later PR).
+ * once per flow; the routes also check the per-IP login limiter before
+ * calling either function (`sso-login.plugin.tsx`).
  *
  * 1. The flow cookie is present, decrypts, parses, was made for this
  *    provider and has not expired.

@@ -12,7 +12,8 @@
  *   `auth.sso.linked`.
  * - Refusals: the owner without a second factor, one link per provider,
  *   an identity linked to another account, a session that changed, a
- *   sign-in flow, a replayed callback.
+ *   replayed callback; a sign-in flow never links (it signs in, see
+ *   `sso-sign-in.integration.test.ts`).
  * - Unlinking: the password (a wrong one audited), the sessions the
  *   identity opened end with it, only one's own link.
  * - The owner rule kept true afterwards: the owner's last second factor
@@ -21,6 +22,11 @@
  * - A failed round trip with a live session is audited (`flow_failed`).
  * - The page escapes the stored name; the sidebar keeps Sign-in methods
  *   for an account with a link even without configured providers.
+ * - Resets remove links (#224, decision 7): a completed admin reset link
+ *   and a completed `reset-owner` link take every link of the account away
+ *   with its second factors, end the sessions those links opened, list them
+ *   in the `removed_by_reset` email and count them in
+ *   `auth.two_factor.removed`; the identity no longer signs in.
  */
 import {
   describe,
@@ -47,6 +53,8 @@ import { users } from "../../src/modules/users/models/user.schema.ts";
 import * as twoFactorAlert from "../../src/modules/users/services/two-factor-alert.service.ts";
 import { clearSsoDiscoveryCache } from "../../src/modules/users/services/sso-discovery.service.ts";
 import { startSsoFlow } from "../../src/modules/users/services/sso.service.ts";
+import { issuePasswordReset } from "../../src/modules/users/services/user-admin.service.ts";
+import { issueOwnerSetupLink } from "../../src/modules/users/services/owner.service.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { config, type SsoProviderSettings } from "../../src/config.ts";
 
@@ -418,7 +426,7 @@ describe("linking (#224)", () => {
     expect(await linkRows(ids.member)).toHaveLength(0);
   });
 
-  test("a sign-in flow is refused with the generic failure, nothing kept", async () => {
+  test("a sign-in flow is never a link, even with a live session: it signs in or is refused", async () => {
     const session = await seed.session({ userId: ids.member });
     const started = await startSsoFlow({ provider, baseUrl: ORIGIN, purpose: "login" });
     if (!started.ok) throw new Error("start failed");
@@ -426,8 +434,10 @@ describe("linking (#224)", () => {
       token: session.token,
       flow: started.flowCookie,
     });
-    expect(response.headers.get("location")).toBe("/dashboard/login?error=sso");
+    /** No account is linked to the identity: the sign-in's own refusal (#224, part 3). */
+    expect(response.headers.get("location")).toBe("/dashboard/login?error=sso_unlinked");
     expect(await linkRows(ids.member)).toHaveLength(0);
+    expect(await auditRows("auth.sso.link_refused")).toEqual([]);
   });
 
   test("a replayed callback is refused without a second token request", async () => {
@@ -714,5 +724,163 @@ describe("the owner rule stays true (#224)", () => {
       await call("GET", "/dashboard/account/sessions", { token: member.token })
     ).text();
     expect(withLink).toContain('href="/dashboard/account/sso"');
+  });
+});
+
+/* ─── Resets remove links ─── */
+
+describe("resets remove SSO links (#224)", () => {
+  const NEW_PASSWORD = "a brand new passphrase, long enough";
+
+  /** The token of a reset or setup link URL. */
+  function tokenOf(url: string): string {
+    return new URL(url, ORIGIN).searchParams.get("token") ?? "";
+  }
+
+  /** The `removed_by_reset` alerts sent, with what they list (links sorted by provider). */
+  function resetAlerts(): Array<[string, unknown, unknown]> {
+    return alerts.mock.calls
+      .filter(([input]) => input.event === "removed_by_reset")
+      .map(([input]) => [
+        input.event,
+        input.removed,
+        (input.removedSsoLinks ?? []).toSorted((a, b) =>
+          a.provider.localeCompare(b.provider),
+        ),
+      ]);
+  }
+
+  /** A full SSO sign-in round trip for the identity `user-123`: where it lands. */
+  async function signInLocation(): Promise<string> {
+    const started = await startSsoFlow({ provider, baseUrl: ORIGIN, purpose: "login" });
+    if (!started.ok) throw new Error("start failed");
+    const response = await callback(started.authorizationUrl, {
+      flow: started.flowCookie,
+    });
+    return response.headers.get("location") ?? "";
+  }
+
+  test("a completed admin reset link removes the links and their sessions, emails and records them", async () => {
+    const linkId = await insertLink(ids.member);
+    await insertLink(ids.member, {
+      provider: "oidc:https://gone.example.org/realm",
+      sub: "z",
+    });
+    const viaSso = await seed.session({ userId: ids.member, credentialId: linkId });
+    const issued = await issuePasswordReset(ids.owner, ids.member);
+    if (!issued.ok) throw new Error(issued.reason);
+
+    const response = await call("POST", "/dashboard/reset", {
+      body: { token: tokenOf(issued.url), password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+    });
+    expect(response.headers.get("location")).toBe("/dashboard");
+    expect(await linkRows(ids.member)).toHaveLength(0);
+    const left = await db
+      .select({ id: sessions.id })
+      .from(sessions)
+      .where(eq(sessions.userId, ids.member));
+    expect(left.map((row) => row.id)).not.toContain(viaSso.id);
+    expect(left).toHaveLength(1);
+
+    expect(resetAlerts()).toEqual([
+      [
+        "removed_by_reset",
+        { totp: false, passkeys: 0 },
+        [
+          { provider: "Corp SSO", account: "alice@example.com" },
+          { provider: "gone.example.org", account: "alice@example.com" },
+        ],
+      ],
+    ]);
+    const recorded = await auditRows("auth.two_factor.removed");
+    expect(recorded.map((r) => [r.actorId, r.metadata])).toEqual([
+      [ids.member, { via: "password_reset", totp: false, passkeys: 0, ssoLinks: 2 }],
+    ]);
+    expect(JSON.stringify(await db.select().from(auditEvents))).not.toContain("user-123");
+
+    /** The identity no longer opens the account. */
+    expect(await signInLocation()).toBe("/dashboard/login?error=sso_unlinked");
+  });
+
+  test("a completed reset-owner link removes the owner's links with its second factor", async () => {
+    await db.insert(userCredentials).values({
+      id: generateId("crd"),
+      userId: ids.owner,
+      type: "totp",
+      secretHash: "enc:x",
+    });
+    const linkId = await insertLink(ids.owner);
+    await seed.session({ userId: ids.owner, assurance: "mfa", credentialId: linkId });
+    const setupLink = await issueOwnerSetupLink("owner@example.com");
+
+    const response = await call("POST", "/dashboard/setup", {
+      body: { token: setupLink.token, password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+    });
+    expect(response.headers.get("location")).toBe("/dashboard");
+    expect(await linkRows(ids.owner)).toHaveLength(0);
+    const left = await db
+      .select({ credentialId: sessions.credentialId })
+      .from(sessions)
+      .where(eq(sessions.userId, ids.owner));
+    expect(left.map((row) => row.credentialId)).not.toContain(linkId);
+
+    expect(resetAlerts()).toEqual([
+      [
+        "removed_by_reset",
+        { totp: true, passkeys: 0 },
+        [{ provider: "Corp SSO", account: "alice@example.com" }],
+      ],
+    ]);
+    expect((await auditRows("auth.two_factor.removed")).map((r) => r.metadata)).toEqual([
+      { via: "owner_setup", totp: true, passkeys: 0, ssoLinks: 1 },
+    ]);
+    expect(await signInLocation()).toBe("/dashboard/login?error=sso_unlinked");
+  });
+
+  test("a reset of an account with links but no second factor still records and emails the removal", async () => {
+    await insertLink(ids.member);
+    const issued = await issuePasswordReset(ids.owner, ids.member);
+    if (!issued.ok) throw new Error(issued.reason);
+    await call("POST", "/dashboard/reset", {
+      body: { token: tokenOf(issued.url), password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+    });
+    expect(await linkRows(ids.member)).toHaveLength(0);
+    expect(resetAlerts().map(([event, removed]) => [event, removed])).toEqual([
+      ["removed_by_reset", { totp: false, passkeys: 0 }],
+    ]);
+    expect((await auditRows("auth.two_factor.removed")).map((r) => r.metadata)).toEqual([
+      { via: "password_reset", totp: false, passkeys: 0, ssoLinks: 1 },
+    ]);
+  });
+
+  test("a link started before a reset cannot finish after it (L2)", async () => {
+    const session = await seed.session({ userId: ids.member });
+    const started = await startLink(session.token);
+    expect(started.response.status).toBe(302);
+    const issued = await issuePasswordReset(ids.owner, ids.member);
+    if (!issued.ok) throw new Error(issued.reason);
+    await call("POST", "/dashboard/reset", {
+      body: { token: tokenOf(issued.url), password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+    });
+    /** The reset signed the linking session out: the callback finds it gone. */
+    const response = await callback(started.location, {
+      token: session.token,
+      flow: started.flow,
+    });
+    expect(flashOf(response).type).toBe("error");
+    expect(await linkRows(ids.member)).toHaveLength(0);
+    expect((await auditRows("auth.sso.link_refused")).map((r) => r.metadata)).toEqual([
+      { provider: "corp", reason: "session_changed" },
+    ]);
+  });
+
+  test("a reset with nothing to remove sends no alert and records no removal", async () => {
+    const issued = await issuePasswordReset(ids.owner, ids.member);
+    if (!issued.ok) throw new Error(issued.reason);
+    await call("POST", "/dashboard/reset", {
+      body: { token: tokenOf(issued.url), password: NEW_PASSWORD, confirm: NEW_PASSWORD },
+    });
+    expect(resetAlerts()).toEqual([]);
+    expect(await auditRows("auth.two_factor.removed")).toEqual([]);
   });
 });

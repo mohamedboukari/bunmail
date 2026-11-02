@@ -795,6 +795,7 @@ describe("Passkeys as a second factor in the policy (#223)", () => {
         via: "password_reset",
         totp: false,
         passkeys: 2,
+        ssoLinks: 0,
       });
     } finally {
       alerts.restore();

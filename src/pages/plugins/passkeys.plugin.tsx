@@ -49,6 +49,7 @@ import { isSameOrigin } from "../lib/same-origin.ts";
 import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
 import type { GuardedDashboard, PublicDashboard } from "../lib/session-guard.ts";
+import { ssoProviderLabelOf } from "../lib/sso.ts";
 import { twoFactorLoginLimiter } from "../lib/two-factor-limiter.ts";
 import {
   UNKNOWN_ACCOUNT,
@@ -533,6 +534,8 @@ export function passkeyLoginPages(app: PublicDashboard) {
               email: pending.email,
               sessionId: pending.sessionId,
               ip,
+              /** An SSO first factor (#224) is named in the new-device alert. */
+              ssoProvider: ssoProviderLabelOf(pending.ssoProvider),
             });
             return redirect(set, "/dashboard");
           } catch (error: unknown) {

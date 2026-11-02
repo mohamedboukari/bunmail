@@ -1,9 +1,10 @@
 import type { SsoProviderSettings } from "../../../config.ts";
-import type { SsoIdentity } from "../types/sso.types.ts";
+import type { SsoIdentity, SsoSignInRefusal } from "../types/sso.types.ts";
 
 /**
- * The pure rules of SSO links (#224): how a link is keyed and named, and
- * how a stored link is matched back to a configured provider. No database,
+ * The pure rules of SSO links (#224): how a link is keyed and named, how a
+ * stored link is matched back to a configured provider, and who may sign
+ * in with one. No database,
  * no config read: `sso-link.service.ts` and the Sign-in methods page pass
  * the providers in.
  */
@@ -100,4 +101,24 @@ export function auditProviderOf(
  */
 export function ownerNeedsSecondFactor(role: string, hasSecondFactor: boolean): boolean {
   return role === "owner" && !hasSecondFactor;
+}
+
+/**
+ * Why a proven identity may not sign in (#224), or `null` when it may.
+ * `account` is the account linked to `(issuer, sub)`, `null` when none is.
+ * In order: no linked account (`unknown_identity`: never looked up by
+ * email), a disabled one (`deactivated`), then the owner rule
+ * (`owner_second_factor_required`): an owner without a BunMail second
+ * factor never gets a one-factor session from SSO, whatever made the
+ * link rules not hold.
+ */
+export function ssoSignInRefusal(
+  account: { disabled: boolean; role: string; hasSecondFactor: boolean } | null,
+): SsoSignInRefusal | null {
+  if (account === null) return "unknown_identity";
+  if (account.disabled) return "deactivated";
+  if (ownerNeedsSecondFactor(account.role, account.hasSecondFactor)) {
+    return "owner_second_factor_required";
+  }
+  return null;
 }

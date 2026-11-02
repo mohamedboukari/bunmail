@@ -91,6 +91,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/login/passkey": { access: "public" },
   "POST /dashboard/login/two-factor/passkey/options": { access: "public" },
   "POST /dashboard/login/two-factor/passkey": { access: "public" },
+  /** Starts an SSO sign-in (#224): same-origin and the per-IP limiter, checked in the handler. */
+  "POST /dashboard/login/sso/:provider": { access: "public" },
   /** The SSO callback (#224): authorized by the `bm_sso` flow cookie, and for a link by the live session, checked in the handler. */
   "GET /dashboard/login/sso/:provider/callback": { access: "public" },
   /** The self-hosted stylesheet and script every page loads, login included (#255). */

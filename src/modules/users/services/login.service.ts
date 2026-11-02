@@ -4,7 +4,7 @@ import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { users } from "../models/user.schema.ts";
 import { hasSecondFactor, userCredentials } from "../models/user-credential.schema.ts";
-import type { LoginResult, SessionAssurance } from "../types/user.types.ts";
+import type { LoginResult } from "../types/user.types.ts";
 import { hashPassword, verifyPassword } from "./password.service.ts";
 import { normalizeLoginEmail } from "./session-policy.service.ts";
 
@@ -43,9 +43,10 @@ function getDummyHash(): Promise<string> {
  * The assurance a session gets after the password step: `pending` for an
  * account with a second factor (#220: TOTP; #223: a passkey), whose login
  * route then sends the browser to the second step instead of the
- * dashboard; `password` otherwise. The single place that decision lives.
+ * dashboard; `password` otherwise. The single place that decision lives:
+ * an SSO sign-in (#224) is a first factor too and asks it here.
  */
-function firstFactorAssurance(secondFactor: boolean): SessionAssurance {
+export function firstFactorAssurance(secondFactor: boolean): "pending" | "password" {
   return secondFactor ? "pending" : "password";
 }
 

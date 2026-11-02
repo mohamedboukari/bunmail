@@ -44,8 +44,9 @@ const DEFAULT_DEPS: SsoLinkCallbackDeps = {
  *    When the browser presents a live session, the failure is recorded
  *    against that account (`auth.sso.link_refused`, `flow_failed`, no value
  *    of the flow); without one, only the service's log line remains.
- * 2. The purpose: only a `link` flow is finished here; a sign-in flow is
- *    refused (stage `purpose`) with nothing kept.
+ * 2. The purpose: only a `link` flow is finished here (the route sends
+ *    sign-in flows to `finishSsoSignInCallback`); anything else is refused
+ *    (stage `purpose`) with nothing kept.
  * 3. The browser's live session is read again (`findActiveSession` on its
  *    `bm_session` token, which must be well-formed; the caller passes
  *    `undefined` otherwise).
@@ -89,7 +90,7 @@ export async function finishSsoLinkCallback(
   }
 
   if (result.purpose !== "link" || result.sessionId === null) {
-    logger.warn("SSO callback refused: sign-in flows are not handled", {
+    logger.warn("SSO callback refused: not a link flow", {
       provider: provider.id,
       purpose: result.purpose,
     });

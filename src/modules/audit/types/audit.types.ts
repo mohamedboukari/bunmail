@@ -84,7 +84,34 @@ export type AuditLoginFailureReason =
   | "wrong_code"
   | "passkey_rejected"
   | "unknown_passkey"
-  | "passkey_counter_regressed";
+  | "passkey_counter_regressed"
+  | AuditSsoLoginFailureReason;
+
+/**
+ * Why a sign-in with SSO failed (#224), recorded as the `reason` of
+ * `auth.login.failed` with `step: "sso"`. The flow's own checks
+ * (`SsoFailureReason` in the users module): `discovery_failed`,
+ * `flow_missing`, `flow_invalid`, `flow_expired`, `provider_mismatch`,
+ * `state_mismatch`, `flow_replayed`, `issuer_mismatch`, `provider_error`,
+ * `id_token_invalid`. Then the account (`SsoSignInRefusal`):
+ * `unknown_identity` (no account linked to the identity), `deactivated`
+ * (shared with the other steps) and `owner_second_factor_required` (the
+ * owner has no BunMail second factor: SSO never opens a one-factor
+ * session for the owner).
+ */
+type AuditSsoLoginFailureReason =
+  | "discovery_failed"
+  | "flow_missing"
+  | "flow_invalid"
+  | "flow_expired"
+  | "provider_mismatch"
+  | "state_mismatch"
+  | "flow_replayed"
+  | "issuer_mismatch"
+  | "provider_error"
+  | "id_token_invalid"
+  | "unknown_identity"
+  | "owner_second_factor_required";
 
 /**
  * Why linking an SSO identity was refused (#224), recorded as the `reason`
@@ -114,8 +141,12 @@ export type AuditSsoLinkRefusal =
   | "session_changed"
   | "flow_failed";
 
-/** How a sign-in was completed (`passkey`: WebAuthn, alone or as the second step, #223). */
-type AuditSignInMethod = "password" | "totp" | "recovery_code" | "passkey";
+/**
+ * How a sign-in was completed (`passkey`: WebAuthn, alone or as the second
+ * step, #223; `oauth`: an SSO provider, for an account without a second
+ * factor, #224).
+ */
+type AuditSignInMethod = "password" | "totp" | "recovery_code" | "passkey" | "oauth";
 
 /** The role an account or invitation carries. */
 type AuditRole = "owner" | "admin" | "member";
@@ -125,14 +156,25 @@ type AuditRole = "owner" | "admin" | "member";
  * plain: no field may hold a secret, and none is named like one.
  */
 export interface AuditMetadataByAction {
-  "auth.login.succeeded": { method: AuditSignInMethod; recoveryCodesLeft?: number };
+  "auth.login.succeeded": {
+    method: AuditSignInMethod;
+    recoveryCodesLeft?: number;
+    /** With `method: "oauth"`: the provider's id in `SSO_PROVIDERS` (#224). */
+    provider?: string;
+  };
   "auth.login.failed": {
-    /** `passkey`: a passwordless sign-in with a passkey (#223). */
-    step: "password" | "two_factor" | "passkey";
+    /** `passkey`: a passwordless sign-in with a passkey (#223); `sso`: with an SSO provider (#224). */
+    step: "password" | "two_factor" | "passkey" | "sso";
     reason: AuditLoginFailureReason;
+    /** With `step: "sso"`: the provider's id in `SSO_PROVIDERS` (#224). */
+    provider?: string;
   };
   "auth.login.rate_limited": { retryAfterSec: number };
-  "auth.login.two_factor_required": null;
+  /**
+   * The first factor passed and the second step follows: `password`, or
+   * `oauth` with the provider's id for an SSO sign-in (#224).
+   */
+  "auth.login.two_factor_required": { method: "password" | "oauth"; provider?: string };
   "auth.login.two_factor_locked": null;
   "auth.logout": null;
   "auth.session.revoked": { current: boolean; reason: "user" | "code_budget_spent" };
@@ -154,6 +196,8 @@ export interface AuditMetadataByAction {
     /** Whether the TOTP credential went, and how many passkeys (#223). */
     totp: boolean;
     passkeys: number;
+    /** How many SSO links went with them (#224); recorded even when only links went. */
+    ssoLinks: number;
   };
   "auth.passkey.added": { sessionsRevoked: number };
   "auth.passkey.removed": null;
@@ -212,7 +256,7 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "auth.login.succeeded": "Signed in",
   "auth.login.failed": "Sign-in failed",
   "auth.login.rate_limited": "Sign-in rate limited",
-  "auth.login.two_factor_required": "Password accepted, second factor required",
+  "auth.login.two_factor_required": "First factor accepted, second factor required",
   "auth.login.two_factor_locked": "Sign-in locked: too many invalid codes",
   "auth.logout": "Signed out",
   "auth.session.revoked": "Session revoked",
@@ -223,7 +267,7 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "auth.two_factor.recovery_codes_regenerated": "Recovery codes regenerated",
   "auth.two_factor.removal_refused":
     "Second factor removal refused: the owner has a single sign-on link",
-  "auth.two_factor.removed": "Second factors removed by a reset",
+  "auth.two_factor.removed": "Second factors and single sign-on links removed by a reset",
   "auth.passkey.added": "Passkey added",
   "auth.passkey.removed": "Passkey removed",
   "auth.passkey.counter_regressed":

@@ -17,8 +17,12 @@ import {
 import * as twoFactorService from "../../modules/users/services/two-factor.service.ts";
 import { relyingPartyFrom } from "../../modules/users/services/passkey-policy.service.ts";
 import { LoginTwoFactorPage } from "../routes/login-two-factor.tsx";
-import { readDeviceCookie } from "../session.ts";
-import { clearSession, issueDeviceCookie } from "./session-helpers.ts";
+import { readDeviceCookie, readSessionCookie } from "../session.ts";
+import {
+  clearSession,
+  issueDeviceCookie,
+  revokeOnTokenReuse,
+} from "./session-helpers.ts";
 import { redirect } from "./responses.ts";
 import {
   shouldAlertCodesExhausted,
@@ -26,9 +30,10 @@ import {
 } from "./two-factor-limiter.ts";
 
 /**
- * What the public sign-in routes share (#216, #220, #223): the password
- * login and its TOTP step (`auth.plugin.tsx`) and the passkey sign-ins
- * (`passkeys.plugin.tsx`).
+ * What the public sign-in routes share (#216, #220, #223, #224): the
+ * password login and its TOTP step (`auth.plugin.tsx`), the passkey
+ * sign-ins (`passkeys.plugin.tsx`) and the SSO sign-in
+ * (`sso-login.plugin.tsx`).
  */
 
 /**
@@ -95,8 +100,9 @@ export function userActor(userId: string): AuditActor {
 /**
  * What runs once a sign-in is complete (#281, #282): after the password
  * for an account without a second factor, after the second factor (#220:
- * a code; #223: a passkey) for one with it, and after a passwordless
- * passkey sign-in (#223). The approximate location is looked up and the
+ * a code; #223: a passkey) for one with it, after a passwordless passkey
+ * sign-in (#223), and after an SSO sign-in for an account without a second
+ * factor (#224). The approximate location is looked up and the
  * new-device check runs, both in the background (never awaited: they
  * never delay or fail a login); the browser keeps its `bm_device` cookie
  * when it presents a well-formed one, else it gets a new one (a malformed
@@ -107,7 +113,14 @@ export function userActor(userId: string): AuditActor {
 export function completeSignIn(
   set: Context["set"],
   request: Request,
-  signIn: { userId: string; email: string; sessionId: string; ip: string },
+  signIn: {
+    userId: string;
+    email: string;
+    sessionId: string;
+    ip: string;
+    /** The SSO provider's label when the first factor was single sign-on (#224). */
+    ssoProvider?: string;
+  },
 ): void {
   /** The new-device check waits on it for at most 2 s. */
   const located = sessionLocation.locateSession(signIn.sessionId, sessionIp(signIn.ip));
@@ -124,14 +137,38 @@ export function completeSignIn(
     userAgent: request.headers.get("user-agent"),
     location: located,
     at: new Date(),
+    ...(signIn.ssoProvider === undefined ? {} : { ssoProvider: signIn.ssoProvider }),
   });
   issueDeviceCookie(set, deviceToken);
 }
 
 /**
+ * Replaces the browser's previous session before a sign-in opens a new
+ * one, as the password login does: the session the browser presents is
+ * revoked, so sessions do not stack and a planted cookie cannot survive
+ * the sign-in; a token the session had already rotated away from means a
+ * copy is in other hands, so every session of that user is revoked
+ * (`revokeOnTokenReuse`). Call it only once the sign-in will go ahead,
+ * before the new session exists. Throws on a store error.
+ */
+export async function replacePresentedSession(
+  request: Request,
+  ip: string,
+): Promise<void> {
+  const presented = readSessionCookie(request.headers.get("cookie"));
+  if (!presented || !isWellFormedToken(presented)) return;
+  if (await sessionService.revokeSessionByToken(presented)) return;
+  const superseded = await sessionService.findSessionBySupersededToken(presented);
+  if (superseded) {
+    await revokeOnTokenReuse(superseded, ip, request.headers.get("user-agent"));
+  }
+}
+
+/**
  * Ends a second login step whose budget is spent (#220; a failed passkey
  * counts against the same budget, #223): the pending session is revoked,
- * so a retry needs the password again; the lock is logged and recorded
+ * so a retry needs the first factor (the password, or SSO, #224) again;
+ * the lock is logged and recorded
  * once per pending session; when the account's own budget ran out (the
  * password was right and the second factor kept failing, a likely
  * password compromise) the account is emailed, at most once per window.

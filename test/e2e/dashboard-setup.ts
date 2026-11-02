@@ -350,6 +350,7 @@ export const completeOwnerSetup = mock(
       sessionToken: lastSetupSessionToken,
       twoFactorRemoved: false,
       secondFactorsRemoved: { totp: false, passkeys: 0 },
+      ssoLinksRemoved: [],
     });
   },
 );
@@ -512,6 +513,7 @@ export const completePasswordReset = mock(
       issuedTokensRevoked: 1,
       twoFactorRemoved: false,
       secondFactorsRemoved: { totp: false, passkeys: 0 },
+      ssoLinksRemoved: [],
       sessionId: `ses_${fakeCounter}`,
       sessionToken,
     });
@@ -901,6 +903,9 @@ export function registerDashboardMocks(): void {
   }));
   void mock.module("../../src/modules/users/services/login.service.ts", () => ({
     verifyPasswordLogin,
+    /** SSO sign-in (#224) reads it; the same rule as the real one. */
+    firstFactorAssurance: (secondFactor: boolean): "pending" | "password" =>
+      secondFactor ? "pending" : "password",
   }));
   void mock.module(
     "../../src/modules/users/services/two-factor-alert.service.ts",

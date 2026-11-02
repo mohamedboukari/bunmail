@@ -114,3 +114,16 @@ export function openSsoFlow(value: string, key: Buffer): SsoFlowPayload | null {
   if (sessionId !== undefined) return null;
   return base;
 }
+
+/**
+ * The purpose of a `bm_sso` cookie value, or `null` when there is none or
+ * it does not open: what the callback reads first to tell a sign-in from
+ * a link (#224). Nothing else is checked or trusted here (no expiry, no
+ * provider, no `state`): the flow checks of the chosen half do that.
+ */
+export function ssoFlowPurposeOf(
+  value: string | undefined,
+  key: Buffer = defaultSsoFlowKey(),
+): SsoFlowPurpose | null {
+  return value === undefined ? null : (openSsoFlow(value, key)?.purpose ?? null);
+}

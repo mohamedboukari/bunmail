@@ -6,7 +6,8 @@ import { authPages } from "./plugins/auth.plugin.tsx";
 import { homePages } from "./plugins/home.plugin.tsx";
 import { accountPages } from "./plugins/account.plugin.tsx";
 import { passkeyAccountPages, passkeyLoginPages } from "./plugins/passkeys.plugin.tsx";
-import { ssoAccountPages, ssoLoginPages } from "./plugins/sso.plugin.tsx";
+import { ssoAccountPages } from "./plugins/sso.plugin.tsx";
+import { ssoLoginPages } from "./plugins/sso-login.plugin.tsx";
 import { emailPages } from "./plugins/emails.plugin.tsx";
 import { apiKeyPages } from "./plugins/api-keys.plugin.tsx";
 import { invitationPages } from "./plugins/invitations.plugin.tsx";
@@ -34,7 +35,9 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * - POST /dashboard/login/passkey   → verify the passkey, open an mfa session (public, #223)
  * - POST /dashboard/login/two-factor/passkey/options → second-step passkey options (public, pending session, #223)
  * - POST /dashboard/login/two-factor/passkey → second step with a passkey, mfa session (public, #223)
- * - GET  /dashboard/login/sso/:provider/callback → the SSO provider's answer: finishes a link (public, bm_sso cookie, #224)
+ * - POST /dashboard/login/sso/:provider → start an SSO sign-in: bm_sso cookie, to the provider (public, #224)
+ * - GET  /dashboard/login/sso/:provider/callback → the SSO provider's answer: signs in (`pending` with a second
+ *                                    factor, then the second step) or finishes a link (public, bm_sso cookie, #224)
  * - POST /dashboard/logout          → revoke the session, clear cookie, redirect
  * - GET  /dashboard/setup?token=    → owner setup form (public, #215)
  * - POST /dashboard/setup           → set the owner password, sign in (public, #215)
@@ -96,7 +99,8 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * whose opaque token rides in the `bm_session` cookie and rotates every
  * minute. An account with a second factor (#220: TOTP; #223: a passkey)
  * gets a `pending` session that only the second step opens; a passkey
- * also signs in on its own (passwordless, #223); `REQUIRE_2FA` holds accounts that must
+ * also signs in on its own (passwordless, #223); a linked SSO identity is
+ * a first factor like the password (#224); `REQUIRE_2FA` holds accounts that must
  * enrol on their Two-factor page. The owner setup, invitation accept and password reset routes
  * are authorized by their one-time token.
  *
@@ -145,7 +149,7 @@ export const pagesPlugin = new Elysia({
   /** Passwordless passkey sign-in and the passkey second step (#223). */
   .use(passkeyLoginPages)
 
-  /** The SSO callback (#224): the provider sends the browser back there. */
+  /** The SSO sign-in start and the callback the provider sends the browser back to (#224). */
   .use(ssoLoginPages)
 
   /* ─── Session Guard ─── */

@@ -136,7 +136,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `APP_BASE_URL`: public base URL of this instance (no trailing slash). Used to build the "view in dashboard" link in inbound notification emails (leave unset to omit it), the owner setup link logged on first boot, invitation links (#217), admin-issued password reset links (#277) and, when it is an `https://` URL, the per-recipient one-click unsubscribe link `/u/<token>` in single-recipient mail (#249, see [suppressions.md](suppressions.md#one-click-unsubscribe)): that path must be publicly reachable, unauthenticated, through your reverse proxy. When unset, the setup and reset links fall back to `http://localhost:PORT`, which you can still open through an SSH tunnel; invitation links would too, so without a usable `APP_BASE_URL` BunMail never emails an invitation and shows the link to the inviter instead: set it before inviting anyone. Passkeys (#223) are bound to it: its hostname is the WebAuthn RP ID and its origin the only origin a passkey ceremony may come from, so it must be the exact `https://` address users open the dashboard on; unset (or plain `http://` other than `localhost`) turns passkeys off, and changing the hostname later orphans every registered passkey.
 
-> `SSO_PROVIDERS` and `SSO_<ID>_*` (#224, **in progress**: accounts can link a provider identity on Account > Sign-in methods, but nothing signs in with SSO yet): OpenID Connect providers, unset by default (SSO off). `SSO_PROVIDERS` lists ids (lowercase letters, digits and `-`, 1 to 32 each, comma-separated); per id (upper-cased, `-` as `_`): `SSO_<ID>_ISSUER` (required, the exact issuer URL, `https://`, plain `http://` only on a loopback host), `SSO_<ID>_CLIENT_ID` and `SSO_<ID>_CLIENT_SECRET` (required; the secret is never logged), `SSO_<ID>_LABEL` (default: the id), `SSO_<ID>_SCOPES` (default `openid email profile`, must include `openid`), `SSO_<ID>_ALLOWED_DOMAINS` (optional) and `SSO_<ID>_AUTO_LINK` (default `false`; `true` needs allowed domains). Any malformed value refuses to boot. SSO also needs an `https://` `APP_BASE_URL` (plain `http://` only for localhost): otherwise it stays off with one boot warning. The redirect URI to register at the provider is `<APP_BASE_URL>/dashboard/login/sso/<id>/callback`. BunMail fetches the provider's discovery document itself, without the SSRF guard (a private Keycloak on your LAN works). See [docs/users.md](users.md#single-sign-on-224).
+> `SSO_PROVIDERS` and `SSO_<ID>_*` (#224): OpenID Connect providers for single sign-on (an account links its identity on Account > Sign-in methods, then signs in with "Sign in with `<label>`"; see [Single sign-on](#single-sign-on-224) below), unset by default (SSO off). `SSO_PROVIDERS` lists ids (lowercase letters, digits and `-`, 1 to 32 each, comma-separated); per id (upper-cased, `-` as `_`): `SSO_<ID>_ISSUER` (required, the exact issuer URL, `https://`, plain `http://` only on a loopback host), `SSO_<ID>_CLIENT_ID` and `SSO_<ID>_CLIENT_SECRET` (required; the secret is never logged), `SSO_<ID>_LABEL` (default: the id), `SSO_<ID>_SCOPES` (default `openid email profile`, must include `openid`), `SSO_<ID>_ALLOWED_DOMAINS` (optional) and `SSO_<ID>_AUTO_LINK` (default `false`; `true` needs allowed domains, and is not implemented yet: it links nothing and logs one boot warning per provider). Any malformed value refuses to boot. SSO also needs an `https://` `APP_BASE_URL` (plain `http://` only for localhost): otherwise it stays off with one boot warning. The redirect URI to register at the provider is `<APP_BASE_URL>/dashboard/login/sso/<id>/callback`. BunMail fetches the provider's discovery document itself, without the SSRF guard (a private Keycloak on your LAN works). See [docs/users.md](users.md#single-sign-on-224).
 
 > `SYSTEM_MAIL_FROM` / `INVITE_EXPIRY_DAYS`: dashboard invitations (#217). Admins and the owner invite teammates from the dashboard (**Invite teammates** on the home page). When `SYSTEM_MAIL_FROM` is set to an address on a domain you registered in BunMail and whose DKIM record is verified, BunMail emails the accept link from it, signed with that domain's key. When it is unset, or the domain is missing or unverified, or the send fails, the invitation is still created and the inviter sees the link once on the Invitations page to send by hand (share it privately: anyone with it can create the account). A malformed `SYSTEM_MAIL_FROM` refuses to boot. `INVITE_EXPIRY_DAYS` (default `7`, a whole number from `1` to `90`, anything else refuses to boot) sets how long a link stays valid. See [docs/dashboard.md](dashboard.md#invitations-217). The same sender also sends **new-device sign-in alerts** (#282): when an account signs in with its password from a browser it has not used in the last 30 days, it gets "New sign-in to your BunMail account" (browser and OS, IP, approximate location, time, and what to do; no links). Without a usable `SYSTEM_MAIL_FROM` no alert is sent and the sign-in is only logged (`New-device sign-in`). See [docs/dashboard.md](dashboard.md#new-device-alerts-282).
 
@@ -357,11 +357,59 @@ Every account can turn on two-factor authentication at **Two-factor** (Account g
 
 `REQUIRE_2FA` makes it mandatory: `owner` for the owner, `admin` for admins and the owner (default `none`). An account it covers without 2FA is sent to its Two-factor page on every request until it enrols, so nobody is locked out, but enable 2FA on those accounts first if you want a smooth switch. Anything but `none`, `owner` or `admin` refuses to start.
 
-Turning it on asks for the current password. With `SYSTEM_MAIL_FROM` set, the account gets an email (no links) when 2FA is turned on or off, its recovery codes are replaced, a reset removes it, or someone enters the right password and then keeps entering wrong codes (change the password if that was not you).
+Turning it on asks for the current password. With `SYSTEM_MAIL_FROM` set, the account gets an email (no links) when 2FA is turned on or off, its recovery codes are replaced, a reset removes it, or someone passes the first step (the right password, or a linked single sign-on account) and then keeps entering wrong codes (change the password, or secure the provider account, if that was not you).
 
-**Lost phone.** Sign in with a recovery code (each works once). Without one: an admin or the owner issues a **Reset password** link on the Users page; completing it sets a new password and removes the account's 2FA (enrol again afterwards). For the owner, run `docker compose exec app bun run src/db/reset-owner.ts` and complete the printed link: that removes the owner's 2FA too. Shell access is the trust boundary of that path.
+**Lost phone.** Sign in with a recovery code (each works once). Without one: an admin or the owner issues a **Reset password** link on the Users page; completing it sets a new password and removes the account's 2FA and its single sign-on links (enrol and link again afterwards). For the owner, run `docker compose exec app bun run src/db/reset-owner.ts` and complete the printed link: that removes the owner's 2FA too. Shell access is the trust boundary of that path.
 
 The TOTP secrets are stored encrypted with `DKIM_ENCRYPTION_KEY` (like DKIM keys and webhook secrets). If you rotate that key without re-encrypting, existing authenticator codes stop working (recovery codes still do; reset to re-enrol).
+
+### Single sign-on (#224)
+
+Accounts can sign in through your organization's OpenID Connect provider (Google Workspace, Keycloak, Authentik, Okta, Zitadel, GitLab, Microsoft Entra single-tenant). It is an extra way in, never a way to create accounts: dashboard accounts stay invite-only, and an identity at the provider opens only the BunMail account it was **linked** to. The password keeps working.
+
+**Requirements.** An `https://` `APP_BASE_URL` (SSO stays off with one boot warning otherwise; plain `http://` only on `localhost`). At the provider: a confidential web client using the authorization code flow, a client secret sent with HTTP Basic (`client_secret_basic`), PKCE with `S256`, and ID tokens signed with a public key (RS256, ES256 and the like; `HS256` is refused). BunMail fetches `<issuer>/.well-known/openid-configuration` itself (a private Keycloak on your LAN works: the SSRF guard is deliberately not applied to the issuer you configure).
+
+**Set up a provider.**
+
+1. Pick an id (lowercase letters, digits and `-`), for example `google` or `corp`, and register this **redirect URI** at the provider, exactly: `${APP_BASE_URL}/dashboard/login/sso/<id>/callback` (for example `https://mail.example.com/dashboard/login/sso/google/callback`). One URI per provider.
+2. Put the issuer, client id and secret in `.env` (the id `my-idp` reads `SSO_MY_IDP_*`) and restart. Any malformed value refuses to boot, naming the variable; the secret is never logged.
+3. Each user signs in once with their password, opens **Account > Sign-in methods**, clicks **Link** next to the provider (the current password is asked), and signs in at the provider. From then on the login page's **Sign in with `<label>`** button signs them in.
+
+**Google Workspace / Google Cloud.** In the Google Cloud console: *APIs & Services > OAuth consent screen*, user type **Internal** (only accounts of your Workspace organization can sign in; a consumer Google account cannot), then *Credentials > Create credentials > OAuth client ID*, application type **Web application**, and add the redirect URI above under *Authorized redirect URIs*.
+
+```env
+SSO_PROVIDERS=google
+SSO_GOOGLE_ISSUER=https://accounts.google.com
+SSO_GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
+SSO_GOOGLE_CLIENT_SECRET=GOCSPX-...
+SSO_GOOGLE_LABEL=Google
+```
+
+The issuer is exactly `https://accounts.google.com`, without a trailing slash. With a consumer (External) consent screen any Google account could reach the callback, but it still opens nothing unless an account linked it.
+
+**Keycloak** (Authentik, Zitadel and other generic providers work the same way). In the realm: *Clients > Create client*, type **OpenID Connect**; turn **Client authentication** on (a confidential client) with only the **Standard flow**; set **Valid redirect URIs** to the redirect URI above (exactly, no wildcard); under *Advanced*, set the PKCE code challenge method to **S256**; copy the secret from the *Credentials* tab (authenticator "Client Id and Secret").
+
+```env
+SSO_PROVIDERS=corp
+SSO_CORP_ISSUER=https://idp.example.com/realms/corp
+SSO_CORP_CLIENT_ID=bunmail
+SSO_CORP_CLIENT_SECRET=...
+SSO_CORP_LABEL=Corporate SSO
+```
+
+For any other provider, the issuer is the `issuer` value of its discovery document, byte for byte (mind a trailing slash). Several providers: `SSO_PROVIDERS=google,corp` and one block each.
+
+**What to expect.**
+
+- **BunMail's own second factor still applies.** An account with TOTP or a passkey is asked for it after the provider, exactly as after the password; a provider's own MFA does not replace it. `REQUIRE_2FA` is unchanged.
+- **The owner** can link an SSO account only while it has a BunMail second factor, and an owner without one is refused at sign-in: a takeover at the provider (or by its administrator) never becomes a one-factor way into the owner account.
+- **Disabling someone at the provider is not enough.** BunMail has no SCIM or back-channel logout: their open BunMail sessions last until they expire (24 hours idle, 7 days at most) and their password still works. Deactivate the account in BunMail (**Users**) too; that signs it out at once.
+- **Signing out is local.** **Log out** ends the BunMail session only; the provider session lives on, so on a shared computer the next **Sign in with** is one click at the provider. Sign out of the provider too on shared machines.
+- **Unlinking** (Account > Sign-in methods, the password asked) signs out every session that identity opened. A completed password reset link or `reset-owner` link removes every link of the account too (with its 2FA), so an identity linked by someone who had access does not survive a reset; the security email lists what was removed.
+- **`SSO_<ID>_AUTO_LINK=true` does nothing yet** (linking by verified email comes later): BunMail logs one warning per provider at boot, and identities must be linked under Account > Sign-in methods.
+- Sign-ins with SSO count against the login rate limit like passwords (a failed one costs an attempt, a successful one gives it back) and appear in the **Audit log**. Each address may also start at most 20 sign-ins per 15 minutes. A callback request that another site embeds (an image, a frame) or that carries no sign-in in progress is refused without counting, so no site can lock your users out.
+- **Several replicas, or a lot of traffic:** without `REDIS_URL`, each replica keeps the "already used" sign-in states in memory, at most 10 000 at a time (beyond that new sign-ins fail until older ones expire, within about 11 minutes). With `REDIS_URL` they are kept in Redis, shared by every replica, with no such cap.
+- A new-device alert for an SSO sign-in names the provider; if you get one you do not recognise, remove unknown links under Account > Sign-in methods.
 
 ### Approximate session locations (GeoIP, #281)
 

@@ -1,15 +1,8 @@
-import { t, type Context } from "elysia";
+import { t } from "elysia";
 import { config, type SsoProviderSettings } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
-import {
-  refundLoginAttempt,
-  shouldAuditLockout,
-  takeLoginAttempt,
-} from "../../middleware/login-rate-limit.ts";
-import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import type {
   AuthorizeSsoLinkResult,
-  SsoLinkRefusal,
   UnlinkSsoIdentityResult,
 } from "../../modules/users/types/sso.types.ts";
 import {
@@ -17,7 +10,6 @@ import {
   listSsoLinks,
   unlinkSsoIdentity,
 } from "../../modules/users/services/sso-link.service.ts";
-import { finishSsoLinkCallback } from "../../modules/users/services/sso-link-flow.service.ts";
 import {
   auditProviderOf,
   providerOfLink,
@@ -28,67 +20,32 @@ import { startSsoFlow } from "../../modules/users/services/sso.service.ts";
 import { secondFactorsOf } from "../../modules/users/services/two-factor.service.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 import { sessionIp } from "../../modules/users/services/session-policy.service.ts";
-import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
 import {
   AccountSsoPage,
   type SsoMethodRow,
   type SsoPageNotice,
 } from "../routes/account-sso.tsx";
 import { memberGuard } from "../guards.tsx";
-import { readSessionCookie, readSsoFlowCookie } from "../session.ts";
-import {
-  SESSION_STORE_DOWN,
-  clearSsoFlow,
-  issueSsoFlowCookie,
-} from "../lib/session-helpers.ts";
+import { issueSsoFlowCookie } from "../lib/session-helpers.ts";
 import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
-import type { GuardedDashboard, PublicDashboard } from "../lib/session-guard.ts";
-import { UNKNOWN_ACCOUNT, requestIp, setAuthPageHeaders } from "../lib/sign-in.tsx";
-import type { WindowTicket } from "../../utils/shared-store.ts";
+import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { requestIp } from "../lib/sign-in.tsx";
+import { LINK_REFUSAL, providerById, toSsoPage } from "../lib/sso.ts";
 
 /**
- * Single sign-on (OpenID Connect, #224) in the dashboard: linking an
- * identity at a configured provider to the signed-in account, and
- * unlinking it.
- *
- * - Account > Sign-in methods (`/dashboard/account/sso`, after the session
- *   guard, `memberGuard`): the page, the Link form (the current password,
- *   then the browser goes to the provider) and the Unlink form.
- * - The callback (`/dashboard/login/sso/:provider/callback`, public,
- *   before the guard: the provider sends the browser back there) finishes
- *   a link. Signing in with a provider is not handled yet: a sign-in flow
- *   reaching the callback is refused.
+ * Single sign-on (OpenID Connect, #224) on Account > Sign-in methods
+ * (`/dashboard/account/sso`, after the session guard, `memberGuard`): the
+ * page, the Link form (the current password, then the browser goes to the
+ * provider) and the Unlink form. The provider sends the browser back to
+ * the public callback (`sso-login.plugin.tsx`), which finishes the link.
  *
  * Redirects are fixed: the provider's authorization URL (from its
- * discovery document), the Sign-in methods page and the login page. No
- * return parameter is read.
+ * discovery document) and the Sign-in methods page. No return parameter
+ * is read.
  */
-
-/** The Sign-in methods page. */
-const SSO_PAGE = "/dashboard/account/sso";
-
-/** Where a callback without a session lands: the login page's generic SSO message. */
-const LOGIN_FAILED = "/dashboard/login?error=sso";
-
-/** What the page says when the provider round trip failed: one message for every reason. */
-const FLOW_FAILED =
-  "Linking did not complete: the provider's answer was not accepted. Try again.";
-
-/** What the page says for a refused link. */
-const LINK_REFUSAL: Record<SsoLinkRefusal | "rate_limited", string> = {
-  rate_limited: "Too many attempts. Try again later.",
-  wrong_password: "Current password is incorrect.",
-  second_factor_required:
-    "As the owner, you need a second factor before you can link a single sign-on account.",
-  provider_already_linked: "Your account already has an account linked at that provider.",
-  already_linked:
-    "That account at the provider is already linked to another BunMail account.",
-  session_changed:
-    "Your session changed while you were at the provider. Sign in and try again.",
-};
 
 /** What the page says for a refused unlink. */
 const UNLINK_REFUSAL: Record<
@@ -100,11 +57,6 @@ const UNLINK_REFUSAL: Record<
   wrong_password: "Current password is incorrect.",
 };
 
-/** The configured provider with this id, or `null`. */
-function providerById(id: string): SsoProviderSettings | null {
-  return config.sso.providers.find((provider) => provider.id === id) ?? null;
-}
-
 /** A provider as the link service keys, records and labels it. */
 function linkProviderOf(provider: SsoProviderSettings): {
   key: string;
@@ -112,154 +64,6 @@ function linkProviderOf(provider: SsoProviderSettings): {
   label: string;
 } {
   return { key: ssoProviderKey(provider.issuer), id: provider.id, label: provider.label };
-}
-
-/** Redirects to the Sign-in methods page with a flash banner. */
-function toSsoPage(
-  set: Context["set"],
-  message: string,
-  type: "success" | "error",
-): string {
-  return redirect(
-    set,
-    `${SSO_PAGE}?flash=${encodeURIComponent(message)}&flashType=${type}`,
-  );
-}
-
-/**
- * The SSO callback (#224). Public: the provider sends the browser here,
- * and it reads the browser's session itself for a link.
- */
-export function ssoLoginPages(app: PublicDashboard) {
-  return app.get(
-    "/login/sso/:provider/callback",
-    /**
-     * GET /dashboard/login/sso/:provider/callback?code&state[&iss]
-     * Finishes a link flow. In order:
-     *
-     * 1. Auth-page headers (`no-store`, no framing), with
-     *    `Referrer-Policy: no-referrer`: the URL carries the one-time code,
-     *    and this answer is a redirect, never a form.
-     * 2. The per-IP login limiter (`DASHBOARD_LOGIN_RATE_LIMIT_*`), counted
-     *    before anything else; over budget: refused, nothing called.
-     * 3. The `bm_sso` cookie is read; it is cleared on every answer, this
-     *    refusal included. The path's provider must be configured and SSO
-     *    on.
-     * 4. `finishSsoLinkCallback`: the flow cookie (this provider's,
-     *    unexpired), `state` in constant time and consumed once, the
-     *    RFC 9207 `iss`, only then the code exchange, every ID token check,
-     *    a `link` purpose (a sign-in flow is refused), the browser's live
-     *    session (the same session that started the link, so the same
-     *    user), then the link (owner rule, one per provider, one account
-     *    per identity).
-     *
-     * Success: the attempt is given back to the limiter, the account is
-     * emailed (no links in it), and the browser goes to the Sign-in methods
-     * page. Any failure: the Sign-in methods page with a message when the
-     * browser presents a session cookie, else the login page's generic
-     * message. Never logs the code, a token, the ID token or the subject.
-     */
-    async ({ params, request, set, server }) => {
-      setAuthPageHeaders(set);
-      set.headers["referrer-policy"] = "no-referrer";
-      const ip = requestIp(request, server?.requestIP(request)?.address);
-      const client = { ip, userAgent: request.headers.get("user-agent") };
-      const cookieHeader = request.headers.get("cookie");
-      /** Every answer clears the flow cookie: a flow gets one callback. */
-      clearSsoFlow(set);
-      const presented = readSessionCookie(cookieHeader);
-      const sessionToken =
-        presented !== undefined && isWellFormedToken(presented) ? presented : undefined;
-      const fail = (message: string): string =>
-        sessionToken === undefined
-          ? redirect(set, LOGIN_FAILED)
-          : toSsoPage(set, message, "error");
-
-      const { loginRateLimit } = config.dashboard;
-      /** The take's window ids, so a success refunds only into that window. */
-      let attemptTicket: WindowTicket = new Map();
-      if (loginRateLimit.enabled) {
-        const { limited, retryAfterSec, ticket } = await takeLoginAttempt(
-          [ip],
-          loginRateLimit.maxAttempts,
-          loginRateLimit.windowSec * 1000,
-        );
-        if (limited) {
-          logger.warn("SSO callback blocked: too many attempts", { ip, retryAfterSec });
-          if (await shouldAuditLockout(ip)) {
-            await recordAuditEvent({
-              action: "auth.login.rate_limited",
-              outcome: "failure",
-              actor: UNKNOWN_ACCOUNT,
-              ...client,
-              metadata: { retryAfterSec },
-            });
-          }
-          return fail(LINK_REFUSAL.rate_limited);
-        }
-        attemptTicket = ticket;
-      }
-
-      const flowCookie = readSsoFlowCookie(cookieHeader);
-      const provider = providerById(params.provider);
-      const baseUrl = config.sso.baseUrl;
-      if (provider === null || baseUrl === null) {
-        logger.warn("SSO callback refused: provider not configured or SSO off", {
-          ip,
-          ssoOn: baseUrl !== null,
-        });
-        return fail(FLOW_FAILED);
-      }
-
-      try {
-        const outcome = await finishSsoLinkCallback({
-          provider,
-          baseUrl,
-          flowCookie,
-          params: new URL(request.url).searchParams,
-          sessionToken,
-          client,
-        });
-        if (!outcome.ok) {
-          if (outcome.stage === "purpose") return redirect(set, LOGIN_FAILED);
-          if (outcome.stage === "flow") return fail(FLOW_FAILED);
-          logger.warn("SSO link refused", {
-            provider: provider.id,
-            reason: outcome.reason,
-            ...(outcome.userId === null ? {} : { userId: outcome.userId }),
-            ip,
-          });
-          return fail(LINK_REFUSAL[outcome.reason]);
-        }
-
-        if (loginRateLimit.enabled) await refundLoginAttempt(ip, attemptTicket);
-        logger.warn("SSO identity linked", {
-          userId: outcome.userId,
-          sessionId: outcome.sessionId,
-          linkId: outcome.linkId,
-          provider: provider.id,
-          ip,
-        });
-        void sendTwoFactorAlert({
-          event: "sso_linked",
-          userId: outcome.userId,
-          email: outcome.email,
-          ip: sessionIp(ip),
-          sso: { provider: provider.label, account: outcome.name },
-        });
-        return toSsoPage(set, `${provider.label} linked.`, "success");
-      } catch (error: unknown) {
-        logger.error("SSO callback failed: store error", {
-          provider: provider.id,
-          ip,
-          error: errorMessage(error),
-        });
-        set.status = 503;
-        return SESSION_STORE_DOWN;
-      }
-    },
-    { params: t.Object({ provider: t.String({ maxLength: 64 }) }) },
-  );
 }
 
 /* ─── Account: the Sign-in methods page ─── */
