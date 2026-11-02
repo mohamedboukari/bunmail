@@ -225,6 +225,8 @@ Every webhook delivery carries three headers:
 | `X-BunMail-Timestamp` | Unix-seconds timestamp the signature was computed at (one signed block per delivery attempt, see [Replay protection](#replay-protection)) |
 | `X-BunMail-Event` | The event type (e.g. `email.sent`): for routing only, not authenticated |
 
+With tracing on ([tracing.md](tracing.md), #363), a delivery also carries a W3C `traceparent` header naming its `webhook.deliver` span, so a traced receiver continues the trace. It is not signed: use it for correlation only.
+
 To verify a delivery, recompute the HMAC over `<header-timestamp>.<raw-body>` and compare against the `X-BunMail-Signature` header in constant time. **Use the raw request body**: JSON re-serialization changes whitespace and breaks the signature.
 
 After verifying the signature, **also check the timestamp is fresh** (within ±5 minutes by default). Without that check, an attacker who captures one valid delivery can replay it indefinitely.
@@ -394,7 +396,7 @@ As of #30, webhook delivery is **persisted, not in-memory**. Every dispatch writ
 | **Crash recovery** | Claim advances `next_attempt_at` by 30s during the in-flight attempt and counts the attempt up front; if the worker crashes, the row becomes claimable again automatically, and a row whose attempts keep crashing ends at `failed` once the limit is exceeded instead of being retried forever |
 | **Response reading** | The body is never decompressed (`decompress: false`) and at most 8 KB is read (streamed, then cancelled) to build the 2 KB preview, so a huge or compressed response can't exhaust memory. A receiver that compresses anyway gets a placeholder preview such as `[gzip-encoded response body not shown]` |
 | **Connection** | Sent to the address the SSRF guard validated for this attempt (see [URL requirements](#url-requirements--ssrf-guard-128)), one fresh connection per attempt; `Host`, SNI and the certificate check use the configured host name |
-| **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity` |
+| **Headers** | `Host` (the configured host), `Content-Type: application/json`, `X-BunMail-Signature`, `X-BunMail-Timestamp`, `X-BunMail-Event`, `Accept-Encoding: identity`, and `traceparent` when tracing is on (#363) |
 | **Signing** | Re-computed per attempt with a fresh timestamp so a retry an hour later still passes the consumer's freshness window |
 
 ### Delivery row lifecycle

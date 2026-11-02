@@ -147,6 +147,8 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
           secret: row.secret,
           body: row.payload,
           event: row.event,
+          deliveryId: row.id,
+          attempt: row.attempts + 1,
         });
         try {
           await recordAttempt({
