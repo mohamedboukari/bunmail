@@ -176,8 +176,8 @@ async function deliverToMxHosts(
  */
 function admitFor(budget: RateBudget | null): MxAdmit | undefined {
   if (budget === null) return undefined;
-  return (bucket, count) => {
-    const grant = budget.take(bucket, count);
+  return async (bucket, count) => {
+    const grant = await budget.take(bucket, count);
     if (grant.granted < count && budget.shouldLog(bucket)) {
       logger.info("MX rate budget reached: deferring", {
         bucket,

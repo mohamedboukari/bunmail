@@ -494,6 +494,35 @@ describe("deliverWithFailover: buckets and rate budget", () => {
     ]);
   });
 
+  test("a shared (asynchronous) budget defers the same way (#391)", async () => {
+    const sessions: string[][] = [];
+    const { admit } = stubBudget({ google: 1 }, 42_000);
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org"],
+      transactions: [transaction("t0"), transaction("t1")],
+      allowPrivate: false,
+      runSession: async ({ transactions }) => {
+        sessions.push(transactions.map((t) => t.key));
+        return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+      },
+      lock: recordingLock([]),
+      bucketOf: () => "google",
+      admit: async (bucket, count) => {
+        await Bun.sleep(1);
+        return admit(bucket, count);
+      },
+      routeDeps: stubDeps(),
+    });
+    expect(sessions).toEqual([["t0"]]);
+    expect(outcomes[1]).toEqual({
+      key: "t1",
+      tls: null,
+      mxHost: "mx1.example.org",
+      deferredMs: 42_000,
+    });
+  });
+
   test("no budget left at all: no session is opened", async () => {
     let connected = false;
     const outcomes = await deliverWithFailover({

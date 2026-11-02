@@ -12,6 +12,7 @@ import {
   useSharedBackend,
   type SharedStoreBackend,
 } from "../../src/utils/shared-store.ts";
+import { MemoryTokenBuckets } from "../../src/utils/shared-tokens.ts";
 import { connectRedisBackend } from "../../src/utils/redis-store.ts";
 import {
   _resetLocks,
@@ -87,6 +88,7 @@ describe("the shared facade", () => {
       renew: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
       release: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
     }),
+    tokens: () => new MemoryTokenBuckets(),
     close: () => {},
   };
 
@@ -99,6 +101,7 @@ describe("the shared facade", () => {
         counter: () => new MemoryWindowCounter(),
         oneTime: () => new MemoryOneTimeStore(10),
         slots: () => slots,
+        tokens: () => new MemoryTokenBuckets(),
         close: () => {},
       },
     };
@@ -205,6 +208,7 @@ describe("withMxLock with a shared store", () => {
       counter: () => new MemoryWindowCounter(),
       oneTime: () => new MemoryOneTimeStore(10),
       slots: () => slots,
+      tokens: () => new MemoryTokenBuckets(),
       close: () => {},
     });
     return slots;
@@ -326,6 +330,7 @@ describe("withMxLock with a shared store", () => {
           release: () =>
             Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
         }),
+        tokens: () => new MemoryTokenBuckets(),
         close: () => {},
       });
       const events: string[] = [];

@@ -15,6 +15,7 @@ import {
   type WindowCounter,
 } from "../../src/utils/shared-store.ts";
 import { MemorySlotSemaphore } from "../../src/utils/shared-slots.ts";
+import { MemoryTokenBuckets } from "../../src/utils/shared-tokens.ts";
 import { connectRedisBackend, describeRedisUrl } from "../../src/utils/redis-store.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -546,6 +547,7 @@ describe("backend selection and outage behaviour", () => {
       renew: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
       release: () => Promise.reject(new SharedStoreError("REDIS_UNAVAILABLE", "down")),
     }),
+    tokens: () => new MemoryTokenBuckets(),
     close: () => {},
   };
 
@@ -573,6 +575,7 @@ describe("backend selection and outage behaviour", () => {
         counter: () => counter,
         oneTime: () => new MemoryOneTimeStore(10),
         slots: () => new MemorySlotSemaphore(),
+        tokens: () => new MemoryTokenBuckets(),
         close: () => {},
       },
     };
