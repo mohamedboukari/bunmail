@@ -80,7 +80,8 @@ bunmail/
 ├── drizzle/                              ← Generated migrations
 ├── src/
 │   ├── index.ts                          ← Elysia app entry point
-│   ├── config.ts                         ← Env config with validation
+│   ├── config.ts                         ← Assembles `config` from config/ and re-exports its readers
+│   ├── config/                           ← Env readers with validation and the `config` section builders, one file per area (env, app, mail, auth, sso, smtp, retention, observability, storage)
 │   ├── db/
 │   │   ├── index.ts                      ← Drizzle DB connection
 │   │   ├── schema.ts                     ← Re-exports all model schemas

@@ -66,6 +66,8 @@ Webhooks fired on delivery/bounce
 - Prefer editing existing files over creating new ones.
 - Follow existing patterns in the codebase. Match the style of surrounding code.
 - Keep changes minimal and focused. Don't refactor unrelated code.
+- Put a new configuration reader in its area file under `src/config/` (shared parsers in `src/config/env.ts`), and a new object section of `config` in a `build<Section>Config()` builder there; `src/config.ts` only assembles the `config` object and re-exports.
+- Split a source file by concern when it approaches ~600 lines, rather than growing it.
 
 ### Module Layout
 
@@ -80,7 +82,7 @@ src/modules/<feature>/
   └── types/                  ← Shared types for this module only
 ```
 
-- Never introduce new top-level folders under `src/` except: `modules/`, `db/`, `pages/`, `middleware/`, `utils/`.
+- Never introduce new top-level folders under `src/` except: `modules/`, `db/`, `pages/`, `middleware/`, `utils/`, `config/`.
 
 ### Elysia Specifics
 
