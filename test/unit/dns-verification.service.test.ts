@@ -1,11 +1,12 @@
-import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from "bun:test";
 import type { VerificationDeps } from "../../src/modules/domains/services/dns-verification.service.ts";
 import type { SpfDnsResolver } from "../../src/modules/domains/types/spf.types.ts";
 
 /**
  * Unit tests for the DNS verification service.
  *
- * Mocks `dns/promises.resolveTxt` to feed synthetic TXT records and
+ * Feeds synthetic TXT records through the domains module's DNS seam
+ * (`setDomainDnsDeps`), which the default verification deps use, and
  * mocks the `db` import so the persistence step writes to a recorded
  * spy instead of Postgres. Verifies SPF / DKIM / DMARC parsing rules
  * including the multi-record DKIM concatenation case.
@@ -22,14 +23,11 @@ const realDns = await import("dns/promises");
  * under the stubs), so this mock leaking into a later file cannot leave
  * its `resolveMx`, `lookup` or `resolve4` undefined. `resolveMx` and
  * `lookup` are stubbed too, so a leak never reaches the real resolver.
+ * TXT is not stubbed here: no code reads it from `dns/promises` any more
+ * (`utils/dns-txt.ts`), and these tests feed it through `setDomainDnsDeps`.
  */
 void mock.module("dns/promises", () => ({
   ...realDns,
-  resolveTxt: mock(async (hostname: string) => {
-    if (hostname in txtRecords) return txtRecords[hostname];
-    const err = Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
-    throw err;
-  }),
   resolveMx: mock(async () => []),
   resolve4: mock(async () => []),
   resolve6: mock(async () => []),
@@ -72,6 +70,23 @@ void mock.module("../../src/db/index.ts", () => ({
 const { verifyDomain } =
   await import("../../src/modules/domains/services/dns-verification.service.ts");
 const { checkHost } = await import("../../src/modules/domains/services/spf-evaluator.ts");
+const { setDomainDnsDeps } =
+  await import("../../src/modules/domains/services/domain-dns-status.service.ts");
+
+/** TXT lookups of the default deps answer from `txtRecords`; unknown names are NXDOMAIN. */
+beforeAll(() => {
+  setDomainDnsDeps({
+    resolveTxt: async (hostname) => {
+      const records = txtRecords[hostname];
+      if (records !== undefined) return records;
+      throw Object.assign(new Error(`ENOTFOUND ${hostname}`), { code: "ENOTFOUND" });
+    },
+  });
+});
+
+afterAll(() => {
+  setDomainDnsDeps(null);
+});
 
 const baseDomain = {
   id: "dom_test",

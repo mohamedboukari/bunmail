@@ -1,6 +1,7 @@
 /**
  * DKIM signature verification (RFC 6376) for inbound mail (#373), on
- * `node:crypto` and `dns/promises`: rsa-sha256 with keys of 1024 bits or
+ * `node:crypto` and our TXT lookup (`utils/dns-txt.ts`, which keeps a
+ * multi-string key record whole where Bun's `resolveTxt` splits it): rsa-sha256 with keys of 1024 bits or
  * more and ed25519-sha256 (RFC 8463). rsa-sha1 is not accepted (RFC 8301).
  * Used for the DKIM verdict on feedback-loop reports, which is logged only.
  *
@@ -27,8 +28,8 @@
  */
 
 import { createHash, createPublicKey, verify, type KeyObject } from "crypto";
-import { resolveTxt } from "dns/promises";
 import { domainToASCII } from "url";
+import { resolveTxtRecords } from "../../../utils/dns-txt.ts";
 import { logger } from "../../../utils/logger.ts";
 
 /** The verdict on one signature (RFC 8601 section 2.7.1, without `none`). */
@@ -50,7 +51,7 @@ export interface DkimSignatureResult {
 
 /** Injectable for tests: the TXT lookup and the clock. */
 export interface DkimVerifyDeps {
-  /** `resolveTxt` of `dns/promises`: one entry per record, each a list of strings. */
+  /** A TXT lookup shaped like `dns/promises.resolveTxt`: one entry per record, each a list of strings. */
   resolveTxt?: (name: string) => Promise<string[][]>;
   now?: () => number;
 }
@@ -582,7 +583,7 @@ export async function verifyDkimSignatures(
   message: Uint8Array,
   deps: DkimVerifyDeps = {},
 ): Promise<DkimSignatureResult[]> {
-  const resolve = deps.resolveTxt ?? resolveTxt;
+  const resolve = deps.resolveTxt ?? resolveTxtRecords;
   const now = deps.now ?? Date.now;
   const { fields, body } = splitMessage(message);
 

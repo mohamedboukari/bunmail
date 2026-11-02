@@ -178,6 +178,20 @@ const { startTracing, stopTracing, withSpan } =
 const { logger } = await import("../../src/utils/logger.ts");
 const { parseReturnPath, recipientOrder, returnPathMacMatches } =
   await import("../../src/modules/bounces/services/return-path.ts");
+const { setMtaStsDeps } = await import("../../src/modules/emails/services/mta-sts.ts");
+
+/**
+ * No MTA-STS policy anywhere: the TXT lookup goes through
+ * `utils/dns-txt.ts`, not `dns/promises`, so the mock above does not
+ * reach it; the MTA-STS seam does.
+ */
+beforeAll(() => {
+  setMtaStsDeps({ resolveTxt: async () => [] });
+});
+
+afterAll(() => {
+  setMtaStsDeps(null);
+});
 
 /** Canonical Message-ID used across tests. Mirrors the queue's
  *  responsibility of generating + passing it on every call (#97). */

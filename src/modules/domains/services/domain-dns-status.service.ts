@@ -1,5 +1,6 @@
-import { resolveMx, resolveTxt } from "dns/promises";
+import { resolveMx } from "dns/promises";
 import { config } from "../../../config.ts";
+import { resolveTxtRecords } from "../../../utils/dns-txt.ts";
 import {
   MX_ANSWER_TTL_MS,
   MX_ERROR_TTL_MS,
@@ -15,9 +16,10 @@ import { checkDmarc } from "./dmarc-check.service.ts";
  * page (#250): its DMARC check and its MX status. Informational only,
  * nothing gates on it.
  *
- * Lookups follow the return-path MX conventions (#236): `dns/promises`, a
- * 5 second timeout per lookup, answers cached in memory for an hour and
- * errors for five minutes, at most 10,000 domains. The MX answer shares the
+ * Lookups follow the return-path MX conventions (#236): `dns/promises` for
+ * MX and `utils/dns-txt.ts` for TXT, a 5 second timeout per lookup,
+ * answers cached in memory for an hour and errors for five minutes, at
+ * most 10,000 domains. The MX answer shares the
  * return-path cache, so the page shows the answer the mailer uses. Running
  * **Verify** replaces the cached DMARC check with a fresh one.
  */
@@ -37,8 +39,12 @@ export interface DomainDnsDeps {
 }
 
 const realDeps: DomainDnsDeps = {
-  /** Called through, so a replaced `dns/promises` export is honoured. */
-  resolveTxt: (hostname) => resolveTxt(hostname),
+  /**
+   * Our own TXT lookup (`utils/dns-txt.ts`): Bun's `resolveTxt` splits a
+   * multi-string record (a 2048-bit DKIM key, a long SPF record) into
+   * several records (oven-sh/bun#44692). Verify and DKIM rotation use it too.
+   */
+  resolveTxt: (hostname) => resolveTxtRecords(hostname),
   resolveMx: (domain) => resolveMx(domain),
   now: () => Date.now(),
   timeoutMs: 5_000,
