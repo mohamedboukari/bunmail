@@ -4,7 +4,7 @@ import {
   clearLoginAttempts,
   isLoginRateLimited,
   rateLimitBucket,
-  recordFailedLogin,
+  takeLoginAttempt,
 } from "../../middleware/login-rate-limit.ts";
 
 /**
@@ -18,19 +18,31 @@ import {
  * (#223: adding and removing a passkey), which share these keys.
  */
 export function passwordChangeLimiter(userId: string, ip: string): AttemptLimiter {
+  /** IPv6 clients by /64, like the login (#256). */
+  return loginBudgetLimiter([
+    `password:user:${userId}`,
+    `password:ip:${rateLimitBucket(ip)}`,
+  ]);
+}
+
+/**
+ * An `AttemptLimiter` over `keys` with the login limiter's settings
+ * (`DASHBOARD_LOGIN_RATE_LIMIT_*`): never limited when the limiter is off.
+ * Shared by the password change and the ownership transfer (#218).
+ */
+export function loginBudgetLimiter(keys: readonly string[]): AttemptLimiter {
   const { enabled, maxAttempts, windowSec } = config.dashboard.loginRateLimit;
   const windowMs = windowSec * 1000;
-  /** IPv6 clients by /64, like the login (#256). */
-  const keys = [`password:user:${userId}`, `password:ip:${rateLimitBucket(ip)}`];
   return {
-    isLimited: () =>
-      enabled &&
-      keys.some((key) => isLoginRateLimited(key, maxAttempts, windowMs).limited),
-    record: () => {
-      if (enabled) for (const key of keys) recordFailedLogin(key, windowMs);
+    take: async () =>
+      enabled && (await takeLoginAttempt(keys, maxAttempts, windowMs)).limited,
+    isLimited: async () => {
+      if (!enabled) return false;
+      for (const key of keys) {
+        if ((await isLoginRateLimited(key, maxAttempts)).limited) return true;
+      }
+      return false;
     },
-    clear: () => {
-      for (const key of keys) clearLoginAttempts(key);
-    },
+    clear: () => clearLoginAttempts(keys),
   };
 }

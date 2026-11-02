@@ -9,6 +9,7 @@ import {
 } from "bun:test";
 import { DrizzleQueryError } from "drizzle-orm";
 import { TestAuthenticator } from "../integration/_webauthn.ts";
+import type { AttemptLimiter } from "../../src/modules/users/types/user.types.ts";
 
 /**
  * `passkey.service.ts` (#223) without a database: every query the service
@@ -74,24 +75,21 @@ const HASH = await hashPassword(PASSWORD);
 const PENDING = { sessionId: "ses_pending", userId: USER.userId, email: USER.email };
 
 /** A limiter that counts calls and limits on demand. */
-function limiter(limited = false): {
-  isLimited: () => boolean;
-  record: () => void;
-  clear: () => void;
-  calls: string[];
-} {
+function limiter(limited = false): AttemptLimiter & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
+    take: () => {
+      calls.push("take");
+      return Promise.resolve(limited);
+    },
     isLimited: () => {
       calls.push("isLimited");
-      return limited;
-    },
-    record: () => {
-      calls.push("record");
+      return Promise.resolve(limited);
     },
     clear: () => {
       calls.push("clear");
+      return Promise.resolve();
     },
   };
 }
@@ -188,7 +186,7 @@ describe("startRegistration", () => {
         RP,
       ),
     ).toEqual({ ok: false, reason: "rate_limited" });
-    expect(limited.calls).toEqual(["isLimited"]);
+    expect(limited.calls).toEqual(["take"]);
 
     const wrong = limiter();
     queues.select.push([{ secretHash: HASH }]);
@@ -199,7 +197,7 @@ describe("startRegistration", () => {
         RP,
       ),
     ).toEqual({ ok: false, reason: "wrong_password" });
-    expect(wrong.calls).toEqual(["isLimited", "record"]);
+    expect(wrong.calls).toEqual(["take"]);
 
     queues.select.push([]);
     expect(
@@ -243,7 +241,7 @@ describe("startRegistration", () => {
       RP,
     );
     if (!result.ok) throw new Error(result.reason);
-    expect(ok.calls).toEqual(["isLimited", "record", "clear"]);
+    expect(ok.calls).toEqual(["take", "clear"]);
     expect(result.options.rp).toEqual({ name: "BunMail", id: "localhost" });
     expect(result.options.attestation).toBe("none");
     expect(result.options.authenticatorSelection).toEqual({
@@ -615,7 +613,7 @@ describe("the second login step", () => {
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
       maxAgeSec: 600,
     });
-    expect(budget.calls).toEqual(["isLimited", "record"]);
+    expect(budget.calls).toEqual(["take"]);
     expect(captured.set[1]).toMatchObject({ assurance: "mfa" });
   });
 
@@ -773,7 +771,7 @@ describe("managing", () => {
       ok: true,
       name: "Passkey",
     });
-    expect(budget.calls).toEqual(["isLimited", "record", "clear"]);
+    expect(budget.calls).toEqual(["take", "clear"]);
     expect(captured.values).toContainEqual(
       expect.objectContaining({ action: "auth.passkey.removed", targetId: "crd_1" }),
     );

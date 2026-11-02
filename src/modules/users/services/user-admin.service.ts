@@ -574,8 +574,9 @@ async function readAccount(id: string): Promise<AccountRow | null> {
  * 2. The failed-attempt budget (`limiter`, per actor and per client IP,
  *    built by the route from the login limiter): over budget is refused
  *    (`rate_limited`) with no argon2id work. Otherwise the attempt is
- *    counted at once, before the verify and with no await in between, so
- *    a parallel burst cannot run more verifies than the budget allows.
+ *    counted at once, before the verify, in the same atomic step as the
+ *    check (#185), so a parallel burst cannot run more verifies than the
+ *    budget allows.
  * 3. The password, checked outside the lock so it is never held during
  *    argon2id. Wrong (or no password credential): refused, nothing changes.
  * 4. Under the owner lock, the rules again on the locked live rows (a
@@ -624,8 +625,8 @@ export async function transferOwnership(
     return { ok: false, reason: early };
   }
 
-  /** Checked and counted with no await in between (see step 2 above). */
-  if (limiter.isLimited()) {
+  /** Checked and counted in one atomic step (see step 2 above). */
+  if (await limiter.take()) {
     logRefusal(action, actorId, targetId, {
       reason: "rate_limited",
       actorRole: actor.role,
@@ -633,7 +634,6 @@ export async function transferOwnership(
     });
     return { ok: false, reason: "rate_limited" };
   }
-  limiter.record();
 
   const hash = await passwordHashOf(actorId);
   if (hash === null || !(await verifyPassword(password, hash))) {
@@ -699,7 +699,7 @@ export async function transferOwnership(
     },
     client,
   );
-  if (result.ok) limiter.clear();
+  if (result.ok) await limiter.clear();
   return result;
 }
 

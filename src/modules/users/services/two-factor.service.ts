@@ -62,8 +62,9 @@ import { recordAuditEvent } from "../../audit/services/audit.service.ts";
  *
  * **Throttling.** Every check of a code an attacker could guess (the
  * login step, disabling, regenerating) takes an `AttemptLimiter` and runs
- * `isLimited` then `record` with no await in between, before any work:
- * a parallel burst cannot verify more codes than the budget. The login
+ * `take` (check and count in one atomic step, #185) before any work: a
+ * parallel burst, even across replicas, cannot verify more codes than the
+ * budget. The login
  * step spends the account's budget; disabling and regenerating spend only
  * the session's, so a stolen session cannot lock the real user's sign-in.
  * Starting an enrolment re-checks the current password under the password
@@ -304,15 +305,14 @@ export async function startEnrolment(
   if ((await twoFactorStatus(userId)).enabled) {
     return { ok: false, reason: "already_enabled" };
   }
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
   const hash = await passwordHashOf(userId);
   if (hash === null || !(await verifyPassword(password, hash))) {
     return { ok: false, reason: "wrong_password" };
   }
   const encrypted = encryptSecret(totp.generateTotpSecret(), config.dkimEncryptionKey);
   await setTotpPendingSecret(userId, sessionId, encrypted);
-  limiter.clear();
+  await limiter.clear();
   return { ok: true };
 }
 
@@ -444,8 +444,7 @@ export async function completeTwoFactorLogin(
   limiter: AttemptLimiter,
   nowMs: number = Date.now(),
 ): Promise<TwoFactorLoginResult> {
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
 
   return withSanitizedErrors(() =>
     db.transaction(async (tx): Promise<TwoFactorLoginResult> => {
@@ -491,8 +490,7 @@ export async function disableTwoFactor(
   if (!(await withSanitizedErrors(() => totpCredentialOf(db, userId)))) {
     return { ok: false, reason: "not_enabled" };
   }
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
 
   const hash = await passwordHashOf(userId);
   if (hash === null || !(await verifyPassword(password, hash))) {
@@ -539,8 +537,7 @@ export async function regenerateRecoveryCodes(
   client: SessionClient = NO_CLIENT,
   nowMs: number = Date.now(),
 ): Promise<RegenerateRecoveryCodesResult> {
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
 
   return withSanitizedErrors(() =>
     db.transaction(async (tx): Promise<RegenerateRecoveryCodesResult> => {

@@ -69,8 +69,9 @@ async function passwordCredentialOf(
  *    (`rate_limited`) with no argon2id work.
  * 2. The form policy (`passwordChangeProblem`): a problem is refused
  *    (`invalid_input`) with no argon2id work and no attempt counted.
- * 3. The attempt is counted, with no await since step 1, so a parallel
- *    burst cannot run more verifies than the budget allows. It is not
+ * 3. The attempt is counted, atomically with a second check of the
+ *    budget (#185), so a parallel burst cannot run more verifies than the
+ *    budget allows. It is not
  *    given back on a wrong password; a completed change clears the
  *    budget (a one-shot action, like the ownership transfer).
  * 4. Exactly one argon2id verify of the current password against the
@@ -105,11 +106,14 @@ export async function changePassword(
 ): Promise<ChangePasswordResult> {
   const { userId, assurance, current, password, confirm } = input;
 
-  /** Steps 1 to 3: checked and counted with no await in between. */
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
+  /**
+   * Steps 1 to 3: an input problem is answered without counting, but not
+   * while the budget is spent; the count itself is atomic with its check.
+   */
+  if (await limiter.isLimited()) return { ok: false, reason: "rate_limited" };
   const problem = passwordChangeProblem(current, password, confirm);
   if (problem) return { ok: false, reason: "invalid_input", problem };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
 
   const credential = await passwordCredentialOf(userId);
   const verifiedHash = credential?.secretHash ?? null;
@@ -215,7 +219,7 @@ export async function changePassword(
   });
 
   if (result.ok) {
-    limiter.clear();
+    await limiter.clear();
     /** Committed: look the new session's location up in the background (#281). */
     void locateSession(result.sessionId, sessionIp(client.ip));
   }

@@ -110,7 +110,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Webhooks**: HMAC-signed events with timestamp-bound replay protection: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (feedback-loop spam complaints, #191), `email.received`, `email.unsubscribed`, `domain.verification_failed`, `domain.verified`
 - **Inbound SMTP**: receive and store incoming mail with DNSBL, recipient validation, and per-IP rate limiting; reply from the dashboard with RFC 5322 threading headers, and see which of your emails a received reply answers
 - **Inbound notifications**: per-domain "you have new mail" email on receive, DKIM-signed from the recipient domain, with no content of the inbound message by default, automatic mail skipped and per-address and per-domain throttles; opt-in via each domain's `notify_email`
-- **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting
+- **API key auth**: SHA-256 hashed Bearer tokens with per-key rate limiting, shared across replicas with the optional `REDIS_URL`
 - **Trash + auto-purge**: Gmail-style soft delete on outbound and inbound, restorable until purged after `TRASH_RETENTION_DAYS` (default 7)
 - **Suppression list**: per-API-key list of addresses we refuse to send to; gate runs at `POST /emails/send` so bounced/unsubscribed recipients can't re-tank IP reputation; a mailbox still full (`4.2.2`) when retries run out is suppressed for 24 h, and `SUPPRESSIONS_SHARED_HARD=true` also refuses addresses any key hard-bounced on or got a complaint for
 - **Sender display name and send category**: an optional `fromName` (checked so it cannot pose as an address) and `category` (`transactional` mail goes out without `List-Unsubscribe`, `marketing` mail is refused unless it can carry the one-click link); HTML-only mail gets a derived text part and fragments a document wrapper at send time
@@ -213,6 +213,7 @@ curl -X POST http://localhost:3000/api/v1/emails/send \
 | Framework | [Elysia](https://elysiajs.com) |
 | ORM | [Drizzle ORM](https://orm.drizzle.team) (`drizzle-orm/bun-sql`) |
 | Database | PostgreSQL 16+ |
+| Shared state (optional) | Redis or Valkey via Bun's built-in client, only to run several replicas (`REDIS_URL`, #185) |
 | SMTP outbound | Nodemailer (one transport per recipient MX on port 25 + DKIM) |
 | SMTP inbound | smtp-server + mailparser |
 | Dashboard | Elysia JSX (`@elysiajs/html` + `@kitajs/html`) |

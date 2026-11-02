@@ -51,7 +51,7 @@ export function apiKeyPages(app: GuardedDashboard) {
            * (#132): never in the URL. `consumeRevealSecret` returns it once,
            * then it's gone.
            */
-          const rawKey = consumeRevealSecret(
+          const rawKey = await consumeRevealSecret(
             query.reveal,
             "api_key",
             revealOwnerOf(auth),
@@ -121,7 +121,11 @@ export function apiKeyPages(app: GuardedDashboard) {
              * never the raw key itself. The GET consumes the token and shows
              * the key once. Keeps secrets out of history / access logs / Referer.
              */
-            const reveal = stashRevealSecret(rawKey, "api_key", revealOwnerOf(auth));
+            const reveal = await stashRevealSecret(
+              rawKey,
+              "api_key",
+              revealOwnerOf(auth),
+            );
             set.status = 302;
             set.headers["location"] =
               `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&reveal=${reveal}`;

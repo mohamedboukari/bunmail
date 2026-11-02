@@ -876,6 +876,36 @@ export function readMetricsToken(
   return token;
 }
 
+/** A Redis logical database in a URL path: `/0` to `/99`, or none. */
+const REDIS_DB_PATH_RE = /^\/?(\d{1,2})?$/;
+
+/**
+ * Reads `REDIS_URL` (#185): where the state shared by several replicas
+ * lives (rate limits, login throttles, one-time reveals). Unset or blank
+ * keeps that state in process memory (one replica). Anything else must be
+ * a `redis://` or `rediss://` (TLS) URL with a host, an optional user and
+ * password, an optional database number as the path and no query, or the
+ * server refuses to boot. The URL can carry a password, so neither this
+ * error nor any log line ever repeats it. Exported for tests.
+ */
+export function readRedisUrl(
+  raw: string | undefined = process.env["REDIS_URL"],
+): string | null {
+  const value = raw?.trim() ?? "";
+  if (value === "") return null;
+  const problem = (): Error =>
+    new Error(
+      "[config] REDIS_URL must be a redis:// or rediss:// URL with a host, such as redis://redis:6379 or rediss://:password@redis.example.com:6380/0.\n" +
+        "  → Leave it empty to keep the shared state in memory (a single replica).",
+    );
+  if (!URL.canParse(value)) throw problem();
+  const url = new URL(value);
+  if (url.protocol !== "redis:" && url.protocol !== "rediss:") throw problem();
+  if (url.hostname === "" || url.search !== "" || url.hash !== "") throw problem();
+  if (!REDIS_DB_PATH_RE.test(url.pathname)) throw problem();
+  return value;
+}
+
 /** Samplers BunMail understands in `OTEL_TRACES_SAMPLER` (#363), as the OpenTelemetry spec names them. */
 const TRACES_SAMPLERS = [
   "always_on",
@@ -1081,6 +1111,13 @@ export const config = {
     token: readMetricsToken(),
   },
 
+  redis: {
+    /**
+     * `REDIS_URL` (#185): shared state for several replicas; `null` keeps
+     * it in process memory. Carries the password: never logged.
+     */
+    url: readRedisUrl(),
+  },
   /**
    * OpenTelemetry tracing (#363): off unless an OTLP endpoint is set (or
    * `OTEL_TRACES_EXPORTER=otlp`). See `readTracingSettings`.
@@ -1117,8 +1154,8 @@ export const config = {
 
   /**
    * Per-API-key request limit on the REST API: at most `max` requests per
-   * `windowSec`, then HTTP 429 with `Retry-After`. In-memory and
-   * per-replica, like the dashboard login limiter.
+   * `windowSec`, then HTTP 429 with `Retry-After`. Shared by every
+   * replica when `REDIS_URL` is set (#185), else in memory per replica.
    */
   apiRateLimit: {
     /** Requests allowed per key per window (default 100). */
@@ -1422,8 +1459,8 @@ export const config = {
      * once `maxAttempts` is reached the login POST returns HTTP 429 until
      * the window expires. A successful login gives back only its own
      * attempt on the IP's counter (#256), so earlier failures stay until
-     * the window ends. State is in-memory and per-replica (same caveat as
-     * the API rate limiter).
+     * the window ends. Shared by every replica when `REDIS_URL` is set
+     * (#185), else in memory per replica.
      */
     loginRateLimit: {
       /** Master switch: set to "false" to disable login throttling. */

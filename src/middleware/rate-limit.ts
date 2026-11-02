@@ -1,14 +1,8 @@
 import { Elysia } from "elysia";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
-import {
-  checkRateLimit,
-  pruneExpiredEntries,
-  readApiKeyId,
-  requestWeight,
-  type RateLimitEntry,
-  type RateLimitOptions,
-} from "./rate-limit-core.ts";
+import { sharedWindowCounter } from "../utils/shared-store.ts";
+import { readApiKeyId, requestWeight, type RateLimitOptions } from "./rate-limit-core.ts";
 
 /** The enforced limit, from `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`. */
 const limit: RateLimitOptions = {
@@ -20,32 +14,27 @@ const limit: RateLimitOptions = {
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Tracks request counts per API key within a time window. The algorithm
- * lives in `rate-limit-core.ts` (pure, unit-tested); this module owns the
- * state, the cleanup timer and the Elysia wiring.
- *
- * Resets on server restart: acceptable for MVP. A production system
- * would use Redis or a shared store for multi-instance deployments.
+ * Request counts per API key in fixed windows (#185): in Redis when
+ * `REDIS_URL` is set, so every replica shares one budget per key; else
+ * (and while Redis is down) in this process's memory, reset by a restart.
  */
-const rateLimitMap = new Map<string, RateLimitEntry>();
+const apiCounter = sharedWindowCounter("rl:api");
 
 /** Reference to the periodic cleanup timer; null when not running. */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
  * Starts a periodic sweep that drops expired entries from the in-memory
- * rate-limit map. Without this, distinct API keys arriving over a long
- * lifetime would grow the map unbounded.
+ * counters (the default store, and the fallback while Redis is down).
+ * Without this, distinct API keys arriving over a long lifetime would
+ * grow the map unbounded; Redis expires its keys on its own.
  *
  * Idempotent: calling twice is a no-op while the interval is running.
  * Mirrors the SMTP receiver's rate-limit cleanup pattern.
  */
 export function startRateLimitCleanup(): void {
   if (cleanupInterval) return;
-  cleanupInterval = setInterval(
-    () => pruneExpiredEntries(rateLimitMap, Date.now(), limit.windowMs),
-    CLEANUP_INTERVAL_MS,
-  );
+  cleanupInterval = setInterval(() => apiCounter.local.prune(), CLEANUP_INTERVAL_MS);
   logger.debug("HTTP rate-limit cleanup started", {
     intervalMs: CLEANUP_INTERVAL_MS,
   });
@@ -63,12 +52,12 @@ export function stopRateLimitCleanup(): void {
 /**
  * Rate-limit middleware: enforces per-API-key request limits.
  *
- * Fixed window algorithm:
- * 1. Look up the API key's current window in the in-memory map
- * 2. If the window has expired, reset the counter
- * 3. Add the request's weight: 1, or one per email for a batch send (#178)
- * 4. If that would pass the limit, return 429 with Retry-After header,
- *    before the handler runs, so an over-budget batch creates nothing
+ * Fixed window algorithm, one atomic step in the shared counter:
+ * 1. A key without a live window starts one
+ * 2. Add the request's weight: 1, or one per email for a batch send (#178)
+ * 3. If that would pass the limit, count the refused request once and
+ *    return 429 with Retry-After header, before the handler runs, so an
+ *    over-budget batch creates nothing
  *
  * Must be applied AFTER authMiddleware (needs `apiKeyId` in context).
  * The limit comes from `config.apiRateLimit` (default 100 per 60 s).
@@ -76,7 +65,7 @@ export function stopRateLimitCleanup(): void {
 export const rateLimitMiddleware = new Elysia({
   name: "rate-limit-middleware",
 })
-  .onBeforeHandle((context) => {
+  .onBeforeHandle(async (context) => {
     /** Every plugin applies `.use(authMiddleware).use(rateLimitMiddleware)`, so
      *  `apiKeyId` is in the context by now if auth ran. See readApiKeyId. */
     const apiKeyId = readApiKeyId(context);
@@ -93,10 +82,17 @@ export const rateLimitMiddleware = new Elysia({
 
     /** A batch send counts as one send per email (#178). */
     const weight = requestWeight(context);
-    const decision = checkRateLimit(rateLimitMap, apiKeyId, Date.now(), limit, weight);
+    const decision = await apiCounter.take([apiKeyId], {
+      max: limit.max,
+      windowMs: limit.windowMs,
+      weight,
+      refusedWeight: 1,
+    });
     if (!decision.limited) return;
 
-    const { count, retryAfter } = decision;
+    const { count } = decision;
+    /** Whole seconds left in the window, rounded up. */
+    const retryAfter = Math.ceil(decision.retryAfterMs / 1000);
     logger.warn("Rate limit exceeded", { apiKeyId, count, weight, retryAfter });
 
     set.status = 429;

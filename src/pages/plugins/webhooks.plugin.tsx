@@ -36,7 +36,7 @@ export function webhookPages(app: GuardedDashboard) {
           ]);
           const flash = toFlash(query.flash, query.flashType);
           /** One-time reveal of the webhook HMAC secret (#132): never in URL. */
-          const secret = consumeRevealSecret(
+          const secret = await consumeRevealSecret(
             query.reveal,
             "webhook_secret",
             revealOwnerOf(auth),
@@ -95,7 +95,7 @@ export function webhookPages(app: GuardedDashboard) {
               metadata: { events: webhook.events },
             });
             /** One-time reveal token in the URL (#132): never the secret. */
-            const reveal = stashRevealSecret(
+            const reveal = await stashRevealSecret(
               secret,
               "webhook_secret",
               revealOwnerOf(auth),

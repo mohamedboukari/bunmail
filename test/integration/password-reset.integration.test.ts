@@ -123,9 +123,9 @@ beforeEach(async () => {
 
 /** A transfer budget that never limits, for the ownership transfer test. */
 const NO_LIMIT: AttemptLimiter = {
-  isLimited: () => false,
-  record: () => undefined,
-  clear: () => undefined,
+  take: () => Promise.resolve(false),
+  isLimited: () => Promise.resolve(false),
+  clear: () => Promise.resolve(),
 };
 
 /** A request, same-origin unless overridden, optionally with a session cookie and a form body. */

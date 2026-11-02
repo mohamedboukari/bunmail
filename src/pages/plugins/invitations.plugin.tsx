@@ -82,17 +82,17 @@ function answerInviteRefusal(
  * reveal token goes in the redirect: the link itself never appears in a
  * URL, a flash message or a log.
  */
-function answerIssuedInvitation(
+async function answerIssuedInvitation(
   set: Context["set"],
   auth: DashboardAuth,
   result: IssueInvitationResult,
   verb: "sent" | "resent",
-): string | Promise<string> {
+): Promise<string> {
   if (!result.ok) return answerInviteRefusal(set, result.reason);
   if (result.delivery.sent) {
     return invitationsRedirect(set, `Invitation ${verb} by email.`, "success");
   }
-  const reveal = stashRevealSecret(result.url, "invite_link", revealOwnerOf(auth));
+  const reveal = await stashRevealSecret(result.url, "invite_link", revealOwnerOf(auth));
   return invitationsRedirect(
     set,
     `Invitation created, but the email was not sent: ${INVITE_MAIL_FAILURE_TEXT[result.delivery.reason]}. Copy the link below and share it with the invitee.`,
@@ -118,7 +118,7 @@ export function invitationPages(app: GuardedDashboard) {
           const invitations = await inviteService.listPendingInvitations();
           const flash = toFlash(query.flash, query.flashType);
           /** One-time reveal bound to this user and session (#280): never in a URL. */
-          const revealedLink = consumeRevealSecret(
+          const revealedLink = await consumeRevealSecret(
             query.reveal,
             "invite_link",
             revealOwnerOf(auth),
@@ -160,7 +160,7 @@ export function invitationPages(app: GuardedDashboard) {
               body.role,
               dashboardClient(request, server),
             );
-            return answerIssuedInvitation(set, auth, result, "sent");
+            return await answerIssuedInvitation(set, auth, result, "sent");
           } catch (error: unknown) {
             logger.error("Failed to create invitation via dashboard", {
               error: errorMessage(error),
@@ -214,7 +214,7 @@ export function invitationPages(app: GuardedDashboard) {
               params.id,
               dashboardClient(request, server),
             );
-            return answerIssuedInvitation(set, auth, result, "resent");
+            return await answerIssuedInvitation(set, auth, result, "resent");
           } catch (error: unknown) {
             logger.error("Failed to resend invitation via dashboard", {
               invitationId: params.id,

@@ -73,9 +73,9 @@ const HOOK_URL = "https://93.184.216.34/hook";
 
 /** A transfer budget that never limits. */
 const NO_LIMIT: AttemptLimiter = {
-  isLimited: () => false,
-  record: () => undefined,
-  clear: () => undefined,
+  take: () => Promise.resolve(false),
+  isLimited: () => Promise.resolve(false),
+  clear: () => Promise.resolve(),
 };
 
 type Name = "owner" | "admin" | "member" | "member2";

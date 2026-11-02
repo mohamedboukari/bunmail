@@ -45,3 +45,23 @@ services:
   # app:
   #   ports: !override
   #     - "${PORT:-3000}:${PORT:-3000}"
+
+  # ── Several replicas (#185) ──
+  # Shared rate limits, login throttles and one-time reveals for more than
+  # one app container behind a load balancer: set
+  # REDIS_URL=redis://redis:6379 in .env of every replica. See
+  # docs/self-hosting.md, "Running several replicas". Never publish the
+  # Redis port; every key expires, so it needs no persistence.
+  # app:
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  # redis:
+  #   image: redis:7-alpine
+  #   command: ["redis-server", "--save", "", "--appendonly", "no"]
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped

@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto";
 import { logger } from "../utils/logger.ts";
+import { sharedOneTimeStore, sharedStoreErrorCode } from "../utils/shared-store.ts";
 
 /**
  * One-time secret reveal (#132, bound to its creator in #280).
@@ -21,16 +22,17 @@ import { logger } from "../utils/logger.ts";
  * oracle), is logged with IDs only, and does not consume the entry: whoever
  * presents a stolen token cannot destroy the creator's one-time view.
  *
- * Caveat (documented in SECURITY.md): the store is in memory and per
- * process. On a multi-replica deploy a create on one replica and the
- * follow-up GET on another miss the token; the operator then revokes and
- * recreates.
+ * Storage (#185): in Redis when `REDIS_URL` is set, so the GET may land on
+ * any replica (the Redis key is the token's SHA-256 and the secret is
+ * encrypted there); else in process memory, for one replica. A Redis
+ * failure fails closed: the secret is not shown (the operator revokes and
+ * recreates), and the failure is logged.
  */
 
 /** How long a reveal token stays redeemable. */
 const REVEAL_TTL_MS = 60_000;
 
-/** Hard cap so a burst of creates cannot grow the map without bound. */
+/** Hard cap so a burst of creates cannot grow the in-memory map without bound. */
 const REVEAL_MAX_ENTRIES = 1000;
 
 /**
@@ -53,50 +55,47 @@ export interface RevealOwner {
   sessionId: string;
 }
 
-interface RevealEntry {
-  /** The one-time secret (raw API key, webhook secret, invitation or reset link). */
-  value: string;
-  /** The page that may show it. */
-  kind: RevealKind;
-  /** Who created it. */
-  owner: RevealOwner;
-  /** Unix epoch ms after which the entry is expired. */
-  expiresAt: number;
+const reveals = sharedOneTimeStore("reveal", REVEAL_MAX_ENTRIES);
+
+/**
+ * The binding a token is stored with: kind, user and session, as one
+ * string compared for equality. IDs only, safe to log.
+ */
+function guardOf(kind: RevealKind, owner: RevealOwner): string {
+  return JSON.stringify([kind, owner.userId, owner.sessionId]);
 }
 
-const reveals = new Map<string, RevealEntry>();
-
-/** Drops expired entries; a cheap lazy sweep run on each stash. */
-function sweepExpired(now: number): void {
-  for (const [token, entry] of reveals) {
-    if (entry.expiresAt <= now) reveals.delete(token);
-  }
+/** The IDs of a stored binding, for the refusal log line. */
+function describeGuard(guard: string): Record<string, string | null> {
+  const parsed: unknown = JSON.parse(guard);
+  const at = (i: number): string | null =>
+    Array.isArray(parsed) && typeof parsed[i] === "string" ? parsed[i] : null;
+  return { entryKind: at(0), ownerUserId: at(1), ownerSessionId: at(2) };
 }
 
 /**
  * Stashes a one-time secret for `owner` and returns the opaque token to put
  * in the redirect URL: 32 random bytes in hex, redeemable once, for
  * {@link REVEAL_TTL_MS}, only on the page of `kind`, only by `owner`.
+ * When the store fails, the token is still returned but redeems nothing
+ * (fails closed, logged): the page then shows no secret.
  */
-export function stashRevealSecret(
+export async function stashRevealSecret(
   value: string,
   kind: RevealKind,
   owner: RevealOwner,
-  now: number = Date.now(),
-): string {
-  sweepExpired(now);
-  if (reveals.size >= REVEAL_MAX_ENTRIES) {
-    /** Still at the cap after the sweep: evict the oldest insertion. */
-    const oldest = reveals.keys().next().value;
-    if (oldest !== undefined) reveals.delete(oldest);
-  }
+): Promise<string> {
   const token = randomBytes(32).toString("hex");
-  reveals.set(token, {
-    value,
-    kind,
-    owner: { ...owner },
-    expiresAt: now + REVEAL_TTL_MS,
-  });
+  try {
+    await reveals.put(token, { guard: guardOf(kind, owner), value }, REVEAL_TTL_MS);
+  } catch (error: unknown) {
+    logger.error("One-time reveal could not be stored: the secret will not be shown", {
+      kind,
+      userId: owner.userId,
+      sessionId: owner.sessionId,
+      code: sharedStoreErrorCode(error),
+    });
+  }
   return token;
 }
 
@@ -104,37 +103,36 @@ export function stashRevealSecret(
  * Redeems a reveal token on the page of `kind` for `requester`. Returns the
  * secret and deletes the entry when the token is live and was created by
  * the same user and session for the same kind; otherwise `undefined`,
- * whatever the reason (unknown, expired, used, wrong page, someone else),
- * so the response reveals nothing. A mismatch keeps the entry for its
- * owner and logs a warning with IDs only.
+ * whatever the reason (unknown, expired, used, wrong page, someone else,
+ * store failure), so the response reveals nothing. A mismatch keeps the
+ * entry for its owner and logs a warning with IDs only.
  */
-export function consumeRevealSecret(
+export async function consumeRevealSecret(
   token: string | undefined,
   kind: RevealKind,
   requester: RevealOwner,
-  now: number = Date.now(),
-): string | undefined {
+): Promise<string | undefined> {
   if (!token) return undefined;
-  const entry = reveals.get(token);
-  if (!entry) return undefined;
-  if (entry.expiresAt <= now) {
-    reveals.delete(token);
-    return undefined;
-  }
-  const sameOwner =
-    entry.owner.userId === requester.userId &&
-    entry.owner.sessionId === requester.sessionId;
-  if (entry.kind !== kind || !sameOwner) {
-    logger.warn("One-time reveal refused: token presented by another session or page", {
-      requesterUserId: requester.userId,
-      requesterSessionId: requester.sessionId,
-      ownerUserId: entry.owner.userId,
-      ownerSessionId: entry.owner.sessionId,
-      expectedKind: kind,
-      entryKind: entry.kind,
+  let taken;
+  try {
+    taken = await reveals.take(token, guardOf(kind, requester));
+  } catch (error: unknown) {
+    logger.error("One-time reveal could not be read: the secret is not shown", {
+      kind,
+      userId: requester.userId,
+      sessionId: requester.sessionId,
+      code: sharedStoreErrorCode(error),
     });
     return undefined;
   }
-  reveals.delete(token);
-  return entry.value;
+  if (taken.status === "taken") return taken.value;
+  if (taken.status === "mismatch") {
+    logger.warn("One-time reveal refused: token presented by another session or page", {
+      requesterUserId: requester.userId,
+      requesterSessionId: requester.sessionId,
+      expectedKind: kind,
+      ...describeGuard(taken.guard),
+    });
+  }
+  return undefined;
 }

@@ -248,10 +248,10 @@ Recorded from the dashboard: sign-in (success, each failure with its reason, a l
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
-an in-memory fixed window (`src/middleware/login-rate-limit.ts`). Every kind
+a fixed window (`src/middleware/login-rate-limit.ts`). Every kind
 of failure counts (unknown email, no password, disabled account, wrong
-password, over-long input), and the check runs before any database or argon2id
-work. After `DASHBOARD_LOGIN_RATE_LIMIT_MAX` failures within
+password, over-long input), and the check and the count are one atomic step
+before any database or argon2id work. After `DASHBOARD_LOGIN_RATE_LIMIT_MAX` failures within
 `DASHBOARD_LOGIN_RATE_LIMIT_WINDOW` seconds, further attempts from that IP get
 HTTP `429` with a `Retry-After` header until the window expires. A successful
 login gives back only its own attempt; earlier failures from the address stay
@@ -280,8 +280,9 @@ IP, and make sure the origin can only be reached **through** the proxy, or
 `X-Forwarded-For` can't be trusted. When a request carries fewer
 `X-Forwarded-For` entries than the configured hops, BunMail logs `Request
 bypassed the trusted proxy` (at most once an hour, #256): the app is reachable
-directly, so bind its port to `127.0.0.1` or firewall it. State is in-memory and
-per-replica.
+directly, so bind its port to `127.0.0.1` or firewall it. State is in memory and
+per replica, or shared by every replica in Redis with `REDIS_URL` (#185; during
+a Redis outage it falls back to per-replica memory).
 
 ## Pages
 

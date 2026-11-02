@@ -28,7 +28,7 @@ Client                     Server
 
 - **Algorithm:** Fixed-window counter per API key ID
 - **Limit:** 100 requests per 60 seconds by default, set with `API_RATE_LIMIT_MAX` / `API_RATE_LIMIT_WINDOW`
-- **Storage:** In-memory `Map` (resets on server restart)
+- **Storage:** in process memory (resets on restart, per replica), or in Redis shared by every replica when `REDIS_URL` is set (#185); check and count are atomic, and a Redis outage falls back to memory
 - **Response:** `429 Too Many Requests` with `Retry-After` header
 
 ## Schema

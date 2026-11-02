@@ -227,13 +227,12 @@ export async function startRegistration(
 > {
   const problem = passkeyNameProblem(input.name);
   if (problem !== null) return { ok: false, reason: "invalid_name", problem };
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
   const hash = await passwordHashOf(input.userId);
   if (hash === null || !(await verifyPassword(input.password, hash))) {
     return { ok: false, reason: "wrong_password" };
   }
-  limiter.clear();
+  await limiter.clear();
 
   const existing = await withSanitizedErrors(() => passkeysOf(db, input.userId));
   const challenge = passkeyChallenges.issue("register", input.sessionId, {
@@ -560,8 +559,7 @@ export async function completePasskeyTwoFactor(
   rp: RelyingParty,
   client: SessionClient = NO_CLIENT,
 ): Promise<PasskeyTwoFactorResult> {
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
   const taken = passkeyChallenges.take("second_factor", pending.sessionId);
   if (!taken || taken.userId !== pending.userId) {
     return { ok: false, reason: "no_challenge" };
@@ -757,13 +755,12 @@ export async function deletePasskey(
       ),
   );
   if (!found) return { ok: false, reason: "not_found" };
-  if (limiter.isLimited()) return { ok: false, reason: "rate_limited" };
-  limiter.record();
+  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
   const hash = await passwordHashOf(userId);
   if (hash === null || !(await verifyPassword(password, hash))) {
     return { ok: false, reason: "wrong_password" };
   }
-  limiter.clear();
+  await limiter.clear();
 
   return withSanitizedErrors(() =>
     db.transaction(async (tx): Promise<DeletePasskeyResult> => {

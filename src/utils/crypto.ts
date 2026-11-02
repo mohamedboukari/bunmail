@@ -39,11 +39,20 @@ export function isEncryptedSecret(value: string): boolean {
  *   of the same plaintext produce different ciphertexts.
  * - **Versioned:** the `v1:` prefix lets a future PR introduce `v2:` (new
  *   algorithm or key-derivation scheme) without breaking existing rows.
+ * - **Optional binding (#185):** `associatedData` is authenticated but not
+ *   stored (GCM AAD), so the ciphertext decrypts only with the same value:
+ *   moved to another record, it fails. Without it, the output is exactly
+ *   as before, so every stored secret keeps decrypting.
  *
  * @param plaintext - Raw secret to encrypt (PEM, password, etc.)
  * @param key - 32-byte AES-256 key. Throws if the wrong length is passed.
+ * @param associatedData - What the ciphertext is bound to (not secret, not stored)
  */
-export function encryptSecret(plaintext: string, key: Buffer): string {
+export function encryptSecret(
+  plaintext: string,
+  key: Buffer,
+  associatedData?: string,
+): string {
   if (key.length !== AES_256_KEY_BYTES) {
     throw new Error(
       `[crypto] encryptSecret requires a ${AES_256_KEY_BYTES}-byte key, got ${key.length}`,
@@ -51,6 +60,7 @@ export function encryptSecret(plaintext: string, key: Buffer): string {
   }
   const iv = randomBytes(GCM_IV_BYTES);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
+  if (associatedData !== undefined) cipher.setAAD(Buffer.from(associatedData, "utf8"));
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
   return [
@@ -67,11 +77,18 @@ export function encryptSecret(plaintext: string, key: Buffer): string {
  *   - wrong key (GCM tag verification fails)
  *   - tampered ciphertext (also a tag failure)
  *
+ *   - an `associatedData` other than the one it was encrypted with (also
+ *     a tag failure)
+ *
  * Callers should treat any thrown error as "this secret is unrecoverable
  * with the current key": for DKIM that means falling back to unsigned
  * mail rather than silently failing the send.
  */
-export function decryptSecret(encrypted: string, key: Buffer): string {
+export function decryptSecret(
+  encrypted: string,
+  key: Buffer,
+  associatedData?: string,
+): string {
   if (key.length !== AES_256_KEY_BYTES) {
     throw new Error(
       `[crypto] decryptSecret requires a ${AES_256_KEY_BYTES}-byte key, got ${key.length}`,
@@ -101,6 +118,7 @@ export function decryptSecret(encrypted: string, key: Buffer): string {
     );
   }
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  if (associatedData !== undefined) decipher.setAAD(Buffer.from(associatedData, "utf8"));
   decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   return plaintext.toString("utf8");
