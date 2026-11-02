@@ -396,8 +396,8 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions); auth, account and passkeys are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, #387)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)

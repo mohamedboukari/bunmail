@@ -31,9 +31,10 @@ import {
 
 /**
  * What the public sign-in routes share (#216, #220, #223, #224): the
- * password login and its TOTP step (`auth.plugin.tsx`), the passkey
- * sign-ins (`passkeys.plugin.tsx`) and the SSO sign-in
- * (`sso-login.plugin.tsx`).
+ * password login and its TOTP step (`auth-login.plugin.tsx`,
+ * `auth-login-two-factor.plugin.tsx`), the passkey sign-ins
+ * (`passkey-sign-in.plugin.tsx`, `passkey-second-step.plugin.tsx`) and
+ * the SSO sign-in (`sso-login.plugin.tsx`).
  */
 
 /**

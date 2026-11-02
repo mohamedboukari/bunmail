@@ -122,7 +122,10 @@ import { suppressionPages } from "./plugins/suppressions.plugin.tsx";
  * `GuardedDashboard`, the type the guard returns, so they do, with no
  * cast. That type does not prove a plugin is mounted after the guard: the
  * order below does, and `dashboard-route-access.integration.test.ts`
- * checks every route for the session guard and its role guard.
+ * checks every route for the session guard and its role guard. The
+ * larger areas (`auth`, `account`, `passkeys`) are composed the same way
+ * from one group per concern (#387), called in order on the instance
+ * they are given.
  */
 export const pagesPlugin = new Elysia({
   prefix: "/dashboard",
