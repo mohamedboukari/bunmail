@@ -9,10 +9,9 @@ import { redactEmail } from "../../utils/redact.ts";
 import { UserStoreError } from "../../modules/users/errors.ts";
 import {
   resolveClientIp,
-  isLoginRateLimited,
-  recordFailedLogin,
   refundLoginAttempt,
   shouldAuditLockout,
+  takeLoginAttempt,
 } from "../../middleware/login-rate-limit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import type { AuditLoginFailureReason } from "../../modules/audit/types/audit.types.ts";
@@ -192,20 +191,19 @@ export function authPages(app: PublicDashboard) {
           }
 
           /**
-           * Brute-force protection (#109). Lockout is checked first, then the
-           * attempt is counted right away, before any await: the password
-           * check (argon2id) takes tens of milliseconds, and counting only
-           * after it would let a parallel burst from one IP pass the limit,
-           * each request running a full hash. A successful login gives back
-           * only its own count: earlier failures stay until the window ends
-           * (#256).
+           * Brute-force protection (#109). Lockout is checked and the attempt
+           * counted in one atomic step (#185), before the password check:
+           * argon2id takes tens of milliseconds, and counting only after it
+           * would let a parallel burst from one IP (on any replica) pass the
+           * limit, each request running a full hash. A successful login
+           * gives back only its own count: earlier failures stay until the
+           * window ends (#256).
            */
-          const windowMs = loginRateLimit.windowSec * 1000;
           if (loginRateLimit.enabled) {
-            const { limited, retryAfterSec } = isLoginRateLimited(
-              ip,
+            const { limited, retryAfterSec } = await takeLoginAttempt(
+              [ip],
               loginRateLimit.maxAttempts,
-              windowMs,
+              loginRateLimit.windowSec * 1000,
             );
             if (limited) {
               logger.warn("Dashboard login blocked: too many attempts", {
@@ -213,7 +211,7 @@ export function authPages(app: PublicDashboard) {
                 retryAfterSec,
               });
               /** Once per address and window (#221): a flood records one row. */
-              if (shouldAuditLockout(ip, windowMs)) {
+              if (await shouldAuditLockout(ip)) {
                 await recordAuditEvent({
                   action: "auth.login.rate_limited",
                   outcome: "failure",
@@ -233,7 +231,6 @@ export function authPages(app: PublicDashboard) {
                 />
               );
             }
-            recordFailedLogin(ip, windowMs);
           }
 
           const email = normalizeLoginEmail(body.email);
@@ -333,7 +330,7 @@ export function authPages(app: PublicDashboard) {
              * this address stay (#256), or anyone could sign in to their own
              * account between guesses at someone else's password.
              */
-            if (loginRateLimit.enabled) refundLoginAttempt(ip, windowMs);
+            if (loginRateLimit.enabled) await refundLoginAttempt(ip);
 
             /** Second factor required (#220): only the second step opens this session. */
             if (result.assurance === "pending") {
@@ -513,13 +510,13 @@ export function authPages(app: PublicDashboard) {
                 });
               }
               /** Budget spent (now or before): the pending session ends here. */
-              if (result.reason === "rate_limited" || limiter.isLimited()) {
+              if (result.reason === "rate_limited" || (await limiter.isLimited())) {
                 return endLockedSecondStep(set, request, { token, pending, ip, limiter });
               }
               return await secondStepPage(pending.userId, "Invalid code. Try again.");
             }
 
-            limiter.clear();
+            await limiter.clear();
             issueSession(set, result.token, result.maxAgeSec);
             logger.info("Dashboard login successful", {
               userId: pending.userId,

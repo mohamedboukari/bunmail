@@ -46,6 +46,8 @@ import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
 import { loggableError } from "./utils/db-error.ts";
+import { closeSharedStore, useSharedBackend } from "./utils/shared-store.ts";
+import { connectRedisBackend } from "./utils/redis-store.ts";
 
 /**
  * Last-resort crash lines. Without these, an uncaught error or an
@@ -153,6 +155,19 @@ if (undecryptableKeys.pending.length > 0) {
 
 /** Same for webhook signing secrets from before #259, before the webhook worker starts. */
 await encryptWebhookSecrets();
+
+/**
+ * Shared state for several replicas (#185): with `REDIS_URL`, rate limits,
+ * login throttles and one-time reveals live in Redis, installed before the
+ * server takes a request. A Redis that does not answer at boot refuses the
+ * start, like an unreachable database (Docker restarts and retries); a
+ * later outage degrades instead (see `src/utils/shared-store.ts`).
+ */
+if (config.redis.url) {
+  useSharedBackend(
+    await connectRedisBackend(config.redis.url, { secretKey: config.dkimEncryptionKey }),
+  );
+}
 
 /**
  * Owner bootstrap (#215): create the dashboard owner from
@@ -581,7 +596,7 @@ startRateLimitCleanup();
  * (#109): prunes expired per-IP failed-attempt entries so a long-lived
  * server doesn't accumulate them unbounded under attacker IP rotation.
  */
-startLoginRateLimitCleanup(config.dashboard.loginRateLimit.windowSec * 1000);
+startLoginRateLimitCleanup();
 
 /**
  * Graceful shutdown handler.
@@ -616,6 +631,7 @@ function finishShutdown() {
   sendingIpDnsbl.stop();
   stopRateLimitCleanup();
   stopLoginRateLimitCleanup();
+  closeSharedStore();
   void app.stop();
   process.exit(0);
 }

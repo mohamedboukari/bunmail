@@ -77,9 +77,9 @@ const ROLE_OF: Record<Name, UserRole> = {
 
 /** A transfer budget that never limits, for the service-level tests. */
 const NO_LIMIT: AttemptLimiter = {
-  isLimited: () => false,
-  record: () => undefined,
-  clear: () => undefined,
+  take: () => Promise.resolve(false),
+  isLimited: () => Promise.resolve(false),
+  clear: () => Promise.resolve(),
 };
 
 beforeEach(async () => {

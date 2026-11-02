@@ -7,8 +7,8 @@ import {
   clearLoginAttempts,
   isLoginRateLimited,
   rateLimitBucket,
-  recordFailedLogin,
   refundLoginAttempt,
+  takeLoginAttempt,
 } from "../../middleware/login-rate-limit.ts";
 
 /**
@@ -37,7 +37,7 @@ import {
 /** An `AttemptLimiter` that also says whether its own key (account or session) is spent. */
 export interface TwoFactorLimiter extends AttemptLimiter {
   /** True when the account key (login) or the session key (in-session) is over budget. */
-  ownKeyLimited(): boolean;
+  ownKeyLimited(): Promise<boolean>;
 }
 
 /** The window in milliseconds. */
@@ -47,17 +47,16 @@ const WINDOW_MS = TWO_FACTOR_WINDOW_SECONDS * 1000;
 function limiterFor(ownKey: string, ip: string): TwoFactorLimiter {
   const ipKey = `totp:ip:${rateLimitBucket(ip)}`;
   const keys = [ownKey, ipKey];
-  const limited = (key: string): boolean =>
-    isLoginRateLimited(key, TWO_FACTOR_MAX_FAILURES, WINDOW_MS).limited;
+  const limited = async (key: string): Promise<boolean> =>
+    (await isLoginRateLimited(key, TWO_FACTOR_MAX_FAILURES)).limited;
   return {
-    isLimited: () => keys.some(limited),
+    take: async () =>
+      (await takeLoginAttempt(keys, TWO_FACTOR_MAX_FAILURES, WINDOW_MS)).limited,
+    isLimited: async () => (await limited(ownKey)) || (await limited(ipKey)),
     ownKeyLimited: () => limited(ownKey),
-    record: () => {
-      for (const key of keys) recordFailedLogin(key, WINDOW_MS);
-    },
-    clear: () => {
-      clearLoginAttempts(ownKey);
-      refundLoginAttempt(ipKey, WINDOW_MS);
+    clear: async () => {
+      await clearLoginAttempts([ownKey]);
+      await refundLoginAttempt(ipKey);
     },
   };
 }

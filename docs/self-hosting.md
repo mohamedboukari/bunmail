@@ -177,6 +177,7 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > - `DASHBOARD_LOGIN_RATE_LIMIT_ENABLED` (`true`): `false` turns the login throttle off.
 > - `LOG_LEVEL` (`info`; `debug`, `info`, `warn` or `error`, anything else refuses to boot) and `LOG_REDACT_PII` (`true` in production, `false` in development). See [docs/logging.md](logging.md).
 > - `METRICS_TOKEN` (unset: `/metrics` is a 404): the bearer token Prometheus scrapers send to `GET /metrics` (#362); 32 to 256 letters, digits, `-` or `_` with at least 8 distinct characters, anything else refuses to boot. See [docs/metrics.md](metrics.md).
+> - `REDIS_URL` (unset: in memory, one replica): Redis or Valkey for the state several replicas share (#185), a `redis://` or `rediss://` URL with a host, optional `user:password@` and `/db`; anything else refuses to boot, and the password is never logged. Use one Redis, or one Redis database, per BunMail install. `rediss://` verifies the server certificate. See [Running several replicas](#running-several-replicas).
 > - `TOMBSTONE_RETENTION_DAYS` (`90`): how long the post-purge snapshot of a hard-deleted email is kept (#34, see [emails.md](emails.md#tombstones-34)).
 > - `WEBHOOK_ALLOW_INSECURE_HTTP` (`false`): `true` also allows `http://` webhook URLs; private addresses stay blocked (#128).
 > - Inbound SMTP (see [docs/inbound.md](inbound.md)): `SMTP_ENABLED` (`false`), `SMTP_PORT` (`2525`; use `25` in production), `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `SMTP_RATE_LIMIT_MAX` / `SMTP_RATE_LIMIT_WINDOW` (`true`, `10` connections per `60` seconds per IP).
@@ -482,6 +483,39 @@ git pull
 # Rebuild and restart
 docker compose down && docker compose up -d --build
 ```
+
+### Running several replicas
+
+One app container is enough for most installs and needs nothing more. To run several behind a load balancer (on one host, each on its own published port, or on several hosts sharing one database), set `REDIS_URL` on every replica to the same Redis or Valkey (#185):
+
+```yaml
+# docker-compose.override.yml (see docker-compose.override.example.yml)
+services:
+  app:
+    environment:
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+```
+
+- **What moves to Redis:** the API rate limit, the login, passkey sign-in, ownership transfer, password re-check and two-factor code budgets, and the one-time reveal of new API keys, webhook secrets, invitation and reset links and recovery codes. Without Redis each replica keeps its own (N replicas allow N times the attempts, and a reveal fails when the follow-up request reaches another replica).
+- **What does not need it:** the send queue, webhook deliveries, domain re-verification and the owner bootstrap coordinate through Postgres.
+- **Still per replica** (later parts of #185): the inbound and submission SMTP throttles, passkey challenges (a passkey ceremony needs sticky sessions), the notification, replay, unsubscribe and DNS-verify budgets, and the outbound MX throttle (N replicas open N times `MAIL_MX_CONCURRENCY` sessions per provider: divide it by N).
+- **Nothing to persist:** every key expires within the longest limit window, so Redis needs no disk (the example turns persistence off). Keep Redis on the private network, never published; set a password (`redis://:password@redis:6379`) when it is shared with anything else. Redis Cluster is not supported.
+- **One Redis, or one Redis database, per BunMail install:** every key starts with `bunmail:`, so two installs on the same Redis database would share lockout counters (one install's failed logins from an address would lock that address out of the other). Their reveals stay apart (each is encrypted with its install's `DKIM_ENCRYPTION_KEY`). Give each install its own database number (`redis://redis:6379/1`, `/2`, ...) or its own Redis.
+- **TLS:** with `rediss://`, Bun verifies the server certificate and its host name (checked on Bun 1.3.14); a managed Redis with a public certificate works as is. For a private CA, mount it and set `NODE_EXTRA_CA_CERTS=/path/to/ca.pem` in `.env`. A certificate problem looks like an unreachable Redis: the replica refuses to start (`[boot] Redis did not answer`, code `ERR_REDIS_CONNECTION_CLOSED`).
+- **Outages:** Redis must answer when a replica starts, or the replica refuses to start (Docker restarts it). If Redis goes down later, limits fall back to each replica's memory (`Shared store unavailable` at `error`), reveals are not shown (`One-time reveal could not be stored`), and the replica reconnects on its own (`Redis connection restored`). This is a deliberate trade-off: sign-in keeps working during the outage, but each replica starts a fresh budget in its own memory, so an attacker gets about one extra window of attempts per replica while Redis is down (see SECURITY.md).
+- **Same `DKIM_ENCRYPTION_KEY` on every replica:** it also encrypts the reveals stored in Redis.
 
 ### Upgrading from 0.9.x to 0.10.0
 

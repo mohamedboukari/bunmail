@@ -266,18 +266,21 @@ export type AccountRefusal =
 /**
  * Failed-attempt budget for the ownership transfer password check (#218).
  * The route builds it from the login limiter (`login-rate-limit.ts`) with
- * its own keys (per actor and per client IP); the service calls it in
- * order: `isLimited` before any argon2id work, `record` right after (no
- * await in between, so a parallel burst cannot outrun it), `clear` after
- * a completed transfer.
+ * its own keys (per actor and per client IP); the service calls `take`
+ * before any argon2id work (the check and the count are one atomic step
+ * in the shared store, #185, so a parallel burst cannot outrun it, even
+ * across replicas) and `clear` after a completed transfer.
  */
 export interface AttemptLimiter {
-  /** True when any key is over its budget. */
-  isLimited(): boolean;
-  /** Counts one attempt against every key. */
-  record(): void;
+  /**
+   * Refuses when any key is over its budget (true, nothing counted), else
+   * counts one attempt against every key (false). Atomic.
+   */
+  take(): Promise<boolean>;
+  /** True when any key is over its budget; counts nothing. */
+  isLimited(): Promise<boolean>;
   /** Forgets every key's attempts. */
-  clear(): void;
+  clear(): Promise<void>;
 }
 
 /** Outcome of an account action (#218); the service has already logged it. */

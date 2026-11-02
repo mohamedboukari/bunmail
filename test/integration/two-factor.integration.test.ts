@@ -97,9 +97,9 @@ const ids = { owner: "", admin: "", member: "" };
 
 /** A limiter that never limits, for service calls outside the routes. */
 const noLimit: AttemptLimiter = {
-  isLimited: () => false,
-  record: () => {},
-  clear: () => {},
+  take: () => Promise.resolve(false),
+  isLimited: () => Promise.resolve(false),
+  clear: () => Promise.resolve(),
 };
 
 beforeEach(async () => {

@@ -9,13 +9,8 @@ import type {
   DashboardAuth,
   IssuePasswordResetResult,
 } from "../../modules/users/types/user.types.ts";
-import {
-  resolveClientIp,
-  isLoginRateLimited,
-  recordFailedLogin,
-  clearLoginAttempts,
-  rateLimitBucket,
-} from "../../middleware/login-rate-limit.ts";
+import { resolveClientIp, rateLimitBucket } from "../../middleware/login-rate-limit.ts";
+import { loginBudgetLimiter } from "../lib/password-limiter.ts";
 import { UsersPage } from "../routes/users.tsx";
 import { ForbiddenPage } from "../routes/forbidden.tsx";
 import { adminGuard } from "../guards.tsx";
@@ -67,21 +62,11 @@ const ACCOUNT_REFUSAL_FORBIDDEN: ReadonlySet<AccountRefusal> = new Set<AccountRe
  * successful login never clears them. No-op when the limiter is off.
  */
 function transferLimiter(actorId: string, ip: string): AttemptLimiter {
-  const { enabled, maxAttempts, windowSec } = config.dashboard.loginRateLimit;
-  const windowMs = windowSec * 1000;
   /** IPv6 clients by /64, like the login (#256). */
-  const keys = [`transfer:user:${actorId}`, `transfer:ip:${rateLimitBucket(ip)}`];
-  return {
-    isLimited: () =>
-      enabled &&
-      keys.some((key) => isLoginRateLimited(key, maxAttempts, windowMs).limited),
-    record: () => {
-      if (enabled) for (const key of keys) recordFailedLogin(key, windowMs);
-    },
-    clear: () => {
-      for (const key of keys) clearLoginAttempts(key);
-    },
-  };
+  return loginBudgetLimiter([
+    `transfer:user:${actorId}`,
+    `transfer:ip:${rateLimitBucket(ip)}`,
+  ]);
 }
 
 /** 302 back to the Users page with a flash message (never a link or token). */
@@ -119,13 +104,13 @@ function answerAccountAction(
  * reveal token goes in the redirect, so the link never appears in a URL,
  * a flash message or a log. A refusal is answered like any account action.
  */
-function answerPasswordReset(
+async function answerPasswordReset(
   set: Context["set"],
   auth: DashboardAuth,
   result: IssuePasswordResetResult,
-): string | Promise<string> {
+): Promise<string> {
   if (!result.ok) return answerAccountAction(set, result, "");
-  const reveal = stashRevealSecret(
+  const reveal = await stashRevealSecret(
     result.url,
     "password_reset_link",
     revealOwnerOf(auth),
@@ -161,7 +146,7 @@ export function userPages(app: GuardedDashboard) {
           const accounts = await userAdminService.listAccounts();
           const flash = toFlash(query.flash, query.flashType);
           /** One-time reveal of a reset link (#277), bound to this user and session (#280). */
-          const revealedResetLink = consumeRevealSecret(
+          const revealedResetLink = await consumeRevealSecret(
             query.reveal,
             "password_reset_link",
             revealOwnerOf(auth),
@@ -328,7 +313,7 @@ export function userPages(app: GuardedDashboard) {
               params.id,
               dashboardClient(request, server),
             );
-            return answerPasswordReset(set, auth, result);
+            return await answerPasswordReset(set, auth, result);
           } catch (error: unknown) {
             logger.error("Failed to issue a password reset link via dashboard", {
               targetUserId: params.id,

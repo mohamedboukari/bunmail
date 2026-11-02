@@ -57,6 +57,21 @@ jobs:
           --health-timeout=5s
           --health-retries=5
 
+      # Throwaway Redis for the shared-store contract tests (#185): the
+      # Redis implementation runs the same tests as the in-memory one.
+      # Only the test step below gets its URL (REDIS_TEST_URL); the app
+      # never reads it, and REDIS_URL stays unset, so every other test
+      # keeps the in-memory default.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,6 +155,14 @@ jobs:
             bun test test/unit --randomize --seed="$seed"
             bun test test/e2e --randomize --seed="$seed"
           done
+
+      - name: Test (shared-store contract against real Redis)
+        # Runs the in-memory store's contract against Redis too (#185):
+        # atomic limits under a parallel burst, window expiry, one-time
+        # entries hashed and encrypted at rest. Skipped without the URL.
+        env:
+          REDIS_TEST_URL: redis://localhost:6379
+        run: bun test test/unit/shared-store.test.ts
 
       - name: Coverage floor (unit + e2e merged)
         # Merges both LCOVs and fails below 64% lines / 73% functions.

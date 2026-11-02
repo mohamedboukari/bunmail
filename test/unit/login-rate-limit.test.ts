@@ -1,4 +1,12 @@
-import { describe, test, expect, beforeEach, spyOn } from "bun:test";
+import {
+  describe,
+  test,
+  expect,
+  beforeEach,
+  afterEach,
+  setSystemTime,
+  spyOn,
+} from "bun:test";
 import {
   resolveClientIp,
   isLoginRateLimited,
@@ -9,6 +17,7 @@ import {
   pruneExpiredLoginAttempts,
   loginAttemptMap,
   shouldAuditLockout,
+  takeLoginAttempt,
 } from "../../src/middleware/login-rate-limit.ts";
 import { logger } from "../../src/utils/logger.ts";
 
@@ -16,12 +25,24 @@ import { logger } from "../../src/utils/logger.ts";
  * Unit tests for the dashboard login brute-force limiter (#109).
  *
  * The module is config-free, so we import it directly and drive thresholds
- * and the clock explicitly. The attempt map is module-level shared state,
- * so each test starts from a clean map.
+ * explicitly, and the clock with `setSystemTime` (the in-memory store reads
+ * `Date.now()`). Without `REDIS_URL` the attempt map is the whole state;
+ * it is module-level, so each test starts from a clean map. The store's
+ * own contract, in memory and in Redis, is in shared-store.test.ts.
  */
+
+/** Moves the clock to `ms` (Unix epoch). */
+function at(ms: number): void {
+  setSystemTime(new Date(ms));
+}
 
 beforeEach(() => {
   loginAttemptMap.clear();
+  at(1_000_000);
+});
+
+afterEach(() => {
+  setSystemTime();
 });
 
 describe("resolveClientIp", () => {
@@ -117,91 +138,122 @@ describe("login rate limiter", () => {
   const MAX = 5;
   const WINDOW_MS = 900_000; // 15 minutes
 
-  test("an IP with no record is not limited", () => {
-    expect(isLoginRateLimited("1.1.1.1", MAX, WINDOW_MS).limited).toBe(false);
+  test("an IP with no record is not limited", async () => {
+    expect((await isLoginRateLimited("1.1.1.1", MAX)).limited).toBe(false);
   });
 
-  test("is not limited until maxAttempts failures accumulate", () => {
-    const now = 1_000_000;
+  test("is not limited until maxAttempts failures accumulate", async () => {
     for (let i = 0; i < MAX; i++) {
-      expect(isLoginRateLimited("2.2.2.2", MAX, WINDOW_MS, now).limited).toBe(false);
-      recordFailedLogin("2.2.2.2", WINDOW_MS, now);
+      expect((await isLoginRateLimited("2.2.2.2", MAX)).limited).toBe(false);
+      await recordFailedLogin("2.2.2.2", WINDOW_MS);
     }
     /** 5 failures recorded → the 6th check is limited. */
-    const result = isLoginRateLimited("2.2.2.2", MAX, WINDOW_MS, now);
+    const result = await isLoginRateLimited("2.2.2.2", MAX);
     expect(result.limited).toBe(true);
     expect(result.retryAfterSec).toBeGreaterThan(0);
     expect(result.retryAfterSec).toBeLessThanOrEqual(900);
   });
 
-  test("retryAfterSec counts down within the window", () => {
-    const start = 1_000_000;
-    for (let i = 0; i < MAX; i++) recordFailedLogin("3.3.3.3", WINDOW_MS, start);
+  test("retryAfterSec counts down within the window", async () => {
+    for (let i = 0; i < MAX; i++) await recordFailedLogin("3.3.3.3", WINDOW_MS);
 
     /** 600s into a 900s window → ~300s remaining. */
-    const result = isLoginRateLimited("3.3.3.3", MAX, WINDOW_MS, start + 600_000);
+    at(1_000_000 + 600_000);
+    const result = await isLoginRateLimited("3.3.3.3", MAX);
     expect(result.limited).toBe(true);
     expect(result.retryAfterSec).toBe(300);
   });
 
-  test("lockout clears once the window expires", () => {
-    const start = 1_000_000;
-    for (let i = 0; i < MAX; i++) recordFailedLogin("4.4.4.4", WINDOW_MS, start);
-    expect(isLoginRateLimited("4.4.4.4", MAX, WINDOW_MS, start).limited).toBe(true);
+  test("lockout clears once the window expires", async () => {
+    for (let i = 0; i < MAX; i++) await recordFailedLogin("4.4.4.4", WINDOW_MS);
+    expect((await isLoginRateLimited("4.4.4.4", MAX)).limited).toBe(true);
 
     /** Exactly one window later → window expired, not limited. */
-    expect(isLoginRateLimited("4.4.4.4", MAX, WINDOW_MS, start + WINDOW_MS).limited).toBe(
-      false,
-    );
+    at(1_000_000 + WINDOW_MS);
+    expect((await isLoginRateLimited("4.4.4.4", MAX)).limited).toBe(false);
   });
 
-  test("recordFailedLogin starts a fresh window after expiry", () => {
-    const start = 1_000_000;
-    for (let i = 0; i < MAX; i++) recordFailedLogin("5.5.5.5", WINDOW_MS, start);
+  test("recordFailedLogin starts a fresh window after expiry", async () => {
+    for (let i = 0; i < MAX; i++) await recordFailedLogin("5.5.5.5", WINDOW_MS);
 
     /** A failure after the window resets the count to 1 → not limited. */
-    recordFailedLogin("5.5.5.5", WINDOW_MS, start + WINDOW_MS + 1);
-    expect(
-      isLoginRateLimited("5.5.5.5", MAX, WINDOW_MS, start + WINDOW_MS + 1).limited,
-    ).toBe(false);
+    at(1_000_000 + WINDOW_MS + 1);
+    await recordFailedLogin("5.5.5.5", WINDOW_MS);
+    expect((await isLoginRateLimited("5.5.5.5", MAX)).limited).toBe(false);
   });
 
-  test("clearLoginAttempts resets an IP's counter", () => {
-    const now = 1_000_000;
-    for (let i = 0; i < MAX; i++) recordFailedLogin("6.6.6.6", WINDOW_MS, now);
-    expect(isLoginRateLimited("6.6.6.6", MAX, WINDOW_MS, now).limited).toBe(true);
+  test("clearLoginAttempts resets an IP's counter", async () => {
+    for (let i = 0; i < MAX; i++) await recordFailedLogin("6.6.6.6", WINDOW_MS);
+    expect((await isLoginRateLimited("6.6.6.6", MAX)).limited).toBe(true);
 
-    clearLoginAttempts("6.6.6.6");
-    expect(isLoginRateLimited("6.6.6.6", MAX, WINDOW_MS, now).limited).toBe(false);
+    await clearLoginAttempts(["6.6.6.6"]);
+    expect((await isLoginRateLimited("6.6.6.6", MAX)).limited).toBe(false);
   });
 
-  test("counters are independent per IP", () => {
-    const now = 1_000_000;
-    for (let i = 0; i < MAX; i++) recordFailedLogin("7.7.7.7", WINDOW_MS, now);
-    expect(isLoginRateLimited("7.7.7.7", MAX, WINDOW_MS, now).limited).toBe(true);
-    expect(isLoginRateLimited("8.8.8.8", MAX, WINDOW_MS, now).limited).toBe(false);
+  test("counters are independent per IP", async () => {
+    for (let i = 0; i < MAX; i++) await recordFailedLogin("7.7.7.7", WINDOW_MS);
+    expect((await isLoginRateLimited("7.7.7.7", MAX)).limited).toBe(true);
+    expect((await isLoginRateLimited("8.8.8.8", MAX)).limited).toBe(false);
+  });
+});
+
+describe("takeLoginAttempt (#185)", () => {
+  const MAX = 3;
+  const WINDOW_MS = 60_000;
+
+  test("counts up to the limit, then refuses without counting", async () => {
+    for (let i = 0; i < MAX; i++) {
+      expect((await takeLoginAttempt(["192.0.2.20"], MAX, WINDOW_MS)).limited).toBe(
+        false,
+      );
+    }
+    const refused = await takeLoginAttempt(["192.0.2.20"], MAX, WINDOW_MS);
+    expect(refused).toEqual({ limited: true, retryAfterSec: 60 });
+    expect(loginAttemptMap.get("192.0.2.20")?.count).toBe(MAX);
+  });
+
+  test("a parallel burst passes no more attempts than the budget", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => takeLoginAttempt(["192.0.2.21"], MAX, WINDOW_MS)),
+    );
+    expect(results.filter((r) => !r.limited)).toHaveLength(MAX);
+  });
+
+  test("several keys: one spent key refuses, and nothing is counted on the others", async () => {
+    for (let i = 0; i < MAX; i++)
+      await recordFailedLogin("password:user:usr_1", WINDOW_MS);
+    const keys = ["password:user:usr_1", "password:ip:192.0.2.22"];
+    expect((await takeLoginAttempt(keys, MAX, WINDOW_MS)).limited).toBe(true);
+    expect(loginAttemptMap.has("password:ip:192.0.2.22")).toBe(false);
+  });
+
+  test("buckets each key: an IPv6 /64 is one budget", async () => {
+    for (let i = 1; i <= MAX; i++) {
+      await takeLoginAttempt([`2001:db8:9:9::${i}`], MAX, WINDOW_MS);
+    }
+    expect((await takeLoginAttempt(["2001:db8:9:9::ffff"], MAX, WINDOW_MS)).limited).toBe(
+      true,
+    );
   });
 });
 
 describe("pruneExpiredLoginAttempts", () => {
   const WINDOW_MS = 900_000;
 
-  test("removes only entries whose window has expired", () => {
-    const start = 1_000_000;
-    recordFailedLogin("old.ip", WINDOW_MS, start);
-    recordFailedLogin("fresh.ip", WINDOW_MS, start + WINDOW_MS); // newer window
+  test("removes only entries whose window has expired", async () => {
+    await recordFailedLogin("old.ip", WINDOW_MS);
+    at(1_000_000 + WINDOW_MS);
+    await recordFailedLogin("fresh.ip", WINDOW_MS); // newer window
 
     /** Sweep one window after the first entry started. */
-    const removed = pruneExpiredLoginAttempts(WINDOW_MS, start + WINDOW_MS);
-    expect(removed).toBe(1);
+    expect(pruneExpiredLoginAttempts()).toBe(1);
     expect(loginAttemptMap.has("old.ip")).toBe(false);
     expect(loginAttemptMap.has("fresh.ip")).toBe(true);
   });
 
-  test("returns 0 when nothing has expired", () => {
-    const now = 1_000_000;
-    recordFailedLogin("a.b.c.d", WINDOW_MS, now);
-    expect(pruneExpiredLoginAttempts(WINDOW_MS, now)).toBe(0);
+  test("returns 0 when nothing has expired", async () => {
+    await recordFailedLogin("a.b.c.d", WINDOW_MS);
+    expect(pruneExpiredLoginAttempts()).toBe(0);
   });
 });
 
@@ -218,40 +270,40 @@ describe("throttle buckets (#256)", () => {
     expect(rateLimitBucket(ip)).toBe(bucket);
   });
 
-  test("rotating addresses inside one IPv6 /64 still hits the limit", () => {
+  test("rotating addresses inside one IPv6 /64 still hits the limit", async () => {
     const windowMs = 60_000;
-    for (let i = 1; i <= 5; i++) recordFailedLogin(`2001:db8:1:2::${i}`, windowMs, 1000);
-    expect(isLoginRateLimited("2001:db8:1:2::ffff", 5, windowMs, 1000).limited).toBe(
-      true,
-    );
-    expect(isLoginRateLimited("2001:db8:1:3::1", 5, windowMs, 1000).limited).toBe(false);
+    for (let i = 1; i <= 5; i++) await recordFailedLogin(`2001:db8:1:2::${i}`, windowMs);
+    expect((await isLoginRateLimited("2001:db8:1:2::ffff", 5)).limited).toBe(true);
+    expect((await isLoginRateLimited("2001:db8:1:3::1", 5)).limited).toBe(false);
   });
 });
 
 describe("refundLoginAttempt (#256)", () => {
   const windowMs = 60_000;
 
-  test("a successful login keeps the earlier failures", () => {
-    for (let i = 0; i < 4; i++) recordFailedLogin("192.0.2.9", windowMs, 1000);
+  test("a successful login keeps the earlier failures", async () => {
+    for (let i = 0; i < 4; i++) await recordFailedLogin("192.0.2.9", windowMs);
     /** The login counts itself first, then refunds on success. */
-    recordFailedLogin("192.0.2.9", windowMs, 1000);
-    refundLoginAttempt("192.0.2.9", windowMs, 1000);
-    recordFailedLogin("192.0.2.9", windowMs, 1000);
-    expect(isLoginRateLimited("192.0.2.9", 5, windowMs, 1000).limited).toBe(true);
+    await recordFailedLogin("192.0.2.9", windowMs);
+    await refundLoginAttempt("192.0.2.9");
+    await recordFailedLogin("192.0.2.9", windowMs);
+    expect((await isLoginRateLimited("192.0.2.9", 5)).limited).toBe(true);
   });
 
-  test("successful logins alone never lock an address out", () => {
+  test("successful logins alone never lock an address out", async () => {
     for (let i = 0; i < 20; i++) {
-      recordFailedLogin("192.0.2.10", windowMs, 1000);
-      refundLoginAttempt("192.0.2.10", windowMs, 1000);
+      await recordFailedLogin("192.0.2.10", windowMs);
+      await refundLoginAttempt("192.0.2.10");
     }
-    expect(isLoginRateLimited("192.0.2.10", 5, windowMs, 1000).limited).toBe(false);
+    expect((await isLoginRateLimited("192.0.2.10", 5)).limited).toBe(false);
   });
 
-  test("does nothing once the window has expired", () => {
-    recordFailedLogin("192.0.2.11", windowMs, 1000);
-    refundLoginAttempt("192.0.2.11", windowMs, 1000 + windowMs);
-    expect(loginAttemptMap.get("192.0.2.11")?.count).toBe(1);
+  test("does nothing once the window has expired", async () => {
+    await recordFailedLogin("192.0.2.11", windowMs);
+    at(1_000_000 + windowMs);
+    await refundLoginAttempt("192.0.2.11");
+    /** The expired window is gone; a new one is not started by a refund. */
+    expect(loginAttemptMap.has("192.0.2.11")).toBe(false);
   });
 });
 
@@ -287,27 +339,33 @@ describe("unproxied request warning (#256)", () => {
 describe("shouldAuditLockout (#221)", () => {
   const WINDOW = 60_000;
 
-  test("true once per key and window, false without a live window", () => {
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, 1_000)).toBe(false);
-    recordFailedLogin("192.0.2.1", WINDOW, 1_000);
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, 2_000)).toBe(true);
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, 3_000)).toBe(false);
+  test("true once per key and window, false without a live window", async () => {
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(false);
+    await recordFailedLogin("192.0.2.1", WINDOW);
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(true);
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(false);
     /** Another key has its own flag. */
-    recordFailedLogin("192.0.2.2", WINDOW, 1_000);
-    expect(shouldAuditLockout("192.0.2.2", WINDOW, 2_000)).toBe(true);
+    await recordFailedLogin("192.0.2.2", WINDOW);
+    expect(await shouldAuditLockout("192.0.2.2")).toBe(true);
   });
 
-  test("a new window resets the flag; an expired one says false", () => {
-    recordFailedLogin("192.0.2.1", WINDOW, 0);
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, 1)).toBe(true);
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, WINDOW)).toBe(false);
-    recordFailedLogin("192.0.2.1", WINDOW, WINDOW + 1);
-    expect(shouldAuditLockout("192.0.2.1", WINDOW, WINDOW + 2)).toBe(true);
+  test("a new window resets the flag; an expired one says false", async () => {
+    const t0 = 2_000_000;
+    at(t0);
+    await recordFailedLogin("192.0.2.1", WINDOW);
+    at(t0 + 1);
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(true);
+    at(t0 + WINDOW);
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(false);
+    at(t0 + WINDOW + 1);
+    await recordFailedLogin("192.0.2.1", WINDOW);
+    at(t0 + WINDOW + 2);
+    expect(await shouldAuditLockout("192.0.2.1")).toBe(true);
   });
 
-  test("an IPv6 /64 shares one flag, like its bucket", () => {
-    recordFailedLogin("2001:db8::1", WINDOW, 0);
-    expect(shouldAuditLockout("2001:db8::1", WINDOW, 1)).toBe(true);
-    expect(shouldAuditLockout("2001:db8::ffff", WINDOW, 2)).toBe(false);
+  test("an IPv6 /64 shares one flag, like its bucket", async () => {
+    await recordFailedLogin("2001:db8::1", WINDOW);
+    expect(await shouldAuditLockout("2001:db8::1")).toBe(true);
+    expect(await shouldAuditLockout("2001:db8::ffff")).toBe(false);
   });
 });

@@ -3,10 +3,9 @@ import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
 import { UserStoreError } from "../../modules/users/errors.ts";
 import {
-  isLoginRateLimited,
-  recordFailedLogin,
   refundLoginAttempt,
   shouldAuditLockout,
+  takeLoginAttempt,
 } from "../../middleware/login-rate-limit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import type { AuditLoginFailureReason } from "../../modules/audit/types/audit.types.ts";
@@ -184,19 +183,19 @@ export function passkeyLoginPages(app: PublicDashboard) {
         if (!rp) return refuseOptions(set, 404, { error: PASSKEYS_OFF });
 
         const { loginRateLimit } = config.dashboard;
-        const windowMs = loginRateLimit.windowSec * 1000;
         if (loginRateLimit.enabled) {
-          const { limited, retryAfterSec } = isLoginRateLimited(
-            ip,
+          /** Checked and counted in one atomic step, like the password login. */
+          const { limited, retryAfterSec } = await takeLoginAttempt(
+            [ip],
             loginRateLimit.maxAttempts,
-            windowMs,
+            loginRateLimit.windowSec * 1000,
           );
           if (limited) {
             logger.warn("Passkey sign-in blocked: too many attempts", {
               ip,
               retryAfterSec,
             });
-            if (shouldAuditLockout(ip, windowMs)) {
+            if (await shouldAuditLockout(ip)) {
               await recordAuditEvent({
                 action: "auth.login.rate_limited",
                 outcome: "failure",
@@ -212,7 +211,6 @@ export function passkeyLoginPages(app: PublicDashboard) {
               error: `Too many failed attempts. Try again in ${minutes} minute(s).`,
             });
           }
-          recordFailedLogin(ip, windowMs);
         }
 
         const { binding, options } = await passkeyService.startPasskeySignIn(rp);
@@ -329,7 +327,7 @@ export function passkeyLoginPages(app: PublicDashboard) {
 
             const { loginRateLimit } = config.dashboard;
             if (loginRateLimit.enabled) {
-              refundLoginAttempt(ip, loginRateLimit.windowSec * 1000);
+              await refundLoginAttempt(ip);
             }
             logger.info("Dashboard login successful", {
               userId: result.userId,
@@ -495,7 +493,7 @@ export function passkeyLoginPages(app: PublicDashboard) {
                   reportCounterRegression(result.passkey, ip);
                 }
               }
-              if (result.reason === "rate_limited" || limiter.isLimited()) {
+              if (result.reason === "rate_limited" || (await limiter.isLimited())) {
                 return await endLockedSecondStep(set, request, {
                   token,
                   pending,
@@ -509,7 +507,7 @@ export function passkeyLoginPages(app: PublicDashboard) {
               );
             }
 
-            limiter.clear();
+            await limiter.clear();
             issueSession(set, result.token, result.maxAgeSec);
             logger.info("Dashboard login successful", {
               userId: pending.userId,

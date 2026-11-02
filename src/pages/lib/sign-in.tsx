@@ -162,7 +162,7 @@ export async function endLockedSecondStep(
     userAgent: request.headers.get("user-agent"),
     target: { type: "session", id: pending.sessionId, label: null },
   });
-  if (limiter.ownKeyLimited() && shouldAlertCodesExhausted(pending.userId)) {
+  if ((await limiter.ownKeyLimited()) && shouldAlertCodesExhausted(pending.userId)) {
     void sendTwoFactorAlert({
       event: "login_codes_exhausted",
       userId: pending.userId,

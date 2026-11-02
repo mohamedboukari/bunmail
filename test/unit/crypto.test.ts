@@ -124,6 +124,27 @@ describe("encryptSecret / decryptSecret", () => {
     expect(() => decryptSecret("not-encrypted", key)).toThrow(/segment count/);
     expect(() => decryptSecret("v2:a:b:c", key)).toThrow(/version/);
   });
+
+  describe("associated data (#185)", () => {
+    test("round-trips with the same associated data, in the same v1 shape", () => {
+      const ciphertext = encryptSecret(samplePlaintext, key, "record-a");
+      expect(ciphertext.split(":")).toHaveLength(4);
+      expect(isEncryptedSecret(ciphertext)).toBe(true);
+      expect(decryptSecret(ciphertext, key, "record-a")).toBe(samplePlaintext);
+    });
+
+    test("bound ciphertext fails with other or missing associated data", () => {
+      const ciphertext = encryptSecret(samplePlaintext, key, "record-a");
+      expect(() => decryptSecret(ciphertext, key, "record-b")).toThrow();
+      expect(() => decryptSecret(ciphertext, key)).toThrow();
+    });
+
+    test("an unbound ciphertext (every stored secret) still decrypts unbound only", () => {
+      const ciphertext = encryptSecret(samplePlaintext, key);
+      expect(decryptSecret(ciphertext, key)).toBe(samplePlaintext);
+      expect(() => decryptSecret(ciphertext, key, "record-a")).toThrow();
+    });
+  });
 });
 
 describe("isEncryptedSecret", () => {

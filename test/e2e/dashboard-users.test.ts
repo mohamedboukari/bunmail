@@ -133,7 +133,7 @@ describe("Dashboard E2E: users", () => {
       const call = accountAction.mock.calls.at(-1);
       expect(call?.slice(0, 3)).toEqual([OWNER.userId, "usr_admin", "hunter2-not-it"]);
       /** The route hands the service the transfer budget (#218). */
-      expect(typeof call?.[3]?.isLimited).toBe("function");
+      expect(typeof call?.[3]?.take).toBe("function");
     });
 
     test("an exhausted transfer budget is an error flash", async () => {

@@ -134,7 +134,7 @@ async function endSessionIfBudgetSpent(
   ip: string,
   action: "disable" | "recovery_codes",
 ): Promise<string | undefined> {
-  if (!limiter.ownKeyLimited()) return undefined;
+  if (!(await limiter.ownKeyLimited())) return undefined;
   await sessionService.revokeUserSession(auth.user.id, auth.session.id);
   logger.warn("Two-factor code budget spent in a session: session revoked", {
     userId: auth.user.id,
@@ -177,7 +177,7 @@ function alertTwoFactorChange(
  * to this user and session, and returns the reveal token for the
  * redirect: the codes never go into a URL, a flash or a log.
  */
-function stashRecoveryCodes(codes: string[], auth: DashboardAuth): string {
+function stashRecoveryCodes(codes: string[], auth: DashboardAuth): Promise<string> {
   return stashRevealSecret(codes.join("\n"), "recovery_codes", revealOwnerOf(auth));
 }
 
@@ -371,10 +371,8 @@ export function accountPages(app: GuardedDashboard) {
         "/account/two-factor",
         async ({ query, auth, set }) => {
           setNoStore(set);
-          const recoveryCodes = consumeRevealSecret(
-            query.reveal,
-            "recovery_codes",
-            revealOwnerOf(auth),
+          const recoveryCodes = (
+            await consumeRevealSecret(query.reveal, "recovery_codes", revealOwnerOf(auth))
           )?.split("\n");
           try {
             const status = await twoFactorService.twoFactorStatus(auth.user.id);
@@ -528,7 +526,7 @@ export function accountPages(app: GuardedDashboard) {
               set,
               "Two-factor authentication is on. You were signed out on every other device.",
               "success",
-              stashRecoveryCodes(result.recoveryCodes, auth),
+              await stashRecoveryCodes(result.recoveryCodes, auth),
             );
           } catch (error: unknown) {
             logger.error("Two-factor enrolment failed", {
@@ -589,7 +587,7 @@ export function accountPages(app: GuardedDashboard) {
               if (ended !== undefined) return ended;
               return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
             }
-            limiter.clear();
+            await limiter.clear();
             logger.warn("Recovery codes regenerated", {
               userId: auth.user.id,
               sessionId: auth.session.id,
@@ -600,7 +598,7 @@ export function accountPages(app: GuardedDashboard) {
               set,
               "New recovery codes created. The old ones no longer work.",
               "success",
-              stashRecoveryCodes(result.recoveryCodes, auth),
+              await stashRecoveryCodes(result.recoveryCodes, auth),
             );
           } catch (error: unknown) {
             logger.error("Recovery code regeneration failed", {
@@ -668,7 +666,7 @@ export function accountPages(app: GuardedDashboard) {
                 result.reason === "wrong_code" ? "wrong_password" : result.reason;
               return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[reason], "error");
             }
-            limiter.clear();
+            await limiter.clear();
             logger.warn("Two-factor authentication disabled", {
               userId: auth.user.id,
               sessionId: auth.session.id,

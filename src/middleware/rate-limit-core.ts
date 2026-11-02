@@ -6,6 +6,12 @@
  * replace `rate-limit.ts` with a stub via `mock.module`, and those mocks
  * leak across files in a combined `bun test` run; nothing mocks this
  * module, so its tests always exercise the real code.
+ *
+ * Since #185 the HTTP API's counts live in the shared store
+ * (`src/utils/shared-store.ts`, Redis with `REDIS_URL`), which applies the
+ * same rules; `checkRateLimit` remains the in-process limiter of the
+ * per-replica budgets (notifications, replays, unsubscribes) until they
+ * move too.
  */
 
 /** Default maximum number of requests allowed per window */

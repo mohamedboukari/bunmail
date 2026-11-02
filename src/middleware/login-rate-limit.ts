@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger.ts";
+import { sharedWindowCounter } from "../utils/shared-store.ts";
 import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
 
 /**
@@ -21,11 +22,10 @@ import { embeddedIpv4, parseIpv6 } from "../utils/ssrf-guard.ts";
  * `mock.module`: `config.ts` throws at import time and Bun's
  * `mock.module` leaks across test files.
  *
- * Mirrors the in-memory fixed-window pattern used by the SMTP receiver
- * (`src/modules/inbound/services/smtp-receiver.service.ts`) and the HTTP
- * per-API-key limiter (`src/middleware/rate-limit.ts`). State is
- * in-memory and resets on restart: acceptable for the single-instance
- * default; multi-replica deployments would each keep their own counters.
+ * Fixed windows like the HTTP per-API-key limiter
+ * (`src/middleware/rate-limit.ts`), in the shared store (#185): Redis
+ * when `REDIS_URL` is set, so every replica counts against one budget;
+ * else process memory, reset by a restart (one replica).
  */
 
 /* ─── Client IP resolution ─── */
@@ -142,95 +142,88 @@ export function rateLimitBucket(ip: string): string {
 
 /* ─── Per-IP failed-attempt tracking ─── */
 
-/** Tracks failed-login count and window start per client IP. */
-interface LoginAttemptEntry {
-  /** Number of failed attempts in the current window */
-  count: number;
-  /** Timestamp (ms) when the current window started */
-  windowStart: number;
-  /**
-   * The lockout of this window was already written to the audit log
-   * (#221): a flood of refused attempts records one row, not one each.
-   * A new window is a new entry, so the flag resets with it.
-   */
-  lockoutAudited?: boolean;
+/**
+ * Failed-attempt counters per key (client IP bucket, or a prefixed key
+ * such as `transfer:user:<id>`), in fixed windows (#185): in Redis when
+ * `REDIS_URL` is set, so N replicas allow one budget, not N; else (and
+ * while Redis is down) in this process's memory.
+ */
+const loginCounter = sharedWindowCounter("rl:login");
+
+/**
+ * The in-memory counters, keyed by bucket: the whole state without Redis.
+ * Exported for tests (assert/reset between cases); the running server
+ * goes through the helpers below.
+ */
+export const loginAttemptMap = loginCounter.local.entries;
+
+/** Outcome of a lockout check: `retryAfterSec` is 0 when not limited. */
+export interface LoginLimitDecision {
+  limited: boolean;
+  retryAfterSec: number;
+}
+
+/** Whole seconds until a window ends, rounded up. */
+function toSeconds(ms: number): number {
+  return Math.ceil(ms / 1000);
 }
 
 /**
- * In-memory map of client IP → failed-attempt state. Exported for unit
- * testing (assert/reset between cases): the running server mutates it via
- * the helpers below.
+ * Checks whether a key is currently locked out, without counting
+ * anything: `maxAttempts` attempts in its window. For the checks made
+ * after an attempt was counted (is this budget spent now?); to check
+ * before an attempt, use {@link takeLoginAttempt}, which also counts it.
  */
-export const loginAttemptMap = new Map<string, LoginAttemptEntry>();
-
-/**
- * Checks whether an IP is currently locked out. Pure read, does NOT
- * mutate the map, so the caller can decide to reject before validating the
- * password. The lockout clears automatically once the window expires.
- *
- * @returns `limited` true once `maxAttempts` failures have accumulated in
- *   the window, with `retryAfterSec` = whole seconds until the window ends.
- */
-export function isLoginRateLimited(
+export async function isLoginRateLimited(
   ip: string,
   maxAttempts: number,
-  windowMs: number,
-  now: number = Date.now(),
-): { limited: boolean; retryAfterSec: number } {
-  const entry = loginAttemptMap.get(rateLimitBucket(ip));
-
-  /** No record, or the window has fully expired, not limited. */
-  if (!entry || now - entry.windowStart >= windowMs) {
-    return { limited: false, retryAfterSec: 0 };
-  }
-
-  if (entry.count >= maxAttempts) {
-    const retryAfterSec = Math.ceil((entry.windowStart + windowMs - now) / 1000);
-    return { limited: true, retryAfterSec };
-  }
-
-  return { limited: false, retryAfterSec: 0 };
+): Promise<LoginLimitDecision> {
+  const window = await loginCounter.peek(rateLimitBucket(ip));
+  if (!window || window.count < maxAttempts) return { limited: false, retryAfterSec: 0 };
+  return { limited: true, retryAfterSec: toSeconds(window.resetInMs) };
 }
 
 /**
- * True the first time it is asked during a key's current lockout window,
- * false afterwards (#221): the login records a rate-limited attempt in the
+ * Counts one attempt against every key, or refuses it when any key
+ * already holds `maxAttempts` in its window (then nothing is counted).
+ * One atomic step, before any password work: a parallel burst, on one
+ * replica or several, cannot pass the limit between a check and a count.
+ * A key without a live window starts one of `windowMs`.
+ */
+export async function takeLoginAttempt(
+  ips: readonly string[],
+  maxAttempts: number,
+  windowMs: number,
+): Promise<LoginLimitDecision> {
+  const decision = await loginCounter.take(ips.map(rateLimitBucket), {
+    max: maxAttempts,
+    windowMs,
+  });
+  return decision.limited
+    ? { limited: true, retryAfterSec: toSeconds(decision.retryAfterMs) }
+    : { limited: false, retryAfterSec: 0 };
+}
+
+/**
+ * True the first time it is asked during a key's current window, false
+ * afterwards (#221): the login records a rate-limited attempt in the
  * audit log once per key and window, so a flood cannot fill the table.
- * Reuses the limiter's own entry, so it needs no state of its own; false
- * when the key has no live window.
+ * False when the key has no live window.
  */
-export function shouldAuditLockout(
-  ip: string,
-  windowMs: number,
-  now: number = Date.now(),
-): boolean {
-  const entry = loginAttemptMap.get(rateLimitBucket(ip));
-  if (!entry || now - entry.windowStart >= windowMs || entry.lockoutAudited) {
-    return false;
-  }
-  entry.lockoutAudited = true;
-  return true;
+export function shouldAuditLockout(ip: string): Promise<boolean> {
+  return loginCounter.markOnce(rateLimitBucket(ip));
 }
 
 /**
- * Records one failed login attempt for an IP. Starts a fresh window on the
- * first failure (or after the previous window expired); otherwise
- * increments the counter within the current window.
+ * Counts one failed attempt for a key, whatever its count: starts a
+ * window of `windowMs` on the first one. For tests and for counting
+ * without a check; the routes use {@link takeLoginAttempt}.
  */
-export function recordFailedLogin(
-  ip: string,
-  windowMs: number,
-  now: number = Date.now(),
-): void {
-  const key = rateLimitBucket(ip);
-  const entry = loginAttemptMap.get(key);
-
-  if (!entry || now - entry.windowStart >= windowMs) {
-    loginAttemptMap.set(key, { count: 1, windowStart: now });
-    return;
-  }
-
-  entry.count += 1;
+export async function recordFailedLogin(ip: string, windowMs: number): Promise<void> {
+  await loginCounter.take([rateLimitBucket(ip)], {
+    max: Number.MAX_SAFE_INTEGER,
+    windowMs,
+  });
 }
 
 /**
@@ -240,23 +233,17 @@ export function recordFailedLogin(
  * anyone with an account of their own sign in between guesses at another
  * account's password and keep guessing from the same address forever.
  */
-export function refundLoginAttempt(
-  ip: string,
-  windowMs: number,
-  now: number = Date.now(),
-): void {
-  const entry = loginAttemptMap.get(rateLimitBucket(ip));
-  if (!entry || now - entry.windowStart >= windowMs) return;
-  entry.count = Math.max(0, entry.count - 1);
+export function refundLoginAttempt(ip: string): Promise<void> {
+  return loginCounter.refund(rateLimitBucket(ip));
 }
 
 /**
- * Clears a key's failed-attempt record. Used by the ownership transfer
- * check (#218), whose success cannot be repeated; the login refunds its
- * own attempt instead (see {@link refundLoginAttempt}).
+ * Clears keys' failed-attempt records. Used by the ownership transfer
+ * check (#218) and the other budgets whose success cannot be repeated;
+ * the login refunds its own attempt instead (see {@link refundLoginAttempt}).
  */
-export function clearLoginAttempts(ip: string): void {
-  loginAttemptMap.delete(rateLimitBucket(ip));
+export function clearLoginAttempts(ips: readonly string[]): Promise<void> {
+  return loginCounter.delete(ips.map(rateLimitBucket));
 }
 
 /* ─── Periodic cleanup ─── */
@@ -268,37 +255,24 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
 /**
- * Removes entries whose window has fully expired. Without this, distinct
- * attacker IPs arriving over a long lifetime would grow the map unbounded.
- * Exported for unit testing: the running server uses the interval below.
+ * Removes in-memory entries whose window has ended. Without this, distinct
+ * attacker IPs arriving over a long lifetime would grow the map unbounded
+ * (Redis expires its keys on its own). Exported for unit testing: the
+ * running server uses the interval below.
  */
-export function pruneExpiredLoginAttempts(
-  windowMs: number,
-  now: number = Date.now(),
-): number {
-  let removed = 0;
-  for (const [ip, entry] of loginAttemptMap) {
-    if (now - entry.windowStart >= windowMs) {
-      loginAttemptMap.delete(ip);
-      removed += 1;
-    }
-  }
-  return removed;
+export function pruneExpiredLoginAttempts(): number {
+  return loginCounter.local.prune();
 }
 
 /**
  * Starts a periodic sweep that drops expired entries from the in-memory
- * login-attempt map. Idempotent: calling twice is a no-op while the
- * interval is running. Mirrors `startRateLimitCleanup` in `rate-limit.ts`.
- *
- * @param windowMs The configured failure window, in milliseconds.
+ * login-attempt map (the default store, and the fallback while Redis is
+ * down). Idempotent: calling twice is a no-op while the interval is
+ * running. Mirrors `startRateLimitCleanup` in `rate-limit.ts`.
  */
-export function startLoginRateLimitCleanup(windowMs: number): void {
+export function startLoginRateLimitCleanup(): void {
   if (cleanupInterval) return;
-  cleanupInterval = setInterval(
-    () => pruneExpiredLoginAttempts(windowMs),
-    CLEANUP_INTERVAL_MS,
-  );
+  cleanupInterval = setInterval(() => pruneExpiredLoginAttempts(), CLEANUP_INTERVAL_MS);
   logger.debug("Dashboard login rate-limit cleanup started", {
     intervalMs: CLEANUP_INTERVAL_MS,
   });
