@@ -26,6 +26,23 @@ const SSO_CLIENT_VALUE_RE = /^[\x21-\x7e]{1,512}$/;
 /** One scope token (RFC 6749 section 3.3): printable ASCII but `"` and `\`. */
 const SSO_SCOPE_TOKEN_RE = /^[\x21\x23-\x5b\x5d-\x7e]{1,128}$/;
 
+/**
+ * Issuer hosts of Microsoft Entra ID (#224, part 4), the global cloud and
+ * the sovereign and national ones (US Gov, China operated by 21Vianet,
+ * the legacy Germany cloud). Entra's `email` claim is not a verified,
+ * immutable value (the "nOAuth" class of takeover), so linking by email
+ * is refused at boot for these issuers. Matched exactly, by host name.
+ */
+const ENTRA_ISSUER_HOSTS: ReadonlySet<string> = new Set([
+  "login.microsoftonline.com",
+  "sts.windows.net",
+  "login.microsoftonline.us",
+  "login.partner.microsoftonline.cn",
+  "login.chinacloudapi.cn",
+  "sts.chinacloudapi.cn",
+  "login.microsoftonline.de",
+]);
+
 /** One label of a domain name in `SSO_<ID>_ALLOWED_DOMAINS`. */
 const DOMAIN_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -246,7 +263,7 @@ function readSsoAllowedDomains(key: string, raw: string | undefined): string[] {
  * `CLIENT_SECRET` (required), `LABEL` (default: the id), `SCOPES`
  * (default `openid email profile`), `ALLOWED_DOMAINS` (optional) and
  * `AUTO_LINK` (strict boolean, default false; `true` needs allowed
- * domains). Unset `SSO_PROVIDERS`: no providers, nothing else is read.
+ * domains and is refused for a Microsoft Entra issuer). Unset `SSO_PROVIDERS`: no providers, nothing else is read.
  * Two ids with the same issuer are refused: a link is keyed by the
  * issuer (`oidc:<issuer>`), so they would share every link while keeping
  * their own client settings and labels.
@@ -292,6 +309,13 @@ export function readSsoSettings(
       );
     }
     const issuer = readSsoIssuer(`${prefix}ISSUER`, env[`${prefix}ISSUER`]);
+    const issuerHost = new URL(issuer).hostname;
+    if (autoLink && ENTRA_ISSUER_HOSTS.has(issuerHost)) {
+      throw new Error(
+        `[config] ${prefix}AUTO_LINK=true is not allowed for a Microsoft Entra issuer (${issuerHost}):\n` +
+          "  → Entra's email claim is not a verified, immutable value; link identities under Account > Sign-in methods.",
+      );
+    }
     const sameIssuer = providers.find((provider) => provider.issuer === issuer);
     if (sameIssuer) {
       throw new Error(

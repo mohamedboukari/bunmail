@@ -20,10 +20,7 @@ import {
   finishSsoSignInCallback,
   type SsoSignInCallbackDeps,
 } from "../../src/modules/users/services/sso-sign-in-flow.service.ts";
-import {
-  startSsoFlow,
-  warnSsoAutoLinkNotImplemented,
-} from "../../src/modules/users/services/sso.service.ts";
+import { startSsoFlow } from "../../src/modules/users/services/sso.service.ts";
 import type {
   SsoSignInDecision,
   SsoSignInRefusal,
@@ -135,6 +132,15 @@ function fakeDeps(
       calls.push("recordFailure");
       failures.push([userId, providerId, reason]);
       return Promise.resolve();
+    },
+    /** Auto-link is off for these providers: never reached (`sso-auto-link-flow.test.ts`). */
+    resolveAutoLink: () => {
+      calls.push("resolveAutoLink");
+      return Promise.resolve({ ok: false, reason: "no_account_for_email", userId: null });
+    },
+    autoLink: () => {
+      calls.push("autoLink");
+      return Promise.resolve({ ok: false, reason: "no_account_for_email", userId: null });
     },
   };
 }
@@ -430,30 +436,6 @@ describe("removedLinkFacts (the reset email, #224)", () => {
     } finally {
       expect(Reflect.set(config, "sso", original)).toBe(true);
     }
-  });
-});
-
-describe("warnSsoAutoLinkNotImplemented (until #224 part 4)", () => {
-  test("one boot warn per provider with AUTO_LINK=true, naming its setting; none otherwise", () => {
-    const providers = [
-      { ...provider(), id: "corp", autoLink: true },
-      { ...provider(), id: "google", autoLink: false },
-      { ...provider(), id: "my-idp", autoLink: true },
-    ];
-    expect(warnSsoAutoLinkNotImplemented(providers)).toEqual(["corp", "my-idp"]);
-    expect(logged).toEqual([
-      [
-        "SSO auto-link is not implemented yet; identities must be linked under Account > Sign-in methods",
-        { provider: "corp", setting: "SSO_CORP_AUTO_LINK" },
-      ],
-      [
-        "SSO auto-link is not implemented yet; identities must be linked under Account > Sign-in methods",
-        { provider: "my-idp", setting: "SSO_MY_IDP_AUTO_LINK" },
-      ],
-    ]);
-    logged.length = 0;
-    expect(warnSsoAutoLinkNotImplemented([provider()])).toEqual([]);
-    expect(logged).toEqual([]);
   });
 });
 

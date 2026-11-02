@@ -73,7 +73,8 @@ const FLOW_FAILED =
 
 /**
  * The redirect of a refused sign-in. Every refusal of a proven identity
- * (unknown, a disabled account, the owner without a second factor) gets
+ * (unknown, a disabled account, the owner without a second factor, a link
+ * by verified email that did not hold) gets
  * the same message, so the page tells the identity's holder nothing about
  * the account behind it; the audit row keeps the real reason. A failed
  * flow gets the generic one.
@@ -107,8 +108,10 @@ interface CallbackContext {
  * second login step, which completes it to `mfa` and runs the location
  * lookup and the new-device check then; a `password`-level one goes to
  * `/dashboard`, with the location lookup and the new-device check now
- * (`completeSignIn`). A refusal keeps its counted attempt and goes to the
- * login page.
+ * (`completeSignIn`). An identity linked on the way by its verified email
+ * (`SSO_<ID>_AUTO_LINK=true`) is logged and the account emailed (no links
+ * in it). A refusal keeps its counted attempt and
+ * goes to the login page.
  */
 async function finishSignIn(
   set: Context["set"],
@@ -146,6 +149,19 @@ async function finishSignIn(
     provider: provider.id,
     ip,
   };
+  if (outcome.autoLinked) {
+    logger.warn("SSO identity auto-linked by verified email", {
+      ...ids,
+      linkId: outcome.linkId,
+    });
+    void sendTwoFactorAlert({
+      event: "sso_auto_linked",
+      userId: outcome.userId,
+      email: outcome.email,
+      ip: sessionIp(ip),
+      sso: { provider: provider.label, account: outcome.autoLinked.name },
+    });
+  }
   if (outcome.assurance === "pending") {
     logger.info("Dashboard login: SSO accepted, second factor required", ids);
     issueSession(set, outcome.token, SESSION_PENDING_SECONDS);

@@ -214,6 +214,36 @@ describe("readSsoSettings: refusals", () => {
       { ...base, SSO_CORP_AUTO_LINK: "true" },
       /AUTO_LINK=true needs SSO_CORP_ALLOWED_DOMAINS/,
     ],
+    [
+      "auto-link for a Microsoft Entra issuer (login.microsoftonline.com)",
+      {
+        ...base,
+        SSO_CORP_ISSUER: "https://login.microsoftonline.com/0000-tenant/v2.0",
+        SSO_CORP_ALLOWED_DOMAINS: "example.com",
+        SSO_CORP_AUTO_LINK: "true",
+      },
+      /AUTO_LINK=true is not allowed for a Microsoft Entra issuer \(login\.microsoftonline\.com\)/,
+    ],
+    [
+      "auto-link for a Microsoft Entra v1 issuer (sts.windows.net)",
+      {
+        ...base,
+        SSO_CORP_ISSUER: "https://STS.windows.net/0000-tenant/",
+        SSO_CORP_ALLOWED_DOMAINS: "example.com",
+        SSO_CORP_AUTO_LINK: "true",
+      },
+      /not allowed for a Microsoft Entra issuer \(sts\.windows\.net\)/,
+    ],
+    [
+      "auto-link for a sovereign Microsoft Entra issuer (login.microsoftonline.us)",
+      {
+        ...base,
+        SSO_CORP_ISSUER: "https://login.microsoftonline.us/0000-tenant/v2.0",
+        SSO_CORP_ALLOWED_DOMAINS: "example.com",
+        SSO_CORP_AUTO_LINK: "true",
+      },
+      /not allowed for a Microsoft Entra issuer \(login\.microsoftonline\.us\)/,
+    ],
   ];
 
   for (const [name, env, message] of refusals) {
@@ -221,6 +251,15 @@ describe("readSsoSettings: refusals", () => {
       expect(() => readSsoSettings(env)).toThrow(message);
     });
   }
+
+  test("a Microsoft Entra issuer is accepted with auto-link off (explicit links only)", () => {
+    const settings = readSsoSettings({
+      ...base,
+      SSO_CORP_ISSUER: "https://login.microsoftonline.com/0000-tenant/v2.0",
+      SSO_CORP_ALLOWED_DOMAINS: "example.com",
+    });
+    expect(settings.providers[0]?.autoLink).toBe(false);
+  });
 
   test("a refused client secret is never echoed", () => {
     const secret = "has a space";

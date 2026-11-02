@@ -3,9 +3,10 @@ import { db } from "../../../db/index.ts";
 import { withSanitizedErrors } from "../errors.ts";
 import { users } from "../models/user.schema.ts";
 import { hasSecondFactor, userCredentials } from "../models/user-credential.schema.ts";
-import type { DbExecutor, SessionClient } from "../types/user.types.ts";
+import type { DbExecutor, SessionClient, Tx } from "../types/user.types.ts";
 import type {
   OpenSsoSessionResult,
+  SsoAutoLinkRefusal,
   SsoFailureReason,
   SsoSignInDecision,
   SsoSignInRefusal,
@@ -23,7 +24,10 @@ import { SSO_CREDENTIAL, ssoSignInRefusal } from "./sso-link-policy.service.ts";
  * **Identity.** Only by `(issuer, sub)`: the link row of type `oauth`
  * whose `provider` is `oidc:<issuer>` and whose `provider_account_id` is
  * the subject. Never by email, never by creating an account or accepting
- * an invitation (invite-only, #225).
+ * an invitation (invite-only, #225). An unknown identity may first be
+ * linked by its verified email when the provider opts in
+ * (`sso-auto-link.service.ts`); it then signs in through the same writes
+ * ({@link openLinkedSession}).
  *
  * **Assurance.** SSO is a first factor, like the password
  * (`firstFactorAssurance`): an account with a BunMail second factor gets a
@@ -138,52 +142,74 @@ export async function openSsoSession(
     db.transaction(async (tx): Promise<OpenSsoSessionResult> => {
       const decision = decide(await linkedAccount(tx, input, true));
       if (!decision.ok) return decision;
-      await tx
-        .update(userCredentials)
-        .set({ lastUsedAt: sql`now()` })
-        .where(eq(userCredentials.id, decision.linkId));
-      const { sessionId, token } = await createSession(
-        {
-          userId: decision.userId,
-          assurance: decision.assurance,
-          authMethod: SSO_CREDENTIAL,
-          credentialId: decision.linkId,
-          ...client,
-        },
-        tx,
-      );
-      const actor = { type: "user", id: decision.userId } satisfies AuditActor;
-      const target = {
-        type: "session",
-        id: sessionId,
-        label: null,
-      } satisfies AuditTarget;
-      if (decision.assurance === "pending") {
-        await recordAuditEvent(
-          {
-            action: "auth.login.two_factor_required",
-            actor,
-            ...client,
-            target,
-            metadata: { method: "oauth", provider: input.providerId },
-          },
-          tx,
-        );
-      } else {
-        await recordAuditEvent(
-          {
-            action: "auth.login.succeeded",
-            actor,
-            ...client,
-            target,
-            metadata: { method: "oauth", provider: input.providerId },
-          },
-          tx,
-        );
-      }
-      return { ...decision, sessionId, token };
+      const opened = await openLinkedSession(tx, decision, input.providerId, client);
+      return { ...decision, ...opened };
     }),
   );
+}
+
+/**
+ * The writes of a linked sign-in, inside the caller's transaction once
+ * the rules passed under its lock: the link's `last_used_at`, the session
+ * (`pending` or `password`, `auth_method = 'oauth'`, bound to the link)
+ * and the record, `auth.login.two_factor_required` for a `pending`
+ * session, `auth.login.succeeded` otherwise, both `{ method: "oauth",
+ * provider }`. Shared by {@link openSsoSession} and the link by verified
+ * email (`autoLinkSsoIdentity`), so both sign in the same way.
+ */
+export async function openLinkedSession(
+  tx: Tx,
+  decision: Pick<
+    Extract<SsoSignInDecision, { ok: true }>,
+    "userId" | "linkId" | "assurance"
+  >,
+  providerId: string,
+  client: SessionClient,
+): Promise<{ sessionId: string; token: string }> {
+  await tx
+    .update(userCredentials)
+    .set({ lastUsedAt: sql`now()` })
+    .where(eq(userCredentials.id, decision.linkId));
+  const { sessionId, token } = await createSession(
+    {
+      userId: decision.userId,
+      assurance: decision.assurance,
+      authMethod: SSO_CREDENTIAL,
+      credentialId: decision.linkId,
+      ...client,
+    },
+    tx,
+  );
+  const actor = { type: "user", id: decision.userId } satisfies AuditActor;
+  const target = {
+    type: "session",
+    id: sessionId,
+    label: null,
+  } satisfies AuditTarget;
+  if (decision.assurance === "pending") {
+    await recordAuditEvent(
+      {
+        action: "auth.login.two_factor_required",
+        actor,
+        ...client,
+        target,
+        metadata: { method: "oauth", provider: providerId },
+      },
+      tx,
+    );
+  } else {
+    await recordAuditEvent(
+      {
+        action: "auth.login.succeeded",
+        actor,
+        ...client,
+        target,
+        metadata: { method: "oauth", provider: providerId },
+      },
+      tx,
+    );
+  }
+  return { sessionId, token };
 }
 
 /**
@@ -195,7 +221,7 @@ export async function openSsoSession(
 export async function recordSsoLoginFailure(
   userId: string | null,
   providerId: string,
-  reason: SsoFailureReason | SsoSignInRefusal,
+  reason: SsoFailureReason | SsoSignInRefusal | SsoAutoLinkRefusal,
   client: SessionClient,
 ): Promise<void> {
   await recordAuditEvent({
