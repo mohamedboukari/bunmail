@@ -254,7 +254,11 @@ bunmail/
 │   │   ├── inbound/
 │   │   │   ├── inbound.plugin.ts         ← Routes: list, get, trash/restore/permanent/empty
 │   │   │   ├── services/
-│   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server)
+│   │   │   │   ├── smtp-receiver.service.ts ← SMTP server (smtp-server): public surface, built from the smtp-receiver-*.service.ts files (#387)
+│   │   │   │   ├── smtp-receiver-session.service.ts ← Per-connection stats, log context, spans, SMTP errors
+│   │   │   │   ├── smtp-receiver-handlers.service.ts ← Connect (rate limit, DNSBL), MAIL FROM, RCPT TO, close
+│   │   │   │   ├── smtp-receiver-data.service.ts ← DATA: unsubscribe, return-path, feedback, bounce, DMARC, storage, notification
+│   │   │   │   ├── smtp-receiver-store.service.ts ← Inbound row + `email.received` in one transaction (#184)
 │   │   │   │   ├── connection-limit.ts   ← Per-IP connection rate limit, shared store (#185)
 │   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
@@ -276,7 +280,11 @@ bunmail/
 │   │   │   ├── smtp-submission.plugin.ts    ← Route: GET /stats (usage + quota, #123)
 │   │   │   ├── errors.ts                    ← SubmissionRejectedError: a message refused on its content (SMTP 550)
 │   │   │   ├── services/
-│   │   │   │   ├── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop()
+│   │   │   │   ├── smtp-submission.service.ts ← SMTP server (AUTH) → createEmail; start()/stop(): public surface (#387)
+│   │   │   │   ├── smtp-submission-session.service.ts ← Per-connection stats, log context, spans, SMTP errors
+│   │   │   │   ├── smtp-submission-tls.service.ts ← Implicit-TLS listener (#349, #351)
+│   │   │   │   ├── smtp-submission-handlers.service.ts ← Connect limit, AUTH, RCPT TO cap, close
+│   │   │   │   ├── smtp-submission-data.service.ts ← DATA: size cap, quota, parse → createEmail
 │   │   │   │   ├── submission-limits.ts     ← Per-IP connection and failed-AUTH throttles, shared store (#185)
 │   │   │   │   └── usage.service.ts         ← per-(key,day) usage counters + quota read (#123)
 │   │   │   ├── message-mapper.ts           ← pure message → SendEmailInput mapping (BCC-aware)

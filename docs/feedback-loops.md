@@ -76,7 +76,7 @@ src/modules/inbound/
 │   ├── arf-parser.service.ts        ← isFeedbackReport, parseFeedbackReport (pure)
 │   ├── dkim-verifier.service.ts     ← verifyDkimSignatures: DKIM verdict per signature (#373)
 │   ├── feedback-handler.service.ts  ← handleFeedbackReport (core, injected deps), handleInboundFeedbackReport (wired)
-│   └── smtp-receiver.service.ts     ← the feedback branch, before the bounce parser
+│   └── smtp-receiver-data.service.ts ← the feedback branch, before the bounce parser
 └── types/
     └── feedback-report.types.ts     ← FeedbackReport, FeedbackAction, FeedbackOutcome
 ```

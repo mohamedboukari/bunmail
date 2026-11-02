@@ -17,7 +17,7 @@ import {
  * Per-source-IP detail lives in the sibling `dmarc_records` table.
  *
  * Detected and parsed by `dmarc-handler.service` when a matching
- * message hits the inbound SMTP path (see `smtp-receiver.service.ts`
+ * message hits the inbound SMTP path (see `smtp-receiver-data.service.ts`
  * branching). The original `inbound_emails` row is suppressed for
  * DMARC reports so they don't clutter the inbox view.
  */

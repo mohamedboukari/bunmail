@@ -8,7 +8,7 @@ This module turns that XML stream into a usable view.
 
 ## Inbound branching
 
-The DMARC handler sits in [`smtp-receiver`](../src/modules/inbound/services/smtp-receiver.service.ts) **after the unsubscribe, return-path, feedback-loop and bounce branches** and **before the generic inbound storage**:
+The DMARC handler sits in [`smtp-receiver`](../src/modules/inbound/services/smtp-receiver.service.ts)'s DATA handler ([`smtp-receiver-data.service.ts`](../src/modules/inbound/services/smtp-receiver-data.service.ts)) **after the unsubscribe, return-path, feedback-loop and bounce branches** and **before the generic inbound storage**:
 
 ```
 Inbound message

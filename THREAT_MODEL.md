@@ -101,7 +101,7 @@ The trust boundaries are: **public internet ↔ host** and **app process ↔ dat
 
 ### Inbound SMTP open-relay defences
 
-Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver.service.ts`):
+Spam protection runs in four layers (`src/modules/inbound/services/smtp-receiver-handlers.service.ts`, and the `onData` size re-count in `smtp-receiver-data.service.ts`):
 
 1. **Per-IP connection rate limiting**: fixed window, 10 connections / 60 s by default.
 2. **DNSBL check**: Spamhaus ZEN by default. Listed IPs get SMTP 554 before they can issue `MAIL FROM`.

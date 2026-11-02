@@ -1,7 +1,7 @@
 /**
  * Detects, parses, and persists incoming DMARC aggregate (rua) reports.
  *
- * Wired into `smtp-receiver.service.ts`'s `onData` after the bounce
+ * Wired into `smtp-receiver-data.service.ts`'s `onData` after the bounce
  * branch and before the generic `inbound_emails` insert. When a
  * message is recognised and parsed successfully, the handler stores
  * the `dmarc_reports` row + per-source-IP `dmarc_records` rows AND
