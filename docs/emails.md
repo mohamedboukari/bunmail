@@ -127,7 +127,13 @@ src/modules/emails/
 │   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
 │   ├── mta-sts.ts                  ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
-│   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch
+│   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch: the public surface, re-exported from the files below (#380)
+│   ├── queue-worker.service.ts     ← Poll loop, its state (running, timer, sends in flight) and the per-attempt lease renewal
+│   ├── queue-claim.service.ts      ← Fair claim, lease, worker id and the fenced row release (drops attachment bytes at a final status)
+│   ├── queue-send.service.ts       ← One claimed email's attempt: key check, DKIM, unsubscribe, suppressions, attachments, mailer
+│   ├── queue-domain.service.ts     ← Sender domain lookup for DKIM signing and List-Unsubscribe overrides
+│   ├── queue-outcome.service.ts    ← Outcome transaction: inline bounces, suppressions, row status and webhook events (#184)
+│   ├── queue-decision.service.ts   ← Pure deferred, retry or terminal decision and the `last_error` digests
 │   ├── retry-schedule.ts           ← Pure retry backoff of temporary failures (#180)
 │   ├── stats.service.ts            ← Dashboard stats aggregation
 │   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
@@ -238,7 +244,7 @@ A send may carry up to 10 files, `[{ filename, content, contentType?, contentId?
 
 **Delivery.** The queue loads the bytes for each attempt (`loadOutboundAttachments`) and passes them to `sendMail`; every transaction and every retry carries the same files. `buildMailOptions` gives each one to Nodemailer as inline content with its derived type: with a `contentId` it is an inline part (`cid`) in the `multipart/related` node beside the HTML, whose `cid:` references are left as they are; without one, `Content-Disposition: attachment`. Nodemailer never reads a file or a URL for a message (`disableFileAccess`, `disableUrlAccess`). DKIM signs the whole message, attachments included. An attachment whose bytes are missing while the email is still being sent fails the email (`email.failed`) instead of sending it without the file.
 
-**Retention.** The bytes are kept only while the email can still be sent. The outcome write that moves an email to `sent`, `failed` or `bounced` (`releaseRow` in `queue.service.ts`, inside the outcome transaction of #184, the degraded save included, and the revoked-key and unreadable-DKIM-key paths) also sets `content = NULL` for its attachments; the metadata stays, and responses report `available: false`. A temporary failure keeps them for the retry. The trash purge and every hard delete drop them through the storage interface before the FK cascade removes the rows. Tombstones keep `filename`, `contentType` and `size` only; the idempotency snapshot keeps the response's attachment metadata, never the bytes, and a replay returns that stored metadata.
+**Retention.** The bytes are kept only while the email can still be sent. The outcome write that moves an email to `sent`, `failed` or `bounced` (`releaseRow` in `queue-claim.service.ts`, inside the outcome transaction of #184, the degraded save included, and the revoked-key and unreadable-DKIM-key paths) also sets `content = NULL` for its attachments; the metadata stays, and responses report `available: false`. A temporary failure keeps them for the retry. The trash purge and every hard delete drop them through the storage interface before the FK cascade removes the rows. Tombstones keep `filename`, `contentType` and `size` only; the idempotency snapshot keeps the response's attachment metadata, never the bytes, and a replay returns that stored metadata.
 
 **Logs** carry attachment counts, sizes, indexes and positions, never a filename (it may carry personal data) or any content.
 
@@ -484,6 +490,8 @@ The body a message is sent with (#250): HTML wrapped when it is a fragment (`wra
 The bounded, linear converter behind the text alternative (#250); see [Body composition](#body-composition-250). Pure.
 
 ### queue.service.ts
+
+The queue's public surface; the code sits in the `queue-*.service.ts` files beside it, one per concern (#380, see the module layout above). `processEmail` is in `queue-worker.service.ts`.
 
 #### `start(): void`
 Starts the queue processor: polls every `QUEUE_POLL_INTERVAL_MS` (default 2 s, +/-10% jitter). Each poll is scheduled after the previous one has claimed its rows, so polls never overlap; the sends run in the background (#176). There is no boot-time recovery step: rows a dead worker left in `sending` are reclaimed by the normal claim once their lease expires (#180).
