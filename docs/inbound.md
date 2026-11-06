@@ -61,7 +61,10 @@ src/modules/inbound/
 │   ├── connection-limit.ts          ← per-IP connection rate limit in the shared store (#185)
 │   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
-│   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373)
+│   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373); split by concern into the three below (#387)
+│   ├── dkim-verifier-parse.service.ts ← message split, tag-lists, the signature's tags
+│   ├── dkim-verifier-canonical.service.ts ← canonicalization, the signed header data
+│   ├── dkim-verifier-key.service.ts ← key record lookup and checks, the signature check
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
 │   ├── smtp-listen.ts               ← Port bind failures of both SMTP servers: explain and exit (#167)
@@ -75,7 +78,8 @@ src/modules/inbound/
 │   └── inbound.serialization.ts     ← Response mapper (strips raw message)
 └── types/
     ├── inbound.types.ts             ← InboundEmail type
-    └── feedback-report.types.ts     ← Parsed ARF report, action, outcome (#191)
+    ├── feedback-report.types.ts     ← Parsed ARF report, action, outcome (#191)
+    └── dkim.types.ts                ← DKIM verifier results and seams, parsed signature and key (#373)
 ```
 
 ## Database Schema
