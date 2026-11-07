@@ -27,12 +27,13 @@ import {
 } from "../routes/account-sso.tsx";
 import { memberGuard } from "../guards.tsx";
 import { issueSsoFlowCookie } from "../lib/session-helpers.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { setNoStore, toFlash } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
-import { requestIp } from "../lib/sign-in.tsx";
+import { requestIp, setAuthPageHeaders } from "../lib/sign-in.tsx";
+import { SsoHandoffPage } from "../routes/sso-handoff.tsx";
 import { LINK_REFUSAL, providerById, toSsoPage } from "../lib/sso.ts";
 
 /**
@@ -42,9 +43,9 @@ import { LINK_REFUSAL, providerById, toSsoPage } from "../lib/sso.ts";
  * provider) and the Unlink form. The provider sends the browser back to
  * the public callback (`sso-login.plugin.tsx`), which finishes the link.
  *
- * Redirects are fixed: the provider's authorization URL (from its
- * discovery document) and the Sign-in methods page. No return parameter
- * is read.
+ * Destinations are fixed: the provider's authorization URL (from its
+ * discovery document, through the hand-off page) and the Sign-in methods
+ * page. No return parameter is read.
  */
 
 /** What the page says for a refused unlink. */
@@ -164,8 +165,9 @@ export function ssoAccountPages(app: GuardedDashboard) {
        * `password`) under the password change's budget
        * (`password:user:<id>`, `password:ip:<bucket>`) before the single
        * argon2id verify. Then a `link` flow bound to this session: the
-       * encrypted `bm_sso` cookie and a redirect to the provider's
-       * authorization endpoint. The link itself is written by the callback.
+       * encrypted `bm_sso` cookie and the hand-off page to the provider's
+       * authorization endpoint (`SsoHandoffPage`, #409). The link itself is
+       * written by the callback.
        */
       .post(
         "/account/sso/:id/link",
@@ -217,7 +219,14 @@ export function ssoAccountPages(app: GuardedDashboard) {
             }
             issueSsoFlowCookie(set, started.flowCookie);
             logger.info("SSO link started", { ...ids, provider: provider.id });
-            return redirect(set, started.authorizationUrl);
+            /** A hand-off page, not a `302`: CSP `form-action 'self'` blocks that redirect (#409). */
+            setAuthPageHeaders(set);
+            return (
+              <SsoHandoffPage
+                label={provider.label}
+                authorizationUrl={started.authorizationUrl}
+              />
+            );
           } catch (error: unknown) {
             logger.error("SSO link start failed", {
               ...ids,

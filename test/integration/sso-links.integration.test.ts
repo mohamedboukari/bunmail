@@ -43,6 +43,7 @@ import { html } from "@elysiajs/html";
 import { and, eq, sql } from "drizzle-orm";
 import { db, seed, sessions, truncateAll } from "./_helpers.ts";
 import { FakeOidcProvider } from "../fixtures/fake-oidc-provider.ts";
+import { handoffTargetOf } from "../fixtures/sso-handoff.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { readSsoFlowCookie } from "../../src/pages/session.ts";
@@ -163,7 +164,8 @@ async function startLink(
   const response = await call("POST", `${PAGE}/corp/link`, { token, body: { password } });
   return {
     response,
-    location: response.headers.get("location") ?? "",
+    location:
+      response.status === 200 ? handoffTargetOf(response, await response.text()) : "",
     flow: flowCookieOf(response),
   };
 }
@@ -181,7 +183,7 @@ function callback(
 /** A full link: start, provider, callback. */
 async function link(token: string): Promise<Response> {
   const started = await startLink(token);
-  expect(started.response.status).toBe(302);
+  expect(started.response.status).toBe(200);
   return callback(started.location, { token, flow: started.flow });
 }
 
@@ -263,7 +265,7 @@ describe("linking (#224)", () => {
   test("password, provider, callback: the link is stored, emailed and audited", async () => {
     const session = await seed.session({ userId: ids.member });
     const started = await startLink(session.token);
-    expect(started.response.status).toBe(302);
+    expect(started.response.status).toBe(200);
     expect(started.location.startsWith(`${idp.url}/authorize?`)).toBe(true);
     expect(started.flow).toBeDefined();
     const flowSetCookie = started.response.headers
@@ -856,7 +858,7 @@ describe("resets remove SSO links (#224)", () => {
   test("a link started before a reset cannot finish after it (L2)", async () => {
     const session = await seed.session({ userId: ids.member });
     const started = await startLink(session.token);
-    expect(started.response.status).toBe(302);
+    expect(started.response.status).toBe(200);
     const issued = await issuePasswordReset(ids.owner, ids.member);
     if (!issued.ok) throw new Error(issued.reason);
     await call("POST", "/dashboard/reset", {

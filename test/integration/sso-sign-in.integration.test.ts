@@ -38,6 +38,7 @@ import { html } from "@elysiajs/html";
 import { and, eq } from "drizzle-orm";
 import { db, seed, sessions, truncateAll } from "./_helpers.ts";
 import { FakeOidcProvider } from "../fixtures/fake-oidc-provider.ts";
+import { handoffTargetOf } from "../fixtures/sso-handoff.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { readSessionCookie, readSsoFlowCookie } from "../../src/pages/session.ts";
@@ -180,7 +181,8 @@ async function startSignIn(): Promise<{
   const response = await call("POST", "/dashboard/login/sso/corp");
   return {
     response,
-    location: response.headers.get("location") ?? "",
+    location:
+      response.status === 200 ? handoffTargetOf(response, await response.text()) : "",
     flow: flowCookieOf(response),
   };
 }
@@ -203,7 +205,7 @@ function callback(
 /** A full sign-in: start, provider, callback. */
 async function signIn(opts: { token?: string } = {}): Promise<Response> {
   const started = await startSignIn();
-  expect(started.response.status).toBe(302);
+  expect(started.response.status).toBe(200);
   return callback(started.location, { ...opts, flow: started.flow });
 }
 
@@ -308,7 +310,9 @@ describe("the login page and the start (#224)", () => {
 
   test("the start: a login flow cookie and the provider's URL with the fixed redirect URI; not counted", async () => {
     const started = await startSignIn();
-    expect(started.response.status).toBe(302);
+    /** A hand-off page, not a 302: CSP `form-action 'self'` blocks that redirect (#409). */
+    expect(started.response.status).toBe(200);
+    expect(started.response.headers.get("cache-control")).toBe("no-store");
     const url = new URL(started.location);
     expect(`${url.origin}${url.pathname}`).toBe(`${idp.url}/authorize`);
     expect(url.searchParams.get("redirect_uri")).toBe(`${ORIGIN}${CALLBACK}`);
@@ -641,7 +645,7 @@ describe("the per-IP limiter (#224)", () => {
   test("the start has its own budget: 20 per address and window, never given back (L1)", async () => {
     await insertLink(ids.member);
     for (let i = 0; i < 20; i++) {
-      expect((await startSignIn()).response.status).toBe(302);
+      expect((await startSignIn()).response.status).toBe(200);
     }
     const blocked = await startSignIn();
     expect(blocked.response.status).toBe(429);
