@@ -12,7 +12,7 @@ import {
   SenderDomainNotRegisteredError,
   SenderDomainUnverifiedError,
 } from "../errors.ts";
-import type { SendWarning } from "../types/email.types.ts";
+import type { SenderDomainWarning } from "../types/email.types.ts";
 
 /**
  * How long a failed inline DKIM re-verification is trusted (#245). Within
@@ -56,7 +56,12 @@ const defaultDeps: SenderDomainDeps = {
 interface SenderDomainCheck {
   /** The registered domain's id, or null when unregistered (development). */
   domainId: string | null;
-  warnings: SendWarning[];
+  warnings: SenderDomainWarning[];
+  /**
+   * The domain's open and click tracking opt-in (#187), read with the
+   * row, or null when the domain is not registered.
+   */
+  tracking: { opens: boolean; clicks: boolean } | null;
 }
 
 /** IDs carried into every log line of the check. */
@@ -66,8 +71,8 @@ interface SendIds {
 }
 
 /** One warning per DNS record that is not verified, DKIM first. */
-function warningsFor(flags: VerificationResult): SendWarning[] {
-  const warnings: SendWarning[] = [];
+function warningsFor(flags: VerificationResult): SenderDomainWarning[] {
+  const warnings: SenderDomainWarning[] = [];
   if (!flags.dkim) warnings.push("dkim_unverified");
   if (!flags.spf) warnings.push("spf_unverified");
   if (!flags.dmarc) warnings.push("dmarc_unverified");
@@ -160,7 +165,7 @@ export async function checkSenderDomain(
       logger.warn("Send blocked: sender domain not registered", { ...ids, domain: name });
       throw new SenderDomainNotRegisteredError(name);
     }
-    return { domainId: null, warnings: ["domain_unregistered"] };
+    return { domainId: null, warnings: ["domain_unregistered"], tracking: null };
   }
 
   let flags: VerificationResult = {
@@ -182,5 +187,9 @@ export async function checkSenderDomain(
     flags = fresh;
   }
 
-  return { domainId: domain.id, warnings: warningsFor(flags) };
+  return {
+    domainId: domain.id,
+    warnings: warningsFor(flags),
+    tracking: { opens: domain.trackOpens, clicks: domain.trackClicks },
+  };
 }

@@ -30,6 +30,16 @@ export const unsubscribeEmailSchema = t.String({
   maxLength: 254,
 });
 
+/**
+ * Open or click tracking opt-in (#187), shared with the update DTO. Off by
+ * default. Tracking also needs `TRACKING_ENABLED`, one recipient and an
+ * https `APP_BASE_URL`; a send can always opt out.
+ */
+export const trackingFlagSchema = t.Boolean({
+  description:
+    "Open or click tracking opt-in for mail from this domain (default false). Also needs TRACKING_ENABLED=true; each send can opt out, and transactional mail is tracked only when the send asks. Nothing is tracked yet in this version: the setting is only stored.",
+});
+
 export const createDomainDto = t.Object({
   /**
    * The domain name to register (e.g. "example.com"). Only its length is
@@ -68,4 +78,8 @@ export const createDomainDto = t.Object({
   dkimSelector: t.Optional(
     t.String({ pattern: DKIM_SELECTOR_PATTERN, minLength: 1, maxLength: 63 }),
   ),
+
+  /** Open and click tracking opt-in (#187); omitted means off. */
+  trackOpens: t.Optional(trackingFlagSchema),
+  trackClicks: t.Optional(trackingFlagSchema),
 });

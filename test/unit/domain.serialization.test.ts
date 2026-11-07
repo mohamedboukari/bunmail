@@ -34,6 +34,8 @@ describe("serializeDomain", () => {
     unsubscribeEmail: null as string | null,
     unsubscribeUrl: null as string | null,
     notifyEmail: null as string | null,
+    trackOpens: false,
+    trackClicks: false,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
     createdByUserId: null,
@@ -49,6 +51,16 @@ describe("serializeDomain", () => {
     expect(result.dmarcVerified).toBe(false);
     expect(result.verifiedAt).toEqual(new Date("2024-06-01"));
     expect(result.createdAt).toEqual(new Date("2024-01-01"));
+  });
+
+  test("exposes the tracking opt-in (#187)", () => {
+    expect(serializeDomain(domain, null)).toMatchObject({
+      trackOpens: false,
+      trackClicks: false,
+    });
+    expect(
+      serializeDomain({ ...domain, trackOpens: true, trackClicks: true }, null),
+    ).toMatchObject({ trackOpens: true, trackClicks: true });
   });
 
   test("strips dkimPrivateKey from output", () => {

@@ -109,6 +109,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `category`   | string | No       | `transactional` or `marketing` (#250). Rules below. Returned as `category` on email responses (`null` when unset). |
 | `tags`       | object | No       | Labels, key to value (#189), e.g. `{"flow": "password-reset", "tenant": "t_42"}`, for filtering the list (`?tag=key:value`) and routing webhooks. Never sent to the recipient. Rules below. Returned as `tags` on email responses (`null` when unset). |
 | `attachments` | array | No       | Files to attach (#181), Resend-compatible: `[{ "filename", "content", "contentType"?, "contentId"? }]`, `content` in base64. Rules below. Returned as `attachments` on email responses, metadata only. |
+| `tracking`   | object | No       | Open and click tracking (#187): `{ "opens"?: boolean, "clicks"?: boolean }`. Rules below. Nothing is tracked yet in this version: the decision is only stored. Returned as `tracking` on email responses. |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
@@ -166,6 +167,16 @@ Returned on email responses as `attachments`, in order, metadata only:
 
 A refused tag is `422 VALIDATION_ERROR` with `details[].path` `/tags/<key>` (or `/tags` when the key itself is invalid, or there are more than 10); the message names the key only when it is valid and never echoes the value, and nothing is queued. Tags may hold your own identifiers (a customer or tenant id): BunMail logs tag keys only, never values.
 
+**Tracking** (`tracking`, #187). **Nothing is tracked yet in this version:** the decision is stored on the email, and the open pixel and click redirect come later. Each kind (`opens`, `clicks`) is decided once, when the email is created:
+
+- `false` always opts out.
+- `true` asks for it, also on `transactional` mail. It is honoured only when every gate allows it; otherwise the email is queued untracked and `warnings` gets `tracking_disabled`.
+- Unset follows the sender domain's opt-in (`trackOpens` / `trackClicks`, set by an admin), except `transactional` mail, which is not tracked.
+- The gates: `TRACKING_ENABLED=true` on the server (off by default), a registered sender domain that opted in, exactly one recipient (one `to`, no `cc`, no `bcc`), and an `https://` `APP_BASE_URL`. No send can turn on what its domain has off, whatever the key's role.
+- A non-boolean is `422 VALIDATION_ERROR`; an unknown key inside `tracking` is removed, like any unknown property of the body.
+
+Email responses carry `tracking: { opens, clicks }` (the stored decision), `firstOpenedAt` and `firstClickedAt` (`null` until an event is recorded).
+
 **Custom headers** (`headers`, #177): application headers (`X-*`) and threading headers (`In-Reply-To`, `References`). Header injection is blocked, and BunMail's own headers cannot be overridden:
 
 - **Name:** RFC 5322 field name, printable ASCII without spaces or `:`, 1 to 64 characters.
@@ -192,6 +203,9 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
     "category": "transactional",
     "tags": { "flow": "welcome" },
     "attachments": [],
+    "tracking": { "opens": false, "clicks": false },
+    "firstOpenedAt": null,
+    "firstClickedAt": null,
     "attempts": 0,
     "nextAttemptAt": "2026-03-15T12:00:00.000Z",
     "createdAt": "2026-03-15T12:00:00.000Z",
@@ -201,7 +215,7 @@ A name or value with bad syntax, or more than 20 headers, fails validation (`422
 }
 ```
 
-`warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
+`warnings` (#245) lists why the email may fail authentication at the receiver, from the sender domain's stored DNS verification flags: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (that record of the registered domain is not verified), or, in development only, `domain_unregistered` (sent unsigned). It is `[]` when the domain is registered and all three records are verified. It also carries `tracking_disabled` (#187) when the send asked for tracking (`true`) that a gate keeps off (see Tracking above). The email is queued either way, unless `REQUIRE_VERIFIED_DOMAIN=true`, which refuses a domain whose DKIM record is still unverified after one inline DNS re-check (a failure is remembered for 5 minutes per domain) with `422 SENDER_DOMAIN_UNVERIFIED`.
 
 **Errors specific to this endpoint:** `422 SENDER_DOMAIN_NOT_REGISTERED` (production, or `REQUIRE_VERIFIED_DOMAIN=true`: register the domain first), `422 SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`: publish the domain's DKIM TXT record), `404 TEMPLATE_NOT_FOUND` (`templateId` is not a template of this key), `422 SUBJECT_REQUIRED` (no inline subject and no template), `422 BODY_REQUIRED` (neither html nor text, inline or from the template, #250), `422 INVALID_CUSTOM_HEADER` (a custom header is reserved, duplicated, or over the 8 KB total, #177), `422 IDEMPOTENCY_KEY_REUSED` (the `Idempotency-Key` was used with another body, #188), `422 MARKETING_REQUIRES_ONE_CLICK` (`category: "marketing"` with more than one recipient or without an https `APP_BASE_URL`, #250), `422 TOO_MANY_RECIPIENTS` (more than 50 `to` addresses, or more than 100 unique recipients across `to`, `cc` and `bcc`, #178), `422 TOO_MANY_ATTACHMENTS` (more than 10, #181), `422 ATTACHMENTS_TOO_LARGE` (over `ATTACHMENTS_MAX_TOTAL_MB` decoded, #181), `422 ATTACHMENT_TYPE_NOT_ALLOWED` (an executable, script or installer, by extension or content, with its `index`, #181), `413` (a body over the HTTP limit), `422 VALIDATION_ERROR` (also for an invalid `fromName`, tag or attachment, with the field, `/tags/<key>` or `/attachments/<i>/<field>` in `details`), plus `RECIPIENT_SUPPRESSED`, `UNAUTHORIZED_SENDER` and `TEMPLATE_OUTPUT_TOO_LARGE` below.
 
@@ -411,6 +425,8 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 | `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Single-recipient mail carries BunMail's own per-recipient `/u/<token>` link instead when `APP_BASE_URL` is `https://` (#249). |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
 | `dkimSelector`      | string | No       | DKIM selector of the domain's key (#250): one lowercase DNS label, 1 to 63 characters, `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Defaults to `bunmail`. Anything else is `422`. |
+| `trackOpens`        | boolean | No      | Open tracking opt-in for mail from this domain (#187). Default `false`. Also needs `TRACKING_ENABLED=true`; each send can opt out, and `transactional` mail is tracked only when the send asks. Nothing is tracked yet in this version. |
+| `trackClicks`       | boolean | No      | Click tracking opt-in (#187), like `trackOpens`. |
 
 **Response:**
 
@@ -433,6 +449,8 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "unsubscribeEmail": null,
     "unsubscribeUrl": null,
     "notifyEmail": null,
+    "trackOpens": false,
+    "trackClicks": false,
     "dnsRecords": [
       {
         "type": "TXT",
@@ -545,12 +563,14 @@ Trigger DNS verification for SPF, DKIM, and DMARC records. The result is stored 
 
 #### `PATCH /api/v1/domains/:id`
 
-Edit the domain's `List-Unsubscribe` overrides (#243). Omitted fields stay unchanged; `null` clears one (back to `unsubscribe@<name>`, or no one-click URL).
+Edit the domain's `List-Unsubscribe` overrides (#243) and its open and click tracking opt-in (#187). Omitted fields stay unchanged; `null` clears an unsubscribe override (back to `unsubscribe@<name>`, or no one-click URL). Recorded in the audit log as `domain.updated` with the field names.
 
 | Field              | Type           | Required | Description |
 |--------------------|----------------|----------|-------------|
 | `unsubscribeEmail` | string \| null | No       | Mailbox for `List-Unsubscribe: <mailto:...>` |
 | `unsubscribeUrl`   | string \| null | No       | One-click endpoint, `https://` only |
+| `trackOpens`       | boolean        | No       | Open tracking opt-in (#187); `true` or `false` only. Applies to mail created afterwards: queued mail keeps its stored decision |
+| `trackClicks`      | boolean        | No       | Click tracking opt-in (#187), like `trackOpens` |
 
 Returns the updated domain, or `404` if it doesn't exist.
 

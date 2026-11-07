@@ -98,6 +98,21 @@ export interface SendEmailInput {
    * sniffed content. The declared `contentType` is never used.
    */
   attachments?: AttachmentInput[];
+  /**
+   * Open and click tracking for this send (#187). `false` always opts
+   * out; `true` asks for it (also on `transactional` mail) and is honoured
+   * only when every gate allows it, else the response carries the
+   * `tracking_disabled` warning; unset inherits the sender domain's
+   * opt-in (never for `transactional` mail). See
+   * `services/tracking-decision.ts`.
+   */
+  tracking?: TrackingRequest;
+}
+
+/** What a send asks for about open and click tracking (#187). */
+export interface TrackingRequest {
+  opens?: boolean;
+  clicks?: boolean;
 }
 
 /**
@@ -108,8 +123,16 @@ export interface SendEmailInput {
  *   - `domain_unregistered`: development only, the domain is not
  *     registered, so the email goes out unsigned
  */
-export type SendWarning =
+export type SenderDomainWarning =
   "dkim_unverified" | "spf_unverified" | "dmarc_unverified" | "domain_unregistered";
+
+/**
+ * A warning on a queued send: a sender-domain one (#245), or
+ * `tracking_disabled` (#187) when the send asked for open or click
+ * tracking (`true`) that a closed gate keeps off. The email is queued
+ * either way.
+ */
+export type SendWarning = SenderDomainWarning | "tracking_disabled";
 
 /** What `createEmail` returns: the queued row and its sender-domain warnings. */
 export interface CreatedEmail {

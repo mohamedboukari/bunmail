@@ -28,11 +28,27 @@ export interface CreateDomainInput {
    * Defaults to `bunmail`.
    */
   dkimSelector?: string;
+  /** Open tracking opt-in (#187). Defaults to false. */
+  trackOpens?: boolean;
+  /** Click tracking opt-in (#187). Defaults to false. */
+  trackClicks?: boolean;
   /**
    * Who added the domain (#219): the dashboard user, or the calling key's
    * user over REST. Attribution only; null (the default) means the owner.
    */
   createdByUserId?: string | null;
+}
+
+/**
+ * The settings `PATCH /api/v1/domains/:id` and the dashboard edit (#243,
+ * #187). Only the fields present are written; `null` clears an
+ * unsubscribe override.
+ */
+export interface DomainSettingsChanges {
+  unsubscribeEmail?: string | null;
+  unsubscribeUrl?: string | null;
+  trackOpens?: boolean;
+  trackClicks?: boolean;
 }
 
 /** A DMARC policy (`p=` and `sp=`, RFC 7489 6.3). */

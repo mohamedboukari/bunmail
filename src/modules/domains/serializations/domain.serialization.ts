@@ -65,6 +65,10 @@ export interface SerializedDomain {
   unsubscribeUrl: string | null;
   /** Address notified on inbound mail for this domain; null disables notifications. */
   notifyEmail: string | null;
+  /** Open tracking opt-in for mail from this domain (#187). */
+  trackOpens: boolean;
+  /** Click tracking opt-in for mail from this domain (#187). */
+  trackClicks: boolean;
   /** The DNS records to publish for this domain (#250). */
   dnsRecords: RequiredDnsRecord[];
   /** The current DMARC check (#250); null when not looked up (create, update, delete). */
@@ -101,6 +105,8 @@ export function serializeDomain(
     unsubscribeEmail: domain.unsubscribeEmail,
     unsubscribeUrl: domain.unsubscribeUrl,
     notifyEmail: domain.notifyEmail,
+    trackOpens: domain.trackOpens,
+    trackClicks: domain.trackClicks,
     dnsRecords: getRequiredDnsRecords(domain),
     dmarc: dns?.dmarc ?? null,
     mx: dns?.mx ?? null,

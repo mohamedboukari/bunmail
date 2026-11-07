@@ -229,15 +229,18 @@ async function insertPreparedEmail(
   /**
    * One line per send that may fail authentication at the receiver. The
    * REST and dashboard callers also show the warnings; SMTP submission
-   * has no channel for them, so this line is its only trace.
+   * has no channel for them, so this line is its only trace. A
+   * `tracking_disabled` warning (#187) is not about DNS: `prepareEmail`
+   * logged it already.
    */
-  if (warnings.length > 0) {
+  const domainWarnings = warnings.filter((warning) => warning !== "tracking_disabled");
+  if (domainWarnings.length > 0) {
     logger.warn("Email queued from a sender domain with unverified DNS records", {
       id,
       apiKeyId,
       source,
       domain: senderDomain,
-      warnings,
+      warnings: domainWarnings,
     });
   }
 

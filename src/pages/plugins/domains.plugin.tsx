@@ -391,7 +391,7 @@ export function domainPages(app: GuardedDashboard) {
             return back("The unsubscribe URL must be an https:// address", "error");
           }
 
-          const updated = await domainService.updateDomainUnsubscribe(params.id, {
+          const updated = await domainService.updateDomainSettings(params.id, {
             unsubscribeEmail: email,
             unsubscribeUrl: url,
           });
@@ -420,6 +420,50 @@ export function domainPages(app: GuardedDashboard) {
       )
 
       /**
+       * POST /dashboard/domains/:id/tracking
+       * Turns open and click tracking on or off for mail from the domain
+       * (#187). Checkboxes: a box left unticked is absent from the form,
+       * which means off. Audited as `domain.updated`. Tracking also needs
+       * `TRACKING_ENABLED`; the flash says so while it is off.
+       */
+      .post(
+        "/domains/:id/tracking",
+        async ({ params, body, set, auth, request, server }) => {
+          const trackOpens = body.trackOpens === "true";
+          const trackClicks = body.trackClicks === "true";
+          const updated = await domainService.updateDomainSettings(params.id, {
+            trackOpens,
+            trackClicks,
+          });
+          set.status = 302;
+          if (!updated) {
+            set.headers["location"] =
+              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            return "";
+          }
+          await recordAuditEvent({
+            ...dashboardAudit(auth, request, server),
+            action: "domain.updated",
+            target: { type: "domain", id: updated.id, label: updated.name },
+            metadata: { fields: ["trackOpens", "trackClicks"] },
+          });
+          const message = config.tracking.enabled
+            ? "Tracking settings saved"
+            : "Tracking settings saved. Nothing is tracked while TRACKING_ENABLED is off.";
+          set.headers["location"] = domainFlashUrl(params.id, message, "success");
+          return "";
+        },
+        {
+          beforeHandle: adminGuard,
+          params: t.Object({ id: t.String() }),
+          body: t.Object({
+            trackOpens: t.Optional(t.Literal("true")),
+            trackClicks: t.Optional(t.Literal("true")),
+          }),
+        },
+      )
+
+      /**
        * GET /dashboard/domains/:id
        * Single domain detail view with DNS verification status.
        */
@@ -443,6 +487,7 @@ export function domainPages(app: GuardedDashboard) {
               dnsRecords={getRequiredDnsRecords(domain)}
               dns={dns}
               smtpEnabled={config.smtp.enabled}
+              trackingEnabled={config.tracking.enabled}
               flash={flash}
             />
           );

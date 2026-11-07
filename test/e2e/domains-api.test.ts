@@ -140,7 +140,7 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
   getDomainByName: mock(() => Promise.resolve(undefined)),
   domainExistsByName: mock(() => Promise.resolve(false)),
   updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
-  updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
+  updateDomainSettings: mock(() => Promise.resolve(undefined)),
   domainNameIs: mock(() => undefined),
   findNonCanonicalDomainNames: mock(() => Promise.resolve([])),
 }));

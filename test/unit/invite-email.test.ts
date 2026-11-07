@@ -117,6 +117,8 @@ const DOMAIN: Domain = {
   unsubscribeEmail: null,
   unsubscribeUrl: null,
   notifyEmail: null,
+  trackOpens: false,
+  trackClicks: false,
   createdAt: new Date(),
   updatedAt: new Date(),
   createdByUserId: null,

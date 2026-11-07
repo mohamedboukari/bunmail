@@ -28,13 +28,13 @@ src/modules/domains/
 │   └── spf-address.ts              ← IP parsing, IPv4-mapped clients, CIDR matching (#373)
 ├── dtos/
 │   ├── create-domain.dto.ts        ← POST body validation
-│   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings)
+│   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings, tracking opt-in #187)
 ├── models/
 │   └── domain.schema.ts            ← Drizzle pgTable definition
 ├── serializations/
 │   └── domain.serialization.ts     ← Strips private keys, exposes DKIM DNS record
 └── types/
-    ├── domain.types.ts             ← Domain type + CreateDomainInput
+    ├── domain.types.ts             ← Domain type, CreateDomainInput, DomainSettingsChanges (#187)
     ├── domain-check.types.ts       ← Check outcome (`pass`, `fail`, `unknown`) and result (#250)
     └── spf.types.ts                ← SPF result, DNS resolver, `checkHost()` input and options (#373)
 ```
@@ -60,6 +60,8 @@ Table: `domains`
 | unsubscribe_email | varchar(255)   | nullable: overrides the default `unsubscribe@<from-domain>` mailto in the `List-Unsubscribe` header (#40). On single-recipient mail with inbound SMTP off it is kept next to the per-recipient link; with inbound SMTP on, the `unsub+<token>` mailto replaces it (#249) |
 | unsubscribe_url   | text           | nullable: adds an `https` URL form to `List-Unsubscribe` and enables `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (#40). Used only for mail with cc, bcc or several recipients, or when `APP_BASE_URL` is not `https://`: otherwise BunMail's per-recipient `/u/<token>` link takes precedence, since a static URL cannot tell who clicked (#249) |
 | notify_email      | varchar(255)   | nullable, when set, inbound mail received for this domain triggers a summary notification email to this address (#106). Use an external mailbox. |
+| track_opens       | boolean        | NOT NULL, default `false`: open tracking opt-in, set by admins (#187). See [Open and click tracking](#open-and-click-tracking-187) |
+| track_clicks      | boolean        | NOT NULL, default `false`: click tracking opt-in, set by admins (#187) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -206,7 +208,7 @@ There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 ### domain.service.ts
 
 #### `createDomain(input): Promise<Domain>`
-Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. The name is normalised and checked (see Domain Name above; a refused one throws `InvalidDomainNameError`, `422 INVALID_DOMAIN_NAME`, #406) and stored in that form; a name already registered in any form throws `DomainAlreadyRegisteredError` (`409 DOMAIN_ALREADY_REGISTERED`). Lookups by name (`domainNameIs`, used by `getDomainByName`, `domainExistsByName`, the sender-domain check and the queue's legacy lookup) ignore case and normalise the name the same way; when that changes more than the case, the name trimmed and lowercased as before #406 matches too, so a row stored in that form is still found. The key is generated under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
+Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. The name is normalised and checked (see Domain Name above; a refused one throws `InvalidDomainNameError`, `422 INVALID_DOMAIN_NAME`, #406) and stored in that form; a name already registered in any form throws `DomainAlreadyRegisteredError` (`409 DOMAIN_ALREADY_REGISTERED`). Lookups by name (`domainNameIs`, used by `getDomainByName`, `domainExistsByName`, the sender-domain check and the queue's legacy lookup) ignore case and normalise the name the same way; when that changes more than the case, the name trimmed and lowercased as before #406 matches too, so a row stored in that form is still found. The key is generated under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner). `input.trackOpens` / `input.trackClicks` (#187) set the tracking opt-in, off when omitted.
 
 #### `getDkimDnsRecord(domain): string | null`
 Returns the DKIM DNS TXT record value (`v=DKIM1; k=rsa; p=<base64>`) for a domain.
@@ -223,8 +225,8 @@ Returns a single domain by its name. Used by the inbound-notification path (#106
 #### `updateDomainNotifyEmail(id, notifyEmail): Promise<Domain | undefined>`
 Sets (or clears, when passed `null`) the inbound-notification address for a domain (#106). Returns `undefined` when no row matches the id.
 
-#### `updateDomainUnsubscribe(id, changes): Promise<Domain | undefined>`
-Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243); only the fields present in `changes` are written, `null` clears one. Also editable from the domain page in the dashboard.
+#### `updateDomainSettings(id, changes): Promise<Domain | undefined>`
+Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243) and `trackOpens` / `trackClicks` (#187); only the fields present in `changes` are written, `null` clears an unsubscribe override. Called `updateDomainUnsubscribe` before #187. Used by `PATCH /api/v1/domains/:id` and the domain page in the dashboard.
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
 Hard-deletes a domain and its keys.
@@ -358,3 +360,12 @@ passes the same SPF/DKIM you already set up for outbound.
   switch); per-domain, just leave `notify_email` empty.
 - Bounces (DSNs) and DMARC aggregate reports never trigger a notification:
   they are routed away before the inbound store.
+
+## Open and click tracking (#187)
+
+Each domain carries an opt-in for open and click tracking, `track_opens` and `track_clicks`, off by default. **Nothing is tracked yet in this version:** the opt-in and each email's decision are stored, and the open pixel and click redirect come later.
+
+- **Who sets it:** admins only. Over REST with an admin key (`trackOpens` / `trackClicks` on `POST /api/v1/domains` and `PATCH /api/v1/domains/:id`; every domain route is admin-only), or on the domain page in the dashboard (two checkboxes, `POST /dashboard/domains/:id/tracking`, `adminGuard`; a box left unticked turns that kind off). Every change is audited as `domain.updated` with the field names.
+- **Per domain, not per key:** the domain is the reputation and disclosure unit, and keys share domains. A send can opt out (`tracking: { opens: false }`) but never turn on what the domain has off, whatever its key's role.
+- **Not alone:** tracking also needs `TRACKING_ENABLED=true` on the server, exactly one recipient and an `https://` `APP_BASE_URL`; `transactional` mail is tracked only when the send asks. See [emails.md](emails.md#open-and-click-tracking-187).
+- **Queued mail keeps its decision:** it is made when the email is created and stored on it, so changing the opt-in affects mail created afterwards only.

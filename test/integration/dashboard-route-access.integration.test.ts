@@ -223,6 +223,11 @@ const ROUTES: Record<string, RouteSpec> = {
     access: "admin",
     body: { unsubscribeEmail: "" },
   },
+  /** Open and click tracking opt-in (#187). */
+  "POST /dashboard/domains/:id/tracking": {
+    access: "admin",
+    body: { trackOpens: "true" },
+  },
 
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },

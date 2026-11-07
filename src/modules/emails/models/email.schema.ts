@@ -1,4 +1,12 @@
-import { pgTable, varchar, text, integer, timestamp, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  varchar,
+  text,
+  integer,
+  timestamp,
+  index,
+  boolean,
+} from "drizzle-orm/pg-core";
 import { jsonb } from "../../../db/jsonb.ts";
 import { sql } from "drizzle-orm";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
@@ -235,6 +243,25 @@ export const emails = pgTable(
      * in the `email.*` webhook payloads. See `services/tags.ts`.
      */
     tags: jsonb<EmailTags | null>("tags"),
+
+    /**
+     * Whether opens and clicks of this email are tracked (#187), decided
+     * once by `createEmail` (`services/tracking-decision.ts`): every gate
+     * must allow it (`TRACKING_ENABLED`, the sender domain's opt-in, the
+     * send not opting out, one recipient, an https `APP_BASE_URL`).
+     * Stored so retries are identical and a later domain change does not
+     * alter mail already queued. False on every row from before #187.
+     */
+    trackOpens: boolean("track_opens").notNull().default(false),
+    trackClicks: boolean("track_clicks").notNull().default(false),
+
+    /**
+     * When the first open and the first click were recorded (#187); null
+     * until then. For list badges and filters: the events themselves are
+     * in `email_events`.
+     */
+    firstOpenedAt: timestamp("first_opened_at", { withTimezone: true }),
+    firstClickedAt: timestamp("first_clicked_at", { withTimezone: true }),
 
     /** Number of send attempts so far (retries stop when the email is
      *  older than `MAIL_RETRY_MAX_AGE_HOURS`, not after a fixed count) */

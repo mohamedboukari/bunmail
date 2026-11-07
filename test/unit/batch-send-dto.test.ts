@@ -92,3 +92,25 @@ describe("parseBatchItem", () => {
     if (!parsed.ok) expect(parsed.problems.length).toBeLessThanOrEqual(10);
   });
 });
+
+describe("parseBatchItem: tracking (#187)", () => {
+  test("keeps a valid tracking object on the item", () => {
+    const parsed = parseBatchItem({ ...item, tracking: { opens: false, clicks: true } });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.item.tracking).toEqual({ opens: false, clicks: true });
+  });
+
+  test("fails the item on a non-boolean", () => {
+    const wrongType = parseBatchItem({ ...item, tracking: { opens: "yes" } });
+    expect(wrongType.ok).toBe(false);
+    if (!wrongType.ok) {
+      expect(wrongType.problems.some((p) => p.path.startsWith("/tracking"))).toBe(true);
+    }
+  });
+
+  test("removes an unknown tracking key, like any unknown property of a body", () => {
+    const parsed = parseBatchItem({ ...item, tracking: { open: true } });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.item.tracking).toEqual({});
+  });
+});

@@ -262,7 +262,11 @@ describe("REQUIRE_VERIFIED_DOMAIN=true", () => {
     const result = await checkSenderDomain(name, IDS, deps);
 
     expect(calls).toHaveLength(1);
-    expect(result).toEqual({ domainId, warnings: ["spf_unverified"] });
+    expect(result).toEqual({
+      domainId,
+      warnings: ["spf_unverified"],
+      tracking: { opens: false, clicks: false },
+    });
   });
 
   test("a verifier that throws counts as unverified and is cached", async () => {
