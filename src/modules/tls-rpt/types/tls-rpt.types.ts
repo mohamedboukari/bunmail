@@ -3,8 +3,12 @@
  * recipient domain is recorded as, and the policy it was made under.
  */
 
-/** The `policy-type` values BunMail reports (RFC 8460 section 4.4): no DANE. */
-export type TlsRptPolicyType = "sts" | "no-policy-found";
+/**
+ * The `policy-type` values BunMail reports (RFC 8460 section 4.4): `tlsa`
+ * for a session under DANE (#345, the MX host's TLSA records), `sts` under
+ * an MTA-STS policy, `no-policy-found` otherwise.
+ */
+export type TlsRptPolicyType = "tlsa" | "sts" | "no-policy-found";
 
 /**
  * The failure `result-type` values BunMail can tell apart (RFC 8460 section
@@ -16,6 +20,8 @@ export type TlsRptFailureType =
   | "certificate-expired"
   | "certificate-not-trusted"
   | "validation-failure"
+  | "tlsa-invalid"
+  | "dnssec-invalid"
   | "sts-policy-fetch-error"
   | "sts-policy-invalid"
   | "sts-webpki-invalid";
@@ -27,14 +33,20 @@ export const TLSRPT_FAILURE_TYPES: readonly TlsRptFailureType[] = [
   "certificate-expired",
   "certificate-not-trusted",
   "validation-failure",
+  "tlsa-invalid",
+  "dnssec-invalid",
   "sts-policy-fetch-error",
   "sts-policy-invalid",
   "sts-webpki-invalid",
 ];
 
-/** The MTA-STS failures of the policy itself, not of a session (RFC 8460 section 4.3.2.1). */
+/**
+ * The failures of the policy itself, not of a session (RFC 8460 section
+ * 4.3.2): an MTA-STS policy that could not be fetched, or a TLSA RRset of
+ * which no record is usable (`tlsa-invalid`, #345).
+ */
 export type TlsRptPolicyFailure =
-  "sts-policy-fetch-error" | "sts-policy-invalid" | "sts-webpki-invalid";
+  "tlsa-invalid" | "sts-policy-fetch-error" | "sts-policy-invalid" | "sts-webpki-invalid";
 
 /** What a stored counter counts: successful sessions, or one failure type. */
 export type TlsRptResultType = "success" | TlsRptFailureType;
@@ -49,7 +61,8 @@ export type TlsRptReasonCode =
   | "starttls-refused"
   | "certificate-not-yet-valid"
   | "starttls-handshake-timeout"
-  | "tls-handshake-failed";
+  | "tls-handshake-failed"
+  | "dane-tlsa-mismatch";
 
 /**
  * The policy a recipient domain's mail went out under on one attempt.
@@ -58,12 +71,15 @@ export type TlsRptReasonCode =
  * - `sts`: an MTA-STS policy applied (`mode`, `mx`, `policyString`), or
  *   one was announced but could not be fetched (`policyFailure`, and no
  *   policy fields): every session of the attempt counts as that failure.
+ * - `tlsa` (#345): DANE applied to the session's MX host; `policyString`
+ *   is its TLSA records in presentation form, `mxHost` the host. When none
+ *   of the records is usable, `policyFailure` is `tlsa-invalid`.
  */
 export interface TlsRptPolicy {
   type: TlsRptPolicyType;
   /** `policy-string`: the applied policy, one line per entry; empty without one. */
   policyString: string[];
-  /** `mx-host`: the policy's MX patterns; empty without a policy. */
+  /** `mx-host`: the policy's MX patterns (the MX host for `tlsa`); empty without a policy. */
   mxHost: string[];
   /** The MTA-STS mode, for the MX match of a session; `null` without a policy. */
   mode: "enforce" | "testing" | "none" | null;

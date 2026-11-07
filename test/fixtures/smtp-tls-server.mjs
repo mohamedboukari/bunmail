@@ -22,13 +22,15 @@
  *
  * Prints `{"port":N}` on one line once listening, then counts on stdout
  * each accepted message and connection, the open connections whenever
- * that number changes, the connections closed by either side, and the most
- * messages ever in DATA at once (`{"message":N}`, `{"connection":N}`,
- * `{"open":N}`, `{"closed":N}`, `{"peak":N}`). Exits when stdin
- * closes. The key and certificate are a test-only pair under
+ * that number changes, the connections closed by either side, the most
+ * messages ever in DATA at once, each MAIL FROM received, and the SNI of
+ * each TLS session (`{"message":N}`, `{"connection":N}`, `{"open":N}`,
+ * `{"closed":N}`, `{"peak":N}`, `{"mailFrom":N}`, `{"sni":"name"}`; the
+ * last two for the DANE tests, #345). Exits when stdin closes. The key and certificate are a test-only pair under
  * `test/fixtures/tls/`: `<certificate name>.key.pem` and `.cert.pem`,
  * `hook.example.test` (self-signed) by default. The MTA-STS tests (#250)
- * pass a name whose certificate the test CA (`test-ca.cert.pem`) signed.
+ * pass a name whose certificate the test CA (`test-ca.cert.pem`) signed;
+ * the DANE tests (#345) a name under `dane/` (see its README).
  */
 import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -49,6 +51,7 @@ const tls11 = {
 
 let messages = 0;
 let connections = 0;
+let mailFroms = 0;
 let closed = 0;
 /** Messages between the start of DATA and its reply, now and at most. */
 let inData = 0;
@@ -142,6 +145,15 @@ function startSmtpServer() {
         callback(busy);
         return;
       }
+      callback();
+    },
+    onSecure(socket, _session, callback) {
+      report({ sni: socket.servername || "" });
+      callback();
+    },
+    onMailFrom(_address, _session, callback) {
+      mailFroms += 1;
+      report({ mailFrom: mailFroms });
       callback();
     },
     onRcptTo(address, _session, callback) {

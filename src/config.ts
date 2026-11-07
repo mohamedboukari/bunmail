@@ -38,6 +38,7 @@ import {
 import { readMetricsToken, readTracingSettings } from "./config/observability.ts";
 import { readRedisUrl } from "./config/storage.ts";
 import { buildTlsRptConfig } from "./config/tls-rpt.ts";
+import { buildDaneConfig } from "./config/dane.ts";
 import { readSsoSettings } from "./config/sso.ts";
 
 export { optionalBoundedInt, optionalStrictBoolean } from "./config/env.ts";
@@ -130,6 +131,14 @@ export {
   readTlsRptMaxReportsPerDay,
   readTlsRptOrganizationName,
 } from "./config/tls-rpt.ts";
+
+/** @public */
+export {
+  type DaneConfig,
+  daneResolverIsLocal,
+  readDaneEnabled,
+  readDaneResolver,
+} from "./config/dane.ts";
 
 /** The submission server's TLS settings and port, read once at boot (#349). */
 const submissionTls = readSubmissionTls();
@@ -276,4 +285,7 @@ export const config = {
 
   /** SMTP TLS reporting (RFC 8460, #345); see {@link buildTlsRptConfig}. */
   tlsRpt: buildTlsRptConfig(),
+
+  /** Outbound DANE for SMTP (RFC 7672, #345); see {@link buildDaneConfig}. */
+  dane: buildDaneConfig(),
 } as const;

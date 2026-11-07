@@ -24,6 +24,12 @@ export const TYPE_TXT = 16;
 export const TYPE_CNAME = 5;
 export const TYPE_OPT = 41;
 export const CLASS_IN = 1;
+export const TYPE_A = 1;
+export const TYPE_MX = 15;
+export const TYPE_AAAA = 28;
+export const TYPE_TLSA = 52;
+/** Header flag AD (authentic data), set by a validating resolver (#345). */
+const FLAG_AD = 0x0020;
 
 /** One query as the fake server received it. */
 export interface FakeDnsQuery {
@@ -258,6 +264,8 @@ export interface ResponseOptions {
   tc?: boolean;
   qr?: boolean;
   opcode?: number;
+  /** The AD bit (#345, DANE): the answer was DNSSEC-validated. */
+  ad?: boolean;
   /** The question echoed; default the query's. */
   question?: { name: string; type?: number; rrClass?: number };
   answers?: FakeRecord[];
@@ -290,6 +298,7 @@ export function buildResponse(
     (options.tc === true ? 0x0200 : 0) |
     0x0100 |
     0x0080 |
+    (options.ad === true ? FLAG_AD : 0) |
     ((options.rcode ?? 0) & 0x0f);
   u16(flags);
   u16(1);
@@ -297,7 +306,7 @@ export function buildResponse(
   u16(authority.length);
   u16(additional.length);
   out.push(...encodeName(question.name));
-  u16(question.type ?? TYPE_TXT);
+  u16(question.type ?? query.qtype);
   u16(question.rrClass ?? CLASS_IN);
   for (const record of [...answers, ...authority, ...additional]) {
     if (record.name === null) out.push(0xc0, 12);
@@ -321,6 +330,99 @@ export function optRecord(extendedRcode = 0): FakeRecord {
     rrClass: 1232,
     ttl: (extendedRcode << 24) >>> 0,
     rdata: new Uint8Array(0),
+  };
+}
+
+/* ─── DNSSEC-aware zones (#345, DANE) ─── */
+
+/** An A record of `name` (or the question name), `address` dotted. */
+export function aRecord(address: string, name: string | null = null): FakeRecord {
+  return { name, type: TYPE_A, rdata: Uint8Array.from(address.split(".").map(Number)) };
+}
+
+/** An AAAA record of `name` (or the question name), from the 16 bytes of the address. */
+export function aaaaRecord(bytes: Uint8Array, name: string | null = null): FakeRecord {
+  return { name, type: TYPE_AAAA, rdata: bytes };
+}
+
+/** An MX record of `name` (or the question name). */
+export function mxRecord(
+  preference: number,
+  exchange: string,
+  name: string | null = null,
+): FakeRecord {
+  const target = encodeName(exchange);
+  const rdata = new Uint8Array(2 + target.length);
+  new DataView(rdata.buffer).setUint16(0, preference);
+  rdata.set(target, 2);
+  return { name, type: TYPE_MX, rdata };
+}
+
+/** A CNAME record from `name` (or the question name) to `target`. */
+export function cnameRecord(target: string, name: string | null = null): FakeRecord {
+  return { name, type: TYPE_CNAME, rdata: encodeName(target) };
+}
+
+/** A TLSA record of `name` (or the question name). */
+export function tlsaRecord(
+  usage: number,
+  selector: number,
+  matchingType: number,
+  data: Uint8Array,
+  name: string | null = null,
+): FakeRecord {
+  return {
+    name,
+    type: TYPE_TLSA,
+    rdata: Uint8Array.from([usage, selector, matchingType, ...data]),
+  };
+}
+
+/** What one name and type answers in a {@link secureZoneHandler}. */
+export interface SecureZoneAnswer {
+  /** The answer section; empty with RCODE 0 is NODATA. */
+  answers?: FakeRecord[];
+  rcode?: number;
+  /** The AD bit; default `true` (a signed zone). */
+  ad?: boolean;
+  /** Send nothing: the client times out. */
+  silent?: boolean;
+}
+
+/** The `<name> <TYPE>` key of a {@link secureZoneHandler} entry, lowercased. */
+const TYPE_NAMES: Record<number, string> = {
+  [TYPE_A]: "A",
+  [TYPE_CNAME]: "CNAME",
+  [TYPE_MX]: "MX",
+  [TYPE_TXT]: "TXT",
+  [TYPE_AAAA]: "AAAA",
+  [TYPE_TLSA]: "TLSA",
+};
+
+/**
+ * A handler serving a zone keyed `"<name> <TYPE>"` (e.g. `"example.org MX"`)
+ * with the AD bit of each answer; names not listed get `fallback`
+ * (default: NXDOMAIN, AD set, a signed denial).
+ */
+export function secureZoneHandler(
+  zone: Record<string, SecureZoneAnswer>,
+  fallback: SecureZoneAnswer = { rcode: 3 },
+): FakeDnsHandler {
+  const byKey = new Map(
+    Object.entries(zone).map(([key, answer]) => [key.toLowerCase(), answer]),
+  );
+  return (query) => {
+    const key = `${query.name} ${TYPE_NAMES[query.qtype] ?? String(query.qtype)}`;
+    const entry = byKey.get(key.toLowerCase()) ?? fallback;
+    if (entry.silent === true) return [];
+    return [
+      buildResponse(query, {
+        rcode: entry.rcode ?? 0,
+        ad: entry.ad ?? true,
+        answers: entry.answers ?? [],
+        additional: [optRecord()],
+      }),
+    ];
   };
 }
 

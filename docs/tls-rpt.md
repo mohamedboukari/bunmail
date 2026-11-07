@@ -20,17 +20,18 @@ Reports go out by `https:` POST or by mail, whichever the domain's record lists.
 
 ## What is recorded
 
-Recording hooks into the MX delivery path (`mailer-delivery.service.ts`, `observeMxSession`, after each SMTP session; `mailer.service.ts`, `observeUnconnectedAttempt`, when an enforce-mode MTA-STS policy matches no MX host). It runs in the background: a send never waits for it, and a failure to record is logged at `warn` (`TLS-RPT session could not be recorded`, by error name only) and never reaches the send. At most 4 recordings run at once; past that a recording is dropped, counted as `bunmail_tlsrpt_sessions_total{result="dropped"}` and logged at `debug` at most once a minute, so a slow database cannot pile up background work under a send storm.
+Recording hooks into the MX delivery path (`mailer-delivery.service.ts`, `observeMxSession`, after each SMTP session; `mailer.service.ts`, `observeUnconnectedAttempt`, when an enforce-mode MTA-STS policy matches no MX host; `mailer-dane.service.ts`, `observeDaneLookupFailure`, when a DNSSEC lookup of DANE fails for an MX host, #345). It runs in the background: a send never waits for it, and a failure to record is logged at `warn` (`TLS-RPT session could not be recorded`, by error name only) and never reaches the send. At most 4 recordings run at once; past that a recording is dropped, counted as `bunmail_tlsrpt_sessions_total{result="dropped"}` and logged at `debug` at most once a minute, so a slow database cannot pile up background work under a send storm.
 
 When several recipient domains share one MX session, each domain is classified from its own transactions' outcomes only: a domain whose transaction never reached a TLS decision in that session (it was not attempted, or failed before TLS) is not counted for it.
 
 A session is recorded for a recipient domain only when that domain publishes a usable `_smtp._tls` record. The record is looked up through `src/utils/dns-txt.ts` (Bun's own `resolveTxt` splits multi-string records) and the answer cached in memory per domain for an hour (a failed lookup: five minutes, as "no record"), at most 10,000 domains, the oldest evicted, per replica.
 
-**Policy** (`policy-type`, RFC 8460 section 4.4), from the MTA-STS discovery of the same attempt:
+**Policy** (`policy-type`, RFC 8460 section 4.4), from the DANE decision for the MX host and the MTA-STS discovery of the same attempt:
 
+- `tlsa` (#345, `DANE_ENABLED`), when DANE applied to the session's MX host (see [emails.md](emails.md#dane-345)): the host's TLSA records in presentation form (`3 1 1 <HEX>`, RFC 6698 section 2.2) as `policy-string`, and the MX host as `mx-host`. A host whose DANE lookups failed is recorded under a `tlsa` policy with no policy string. DANE takes precedence: such a session is never recorded under the domain's MTA-STS policy;
 - `sts` with the policy's lines (`version`, `mode`, each `mx`, `max_age`) as `policy-string` and its MX patterns as `mx-host`, when an MTA-STS policy applied (any mode);
 - `sts` with no policy string, when a policy was announced but could not be fetched (and none was cached): every session of the attempt counts as `sts-policy-fetch-error`, `sts-policy-invalid` or `sts-webpki-invalid`;
-- `no-policy-found` otherwise. DANE is not implemented, so `tlsa` never appears.
+- `no-policy-found` otherwise.
 
 **Result** (`result-type`, RFC 8460 section 4.3): only the types BunMail can genuinely tell apart, mapped from what the session showed (`tls-rpt-classify.ts`, checked against real receiving servers in `test/unit/tls-rpt-sessions.test.ts`):
 
@@ -47,6 +48,16 @@ A session is recorded for a recipient domain only when that domain publishes a u
 | Any other TLS failure | `validation-failure`, reason `tls-handshake-failed` |
 | `testing` or `enforce` policy, MX host not named by it | `validation-failure`, reason `mx-not-in-policy` |
 | MTA-STS policy announced, fetch failed / invalid / bad certificate | `sts-policy-fetch-error` / `sts-policy-invalid` / `sts-webpki-invalid` |
+| DANE: TLSA records found, every one invalid by the RFC rules (PKIX usage, unknown selector or matching type, wrong digest length, unparsable Full data; the mail still goes over unauthenticated TLS) | `tlsa-invalid`, every session to the host |
+| DANE: no usable record, but at least one valid record this implementation does not support (DANE-TA under Bun 1.3.14) | reported as without DANE (the domain's `sts` policy, or `no-policy-found`): BunMail claims no `tlsa` result either way (RFC 8460 4.3.2.1) |
+| DANE: a DNSSEC lookup of the host failed (address, CNAME or TLSA), the host skipped | `dnssec-invalid`, no address |
+| DANE: no usable TLSA record matches the certificate chain | `validation-failure`, reason `dane-tlsa-mismatch` |
+| DANE-TA (only once the runtime exposes the chain; unusable under Bun 1.3.14): the chain does not verify up to the anchor | `certificate-not-trusted` |
+| DANE-TA: the certificate names no reference identifier | `certificate-host-mismatch` |
+| DANE-TA: a certificate below the anchor expired / not yet valid | `certificate-expired` / `validation-failure`, reason `certificate-not-yet-valid` |
+| DANE: the MX did not offer or refused `STARTTLS` | `starttls-not-supported`, reason `starttls-refused` |
+| DANE: the TLS handshake did not really complete | `validation-failure`, reason `tls-handshake-failed` |
+| DANE domain: a host without TLSA records skipped as outside an enforce-mode MTA-STS policy | `validation-failure`, reason `mx-not-in-policy` |
 
 Not recorded: a session that failed before TLS mattered (refused connection, timeout, an SMTP reply before STARTTLS), which RFC 8460 leaves out as transient, and entries the rate budget deferred. Without an enforce policy certificates are not verified (opportunistic TLS), so the certificate types only appear for enforce-mode domains. The reason codes are BunMail's own fixed set: nothing a receiving server sent ever goes into a report.
 
@@ -177,4 +188,5 @@ No REST endpoint and no dashboard page. The suppression check for reporting addr
 - Without an MTA-STS `enforce` policy, certificates are not verified, so certificate problems of other domains are not reported (their sessions count as successes when STARTTLS worked).
 - `testing` policies are reported from the same opportunistic session: an MX outside the policy and plaintext sessions show, certificate problems do not.
 - Recording is best-effort: a database error loses that session's count (logged). A report covers what this BunMail's replicas recorded, all replicas writing to the same rows.
-- DANE (`tlsa`, `dnssec-invalid`, `dane-required`) is not implemented.
+- `dane-required` is never reported: BunMail has no mandatory-DANE setting (RFC 7672 section 6), only opportunistic DANE.
+- A failed DANE MX lookup (the whole domain delayed) is not reported: no MX host is known yet to report against.

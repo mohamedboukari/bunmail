@@ -1,8 +1,15 @@
 import { connect, type Socket } from "node:net";
+import type { TLSSocket } from "node:tls";
 import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import type { DeliveryTls } from "../models/email.schema.ts";
+import type { DaneHost } from "../types/dane.types.ts";
+import { daneSocketCheck } from "./dane-verify.ts";
+import { createTlsRecorder, type NodemailerLogger } from "./mx-tls-recorder.ts";
+
+/** @public The TLS record lives in `mx-tls-recorder.ts`; re-exported for the tests. */
+export { createTlsRecorder, type TlsRecorder } from "./mx-tls-recorder.ts";
 
 /**
  * Lowest TLS version an outbound STARTTLS session may negotiate (#250). A
@@ -22,138 +29,33 @@ export const SMTP_SETUP_TIMEOUT_MS = 60_000;
 export const SMTP_SESSION_DEADLINE_MS = 20 * 60_000;
 
 /**
- * Nodemailer's own log line for a completed STARTTLS upgrade, written by
- * its SMTP connection right after the TLS callback. The real-server test
- * (`test/unit/mx-transport.test.ts`) pins it, so a wording change in a
- * nodemailer upgrade fails a test instead of silently recording no TLS.
- */
-const STARTTLS_UPGRADED = "Connection upgraded with STARTTLS";
-
-/** A bunyan-style logger, the shape nodemailer accepts as `logger`. */
-interface NodemailerLogger {
-  trace(...args: unknown[]): void;
-  debug(...args: unknown[]): void;
-  info(...args: unknown[]): void;
-  warn(...args: unknown[]): void;
-  error(...args: unknown[]): void;
-  fatal(...args: unknown[]): void;
-}
-
-/**
- * Watches one MX transport's nodemailer log events to learn whether each
- * transaction ran over STARTTLS (#250). Nothing is logged or stored from
- * those events (they carry addresses); only three facts are kept:
- *
- * - which connection is current (the `sid` nodemailer puts on every line
- *   of a connection: a new one means a new, not yet upgraded session);
- * - whether that connection reported the STARTTLS upgrade;
- * - whether the session became ready to send (the transport's `send`
- *   line, written once the greeting, EHLO and any STARTTLS restart are
- *   done).
- *
- * The upgrade line alone is not proof: under Bun the TLS callback can fire
- * for a handshake the peer refused (one offering only TLS below 1.2), and
- * the session then never answers. So a transaction counts as `starttls`
- * only when the session also became ready, which needs an EHLO reply read
- * over the new TLS layer; `plaintext` when it became ready without the
- * upgrade; and `null` (unknown) when it never became ready.
- */
-export interface TlsRecorder {
-  /** Pass as the transport's `logger` option. */
-  logger: NodemailerLogger;
-  /** Call before each transaction: a pooled connection keeps its upgrade, not its readiness. */
-  beginTransaction(): void;
-  /** What the transaction that just ran used, see the interface comment. */
-  result(): DeliveryTls | null;
-  /**
-   * Rejects when a session reported the STARTTLS upgrade but did not become
-   * ready within the stall limit: the handshake did not really complete,
-   * and nodemailer's own setup timer was already cleared by the callback.
-   * The error carries no SMTP reply, so the group is retried.
-   */
-  stalled: Promise<never>;
-  /** Clears the stall timer. */
-  dispose(): void;
-}
-
-/**
- * Creates a {@link TlsRecorder}; `stallMs` bounds the wait between the
- * STARTTLS upgrade and a ready session.
- */
-export function createTlsRecorder(stallMs = SMTP_SETUP_TIMEOUT_MS): TlsRecorder {
-  let sid: string | undefined;
-  let upgraded = false;
-  let ready = false;
-  let stallTimer: ReturnType<typeof setTimeout> | undefined;
-  let rejectStalled: (error: Error) => void = () => undefined;
-  const stalled = new Promise<never>((_resolve, reject) => {
-    rejectStalled = reject;
-  });
-  /** Nobody may be racing it when it fires; never an unhandled rejection. */
-  stalled.catch(() => undefined);
-
-  const clearStall = (): void => {
-    if (stallTimer !== undefined) clearTimeout(stallTimer);
-    stallTimer = undefined;
-  };
-
-  const observe = (entry: unknown, message: unknown): void => {
-    if (typeof entry !== "object" || entry === null) return;
-    const lineSid: unknown = Reflect.get(entry, "sid");
-    const tnx: unknown = Reflect.get(entry, "tnx");
-    if (typeof lineSid === "string" && lineSid !== sid) {
-      /** A new connection: not upgraded until it says so. */
-      sid = lineSid;
-      upgraded = false;
-    }
-    if (tnx === "smtp" && message === STARTTLS_UPGRADED) {
-      upgraded = true;
-      ready = false;
-      clearStall();
-      stallTimer = setTimeout(() => {
-        if (!ready) {
-          rejectStalled(
-            new Error(
-              `STARTTLS handshake did not complete within ${Math.round(stallMs / 1000)} s`,
-            ),
-          );
-        }
-      }, stallMs);
-      return;
-    }
-    if (tnx === "send") {
-      ready = true;
-      clearStall();
-    }
-  };
-
-  const logger: NodemailerLogger = {
-    trace: observe,
-    debug: observe,
-    info: observe,
-    warn: observe,
-    error: observe,
-    fatal: observe,
-  };
-
-  return {
-    logger,
-    beginTransaction: () => {
-      ready = false;
-    },
-    result: () => (ready ? (upgraded ? "starttls" : "plaintext") : null),
-    stalled,
-    dispose: clearStall,
-  };
-}
-
-/**
  * Verified TLS for a session to an MX host named by an MTA-STS policy in
  * enforce mode (#250, `mta-sts.ts`).
  */
 export interface VerifiedTls {
   /** Trust anchors (PEM) instead of the system store: tests only. */
   ca?: string;
+}
+
+/**
+ * DANE for a session to an MX host with DNSSEC-validated TLSA records
+ * (RFC 7672, #345): the host's records and names, see {@link DaneHost}.
+ */
+export interface DaneTls {
+  host: DaneHost;
+  /** The clock of the certificate date checks; tests only. */
+  now?: () => Date;
+}
+
+/**
+ * nodemailer's transport options plus the hook BunMail's nodemailer patch
+ * adds (`patches/nodemailer@10.3.1.patch`, #345): `verifyTlsSocket` runs
+ * on the TLS socket right after the STARTTLS handshake, before anything is
+ * sent over it; an error it returns (or throws) ends the session with
+ * nodemailer's `ETLS` error, so nothing after the handshake is sent.
+ */
+export interface MxTransportOptions extends SMTPTransport.Options {
+  verifyTlsSocket?: (socket: TLSSocket) => Error | null;
 }
 
 /**
@@ -168,6 +70,13 @@ export interface VerifiedTls {
  *   fallback) and the certificate must chain to a trusted root and name
  *   the MX host (`rejectUnauthorized`, `servername`). The connection stays
  *   pinned to the checked `address`.
+ * - With `dane` (the MX host published DNSSEC-validated TLSA records,
+ *   #345): STARTTLS is required, never a plaintext fallback; the SNI is the
+ *   TLSA base domain (RFC 7672 section 8.1); the system trust store plays
+ *   no part (`rejectUnauthorized: false`), the chain is checked against
+ *   the TLSA records instead by `verifyTlsSocket` ({@link daneSocketCheck}),
+ *   before EHLO is sent over TLS. DANE takes precedence over `verifiedTls`
+ *   (RFC 8461 section 2).
  * - TLS 1.2 at least ({@link OUTBOUND_TLS_MIN_VERSION}).
  * - Setup timeouts of {@link SMTP_SETUP_TIMEOUT_MS}: connecting and the
  *   greeting come before anything is sent, so a dead or tarpitting MX
@@ -183,7 +92,10 @@ export function mxTransportOptions(args: {
   heloName: string;
   logger: NodemailerLogger;
   verifiedTls?: VerifiedTls;
-}): SMTPTransport.Options {
+  dane?: DaneTls;
+  /** Wraps the DANE check, see {@link runMxSession}; the check itself by default. */
+  verifyTlsSocket?: (socket: TLSSocket) => Error | null;
+}): MxTransportOptions {
   const base = {
     host: args.address,
     port: 25,
@@ -193,6 +105,20 @@ export function mxTransportOptions(args: {
     greetingTimeout: SMTP_SETUP_TIMEOUT_MS,
     logger: args.logger,
   };
+  if (args.dane !== undefined) {
+    return {
+      ...base,
+      requireTLS: true,
+      opportunisticTLS: false,
+      tls: {
+        rejectUnauthorized: false,
+        servername: args.dane.host.baseDomain,
+        minVersion: OUTBOUND_TLS_MIN_VERSION,
+      },
+      verifyTlsSocket:
+        args.verifyTlsSocket ?? daneSocketCheck(args.dane.host, args.dane.now),
+    };
+  }
   if (args.verifiedTls !== undefined) {
     const ca = args.verifiedTls.ca;
     return {
@@ -229,9 +155,16 @@ const TLS_FAILURE_CODE_RE =
  * carries the server's `5xx` refusal as `responseCode`), an `EHLO` that
  * fails when STARTTLS is required, or a certificate the check rejected.
  * The reason stays in the message, on one line, so no reply code starts a
- * line of it. Any other error is returned as it is.
+ * line of it. Any other error is returned as it is. `policy` names what
+ * required the TLS: an MTA-STS enforce policy, or DANE (#345, RFC 7672
+ * section 2.2: a DANE failure falls back to the next MX host or a later
+ * attempt, never to plaintext and never to a bounce).
  */
-export function enforcedTlsFailure(error: unknown, mxHost: string): unknown {
+export function enforcedTlsFailure(
+  error: unknown,
+  mxHost: string,
+  policy: "MTA-STS" | "DANE" = "MTA-STS",
+): unknown {
   if (!(error instanceof Error)) return error;
   const code: unknown = Reflect.get(error, "code");
   const originalCode: unknown = Reflect.get(error, "originalCode");
@@ -244,7 +177,9 @@ export function enforcedTlsFailure(error: unknown, mxHost: string): unknown {
     (typeof originalCode === "string" && TLS_FAILURE_CODE_RE.test(originalCode));
   if (!tlsFailure) return error;
   const reason = error.message.replace(/\s+/g, " ").trim();
-  return new Error(`MTA-STS: no verified TLS with ${mxHost} (${reason})`);
+  return policy === "DANE"
+    ? new Error(`DANE: no authenticated TLS with ${mxHost} (${reason})`)
+    : new Error(`MTA-STS: no verified TLS with ${mxHost} (${reason})`);
 }
 
 /** One SMTP transaction of a session: its delivery-state key and its message. */
@@ -283,6 +218,12 @@ export interface MxSessionOutcome {
  * - **Verified TLS** (`verifiedTls`, an MTA-STS enforce policy): see
  *   {@link mxTransportOptions}; a TLS failure is reported through
  *   {@link enforcedTlsFailure}, so it is retried, never bounced.
+ * - **DANE** (`dane`, #345): see {@link mxTransportOptions}; failures
+ *   through {@link enforcedTlsFailure} as well. A guard backs the
+ *   nodemailer patch: should a STARTTLS upgrade ever complete without the
+ *   DANE check having run (the patch lost in an upgrade), the session's
+ *   sockets are destroyed on the upgrade line, before EHLO goes out over
+ *   TLS, and the attempt fails.
  * - **One pooled connection** (`maxConnections: 1`), also for a single
  *   transaction, so there is one code path. Each message after the first
  *   goes after `RSET`. `maxRequeues: 0` keeps nodemailer from silently
@@ -311,6 +252,8 @@ export async function runMxSession(args: {
   transactions: MxSessionTransaction[];
   /** Set when the recipient domain's MTA-STS policy is in enforce mode. */
   verifiedTls?: VerifiedTls;
+  /** Set when the MX host has DNSSEC-validated TLSA records (#345); wins over `verifiedTls`. */
+  dane?: DaneTls;
   port?: number;
   deadlineMs?: number;
   stallMs?: number;
@@ -319,9 +262,24 @@ export async function runMxSession(args: {
   const port = args.port ?? 25;
   const deadlineMs = args.deadlineMs ?? SMTP_SESSION_DEADLINE_MS;
   const setupTimeoutMs = args.setupTimeoutMs ?? SMTP_SETUP_TIMEOUT_MS;
-  /** Learns each transaction's encryption from nodemailer's own events. */
-  const recorder = createTlsRecorder(args.stallMs ?? setupTimeoutMs);
   const sockets = new Set<Socket>();
+  const dane = args.dane;
+  /** Whether the DANE check ran for the latest upgrade; see the guard in the comment. */
+  let daneChecked = false;
+  const daneCheck = dane === undefined ? undefined : daneSocketCheck(dane.host, dane.now);
+  const unpatchedGuard = (): Error | null => {
+    if (dane === undefined) return null;
+    if (daneChecked) {
+      daneChecked = false;
+      return null;
+    }
+    for (const socket of sockets) socket.destroy();
+    return new Error(
+      "DANE: the TLS check did not run (nodemailer patch missing); session closed before EHLO",
+    );
+  };
+  /** Learns each transaction's encryption from nodemailer's own events. */
+  const recorder = createTlsRecorder(args.stallMs ?? setupTimeoutMs, unpatchedGuard);
   const transport = createTransport({
     ...mxTransportOptions({
       address: args.address,
@@ -329,6 +287,15 @@ export async function runMxSession(args: {
       heloName: args.heloName,
       logger: recorder.logger,
       verifiedTls: args.verifiedTls,
+      dane,
+      ...(daneCheck === undefined
+        ? {}
+        : {
+            verifyTlsSocket: (socket: TLSSocket) => {
+              daneChecked = true;
+              return daneCheck(socket);
+            },
+          }),
     }),
     port,
     pool: true,
@@ -362,9 +329,11 @@ export async function runMxSession(args: {
         outcomes.push({
           key: transaction.key,
           error:
-            args.verifiedTls === undefined
-              ? error
-              : enforcedTlsFailure(error, args.mxHost),
+            dane !== undefined
+              ? enforcedTlsFailure(error, args.mxHost, "DANE")
+              : args.verifiedTls === undefined
+                ? error
+                : enforcedTlsFailure(error, args.mxHost),
           tls: recorder.result(),
         });
       }

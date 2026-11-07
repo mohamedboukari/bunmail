@@ -663,3 +663,54 @@ describe("deliverWithFailover: buckets and rate budget", () => {
     expect(addresses).toEqual(["2001:db8::25"]);
   });
 });
+
+describe("deliverWithFailover: a host resolver's time is part of the attempt (#345)", () => {
+  test("the time resolving a host comes out of the session budget", async () => {
+    const budgets: number[] = [];
+    await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      deadlineMs: 5_000,
+      resolveHost: async () => {
+        await Bun.sleep(150);
+        return { addresses: ["203.0.113.10"], dane: null };
+      },
+      runSession: async ({ deadlineMs, transactions }) => {
+        budgets.push(deadlineMs);
+        return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+      },
+      lock: recordingLock([]),
+      routeDeps: stubDeps(),
+    });
+    expect(budgets).toHaveLength(1);
+    expect(budgets[0]).toBeLessThanOrEqual(5_000 - 140);
+  });
+
+  test("a resolver slower than the deadline is cut off: no session, retried", async () => {
+    const sessions: string[] = [];
+    const started = Date.now();
+    const [outcome] = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "mx2.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      deadlineMs: 200,
+      resolveHost: async () => {
+        await Bun.sleep(1_000);
+        return { addresses: ["203.0.113.10"], dane: null };
+      },
+      runSession: async ({ mxHost, transactions }) => {
+        sessions.push(mxHost);
+        return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+      },
+      lock: recordingLock([]),
+      routeDeps: stubDeps(),
+    });
+    expect(Date.now() - started).toBeLessThan(700);
+    expect(sessions).toEqual([]);
+    expect(String(outcome?.error)).toContain("SMTP session exceeded");
+    expect(failsOver(outcome?.error)).toBe(true);
+  });
+});

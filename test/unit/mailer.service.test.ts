@@ -11,6 +11,14 @@ import {
 import { generateKeyPairSync } from "crypto";
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { DeliveryGroup } from "../../src/modules/emails/models/email.schema.ts";
+import { parseServer, type DnsServer } from "../../src/utils/dns-transport.ts";
+import {
+  aRecord,
+  mxRecord,
+  secureZoneHandler,
+  tlsaRecord,
+  useFakeDns,
+} from "../fake-dns.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace";
 
@@ -42,6 +50,12 @@ function asRecord(value: unknown): Record<string, unknown> {
 /** The real module, spread under the stub so every export exists (#293). */
 const realConfig = await import("../../src/config.ts");
 
+/** DANE (#345): off unless a test turns it on, pointed at the fake resolver. */
+const daneConfig: { enabled: boolean; resolver: DnsServer | null } = {
+  enabled: false,
+  resolver: null,
+};
+
 void mock.module("../../src/config.ts", () => ({
   ...realConfig,
   config: {
@@ -55,6 +69,7 @@ void mock.module("../../src/config.ts", () => ({
       publicIps: [],
     },
     env: "test" as const,
+    dane: daneConfig,
     /** `src/db/index.ts` reads it at import; keep it set in case this stub leaks. */
     database: {
       ...realConfig.config.database,
@@ -281,6 +296,113 @@ describe("sendMail: transport configuration", () => {
     expect(cfg.maxRequeues).toBe(0);
     expect(typeof cfg.getSocket).toBe("function");
     expect(closedTransports).toBe(1);
+  });
+});
+
+describe("sendMail: DANE (#345)", () => {
+  const fakeDns = useFakeDns();
+
+  /** DANE on, against the fake resolver serving `zone`. */
+  function daneOn(zone: Parameters<typeof secureZoneHandler>[0]): void {
+    fakeDns.serve(secureZoneHandler(zone));
+    daneConfig.enabled = true;
+    daneConfig.resolver = parseServer(fakeDns.dns.server);
+  }
+
+  afterAll(() => {
+    daneConfig.enabled = false;
+    daneConfig.resolver = null;
+  });
+
+  beforeEach(() => {
+    daneConfig.enabled = false;
+    daneConfig.resolver = null;
+  });
+
+  test("a secure MX with TLSA records: TLS required, SNI the base domain, the DANE check set", async () => {
+    daneOn({
+      "example.org MX": { answers: [mxRecord(10, "mx.example.org")] },
+      "mx.example.org A": { answers: [aRecord(MX_IP)] },
+      "mx.example.org AAAA": { answers: [] },
+      "_25._tcp.mx.example.org TLSA": {
+        answers: [tlsaRecord(3, 1, 1, new Uint8Array(32).fill(1))],
+      },
+    });
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "dane",
+      messageId: MID,
+    });
+    const cfg = captured[0]!.transportConfig;
+    expect(cfg.host).toBe(MX_IP);
+    expect(cfg.requireTLS).toBe(true);
+    expect(cfg.opportunisticTLS).toBe(false);
+    expect(asRecord(cfg.tls).servername).toBe("mx.example.org");
+    expect(asRecord(cfg.tls).rejectUnauthorized).toBe(false);
+    expect(typeof cfg.verifyTlsSocket).toBe("function");
+    expect(result.deliveryState["example.org"]?.status).toBe("sent");
+  });
+
+  test("an insecure MX: delivery as without DANE (opportunistic, no DANE check)", async () => {
+    daneOn({
+      "example.org MX": { answers: [mxRecord(10, "mx.example.org")], ad: false },
+    });
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "dane",
+      messageId: MID,
+    });
+    const cfg = captured[0]!.transportConfig;
+    expect(cfg.opportunisticTLS).toBe(true);
+    expect(cfg.requireTLS).toBeUndefined();
+    expect(cfg.verifyTlsSocket).toBeUndefined();
+  });
+
+  test("a failed MX lookup leaves the group in retry, nothing connected to", async () => {
+    daneOn({ "example.org MX": { rcode: 2, ad: false } });
+    const result = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "dane",
+      messageId: MID,
+    });
+    expect(captured).toHaveLength(0);
+    expect(result.deliveryState["example.org"]?.status).toBe("retry");
+    expect(result.deliveryState["example.org"]?.lastError).toContain(
+      "DANE: MX lookup failed",
+    );
+  });
+
+  test("a report goes out without DANE (RFC 8460 section 3)", async () => {
+    daneOn({ "example.org MX": { rcode: 2, ad: false } });
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "report",
+      text: "report",
+      messageId: MID,
+      dkim: DKIM,
+      attachments: [
+        {
+          filename: "r.json.gz",
+          content: Buffer.from("x"),
+          contentType: "application/tlsrpt+gzip",
+          contentId: null,
+        },
+      ],
+      report: {
+        reportType: "tlsrpt",
+        headers: {
+          "TLS-Report-Domain": "example.org",
+          "TLS-Report-Submitter": "example.com",
+        },
+      },
+    });
+    /** The plain MX route (the dns/promises stub), opportunistic TLS. */
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.transportConfig.opportunisticTLS).toBe(true);
   });
 });
 

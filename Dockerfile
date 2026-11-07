@@ -36,8 +36,11 @@ FROM oven/bun:1.3.14 AS install
 WORKDIR /app
 
 # `bun.lock` is required for `--frozen-lockfile`, which makes the
-# install deterministic: same versions every build.
+# install deterministic: same versions every build. `patches/` holds
+# BunMail's patch of nodemailer (the TLS check DANE needs, #345), applied
+# by `bun install`: without it the install fails.
 COPY package.json bun.lock ./
+COPY patches/ ./patches/
 
 # `--frozen-lockfile` aborts if the lockfile is missing/out-of-date,
 # so a stale CI without the committed lockfile fails loud instead of
@@ -66,6 +69,7 @@ FROM oven/bun:1.3.14 AS prod-deps
 WORKDIR /app
 
 COPY package.json bun.lock ./
+COPY patches/ ./patches/
 
 RUN bun install --frozen-lockfile --ignore-scripts --production
 

@@ -65,3 +65,14 @@ services:
   #     timeout: 5s
   #     retries: 5
   #   restart: unless-stopped
+
+  # ── Outbound DANE (#345) ──
+  # With the `dane` profile (a local validating Unbound at 172.30.53.53, see
+  # docker-compose.yml): the app joins that resolver's network. Set in .env:
+  # DANE_ENABLED=true, DANE_RESOLVER=172.30.53.53, and COMPOSE_PROFILES=dane
+  # so a plain `docker compose up -d` starts the resolver too. See
+  # docs/self-hosting.md, "DANE".
+  # app:
+  #   networks:
+  #     - default
+  #     - dane

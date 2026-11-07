@@ -1,5 +1,8 @@
+import { tlsaPresentation } from "../../../utils/dns-rdata.ts";
 import type { DeliveryTls } from "../../emails/models/email.schema.ts";
 import { mxMatchesPattern, type MtaStsDiscovery } from "../../emails/services/mta-sts.ts";
+import type { DaneHost } from "../../emails/types/dane.types.ts";
+import { usableTlsa } from "../../emails/services/dane-verify.ts";
 import type {
   TlsRptFailureType,
   TlsRptObservation,
@@ -25,7 +28,20 @@ import type {
  *   the domain announced an MTA-STS policy that could not be fetched.
  * - `validation-failure`, with a fixed reason code: an MX host outside the
  *   policy (`mx-not-in-policy`), a certificate not yet valid, a handshake
- *   that stalled or failed otherwise.
+ *   that stalled or failed otherwise, a certificate chain no TLSA record
+ *   matches (`dane-tlsa-mismatch`).
+ * - DANE (#345, policy type `tlsa`): `tlsa-invalid` for every session to a
+ *   host whose TLSA records are all invalid by the RFC rules (RFC 8460
+ *   section 4.3.2.1: none of the records was found valid; the mail still
+ *   goes over unauthenticated TLS). Records that are valid but unsupported
+ *   here (DANE-TA under Bun 1.3.14) are not invalid: a host with no usable
+ *   record and at least one such record is reported as without DANE
+ *   ({@link danePolicyOf} returns `null`). `dnssec-invalid` for a host skipped because a
+ *   DNSSEC lookup failed (no valid records from the resolver), and the
+ *   certificate results above for a DANE-TA chain that does not verify
+ *   (`certificate-not-trusted`), names the wrong host
+ *   (`certificate-host-mismatch`) or has expired. `dane-required` is not
+ *   used: BunMail has no mandatory-DANE setting (RFC 7672 section 6).
  *
  * A session that failed before TLS mattered (refused connection, timeout,
  * an SMTP reply) is not reported: RFC 8460 section 4.3 leaves transient
@@ -88,6 +104,53 @@ export function tlsRptPolicyOf(discovery: MtaStsDiscovery): TlsRptPolicy {
   };
 }
 
+/**
+ * The `tlsa` policy of a session under DANE (#345): the host's TLSA
+ * records in presentation form (RFC 8460 section 4.4, RFC 6698 section
+ * 2.2) and its name as `mx-host`.
+ *
+ * With no usable record, the reading closest to RFC 8460 section 4.3.2.1
+ * ("none of the records in the RRset were found to be valid"):
+ *
+ * - every record invalid by the RFC rules (PKIX usages, unknown selector or
+ *   matching type, a digest of the wrong length, Full data that does not
+ *   parse): `tlsa-invalid` as the policy failure;
+ * - at least one record valid but unsupported by this implementation
+ *   (DANE-TA while the runtime hides the peer chain, `PEER_CHAIN_AVAILABLE`):
+ *   the set is not invalid, and BunMail did not apply it, so no `tlsa`
+ *   result is claimed either way. `null`: the caller reports the session
+ *   as without DANE (the domain's MTA-STS policy, or `no-policy-found`).
+ */
+export function danePolicyOf(host: DaneHost): TlsRptPolicy | null {
+  if (host.usable.length === 0 && usableTlsa(host.records, true).length > 0) return null;
+  return {
+    type: "tlsa",
+    policyString: host.records.map(tlsaPresentation),
+    mxHost: [host.mxHost],
+    mode: null,
+    policyFailure: host.usable.length === 0 ? "tlsa-invalid" : null,
+  };
+}
+
+/**
+ * The `tlsa` policy of an MX host whose DANE lookups failed (#345): no
+ * records could be obtained, so the policy string is empty.
+ */
+export function daneUnknownPolicyOf(mxHost: string): TlsRptPolicy {
+  return {
+    type: "tlsa",
+    policyString: [],
+    mxHost: [mxHost],
+    mode: null,
+    policyFailure: null,
+  };
+}
+
+/** What a host skipped for a failed DNSSEC lookup is recorded as: nothing was connected to. */
+export function dnssecInvalidObservation(mxHost: string): TlsRptObservation {
+  return failure("dnssec-invalid", mxHost, "");
+}
+
 /** A failure observation of a session to `mxHost` at `address`. */
 function failure(
   result: TlsRptFailureType,
@@ -117,8 +180,10 @@ function errorText(error: Error): string {
  * a TLS failure. Matches nodemailer's STARTTLS errors (`ETLS`, "Error
  * initiating TLS - <reason>", "Error upgrading connection with STARTTLS"),
  * the enforce-mode wrapper (`enforcedTlsFailure`: "MTA-STS: no verified TLS
- * with <host> (<reason>)"), and the OpenSSL reasons and codes Bun reports.
- * Only fixed reason codes come out, never the error's text.
+ * with <host> (<reason>)", or "DANE: no authenticated TLS with <host>
+ * (<reason>)" with the fixed DANE reasons of `dane-verify.ts`), and the
+ * OpenSSL reasons and codes Bun reports. Only fixed reason codes come out,
+ * never the error's text.
  */
 export function classifyTlsError(
   error: unknown,
@@ -136,10 +201,21 @@ export function classifyTlsError(
     return { result: "validation-failure", reason: "starttls-handshake-timeout" };
   }
   const tls =
-    /\bETLS\b|Error initiating TLS|MTA-STS: no verified TLS/.test(text) ||
+    /\bETLS\b|Error initiating TLS|MTA-STS: no verified TLS|DANE: no authenticated TLS/.test(
+      text,
+    ) ||
     TLS_CODE_RE.test(String(Reflect.get(error, "code") ?? "")) ||
     TLS_CODE_RE.test(String(Reflect.get(error, "originalCode") ?? ""));
   if (!tls) return null;
+  if (/DANE: no TLSA record matches/.test(text)) {
+    return { result: "validation-failure", reason: "dane-tlsa-mismatch" };
+  }
+  if (/DANE: certificate chain does not verify/.test(text)) {
+    return { result: "certificate-not-trusted", reason: "" };
+  }
+  if (/DANE: certificate name mismatch/.test(text)) {
+    return { result: "certificate-host-mismatch", reason: "" };
+  }
   if (/certificate has expired|CERT_HAS_EXPIRED/i.test(text)) {
     return { result: "certificate-expired", reason: "" };
   }

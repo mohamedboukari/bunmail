@@ -128,13 +128,17 @@ src/modules/emails/
 │   ├── dkim-signer.service.ts      ← BunMail's own DKIM signer: relaxed/relaxed, rsa-sha256 or ed25519-sha256, over-signed headers (#345)
 │   ├── mailer-state.service.ts     ← Starting delivery state: entries per domain, pre-#250 entries, signed return paths (#236)
 │   ├── mailer-mta-sts.service.ts   ← MTA-STS mode, hosts to try and verified TLS of a domain (#250)
+│   ├── mailer-dane.service.ts      ← Route lookup with or without DANE, and a DANE domain's per-host resolver (#345)
+│   ├── dane.ts                     ← DANE lookups at the trusted resolver: the MX RRset, then per MX host addresses and TLSA (#345)
+│   ├── dane-verify.ts              ← Usable TLSA records and DANE-EE / DANE-TA matching of the server's certificates (#345)
 │   ├── mailer-delivery.service.ts  ← MX sessions: failover, throttle, rate budget, `mx.deliver` and `mx.session` spans
 │   ├── mailer-outcome.service.ts   ← Each transaction's outcome on its entry: sent, retry, failed, partial rejections
 │   ├── mx-route.ts                 ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
 │   ├── mx-address.ts               ← Checked addresses of an MX host: refuses private and special ones, MAIL_IP_FAMILY order
 │   ├── provider-bucket.ts          ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
 │   ├── rate-budget.ts              ← MAIL_MX_RATE_PER_MIN token bucket per provider bucket, in memory or shared in Redis (#250, #391)
-│   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
+│   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, verified or DANE TLS (#250, #345)
+│   ├── mx-tls-recorder.ts          ← STARTTLS recorder: which transactions ran over TLS, from nodemailer's events (#250)
 │   ├── mta-sts.ts                  ← Outbound MTA-STS: replaceable deps (`setMtaStsDeps`), pinned policy fetch, process-wide cache, discovery (#250); re-exports the three below (#387)
 │   ├── mta-sts-policy.ts           ← TXT record and policy file parsing, MX matching (pure)
 │   ├── mta-sts-cache.ts            ← `MtaStsPolicyCache`: bounded per-domain cache, failed fetches remembered
@@ -157,8 +161,11 @@ src/modules/emails/
 │   ├── email-tombstone.serialization.ts ← Tombstone response mapper (#34)
 │   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
-    └── email.types.ts               ← Email, SendEmailInput, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
+    ├── email.types.ts               ← Email, SendEmailInput, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
+    └── dane.types.ts                ← SecureMx, DaneHost (#345)
 ```
+
+The DNSSEC-aware lookups DANE uses live in `src/utils/`: `dns-secure.ts` (the trusted resolver, AD bit), `dns-rdata.ts` (A, AAAA, MX, CNAME and TLSA RDATA), on the wire format of `dns-wire.ts` and the sockets of `dns-transport.ts`, which the TXT resolver (`dns-txt.ts`) shares.
 
 ## Sending Modes
 
@@ -613,6 +620,8 @@ Each attempt resolves each pending recipient domain again (`resolveMxRoute` in `
 
 A DNS outcome carries no SMTP reply, so it never suppresses a recipient and never counts as a bounce.
 
+With `DANE_ENABLED=true` (#345) the MX lookup goes to the trusted resolver instead, with the same outcomes (its NXDOMAIN is exact, so no A/AAAA check is needed), and a DNSSEC-signed MX set is delivered under DANE, see [DANE](#dane-345).
+
 **Failover** (`deliverWithFailover`): the hosts are tried in order, and each host's addresses in order, at most **5 hosts** and **2 addresses per host** per attempt. Every address, an implicit MX's included, goes through the MX address check below (a host with any non-public address is skipped), and is reached over the preferred address family only when it has one (see [Address family](#address-family-250)). A transaction moves to the next address or host only after a **connection-level failure** (refused, timed out, reset, a STARTTLS stall, no greeting: no SMTP reply at all) or a **`421`** (greeting or reply). Any other reply from a server that answered (a 4xx or 5xx to `MAIL FROM`, `RCPT TO` or `DATA`) decides the attempt and is classified as below, so a `550` from the primary is never retried on a backup. All sessions of one attempt share the 20-minute session deadline (counted while sessions run, not while waiting for an MX lock). The MX lock is taken per session, keyed by the **provider bucket** of the host connected to (see [Throttle, provider buckets and rate budget](#throttle-provider-buckets-and-rate-budget-250)), and released before the next host is tried. Each skipped host or address is logged at `debug` with the reason; the entry's outcome is logged as before, with the host it ended on (`mxHost`). When no host could be used, the entry keeps the last failure and is retried.
 
 ### One transaction per recipient with signed return paths (#236)
@@ -732,7 +741,7 @@ Every send writes a per-group outcome map into `emails.delivery_state` (JSONB, n
 
 ### TLS record (#250)
 
-Unless the recipient domain's MTA-STS policy is in enforce mode (see [MTA-STS](#mta-sts-250)), outbound STARTTLS is opportunistic: used when the MX offers it, never required, and certificates are not verified (`rejectUnauthorized: false`), since most MX certificates would fail a strict check. DANE is not implemented. The transport sets `tls.minVersion: "TLSv1.2"`, so a peer that only offers TLS 1.0 or 1.1 fails the handshake; the failure has no SMTP reply, so the entry stays `retry`.
+Unless the recipient domain's MTA-STS policy is in enforce mode (see [MTA-STS](#mta-sts-250)) or DANE applies to the MX host (see [DANE](#dane-345)), outbound STARTTLS is opportunistic: used when the MX offers it, never required, and certificates are not verified (`rejectUnauthorized: false`), since most MX certificates would fail a strict check. The transport sets `tls.minVersion: "TLSv1.2"`, so a peer that only offers TLS 1.0 or 1.1 fails the handshake; the failure has no SMTP reply, so the entry stays `retry`.
 
 Each entry records `tls`, the encryption of the session behind its latest outcome: `starttls`, `plaintext` (the MX did not offer STARTTLS, or answered it with an error), or `null` (no session got ready: a connection, DNS or TLS failure). It is read from Nodemailer's own events, through a logger passed to each MX transport (`createTlsRecorder` in `mx-transport.ts`), never from the server's reply text:
 
@@ -743,7 +752,7 @@ A transaction is `starttls` only when both happened: under Bun the TLS callback 
 
 ### MTA-STS (#250)
 
-A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaSts`); DANE and inbound MTA-STS are not implemented. With `TLSRPT_ENABLED=true`, how each session went under the policy is also reported to the domain, see [TLS reporting](#tls-reporting-345).
+A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaSts`); inbound MTA-STS is not implemented. For an MX host that DANE applies to, DANE takes precedence (see [DANE](#dane-345)). With `TLSRPT_ENABLED=true`, how each session went under the policy is also reported to the domain, see [TLS reporting](#tls-reporting-345).
 
 **Discovery**, for each pending recipient domain on every attempt, in parallel with its MX resolution:
 
@@ -774,6 +783,44 @@ A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts 
 **Logs:** a failed fetch or TXT lookup at `warn` (`MTA-STS policy fetch failed` with the domain, policy `id` and reason; `MTA-STS TXT lookup failed` with the DNS code), each with whether a cached policy was kept; a fetched policy and skipped hosts at `debug`.
 
 **Fetch failures, for TLS-RPT (#345):** a failed fetch is classified (`MtaStsFetchError.kind`): `fetch-error` (DNS, connection, HTTP status), `webpki-invalid` (the policy host's certificate) or `policy-invalid` (content type, encoding, size, syntax). `discoverMtaSts` returns it beside the policy, also while the same `id` is not refetched, so TLS-RPT can report `sts-policy-fetch-error`, `sts-webpki-invalid` or `sts-policy-invalid`. `discoverMtaStsPolicy` still returns the policy alone.
+
+### DANE (#345)
+
+Off by default (`DANE_ENABLED`). When on, outbound delivery follows RFC 7672 (SMTP security via opportunistic DANE TLS): a recipient domain whose MX records are DNSSEC-signed, and whose MX host publishes DNSSEC-signed TLSA records, only gets mail over STARTTLS whose certificate matches those records.
+
+**Trusted resolver.** BunMail does not validate DNSSEC signatures itself. It asks one validating resolver, `DANE_RESOLVER` (an IP literal, normally the Unbound of the compose `dane` profile, see [self-hosting.md](self-hosting.md#dane-345)), with the AD bit set in the query (RFC 6840 5.7), and believes the AD bit of that resolver's answers only (RFC 7672 2.1.1, RFC 4035 4.9.3). Every DANE lookup goes there: MX, A, AAAA, CNAME and TLSA (`src/utils/dns-secure.ts`: UDP, TCP after TC, a random ID and source port, replies from another address, port, ID or question dropped). A SERVFAIL (how a validating resolver reports a bogus answer), a timeout or a malformed reply is a lookup failure, never "insecure". `DANE_ENABLED` sends every MX and address lookup of outbound delivery there (an insecure answer included), so names only internal DNS knows must be served by that resolver too, see [self-hosting.md](self-hosting.md#dane-345). BunMail warns at boot when `DANE_RESOLVER` is not a loopback, private (RFC 1918, ULA) or link-local address.
+
+**How it decides**, on every attempt (`dane.ts`, nothing cached beyond the resolver's own cache):
+
+1. The MX lookup (RFC 7672 2.2.1). Its route is the usual one (preference order, random ties, null MX, NXDOMAIN, the implicit MX). A **secure** MX RRset (AD), or a secure denial of MX records for the implicit MX (2.2.2), makes DANE apply to the domain. An **insecure** one: no DANE for the domain, delivery exactly as with DANE off (MTA-STS, or opportunistic TLS); BunMail does not use the optional DANE over an insecure MX. A **failed** lookup: the entry stays `retry` (`<domain>: DANE: MX lookup failed (<code>); will retry`, 2.1.2: the servers to use cannot be determined), never an MX set from another source.
+2. A DANE domain gets a session plan of its own over every MX host in preference order (preference before security, 2.2.1), never shared with another domain. Each host is decided when delivery reaches it (`mailer-dane.service.ts`):
+   - A and AAAA first (2.2.2). The time these lookups take comes out of the attempt's session deadline, and they are cut off when it runs out. A failed lookup makes the host unusable for this attempt (the next host is tried; with none left the entry stays `retry`); no address makes it unreachable. Insecure addresses: DANE does not apply to the host, and no TLSA query is sent.
+   - The candidate TLSA base domains (2.2.2, 2.2.3): the host name; for a host that is an alias, the fully expanded name first and then the host name when the whole expansion is secure, or the host name alone when only the host's own CNAME record is secure (a separate CNAME query, 2.1.3).
+   - `_<port>._tcp.<candidate>` TLSA at each candidate in turn (port 25): the first secure, non-empty RRset is the host's and its candidate the TLSA base domain. An insecure RRset or a denial (secure or not) moves on; no secure RRset at any candidate: DANE does not apply to the host. A failed TLSA lookup makes the host unusable, never "no DANE" (2.1.2).
+   - With no MX records and an insecure denial, the implicit MX behaves as without DANE (one address family answering is enough); with a secure denial, any failed address lookup leaves the entry in `retry`.
+   - The addresses come from these validated answers and go through the usual address check (`MAIL_ALLOW_PRIVATE_MX`, `MAIL_IP_FAMILY`).
+3. **Records found:** STARTTLS is required (`requireTLS`, no plaintext fallback), the SNI is the TLSA base domain (8.1), the system trust store plays no part (`rejectUnauthorized: false`), and the server's certificate is checked against the records right after the TLS handshake, before EHLO is sent over TLS (`dane-verify.ts`, through the `verifyTlsSocket` hook of BunMail's nodemailer patch, `patches/nodemailer@10.3.1.patch`). With no usable record among them, TLS is still required but not authenticated (2.2: publishing them commits the host to TLS).
+4. **DANE does not apply to the host:** it is handled as MTA-STS says: in enforce mode a host outside the policy is skipped (recorded for TLS-RPT as `mx-not-in-policy`) and a matching one gets verified TLS; otherwise opportunistic TLS.
+
+**Usable records** (RFC 6698 4.1, RFC 7672 3.1.3, RFC 7671 9): usage DANE-EE(3) (and DANE-TA(2) once the runtime exposes the server's chain, see below; PKIX-TA(0) and PKIX-EE(1) are unusable for SMTP), selector Cert(0) or SPKI(1), matching type Full(0), SHA2-256(1) or SHA2-512(2), a digest of the right length, Full(0) data that parses as a certificate or a public key. Digest algorithm agility: per usage and selector, the Full(0) records and only the strongest digest present are kept (a server matching only a SHA2-256 record beside a SHA2-512 one fails).
+
+**Matching** (RFC 7672 3, RFC 7671 5):
+
+- **DANE-EE(3):** the leaf certificate (selector 0) or its SubjectPublicKeyInfo (selector 1, the certificate's own DER bytes, read from it by `dane-der.ts`, never a re-encoding of the parsed key, so compressed EC points and RSA-PSS keys match; DER that cannot be walked matches nothing) must match. No name check and no validity dates (3.1.1, 3.2.1).
+- **DANE-TA(2)** (off under Bun 1.3.14, see the next item): a certificate of the chain the server presented must match: it is the trust anchor. Every certificate below it must be issued and signed by the next one up, each intermediate must be a CA, and each must be within its validity period; the anchor's own dates are not checked (RFC 5280 6.1.1: a trust anchor is an input, here vouched for by DNSSEC). A "2 0 0" or "2 1 0" record carries the anchor itself and may have signed the top of the chain (RFC 7671 5.2.2, 5.2.3). The leaf must then name a reference identifier (3.2.2, 3.2.3): the TLSA base domain, the recipient domain and, when its MX lookup went through a CNAME, the expanded domain (for an implicit MX: the base domain and the recipient domain); its DNS-IDs only when it has any, else its CN; a wildcard only as the whole first label, matching exactly one label.
+- **DANE-TA is not authenticated under Bun 1.3.14:** Bun's TLS client exposes only the server's leaf certificate, not the intermediates and root it sent (`getPeerCertificate(true)` has no `issuerCertificate`), so the anchor a DANE-TA record names cannot be found. DANE-TA records are therefore treated as unsupported by the implementation, hence unusable (RFC 7672 2.2.3 and 3.1.3, `PEER_CHAIN_AVAILABLE = false` in `dane-verify.ts`): a host whose TLSA records are all DANE-TA gets mandatory TLS without authentication (as for any all-unusable RRset; in TLS reports such a session is reported as without DANE, not as `tlsa-invalid`, since its records are valid), and a host with DANE-EE records beside them is authenticated by the DANE-EE records only. The DANE-TA matching above is kept and tested on explicit chains; a real-server test (`test/unit/mx-transport-dane.test.ts`) fails once Bun exposes the chain, with instructions to switch DANE-TA back on. DANE-EE ("3 1 1", which RFC 7672 3.1.1 recommends) is not affected.
+
+**Precedence:** DANE wins over MTA-STS for a host it applies to (RFC 8461 2: MTA-STS never overrides a failing DANE validation), even a host the policy does not name. The entry's `mtaSts` still records the domain's MTA-STS mode.
+
+**Failures:** a handshake that did not really complete (no cipher negotiated or no server certificate; checked first, also for a host with no usable record, so it fails at once instead of waiting out the 60 s STARTTLS stall limit), a host that does not offer STARTTLS, a handshake failure, or a certificate no usable record matches is reported as `DANE: no authenticated TLS with <mx> (<reason>)`, an error with no SMTP reply (a refused `STARTTLS` loses its `5xx`): the attempt fails over to the next MX host, and with none left the entry stays `retry`, never sent in plaintext, never bounced or suppressed. The retry window (`MAIL_RETRY_MAX_AGE_HOURS`) gives the eventual failure. A skipped host's reason is `DANE: MX host <mx> not usable: <reason>`. Should a STARTTLS upgrade ever complete without the DANE check having run (the nodemailer patch lost), the session's sockets are destroyed on nodemailer's upgrade line, before EHLO goes out over TLS, and the attempt fails.
+
+**Reports:** a TLS report (`report`) is sent without DANE, as without MTA-STS (RFC 8460 3: reports go out despite TLS failures).
+
+**Telemetry:**
+
+- Logs: `DANE: MX records` (domain, `secure`), and one line per host decision at `debug` (`DANE: applies to the MX host` with the base domain, the record counts and `mode` `authenticated` or `encrypted-only`; `DANE: not applicable to the MX host`; `DANE: MX host skipped`). At `warn`: `DANE: MX lookup failed, delivery delayed` (domain, code), `DANE: MX host skipped, a DNSSEC lookup failed` (domain, MX host, reason) and `DANE: no authenticated TLS with the MX host` (domain, MX host, base domain, reason). Names and fixed reasons only.
+- Spans: `bunmail.mx.dane` (boolean) on `mx.deliver`, `bunmail.mx.dane_mode` (`authenticated`, `encrypted-only` or `none`) on `mx.session` (see [tracing.md](tracing.md)).
+- TLS-RPT: a DANE session is recorded under a `tlsa` policy (the host's TLSA records in presentation form, the host as `mx-host`), see [tls-rpt.md](tls-rpt.md).
 
 ### TLS reporting (#345)
 
