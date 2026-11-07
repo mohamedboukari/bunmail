@@ -139,6 +139,8 @@ Indexes: `user_devices_user_id_device_hash_idx` (UNIQUE, the sign-in upsert's co
 
 `src/modules/users/types/user.types.ts` exports the value sets as constants and unions: `USER_ROLES` / `UserRole`, `CREDENTIAL_TYPES` / `CredentialType`, `SESSION_ASSURANCES` / `SessionAssurance`, `TOKEN_PURPOSES` / `TokenPurpose`. The same constants render the `CHECK` constraints (`literals()`), and an integration test reads the live constraint definitions back from Postgres and checks every value is present, so a constant changed without `bun run db:generate` fails the test instead of silently diverging.
 
+Since #387 the types live in one file per concern beside it, and `user.types.ts` re-exports every one of them (and keeps `Tx` and `DbExecutor`), so importers keep using it: `user-value-sets.types.ts` (the value sets and `literals()`), `invite.types.ts`, `account.types.ts`, `password.types.ts` (resets and changes), `owner.types.ts` (owner setup, record counts), `session.types.ts` (login and sessions), `two-factor.types.ts` and `passkey.types.ts`.
+
 For the owner bootstrap (#215) it also exports `OwnerSetupLink` (`{ token, email, expiresAt }`: a freshly minted link, the raw token shown once and never stored) and `OwnerBootstrapResult` (the discriminated union `bootstrapOwner` returns, see below).
 
 For invitations (#217): `INVITE_ROLES` / `InviteRole` (`admin`, `member`) with `isInviteRole`, `InviteActor` (`{ id, role }` from `auth`), `InviteRefusal` (`invalid_email`, `role_not_allowed`, `account_exists`, `not_found`), `InviteMailFailure` / `InviteMailOutcome`, `IssuedInvitation` (`{ invitationId, token, email, role, expiresAt, replaced }`, the raw token never stored), `IssueInvitationResult`, `PendingInvitation`, `InviteTarget`, `InviteAcceptance` and `AcceptInvitationResult`.
@@ -357,7 +359,7 @@ Time-based one-time passwords (TOTP, RFC 6238 over RFC 4226 HOTP): HMAC-SHA1, 6 
 
 Rotation and reuse detection (#216) apply unchanged to `password` and `mfa` sessions.
 
-**Verifying a code** (`matchSecondFactor` in `two-factor.service.ts`, always inside a transaction):
+**Verifying a code** (`matchSecondFactor` in `two-factor-match.service.ts`, always inside a transaction):
 
 - Six digits (spaces ignored): a TOTP code. The secret is decrypted, and the code is compared in constant time (`timingSafeEqual`) with the codes of the current step and one step either side (`TOTP_WINDOW_STEPS = 1`: 90 seconds of tolerance for clock drift and typing), every candidate computed whether or not one already matched. A matching step must be **newer than the stored `counter`**.
 - **Replay protection.** The matched step is written with a compare-and-swap in the same transaction: `UPDATE user_credentials SET counter = $step, last_used_at = now() WHERE id = $id AND (counter IS NULL OR counter < $step)`. Zero rows means another request already used this step (or a later one): refused like a wrong code. Of two concurrent submissions of one code, the second waits on the row lock and then matches nothing, so exactly one succeeds. A side effect: after a code of the next step is accepted, the current step's code is refused too.
@@ -402,6 +404,8 @@ WebAuthn passkeys, verified by `@simplewebauthn/server` (14.0.3, pinned exactly)
 **Passwordless** (`startPasskeySignIn`, `completePasskeySignIn`, `openPasskeySession`): discoverable-credential options with no account named. The finish looks the passkey up by its id across every account (`unknown_credential` otherwise: one generic error, logged at `warn` with the IP, nothing about accounts), requires the owner's user handle, verifies, refuses a deactivated account, and stores the counter; the route then replaces the browser's previous session and opens an **`mfa`** session (`auth_method = 'passkey'`) bound to the passkey (`credential_id`): removing the passkey ends every session it opened, and a passkey removed between the check and the insert fails it (foreign-key violation). An `mfa` session satisfies `REQUIRE_2FA`.
 
 **Policy.** A passkey is a second factor everywhere TOTP is (`SECOND_FACTOR_TYPES`, the one `hasSecondFactor` predicate): the password step gives a `pending` session; `password` sessions are refused once the account has one; `REQUIRE_2FA` is satisfied by either, and a held-back account may open the Passkeys page too (`isTwoFactorEnrolmentPath`). Removing the last second factor is allowed, as turning TOTP off is (#220), except for the owner while it holds an SSO link (#224, see [the owner rule](#linking-an-identity-account--sign-in-methods)); the guard then holds a covered account on its Two-factor and Passkeys pages until it enrols again.
+
+**Files** (#387). The routes import `passkey.service.ts`, which keeps listing and managing; adding is in `passkey-registration.service.ts`, `checkAssertion`, the second factor and passwordless in `passkey-assertion.service.ts`, and the stored row and an account's passkeys in `passkey-store.service.ts`.
 
 **Managing** (`listPasskeys`, `renamePasskey`, `deletePasskey`): scoped to the account in the `WHERE`, so another account's passkey id changes nothing (`not_found`). Removing needs the current password (the password change's budget; a foreign or unknown id is answered before any password work) and records `auth.passkey.removed`.
 
@@ -539,6 +543,8 @@ On success the route logs `warn` `SSO identity auto-linked by verified email` (`
 
 `password.service.ts`, `token.service.ts`, `owner-setup-policy.service.ts`, `session-policy.service.ts`, `invite-policy.service.ts`, `user-admin-policy.service.ts`, `password-reset-policy.service.ts`, `password-change-policy.service.ts`, `totp.service.ts`, `recovery-code.service.ts` and `two-factor-policy.service.ts` are pure: no I/O, no config. `owner.service.ts`, `session.service.ts`, `login.service.ts`, `invite.service.ts`, `user-admin.service.ts`, `password-reset.service.ts`, `password-change.service.ts`, `two-factor.service.ts` and `user-device.service.ts` touch the database, all through `withSanitizedErrors`; `record-ownership.service.ts` (#219) only runs inside their owner-locked transactions; `system-mail.service.ts` sends mail, for `invite-email.service.ts` and `new-device-alert.service.ts`. `device-policy.service.ts` is pure too, and so is `sso-link-policy.service.ts` (#224); `sso-link.service.ts`, `sso-sign-in.service.ts` and `sso-owner-rule.service.ts` touch the database through `withSanitizedErrors` like the others (the latter inside its callers' transactions); `sso-link-flow.service.ts` and `sso-sign-in-flow.service.ts` order the callback's checks and take their database work as replaceable dependencies.
 
+Since #387, `session.service.ts`, `two-factor.service.ts`, `passkey.service.ts`, `invite.service.ts` and `user-admin.service.ts` are entry modules: each keeps part of its code and re-exports the rest from `<service>-<concern>.service.ts` files beside it (listed under each service below). Importers keep using the entry.
+
 ### password.service.ts
 
 - `hashPassword(password): Promise<string>`: argon2id via `Bun.password`, fresh salt per hash, parameters encoded in the hash so they can be raised later.
@@ -580,7 +586,7 @@ On success the route logs `warn` `SSO identity auto-linked by verified email` (`
 
 ### invite.service.ts
 
-Every write for an address runs in a transaction under its `bunmail:invite:<email>` advisory lock. Never logs a token, its hash or the link.
+Every write for an address runs in a transaction under its `bunmail:invite:<email>` advisory lock. Never logs a token, its hash or the link. Revoking and listing live in `invite.service.ts`; the lock and the invitation predicates (and `revokeInvitesIssuedBy`) in `invite-store.service.ts`, creating and resending in `invite-issue.service.ts`, the token lookup and the acceptance in `invite-accept.service.ts` (#387).
 
 - `createInvitation(actor, email, role, client?): Promise<IssueInvitationResult>`: checks, replaces the address's open invitations (never a higher-role one), sends or reports the email. `{ ok: true, invitation, url, delivery }` or `{ ok: false, reason }`.
 - `resendInvitation(actor, id, client?)`, `revokeInvitation(actor, id, client?)`: as above, for a pending invitation of a role the actor may grant. Creating, resending, revoking and accepting write their audit event (#221) in the same transaction.
@@ -597,7 +603,7 @@ Every write for an address runs in a transaction under its `bunmail:invite:<emai
 
 ### user-admin.service.ts
 
-Every action runs under the `bunmail:owner` lock with both rows locked; logs every outcome.
+Every action runs under the `bunmail:owner` lock with both rows locked; logs every outcome. The runner that does it (`runAccountAction`: the locked rows, the rules, the audit row and the log line) is in `user-admin-action.service.ts`, the ownership transfer in `user-admin-transfer.service.ts` (#387).
 
 - `listAccounts(): Promise<AccountSummary[]>`: every account, oldest first.
 - `changeAccountRole(actorId, targetId, role, client?)`, `deactivateAccount(actorId, targetId, client?)`, `reactivateAccount(actorId, targetId, client?)`, `removeAccount(actorId, targetId, confirm, client?)`, `transferOwnership(actorId, targetId, password, limiter, client?)`: `Promise<AccountActionResult>` (`{ ok: true }` or `{ ok: false, reason }`). An applied action is written to the audit log (#221) in its own transaction; `client` (`{ ip, userAgent }`) is the request's, null fields when omitted.
@@ -645,6 +651,8 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 
 ### session.service.ts
 
+Split by concern (#387): the interval literal, the live-session predicate and the sliding expiry are in `session-predicates.service.ts`, the Active sessions page functions in `session-list.service.ts`, the two-factor steps and the session locks in `session-two-factor.service.ts`; `session.service.ts` keeps the rest and re-exports them, so every function below is imported from it.
+
 - `createSession(input, executor?): Promise<CreatedSession>`: mints the token, inserts the row (`ip` and `user_agent` cleaned with `sessionIp` and `clampUserAgent`), returns `{ sessionId, token }`.
 - `findActiveSession(token): Promise<ActiveSession | null>`: the guard's single lookup described above. `ActiveSession` is `{ sessionId, userId, email, role, assurance, matched, rotationDue, graceOver }`.
 - `rotateSession(sessionId, presentedToken): Promise<RotatedSession | null>`: the conditional rotation; `null` when another request rotated first.
@@ -681,7 +689,7 @@ Every write runs in a transaction under the `bunmail:owner` advisory lock (`with
 
 ### two-factor.service.ts (#220)
 
-Never logs; database errors leave it as `UserStoreError`.
+Never logs; database errors leave it as `UserStoreError`. The second login step, disabling and regenerating stay in `two-factor.service.ts`; the `totp` credential, recovery codes and `matchSecondFactor` are in `two-factor-match.service.ts`, status and enrolment (and `passwordHashOf`) in `two-factor-enrolment.service.ts`, `removeSecondFactors`, `removedAny` and `secondFactorsOf` in `two-factor-recovery.service.ts` (#387).
 
 - `twoFactorStatus(userId): Promise<TwoFactorStatus>`.
 - `startEnrolment(userId, sessionId, password, limiter)` (re-authentication first), `pendingEnrolment(userId, sessionId, account): Promise<PendingEnrolment | null>`, `confirmEnrolment(userId, sessionId, code, client?, nowMs?): Promise<ConfirmEnrolmentResult>`.
