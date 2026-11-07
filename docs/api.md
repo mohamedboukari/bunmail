@@ -368,6 +368,25 @@ Get a single email by ID. Scoped to the authenticated API key. Trashed emails ar
 
 ---
 
+#### `GET /api/v1/emails/:id/events`
+
+The recorded opens and clicks of one email (open and click tracking, #187), **oldest first** (a timeline), paginated like the list: `?page=` (default 1) and `?limit=` (default 20, at most 100; over it is `422`). Scoped to the authenticated API key like `GET /api/v1/emails/:id`: an email of another key, a missing one or a trashed one is `404`. An email with tracking off simply has no events.
+
+```json
+{
+  "success": true,
+  "data": [
+    { "type": "open", "occurredAt": "2026-11-07T10:00:00.000Z", "url": null, "linkPosition": null, "clientKind": "image_proxy", "machine": true },
+    { "type": "click", "occurredAt": "2026-11-07T10:05:00.000Z", "url": "https://example.com/pricing", "linkPosition": 2, "clientKind": "unknown", "machine": false }
+  ],
+  "pagination": { "page": 1, "limit": 20, "total": 2 }
+}
+```
+
+`url` is the click target without query string and fragment; `clientKind` is `image_proxy` (a mail provider's image proxy) or `unknown`; `machine` is a guess that no person caused the event. No IP address or user agent is stored. At most 20 opens and 50 clicks are recorded per email. Open counts are unreliable: Apple Mail Privacy Protection fetches images at delivery, proxies cache them, other clients block them, and link scanners click links. The same events reach webhooks as `email.opened` / `email.clicked`.
+
+---
+
 #### `DELETE /api/v1/emails/:id`
 
 Move an email to trash (soft-delete). The email is automatically purged after `TRASH_RETENTION_DAYS` days unless restored. Returns `404` if not found or not owned by the calling key.
@@ -722,7 +741,7 @@ Register a new webhook endpoint.
 | `url`    | string   | Yes      | HTTPS endpoint URL                                 |
 | `events` | string[] | Yes      | Events to subscribe to (min 1)                     |
 
-Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`, `email.unsubscribed` (#249), `domain.verification_failed`, `domain.verified` (#250)
+Allowed events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.received`, `email.unsubscribed` (#249), `email.opened`, `email.clicked` (#187), `domain.verification_failed`, `domain.verified` (#250)
 
 Events are delivered only for the requesting key's own emails. `email.received` (inbound mail) and the domain events are admin-only: a restricted key subscribing to one gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 

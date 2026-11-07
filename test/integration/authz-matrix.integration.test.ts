@@ -69,6 +69,7 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /api/v1/emails/tombstones": { access: "key" },
   "GET /api/v1/emails/tombstones/:id": { access: "key", owned: "tombstone" },
   "GET /api/v1/emails/:id": { access: "key", owned: "email" },
+  "GET /api/v1/emails/:id/events": { access: "key", owned: "email" },
   "DELETE /api/v1/emails/:id": { access: "key", owned: "email" },
   "DELETE /api/v1/emails/:id/permanent": { access: "key", owned: "email" },
   "POST /api/v1/emails/:id/restore": { access: "key", owned: "email" },

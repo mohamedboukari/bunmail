@@ -1,5 +1,6 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
+import { EngagementBadges } from "../components/email-tracking.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
@@ -297,6 +298,7 @@ export function EmailsPage({
                       </td>
                       <td class="px-4 py-3">
                         <StatusBadge status={email.status} />
+                        <EngagementBadges email={email} />
                       </td>
                       <td class="px-4 py-3">
                         <SourceBadge source={email.source} />

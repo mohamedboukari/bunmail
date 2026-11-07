@@ -116,7 +116,7 @@ Indexes: `idempotency_keys_api_key_key_unique` (unique `(api_key_id, key)`, the 
 
 ```
 src/modules/emails/
-├── emails.plugin.ts                ← Routes: send, batch, list, get, trash/restore/permanent/empty
+├── emails.plugin.ts                ← Routes: send, batch, list, get, events (#187), trash/restore/permanent/empty
 ├── errors.ts                       ← Typed send rejections, each with HTTP status + code (#245, #177)
 ├── models/
 │   ├── email.schema.ts             ← Drizzle pgTable + indexes
@@ -127,7 +127,8 @@ src/modules/emails/
 ├── dtos/
 │   ├── send-email.dto.ts           ← Send email validation (direct + template), Idempotency-Key header
 │   ├── batch-send-email.dto.ts     ← Batch envelope and per-item validation, per-item idempotencyKey (#178)
-│   └── list-emails.dto.ts          ← List query param validation
+│   ├── list-emails.dto.ts          ← List query param validation
+│   └── list-email-events.dto.ts    ← Events list pagination (#187)
 ├── services/
 │   ├── email.service.ts            ← CRUD + trash/restore + template resolution + domain linking: the public surface, re-exported from the files below (#380)
 │   ├── email-create.service.ts     ← createEmail, the idempotent send (#188) and the insert with attachments and `email.queued`
@@ -137,7 +138,7 @@ src/modules/emails/
 │   ├── batch-send.service.ts       ← POST /batch: items in order, each created or refused on its own (#178)
 │   ├── recipient-limits.ts         ← Pure `to` list normalization and the 50 / 100 recipient caps (#178)
 │   ├── tracking-decision.ts        ← Pure open and click tracking decision: the gates, opt-out, transactional default (#187)
-│   ├── email-events.service.ts     ← Open and click events: the retention purge (#187)
+│   ├── email-events.service.ts     ← Open and click events: the list (API, dashboard) and the retention purge (#187)
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
 │   ├── tombstone.service.ts        ← Hard delete with a tombstone, tombstone reads and retention (#34)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
@@ -181,6 +182,7 @@ src/modules/emails/
 │   └── delivery-rates.ts           ← Pure success and bounce rate math (#250)
 ├── serializations/
 │   ├── email.serialization.ts      ← Response mapper (hides apiKeyId, domainId); `to` string or array (#178)
+│   ├── email-event.serialization.ts ← Open and click event mapper, no internal ids (#187)
 │   ├── send-error.serialization.ts ← Status and body of a refused send, shared by onError and batch items (#178)
 │   ├── batch-item.serialization.ts ← One batch result: created, invalid, refused or internal error (#178)
 │   ├── email-tombstone.serialization.ts ← Tombstone response mapper (#34)
@@ -267,7 +269,7 @@ BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound no
 
 ## Open and click tracking (#187)
 
-Opens are counted with a 1x1 pixel and clicks through a signed redirect on `APP_BASE_URL`. The routes, recording and token details are in [tracking.md](tracking.md); webhooks, the events API and the dashboard timeline come later.
+Opens are counted with a 1x1 pixel and clicks through a signed redirect on `APP_BASE_URL`. The routes, recording, token details, webhooks (`email.opened`, `email.clicked`), the events API (`GET /api/v1/emails/:id/events`) and the dashboard timeline are in [tracking.md](tracking.md).
 
 `tracking: { opens?, clicks? }` on `POST /api/v1/emails/send` and each `/batch` item. `createEmail` decides each kind once (`decideTracking`, `services/tracking-decision.ts`) and stores it in `emails.track_opens` / `track_clicks`, so retries are identical and a later domain change does not alter queued mail. Every gate must allow it:
 
@@ -521,6 +523,9 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 The open and click tracking decision (#187), pure: `context` holds `TRACKING_ENABLED`, the source, the category, the domain's opt-in and the `oneClickBlocker` result. `refusedBy` names the first closed gate when the send asked for `true` and did not get it (the `tracking_disabled` warning). See [Open and click tracking](#open-and-click-tracking-187).
 
 ### email-events.service.ts
+
+#### `listEmailEvents(emailId, apiKeyId | null, { page, limit }): Promise<{ data, total } | null>`
+The events of one email, oldest first, behind `GET /api/v1/emails/:id/events` and the dashboard timeline (#187). `null` when the email is not the key's or is trashed; with a `null` key (the dashboard) any email, trashed included.
 
 #### `purgeOldEmailEvents(retentionDays, batchSize?): Promise<number>`
 Deletes open and click events older than `retentionDays` (#187), on the database clock, in batches of 5000 (at most 100 per pass). Called by the purge cycle (`runEmailEventsRetention`).

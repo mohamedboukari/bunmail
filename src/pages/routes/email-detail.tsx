@@ -3,6 +3,8 @@ import { StatusBadge } from "../components/status-badge.tsx";
 import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
+import { TrackingTimeline } from "../components/email-tracking.tsx";
+import type { EmailEvent } from "../../modules/emails/services/email-events.service.ts";
 import type { Email } from "../../modules/emails/types/email.types.ts";
 import type { AttachmentMeta } from "../../modules/emails/services/attachment-storage.ts";
 import {
@@ -16,6 +18,8 @@ interface EmailDetailPageProps {
   isTrashed: boolean;
   /** Attachment metadata (#181), in order; empty when none. Never the bytes. */
   attachments: AttachmentMeta[];
+  /** Recorded opens and clicks (#187), oldest first; empty (the default) when none. */
+  events?: readonly EmailEvent[];
 }
 
 /**
@@ -23,7 +27,12 @@ interface EmailDetailPageProps {
  * Includes HTML preview, text content, full metadata, and a destructive
  * action button that varies based on whether the row is in trash.
  */
-export function EmailDetailPage({ email, isTrashed, attachments }: EmailDetailPageProps) {
+export function EmailDetailPage({
+  email,
+  isTrashed,
+  attachments,
+  events = [],
+}: EmailDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/emails/trash" : "/dashboard/emails";
   const backLabel = isTrashed ? "Back to trash" : "Back to emails";
 
@@ -161,6 +170,8 @@ export function EmailDetailPage({ email, isTrashed, attachments }: EmailDetailPa
       <DeliveryTable groups={serializeDeliveryState(email.deliveryState)} />
 
       <AttachmentsTable emailId={email.id} attachments={attachments} />
+
+      <TrackingTimeline email={email} events={events} />
 
       {/* HTML preview */}
       {!!email.html && (

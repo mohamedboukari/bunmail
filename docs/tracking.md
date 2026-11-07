@@ -1,6 +1,6 @@
 # Tracking Module
 
-Open and click tracking (#187): the public `/t/` endpoints, their tokens, the link rewriter and pixel added at send time, and the recording of events. Off by default. The per-send decision lives in the emails module ([emails.md](emails.md#open-and-click-tracking-187)), the domain opt-in in [domains.md](domains.md#open-and-click-tracking-187), and the `email_events` table in [emails.md](emails.md#schema). Webhooks, the events API and the dashboard timeline come in a later part.
+Open and click tracking (#187): the public `/t/` endpoints, their tokens, the link rewriter and pixel added at send time, and the recording of events. Off by default. The per-send decision lives in the emails module ([emails.md](emails.md#open-and-click-tracking-187)), the domain opt-in in [domains.md](domains.md#open-and-click-tracking-187), and the `email_events` table in [emails.md](emails.md#schema). Recorded events reach webhooks (`email.opened`, `email.clicked`), the events API (`GET /api/v1/emails/:id/events`) and the dashboard (a timeline on the email page, badges on the list).
 
 ## Module Layout
 
@@ -87,11 +87,27 @@ After the response is built (`recordLater` in the plugin), never delaying it, an
 
 1. `TRACKING_ENABLED` off: nothing recorded (`untracked`).
 2. The in-process gate (`tracking-guards.ts`): the same email, type and link within 60 s is `deduped`, an email at its cap in this process is `capped` (bounded LRU maps of 10,000 entries). Only what passes is charged to the per-second budget (100 a second, else `capped`), so one replayed token cannot use it up for every other email. At most 4 recordings run at once per process; more are dropped as `capped` without touching the database.
-3. One transaction, with `SET LOCAL lock_timeout = '2s'`: the email row locked `FOR UPDATE` (gone, or not tracked for that kind: `untracked`); at most 20 opens and 50 clicks per email (`capped`); the same type and link within 60 s: `deduped`; then the event is inserted and `first_opened_at` / `first_clicked_at` set with a conditional `UPDATE ... WHERE ... IS NULL`. These database checks are the truth across replicas. A lock not granted within 2 s counts as `capped` (logged at `debug`). A later part enqueues the webhook events in this same transaction (`storeEvent`).
+3. One transaction, with `SET LOCAL lock_timeout = '2s'`: the email row locked `FOR UPDATE` (gone, or not tracked for that kind: `untracked`); at most 20 opens and 50 clicks per email (`capped`); the same type and link within 60 s: `deduped`; then the event is inserted and `first_opened_at` / `first_clicked_at` set with a conditional `UPDATE ... WHERE ... IS NULL`. These database checks are the truth across replicas. A lock not granted within 2 s counts as `capped` (logged at `debug`). The `email.opened` / `email.clicked` webhook events are enqueued through the outbox in this same transaction (`storeEvent`), for recorded events only: a failed enqueue rolls the event back too.
 
 Stored per event: type, link position, the URL without query string, fragment or credentials, `client_kind` (`image_proxy` when the user agent carries `GoogleImageProxy`, `ggpht.com` or `YahooMailProxy`, else `unknown`) and `machine` (a known proxy, a click within 10 s of `sent_at`, or a click on another link of the email within 2 s). Never the IP address or the user agent. A failure is logged at `error` with the email id, the error name and the SQLSTATE only (never a driver message, the URL or the recipient); the steps are logged at `debug`.
 
 Metrics: `bunmail_tracking_requests_total{kind, result}` and the `tracking` HTTP `area`, see [metrics.md](metrics.md).
+
+## Webhooks
+
+`email.opened` and `email.clicked` fire for **every recorded event** (after the dedupe and caps), never for a deduplicated, capped or untracked request, scoped to the sending key's webhooks like every `email.*` event (the per-key webhook cap, `WEBHOOKS_MAX_PER_API_KEY`, bounds the fan-out). They go through the transactional outbox (#184) in the transaction that inserts the event row, so both commit or neither does. Payload (`data`): `emailId`, `recipient`, `occurredAt`, for a click `url` (without query string and fragment) and `linkPosition`, then `first` (the email's first open or click), `machine`, `clientKind` and `tags`. Firing only the first event would often fire on an Apple Mail prefetch and never on the real open: `first` and `machine` let the consumer decide. See [webhooks.md](webhooks.md#webhook-payload).
+
+## Events API
+
+`GET /api/v1/emails/:id/events`: the email's events, **oldest first** (a timeline), paginated like the emails list (`page`, `limit` up to 100). Scoped like `GET /api/v1/emails/:id` (another key's, missing or trashed email: `404`). Each event: `type`, `occurredAt`, `url`, `linkPosition`, `clientKind`, `machine`; no internal id. See [api.md](api.md#get-apiv1emailsidevents).
+
+## Dashboard
+
+- **Email page:** an "Opens and clicks" timeline (time in UTC, type, link URL, client kind, a "Likely automated" badge for `machine`), with the reliability caveat next to it. Shown when the email is tracked or has events, trashed emails included.
+- **Emails list:** "Opened" and "Clicked" badges next to the status, from `first_opened_at` / `first_clicked_at`.
+- Every value from the database is rendered escaped (`safe`). No new dashboard route.
+
+**Reliability.** Open and click numbers are both inflated and deflated: Apple Mail Privacy Protection fetches every image at delivery (nearly every Apple Mail recipient shows as opened), Gmail and Yahoo proxies cache images (repeat opens undercounted), Outlook and others block images (opens undercounted), link scanners click every link (fake clicks, partly caught by `machine`), and forwarded mail is attributed to the original recipient. The dashboard and API say so; treat the numbers as signals, not facts.
 
 ## Service Methods
 
@@ -109,6 +125,9 @@ Token helpers; see Tokens.
 
 #### `createTrackingRecorder(options?): (hit) => Promise<result | null>`
 A recorder with its own gate (`budgetPerSecond`, `maxInFlight`, `now` for tests); `null` means it failed and logged it.
+
+#### `listEmailEvents(emailId, apiKeyId | null, { page, limit }): { data, total } | null` (emails module)
+The events of one email, oldest first; `null` when the email is not visible to the key (`null` key: the dashboard, trashed emails included).
 
 #### `trackingPlugin(options?)`
 The Elysia plugin, mounted by `src/app.ts` next to the unsubscribe pages. Options (tests): `limit`, `recorder`, `onRecord`.
