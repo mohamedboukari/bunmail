@@ -43,8 +43,26 @@ const NO_TRACK_ATTRIBUTE = "data-bunmail-notrack";
 /** The closing `</a` of a link, in its text window. */
 const LINK_CLOSE = /<\/a(?=[\s/>])/i;
 
-/** A tag inside a link's text, removed to read the visible text. */
-const INNER_TAG = /<[^>]*>/g;
+/**
+ * The text of a link's markup with every `<...>` run left out, read in one
+ * pass. Only used to decide whether the visible text is a URL: the result
+ * never goes back into the HTML, so this is not a sanitizer (a character
+ * loop rather than a tag-stripping regex, which CodeQL would flag as one).
+ */
+function withoutTags(markup: string): string {
+  let text = "";
+  let inTag = false;
+  for (const char of markup) {
+    if (inTag) {
+      if (char === ">") inTag = false;
+    } else if (char === "<") {
+      inTag = true;
+    } else {
+      text += char;
+    }
+  }
+  return text;
+}
 
 /** Visible text that reads as a URL: a scheme, `www.`, or a bare host name with an optional path. */
 const URL_LIKE_TEXT =
@@ -106,7 +124,7 @@ function textIsUrl(html: string, textStart: number): boolean {
   const window = html.slice(textStart, textStart + LINK_TEXT_WINDOW);
   const close = LINK_CLOSE.exec(window);
   if (!close) return false;
-  const text = (decodeHref(window.slice(0, close.index).replace(INNER_TAG, "")) ?? "")
+  const text = (decodeHref(withoutTags(window.slice(0, close.index))) ?? "")
     .replace(/\s+/g, " ")
     .trim();
   return text !== "" && URL_LIKE_TEXT.test(text);

@@ -556,7 +556,7 @@ describe("the full path", () => {
     );
     const html = body.html ?? "";
     expect(body.text).not.toContain("/t/");
-    expect(html).not.toContain(TARGET.replace("&", "&amp;"));
+    expect(html).not.toContain(TARGET.replaceAll("&", "&amp;"));
     const pixel = /<img src="https:\/\/mail\.example\.com(\/t\/o\/[^"]+)"/.exec(
       html,
     )?.[1];
