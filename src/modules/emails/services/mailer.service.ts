@@ -18,7 +18,9 @@ import { redactEmail } from "../../../utils/redact.ts";
 import { recipientOrder } from "../../bounces/services/return-path.ts";
 import { composeMessageBody } from "./message-body.ts";
 import { resolveMxRoute } from "./mx-route.ts";
-import { discoverMtaStsPolicy } from "./mta-sts.ts";
+import { discoverMtaSts, type MtaStsDiscovery } from "./mta-sts.ts";
+import { tlsRptPolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
+import { observeUnconnectedAttempt } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
 import type {
   CustomHeaders,
   DeliveryMtaSts,
@@ -32,6 +34,7 @@ import {
   type SignedMessage,
   type DkimOptions,
   type FeedbackSource,
+  type MailReport,
   type OutboundAttachment,
   type UnsubscribeOptions,
 } from "./mailer-message.service.ts";
@@ -47,7 +50,11 @@ import {
   policyHosts,
   warnTestingPolicy,
 } from "./mailer-mta-sts.service.ts";
-import { sendToMxHosts, type MxSessionPlan } from "./mailer-delivery.service.ts";
+import {
+  sendToMxHosts,
+  type DeliveryLimits,
+  type MxSessionPlan,
+} from "./mailer-delivery.service.ts";
 import { recordOutcome, recordUnsent } from "./mailer-outcome.service.ts";
 
 export {
@@ -58,9 +65,11 @@ export {
   feedbackIdHeader,
   signMessage,
 } from "./mailer-message.service.ts";
+export type { DeliveryLimits } from "./mailer-delivery.service.ts";
 export type {
   DkimOptions,
   FeedbackSource,
+  MailReport,
   OutboundAttachment,
   UnsubscribeOptions,
 } from "./mailer-message.service.ts";
@@ -117,13 +126,19 @@ export interface SendMailResult {
  * connection-level errors and `421` only ({@link deliverWithFailover}).
  *
  * **MTA-STS (#250):** each pending domain's policy is discovered alongside
- * its MX set ({@link discoverMtaStsPolicy}). In `enforce` mode only the MX
+ * its MX set ({@link discoverMtaSts}). In `enforce` mode only the MX
  * hosts the policy names are tried, over required and verified TLS; no
  * matching host, or a TLS or certificate failure, leaves the group in
  * `retry` (never a bounce), and the retry window gives the RFC's eventual
  * failure. In `testing` mode the group is delivered as without a policy,
  * and what enforce mode would have refused is logged once per policy.
  * The mode is recorded on each entry (`mtaSts`).
+ *
+ * **TLS-RPT (#345):** with `TLSRPT_ENABLED`, each MX session's TLS outcome
+ * is recorded for the report of every recipient domain that publishes a
+ * `_smtp._tls` record (`tls-rpt-observe.service.ts`), in the background:
+ * the send never waits for it. A `report` (a TLS report itself) is sent
+ * without MTA-STS and is not recorded (RFC 8460 section 5.3).
  *
  * **Signed return paths (#236):** with `returnPath`, a pending group of
  * several recipients is split into one entry per recipient, and each is
@@ -219,7 +234,24 @@ export async function sendMail(options: {
    * is the From address and each MX gets one transaction, as before.
    */
   returnPath?: { emailId: string };
+  /**
+   * The message is a report (#345, `multipart/report`): BunMail's own TLS
+   * report (RFC 8460). Needs `dkim`, one text part and the report as the
+   * attachment. MTA-STS is not applied to it and its sessions are not
+   * recorded for TLS-RPT: a report about TLS failures must get through
+   * them (RFC 8460 section 5.3).
+   */
+  report?: MailReport;
+  /**
+   * Tighter delivery limits for this call (#345, TLS reports): the
+   * attempt's total session time and the most MX hosts tried. Absent: the
+   * defaults, as for every other send.
+   */
+  deliveryLimits?: DeliveryLimits;
 }): Promise<SendMailResult> {
+  if (options.report && !options.dkim) {
+    throw new Error("A report is only sent DKIM-signed");
+  }
   /** Build the starting state: either a fresh one from the inputs
    *  or a deep clone of the row's prior state. We always clone so the
    *  caller can compare `before` vs `after` for change detection. */
@@ -305,6 +337,7 @@ export async function sendMail(options: {
     feedback: options.feedback,
     autoSubmitted: options.autoSubmitted === true,
     category: options.category ?? null,
+    ...(options.report ? { report: options.report } : {}),
   };
 
   /**
@@ -321,16 +354,19 @@ export async function sendMail(options: {
   /**
    * Each domain resolved once per attempt, in parallel, never cached
    * (#250), its MTA-STS policy discovered alongside (cached per its `id`
-   * and `max_age`, see `mta-sts.ts`).
+   * and `max_age`, see `mta-sts.ts`). Not for a report (#345).
    */
+  const noPolicy: MtaStsDiscovery = { policy: null, failure: null };
   const routes = new Map(
     await Promise.all(
       [...pendingByDomain.keys()].map(async (domain) => {
-        const [route, policy] = await Promise.all([
+        const [route, discovery] = await Promise.all([
           resolveMxRoute(domain),
-          discoverMtaStsPolicy(domain, { allowPrivate: config.mail.allowPrivateMx }),
+          options.report
+            ? noPolicy
+            : discoverMtaSts(domain, { allowPrivate: config.mail.allowPrivateMx }),
         ]);
-        return [domain, { route, policy }] as const;
+        return [domain, { route, policy: discovery.policy, discovery }] as const;
       }),
     ),
   );
@@ -351,8 +387,10 @@ export async function sendMail(options: {
   for (const [domain, keys] of pendingByDomain) {
     const resolved = routes.get(domain);
     if (!resolved) continue;
-    const { route, policy } = resolved;
+    const { route, policy, discovery } = resolved;
     const mtaSts = mtaStsModeOf(policy);
+    /** The domain and its policy for TLS-RPT (#345); none for a report. */
+    const tlsRpt = options.report ? null : { domain, policy: tlsRptPolicyOf(discovery) };
     mtaStsByDomain.set(domain, mtaSts);
     if (route.kind !== "hosts") {
       for (const key of keys) {
@@ -373,6 +411,7 @@ export async function sendMail(options: {
     const hosts = policyHosts(domain, route.hosts, policy);
     if (hosts.length === 0) {
       /** Enforce mode and no MX host the policy names: nothing is connected to. */
+      if (tlsRpt) observeUnconnectedAttempt(tlsRpt);
       const unsent = {
         kind: "retry" as const,
         error: `${domain}: no MX host matches the MTA-STS policy; will retry`,
@@ -397,13 +436,17 @@ export async function sendMail(options: {
       domains: [],
       transactions: [],
       verifiedTls,
+      tlsRpt: [],
+      ...(options.deliveryLimits ? { limits: options.deliveryLimits } : {}),
     };
     plan.domains.push(domain);
+    if (tlsRpt) plan.tlsRpt.push(tlsRpt);
     for (const key of keys) {
       const group = state[key];
       if (!group) continue;
       plan.transactions.push({
         key,
+        domain,
         recipients: group.recipients,
         envelopeFrom: envelopeSenderFor(group.recipients, returnPaths, options.from),
       });

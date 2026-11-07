@@ -37,6 +37,7 @@ import {
 } from "./config/smtp.ts";
 import { readMetricsToken, readTracingSettings } from "./config/observability.ts";
 import { readRedisUrl } from "./config/storage.ts";
+import { buildTlsRptConfig } from "./config/tls-rpt.ts";
 import { readSsoSettings } from "./config/sso.ts";
 
 export { optionalBoundedInt, optionalStrictBoolean } from "./config/env.ts";
@@ -113,6 +114,22 @@ export {
 export * from "./config/observability.ts";
 export * from "./config/storage.ts";
 export * from "./config/sso.ts";
+/** @public */
+export {
+  type TlsRptConfig,
+  DEFAULT_TLSRPT_MAX_REPORTS_PER_DAY,
+  DEFAULT_TLSRPT_MAX_REPORTS_PER_DESTINATION,
+  MAX_TLSRPT_MAX_REPORTS_PER_DESTINATION,
+  MIN_TLSRPT_MAX_REPORTS_PER_DESTINATION,
+  readTlsRptMaxReportsPerDestination,
+  MAX_TLSRPT_MAX_REPORTS_PER_DAY,
+  MAX_TLSRPT_ORGANIZATION_NAME_LENGTH,
+  MIN_TLSRPT_MAX_REPORTS_PER_DAY,
+  readTlsRptContactEmail,
+  readTlsRptEnabled,
+  readTlsRptMaxReportsPerDay,
+  readTlsRptOrganizationName,
+} from "./config/tls-rpt.ts";
 
 /** The submission server's TLS settings and port, read once at boot (#349). */
 const submissionTls = readSubmissionTls();
@@ -256,4 +273,7 @@ export const config = {
 
   /** Webhook delivery queue (#30); see {@link buildWebhookDeliveryConfig}. */
   webhookDelivery: buildWebhookDeliveryConfig(),
+
+  /** SMTP TLS reporting (RFC 8460, #345); see {@link buildTlsRptConfig}. */
+  tlsRpt: buildTlsRptConfig(),
 } as const;

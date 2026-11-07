@@ -1,3 +1,4 @@
+import type { MtaStsFailureKind } from "./mta-sts-fetch.ts";
 import type { MtaStsPolicy } from "./mta-sts-policy.ts";
 
 /**
@@ -35,7 +36,10 @@ interface CachedPolicy {
  */
 export class MtaStsPolicyCache {
   private readonly policies = new Map<string, CachedPolicy>();
-  private readonly failures = new Map<string, { id: string; retryAt: number }>();
+  private readonly failures = new Map<
+    string,
+    { id: string; retryAt: number; kind: MtaStsFailureKind }
+  >();
 
   constructor(private readonly limit = MTA_STS_CACHE_LIMIT) {}
 
@@ -61,18 +65,29 @@ export class MtaStsPolicyCache {
     });
   }
 
-  /** Records a failed fetch of `domain`'s policy `id`. */
-  failed(domain: string, id: string, now: number): void {
+  /** Records a failed fetch of `domain`'s policy `id`, and why it failed (#345). */
+  failed(
+    domain: string,
+    id: string,
+    now: number,
+    kind: MtaStsFailureKind = "fetch-error",
+  ): void {
     bounded(this.failures, domain, this.limit, {
       id,
       retryAt: now + MTA_STS_FETCH_RETRY_AFTER_MS,
+      kind,
     });
   }
 
-  /** Whether a fetch of `domain`'s policy `id` failed recently, so is not tried again yet. */
-  recentlyFailed(domain: string, id: string, now: number): boolean {
+  /**
+   * Why a fetch of `domain`'s policy `id` failed, when it failed recently
+   * and is not tried again yet; `null` otherwise.
+   */
+  recentFailure(domain: string, id: string, now: number): MtaStsFailureKind | null {
     const failure = this.failures.get(domain);
-    return failure !== undefined && failure.id === id && now < failure.retryAt;
+    return failure !== undefined && failure.id === id && now < failure.retryAt
+      ? failure.kind
+      : null;
   }
 
   /**

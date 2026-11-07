@@ -2,7 +2,8 @@
  * Starts the long-running services once the HTTP server listens (#387,
  * split from `src/index.ts`): the email queue, the two SMTP listeners when
  * enabled, the trash purge, the webhook delivery worker, the domain
- * re-verification, the DNSBL self-check and the periodic memory sweeps.
+ * re-verification, the DNSBL self-check, the TLS report job and the
+ * periodic memory sweeps.
  * `registerShutdownHandlers` (`src/process-lifecycle.ts`) stops them.
  */
 import { config } from "./config.ts";
@@ -14,6 +15,7 @@ import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import * as domainReverify from "./modules/domains/services/domain-reverify.service.ts";
 import * as sendingIpDnsbl from "./modules/domains/services/sending-ip-dnsbl.service.ts";
+import * as tlsRptJob from "./modules/tls-rpt/services/tls-rpt-job.service.ts";
 import { startRateLimitCleanup } from "./middleware/rate-limit.ts";
 import { startLoginRateLimitCleanup } from "./middleware/login-rate-limit.ts";
 import { startLocalCounterSweep } from "./utils/shared-store.ts";
@@ -86,6 +88,13 @@ export function startBackgroundServices(): void {
    * SENDING_IP_DNSBL_CHECK=false.
    */
   sendingIpDnsbl.start();
+
+  /**
+   * Start the TLS report job (#345, RFC 8460): every 15 minutes or so,
+   * sends the daily SMTP TLS reports that are due to the domains that ask
+   * for them. Off unless TLSRPT_ENABLED=true.
+   */
+  tlsRptJob.start();
 
   /**
    * Start the periodic sweep that drops expired entries from the HTTP

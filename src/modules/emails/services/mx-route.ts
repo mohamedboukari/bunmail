@@ -358,11 +358,21 @@ export async function deliverWithFailover(args: {
   /** The preferred address family (`MAIL_IP_FAMILY`), 4 by default. */
   ipFamily?: 4 | 6;
   deadlineMs?: number;
+  /**
+   * Most MX hosts tried, at most {@link MAX_MX_HOSTS_PER_ATTEMPT} (the
+   * default): a TLS report (#345) tries fewer, so hostile MX hosts cannot
+   * hold the report job for long.
+   */
+  maxHosts?: number;
   routeDeps?: MxRouteDeps;
 }): Promise<RoutedOutcome[]> {
   const routeDeps = args.routeDeps ?? deps;
   const deadlineMs = args.deadlineMs ?? SMTP_SESSION_DEADLINE_MS;
   const bucketOf = args.bucketOf ?? ((mxHost: string) => mxHost);
+  const maxHosts = Math.min(
+    args.maxHosts ?? MAX_MX_HOSTS_PER_ATTEMPT,
+    MAX_MX_HOSTS_PER_ATTEMPT,
+  );
   let budgetMs = deadlineMs;
   const done = new Map<string, RoutedOutcome>();
   /** The buckets each transaction already took a rate token from on this attempt. */
@@ -371,14 +381,14 @@ export async function deliverWithFailover(args: {
   const lastFailure = new Map<string, RoutedOutcome>();
   let pending = args.transactions;
 
-  if (args.hosts.length > MAX_MX_HOSTS_PER_ATTEMPT) {
+  if (args.hosts.length > maxHosts) {
     logger.debug("MX hosts beyond the per-attempt cap not tried", {
       domain: args.domain,
-      skipped: args.hosts.slice(MAX_MX_HOSTS_PER_ATTEMPT),
+      skipped: args.hosts.slice(maxHosts),
     });
   }
 
-  for (const mxHost of args.hosts.slice(0, MAX_MX_HOSTS_PER_ATTEMPT)) {
+  for (const mxHost of args.hosts.slice(0, maxHosts)) {
     if (pending.length === 0 || budgetMs <= 0) break;
     let addresses: string[];
     try {

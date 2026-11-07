@@ -13,11 +13,15 @@ import {
   type SignedMessage,
 } from "./mailer-message.service.ts";
 import { verifiedTlsOptions } from "./mailer-mta-sts.service.ts";
+import { observeMxSession } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
+import type { TlsRptDomain } from "../../tls-rpt/types/tls-rpt.types.ts";
 
 /** One SMTP transaction to an MX: a delivery-state entry and its envelope. */
 interface MxTransaction {
   /** Key of the entry in the delivery state. */
   key: string;
+  /** The entry's recipient domain: TLS-RPT classifies each domain from its own outcomes (#345). */
+  domain: string;
   /** RCPT TO of this transaction. */
   recipients: string[];
   /** MAIL FROM of this transaction. */
@@ -33,6 +37,25 @@ export interface MxSessionPlan {
   transactions: MxTransaction[];
   /** The domains' MTA-STS policy is in enforce mode: required, verified TLS (#250). */
   verifiedTls: boolean;
+  /**
+   * The domains and their policies for TLS-RPT (#345): each session's TLS
+   * outcome is recorded for them. Empty for a report, which is not recorded.
+   */
+  tlsRpt: TlsRptDomain[];
+  /**
+   * Tighter limits for this call (#345, a TLS report): the whole attempt's
+   * session deadline and the most MX hosts tried. Absent: the defaults
+   * (`SMTP_SESSION_DEADLINE_MS`, `MAX_MX_HOSTS_PER_ATTEMPT`).
+   */
+  limits?: DeliveryLimits;
+}
+
+/** Per-call delivery limits, see {@link MxSessionPlan.limits}. */
+export interface DeliveryLimits {
+  /** The attempt's total session time, in ms. */
+  deadlineMs: number;
+  /** The most MX hosts tried. */
+  maxMxHosts: number;
 }
 
 /**
@@ -144,6 +167,8 @@ async function deliverToMxHosts(
     }));
   }
   /** The message signed once by `sendMail` (#345), or unsigned without a DKIM key. */
+  /** The recipient domain of each transaction, for TLS-RPT (#345). */
+  const domainOf = new Map(plan.transactions.map((t) => [t.key, t.domain]));
   const transactions = buildTransactionMails(
     message,
     signed.kind === "signed" ? signed.raw : null,
@@ -162,6 +187,9 @@ async function deliverToMxHosts(
     lock: (bucket, fn) => withMxLock(bucket, config.mail.mxConcurrency, fn),
     admit: admitFor(mxRateBudget(config.mail.mxRatePerMin)),
     ipFamily: config.mail.ipFamily,
+    ...(plan.limits === undefined
+      ? {}
+      : { deadlineMs: plan.limits.deadlineMs, maxHosts: plan.limits.maxMxHosts }),
     runSession: (session) =>
       withSpan(
         "mx.session",
@@ -182,6 +210,17 @@ async function deliverToMxHosts(
             ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
           });
           recordDeliverySpan(span, outcomes);
+          /**
+           * TLS-RPT (#345): recorded in the background, never awaited, each
+           * domain from its own transactions' outcomes only.
+           */
+          observeMxSession(
+            plan.tlsRpt.map((target) => ({
+              target,
+              outcomes: outcomes.filter((o) => domainOf.get(o.key) === target.domain),
+            })),
+            { mxHost: session.mxHost, address: session.address },
+          );
           return outcomes;
         },
       ),

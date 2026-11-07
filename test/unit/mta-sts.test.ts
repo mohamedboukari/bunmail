@@ -4,6 +4,7 @@ import {
   MTA_STS_POLICY_MAX_BYTES,
   MtaStsFetchError,
   MtaStsPolicyCache,
+  discoverMtaSts,
   discoverMtaStsPolicy,
   fetchMtaStsPolicy,
   matchingMxHosts,
@@ -607,5 +608,76 @@ describe("fetchMtaStsPolicy against a local HTTPS server", () => {
     } finally {
       void redirecting.stop(true);
     }
+  });
+});
+
+describe("discoverMtaSts: why a fetch failed, for TLS-RPT (#345)", () => {
+  /** Discovery with a fresh cache and a fetch answering `respond`. */
+  function discoverWith(respond: () => Promise<Response>) {
+    const deps = stubDeps({ fetch: respond });
+    return discoverMtaSts("example.org", {
+      allowPrivate: false,
+      deps,
+      cache: new MtaStsPolicyCache(),
+    });
+  }
+
+  test("a fetched policy: no failure", async () => {
+    const found = await discoverWith(async () => policyResponse(ENFORCE));
+    expect(found.failure).toBeNull();
+    expect(found.policy?.policy.mode).toBe("enforce");
+  });
+
+  test.each([
+    [
+      "a connection error",
+      async () => Promise.reject(new Error("connection refused")),
+      "fetch-error",
+    ],
+    ["an HTTP 404", async () => policyResponse("x", { status: 404 }), "fetch-error"],
+    [
+      "a certificate error",
+      async () =>
+        Promise.reject(
+          Object.assign(new Error("unable to verify the first certificate"), {
+            code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+          }),
+        ),
+      "webpki-invalid",
+    ],
+    [
+      "a wrong content type",
+      async () => policyResponse(ENFORCE, { headers: { "content-type": "text/html" } }),
+      "policy-invalid",
+    ],
+    [
+      "an invalid policy",
+      async () => policyResponse("version: STSv1\nmode: bogus\n"),
+      "policy-invalid",
+    ],
+    [
+      "an oversized policy",
+      async () => policyResponse("x".repeat(MTA_STS_POLICY_MAX_BYTES + 1)),
+      "policy-invalid",
+    ],
+  ] as const)("%s: %s", async (_name, respond, failure) => {
+    const found = await discoverWith(respond);
+    expect(found.policy).toBeNull();
+    expect(found.failure).toBe(failure);
+  });
+
+  test("a recent failure is reported again without a new fetch", async () => {
+    let fetches = 0;
+    const deps = stubDeps({
+      fetch: async () => {
+        fetches += 1;
+        return policyResponse("not a policy");
+      },
+    });
+    const cache = new MtaStsPolicyCache();
+    const options = { allowPrivate: false, deps, cache };
+    expect((await discoverMtaSts("example.org", options)).failure).toBe("policy-invalid");
+    expect((await discoverMtaSts("example.org", options)).failure).toBe("policy-invalid");
+    expect(fetches).toBe(1);
   });
 });

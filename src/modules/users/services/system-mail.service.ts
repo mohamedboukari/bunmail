@@ -2,7 +2,10 @@ import { randomBytes } from "crypto";
 import { config } from "../../../config.ts";
 import { sendMail } from "../../emails/services/mailer.service.ts";
 import type {
+  DeliveryLimits,
   DkimOptions,
+  MailReport,
+  OutboundAttachment,
   SendMailResult,
 } from "../../emails/services/mailer.service.ts";
 import { getDomainByName } from "../../domains/services/domain.service.ts";
@@ -12,7 +15,8 @@ import { UserStoreError, withSanitizedErrors } from "../errors.ts";
 
 /**
  * BunMail's own mail to its users: invitation emails (#217) and
- * new-device sign-in alerts (#282). Sent out-of-band with `sendMail` (no
+ * new-device sign-in alerts (#282), and its TLS reports to other domains
+ * (#345, RFC 8460). Sent out-of-band with `sendMail` (no
  * `emails` row, no API key), like inbound notifications (#106), from
  * `SYSTEM_MAIL_FROM` and signed with that domain's DKIM key.
  *
@@ -36,7 +40,14 @@ export interface SystemMessage {
   to: string;
   subject: string;
   text: string;
-  html: string;
+  /** Absent for a report (#345), whose first part is the text alone. */
+  html?: string;
+  /** The report attachment of a TLS report (#345); none otherwise. */
+  attachments?: readonly OutboundAttachment[];
+  /** A TLS report (#345): `multipart/report`, see `MailReport`. */
+  report?: MailReport;
+  /** Tighter delivery limits (#345, TLS reports): deadline and MX hosts tried. */
+  deliveryLimits?: DeliveryLimits;
 }
 
 /** What `sendSystemMail` needs from the outside, injectable for tests. */
@@ -120,7 +131,10 @@ export async function sendSystemMail(
       to: message.to,
       subject: message.subject,
       text: message.text,
-      html: message.html,
+      html: message.html ?? null,
+      ...(message.attachments ? { attachments: message.attachments } : {}),
+      ...(message.report ? { report: message.report } : {}),
+      ...(message.deliveryLimits ? { deliveryLimits: message.deliveryLimits } : {}),
       messageId: `<${randomBytes(16).toString("hex")}@${deps.hostname}>`,
       dkim,
       /** BunMail's own automatic mail (#250), never with `List-Unsubscribe`. */

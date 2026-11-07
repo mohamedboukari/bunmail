@@ -743,7 +743,7 @@ A transaction is `starttls` only when both happened: under Bun the TLS callback 
 
 ### MTA-STS (#250)
 
-A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaStsPolicy`); DANE, TLS-RPT and inbound MTA-STS are not implemented.
+A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaSts`); DANE and inbound MTA-STS are not implemented. With `TLSRPT_ENABLED=true`, how each session went under the policy is also reported to the domain, see [TLS reporting](#tls-reporting-345).
 
 **Discovery**, for each pending recipient domain on every attempt, in parallel with its MX resolution:
 
@@ -772,6 +772,12 @@ A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts 
 **Recorded:** each entry's `mtaSts` is the mode its latest attempt ran under: `enforce`, `testing`, or `null` (no policy, or `none`).
 
 **Logs:** a failed fetch or TXT lookup at `warn` (`MTA-STS policy fetch failed` with the domain, policy `id` and reason; `MTA-STS TXT lookup failed` with the DNS code), each with whether a cached policy was kept; a fetched policy and skipped hosts at `debug`.
+
+**Fetch failures, for TLS-RPT (#345):** a failed fetch is classified (`MtaStsFetchError.kind`): `fetch-error` (DNS, connection, HTTP status), `webpki-invalid` (the policy host's certificate) or `policy-invalid` (content type, encoding, size, syntax). `discoverMtaSts` returns it beside the policy, also while the same `id` is not refetched, so TLS-RPT can report `sts-policy-fetch-error`, `sts-webpki-invalid` or `sts-policy-invalid`. `discoverMtaStsPolicy` still returns the policy alone.
+
+### TLS reporting (#345)
+
+Off by default (`TLSRPT_ENABLED`). When on, the TLS outcome of every MX session (and of an enforce-mode attempt that matched no MX host) is recorded, in the background, for each recipient domain that publishes a `_smtp._tls` record (RFC 8460), and a daily job sends each such domain one report per UTC day by mail (from `SYSTEM_MAIL_FROM`, DKIM-signed) or HTTPS POST (through the webhook SSRF guard). `sendMail` takes a `report` option for that mail: a `multipart/report; report-type=tlsrpt` message, DKIM required, sent without MTA-STS and not itself recorded. Details: [tls-rpt.md](tls-rpt.md).
 
 ### Exposed in the API and on the detail page (#250)
 

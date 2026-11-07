@@ -283,6 +283,53 @@ describe("deliverWithFailover", () => {
     expect(taken).toEqual(["mx1.example.org", "mx2.example.org"]);
   });
 
+  test("a per-call host cap and deadline (#345, TLS reports): fewer hosts, a shorter session", async () => {
+    const calls: Array<{ mxHost: string; deadlineMs: number }> = [];
+    const outcomes = await deliverWithFailover({
+      domain: "example.org",
+      hosts: ["mx1.example.org", "mx2.example.org", "mx3.example.org", "mx4.example.org"],
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      maxHosts: 2,
+      deadlineMs: 120_000,
+      runSession: async ({ mxHost, deadlineMs, transactions }) => {
+        calls.push({ mxHost, deadlineMs });
+        return transactions.map((t) => ({
+          key: t.key,
+          error: new Error("Connection timed out"),
+          tls: null,
+        }));
+      },
+      lock: recordingLock([]),
+      routeDeps: stubDeps({ lookup: async () => [{ address: "203.0.113.10" }] }),
+    });
+    expect(calls.map((c) => c.mxHost)).toEqual(["mx1.example.org", "mx2.example.org"]);
+    expect(calls.every((c) => c.deadlineMs <= 120_000)).toBe(true);
+    expect(outcomes[0]?.error).toBeInstanceOf(Error);
+  });
+
+  test("the host cap never goes above MAX_MX_HOSTS_PER_ATTEMPT", async () => {
+    const calls: string[] = [];
+    await deliverWithFailover({
+      domain: "example.org",
+      hosts: Array.from({ length: 9 }, (_, i) => `mx${i}.example.org`),
+      transactions: [transaction("example.org")],
+      allowPrivate: false,
+      maxHosts: 50,
+      runSession: async ({ mxHost, transactions }) => {
+        calls.push(mxHost);
+        return transactions.map((t) => ({
+          key: t.key,
+          error: new Error("refused"),
+          tls: null,
+        }));
+      },
+      lock: recordingLock([]),
+      routeDeps: stubDeps({ lookup: async () => [{ address: "203.0.113.10" }] }),
+    });
+    expect(calls).toHaveLength(MAX_MX_HOSTS_PER_ATTEMPT);
+  });
+
   test("a 550 from the first host decides the attempt: no failover", async () => {
     const calls: string[] = [];
     const rejection = Object.assign(new Error("Recipient command failed"), {
