@@ -134,5 +134,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Run migrations via the bun-native migrator (no drizzle-kit needed),
 # then start the server. The migrator is idempotent and auto-baselines
-# legacy db:push-provisioned databases on first run.
-CMD ["sh", "-c", "bun run db:migrate && bun run start"]
+# legacy db:push-provisioned databases on first run. `exec` replaces the
+# shell with Bun, and Bun runs the entry file directly (not through
+# `bun run start`), so the server is PID 1 and receives the SIGTERM of
+# `docker stop`: without it the shell swallowed the signal, the graceful
+# shutdown never ran and Docker killed the process after 10 s.
+CMD ["sh", "-c", "bun run db:migrate && exec bun src/index.ts"]
