@@ -421,14 +421,18 @@ Sign-in with any standards-based OpenID Connect provider (Google Workspace, Micr
 
 | Variable | Default | Rule |
 |---|---|---|
-| `SSO_PROVIDERS` | unset (SSO off) | Ids separated by commas, each `^[a-z0-9-]{1,32}$`, no duplicates. An id `my-idp` reads `SSO_MY_IDP_*` |
-| `SSO_<ID>_ISSUER` | required | The exact issuer URL: `https://` (plain `http://` only on `localhost`, `127.0.0.1` or `[::1]`), no credentials, query or fragment, at most 250 characters. Kept byte for byte: the discovery document and every ID token must carry this exact string (mind the trailing slash). Two ids with the same issuer refuse to boot: links are keyed by the issuer |
-| `SSO_<ID>_CLIENT_ID` | required | 1 to 512 printable characters without spaces |
-| `SSO_<ID>_CLIENT_SECRET` | required | Same rule; never logged, never echoed in a boot error |
-| `SSO_<ID>_LABEL` | the id | Button text, 1 to 64 characters, no control characters, rendered escaped |
+| `SSO_PROVIDERS` | unset | Ids separated by commas, each `^[a-z0-9-]{1,32}$`, no duplicates. An id `my-idp` reads `SSO_MY_IDP_*`. The presets `google` and `gitlab` need not be listed: their credentials enable them (after the listed ids) |
+| `SSO_<ID>_ISSUER` | required; the preset's for `google` (`https://accounts.google.com`) and `gitlab` (`https://gitlab.com`) | The exact issuer URL: `https://` (plain `http://` only on `localhost`, `127.0.0.1` or `[::1]`), no credentials, query or fragment, at most 250 characters. Kept byte for byte: the discovery document and every ID token must carry this exact string (mind the trailing slash). Two ids with the same issuer refuse to boot: links are keyed by the issuer |
+| `SSO_<ID>_CLIENT_ID` | required to enable | 1 to 512 printable characters without spaces. With the secret, the switch: neither set skips the provider (below), one of the two refuses to boot |
+| `SSO_<ID>_CLIENT_SECRET` | required to enable | Same rule; never logged, never echoed in a boot error |
+| `SSO_<ID>_LABEL` | `Google` / `GitLab` for a preset, else the id | Button text, 1 to 64 characters, no control characters, rendered escaped |
 | `SSO_<ID>_SCOPES` | `openid email profile` | Scope names separated by spaces; must include `openid` |
 | `SSO_<ID>_ALLOWED_DOMAINS` | none | Email domains separated by commas, lower-cased (no `@`, no wildcard, no subdomains implied). Read only by the link by verified email |
 | `SSO_<ID>_AUTO_LINK` | `false` | Strictly `true` or `false`; `true` requires `ALLOWED_DOMAINS` (refuses to boot without) and refuses to boot for a Microsoft Entra issuer. Links an unknown identity to the member with its verified email at sign-in (never the owner, an admin or an account with a second factor): see [Linking by verified email](#linking-by-verified-email-sso_id_auto_link) |
+
+**Presets** (`SSO_PROVIDER_PRESETS`): `google` and `gitlab` default their issuer and label; an explicit value wins (a self-hosted GitLab), and a defaulted issuer goes through every check a configured one does (the exact discovery match, the duplicate-issuer refusal, Google's `hd` rule, which keys on `https://accounts.google.com`). Every other id needs `SSO_<ID>_ISSUER` (Microsoft Entra's carries the tenant). GitHub (OAuth 2.0 only, no ID token) and Apple (`response_mode=form_post`) are not supported.
+
+**Credentials are the switch.** A provider is configured only with both `SSO_<ID>_CLIENT_ID` and `SSO_<ID>_CLIENT_SECRET` set (non-blank). A listed id with neither is skipped: no button, no routes, its other variables not read, and one boot `warn` per provider (`SSO provider skipped: no client credentials`, `provider`, `missing`: the variable names, never values); `readSsoSettings` returns it in `skipped`. Exactly one of the two refuses to boot, naming the missing variable (almost always a typo, which a hidden button would mask). A preset with neither is simply absent, without a warning, unless listed.
 
 SSO also needs an `https://` `APP_BASE_URL` (plain `http://` only on a loopback host): otherwise the providers are still validated, SSO stays off, and the boot logs one `warn` (`SSO is off: APP_BASE_URL is not an https:// URL`). The redirect URI to register at each provider is `<APP_BASE_URL>/dashboard/login/sso/<id>/callback`, one per provider.
 
@@ -471,7 +475,7 @@ A completed admin reset link (#277, `completePasswordReset`) and a completed `re
 
 ### Signing in with SSO
 
-The login page shows one "Sign in with `<label>`" button per configured provider while SSO is on (the label escaped; no button when `APP_BASE_URL` is not `https://`). Each is a same-origin POST to `/dashboard/login/sso/<id>`, which starts a `login` flow and sends the browser to the provider; the provider sends it back to the same callback as a link. Route behaviour and log lines: [docs/dashboard.md](dashboard.md#signing-in-with-sso-224).
+The login page shows one "Sign in with `<label>`" button per configured provider while SSO is on (the label escaped; no button when `APP_BASE_URL` is not `https://`, none for a provider without credentials). Each carries a static inline SVG logo chosen by the issuer's host, never by the id (`ssoLogoKind` in `src/pages/components/sso-logo.tsx`): Google (`accounts.google.com`), Microsoft (the Entra hosts), GitLab (`gitlab.com`, or any issuer for the id `gitlab`), Okta (`*.okta.com`, `*.oktapreview.com`), Auth0 (`*.auth0.com`), Keycloak (an issuer path with `/realms/`), a key icon otherwise. Each is a same-origin POST to `/dashboard/login/sso/<id>`, which starts a `login` flow and sends the browser to the provider; the provider sends it back to the same callback as a link. Route behaviour and log lines: [docs/dashboard.md](dashboard.md#signing-in-with-sso-224).
 
 **Which account.** Only the account linked to `(oidc:<issuer>, sub)` (`resolveSsoSignIn` in `sso-sign-in.service.ts`), never one found by email: an unverified, changed or reassigned provider email opens nothing (the nOAuth class of takeover). An unknown identity is refused (`unknown_identity`) with its own message, "This sign-in is not linked to a BunMail account. Sign in with your password and link it under Account.": BunMail never creates an account and never accepts an invitation (invite-only, #225), and links by itself only for a provider with `SSO_<ID>_AUTO_LINK=true` ([below](#linking-by-verified-email-sso_id_auto_link)).
 

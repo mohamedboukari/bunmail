@@ -201,8 +201,9 @@ export const config = {
 
   /**
    * OpenID Connect single sign-on (#224): the providers from
-   * `SSO_PROVIDERS` and the base URL their redirect URIs use. Off when no
-   * provider is configured, or when `APP_BASE_URL` is not `https://` (or
+   * `SSO_PROVIDERS` (and the presets whose credentials are set), those
+   * skipped for lack of credentials, and the base URL their redirect URIs
+   * use. Off when no provider is configured, or when `APP_BASE_URL` is not `https://` (or
    * loopback `http://`). See `readSsoSettings`.
    */
   sso: readSsoSettings(),

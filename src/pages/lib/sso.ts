@@ -7,6 +7,7 @@ import type {
 } from "../../modules/users/types/sso.types.ts";
 import { auditProviderOf } from "../../modules/users/services/sso-link-policy.service.ts";
 import type { SsoAlertFacts } from "../../modules/users/services/two-factor-alert.service.ts";
+import { ssoLogoKind, type SsoLogoKind } from "../components/sso-logo.tsx";
 import { redirect } from "./responses.ts";
 
 /**
@@ -51,13 +52,20 @@ export function toSsoPage(
 /**
  * The login page's "Sign in with <label>" buttons: every configured
  * provider while SSO is on (an `https://` `APP_BASE_URL`), none otherwise.
- * Only the id and the label: never the client secret.
+ * A provider is configured only with its client credentials set, so one
+ * without them never gets a button. Only the id, the label and the logo
+ * chosen by its issuer's host (`ssoLogoKind`): never the client secret.
  */
-export function ssoSignInButtons(): Array<{ id: string; label: string }> {
+export function ssoSignInButtons(): Array<{
+  id: string;
+  label: string;
+  logo: SsoLogoKind;
+}> {
   if (config.sso.baseUrl === null) return [];
   return config.sso.providers.map((provider) => ({
     id: provider.id,
     label: provider.label,
+    logo: ssoLogoKind(provider),
   }));
 }
 
