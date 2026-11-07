@@ -12,17 +12,17 @@ import { users } from "./user.schema.ts";
 import { CREDENTIAL_TYPES, SECOND_FACTOR_TYPES, literals } from "../types/user.types.ts";
 
 /**
- * One row per login method a user holds (#214). `password`, `totp` (the
- * second factor, #220) and `passkey` (WebAuthn, a first or second factor,
- * #223) are used; `oauth` and the provider columns exist so OAuth/SSO
- * (#224) plugs in without a schema change.
+ * One row per login method a user holds (#214): `password`, `totp` (the
+ * second factor, #220), `passkey` (WebAuthn, a first or second factor,
+ * #223) and `oauth` (an SSO link, #224, which only widened `provider` in
+ * migration `0040`).
  *
  * | type       | secret_hash             | provider / provider_account_id | public_key / counter         |
  * |------------|-------------------------|--------------------------------|------------------------------|
  * | password   | argon2id hash           |                                |                              |
  * | totp       | encrypted TOTP secret   |                                | last accepted step           |
  * | passkey    |                         | (none) / credential id         | COSE key, signature counter  |
- * | oauth      |                         | `google`, `oidc:<issuer>`, id  |                              |
+ * | oauth      |                         | `oidc:<issuer>` / subject      |                              |
  *
  * A `totp` row exists only once confirmed (#220): an enrolment in
  * progress keeps its secret on the session that started it
