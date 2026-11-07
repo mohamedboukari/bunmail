@@ -422,7 +422,11 @@ src/pages/
 │   ├── account-two-factor.plugin.tsx ← Two-factor page, enrolment start and confirm (#220)
 │   ├── account-two-factor-manage.plugin.tsx ← New recovery codes, turning two-factor off (#220)
 │   ├── account-password.plugin.tsx ← Change password (#279)
-│   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail
+│   ├── emails.plugin.tsx     ← Send form, email list, trash, tombstones, detail; composes the emails-* groups below, in this order (#387)
+│   ├── emails-send.plugin.tsx ← Send form and its POST
+│   ├── emails-list.plugin.tsx ← Email list, tombstones (#34)
+│   ├── emails-trash.plugin.tsx ← Trash page and every trash action
+│   ├── emails-detail.plugin.tsx ← Email detail, attachment downloads (#181)
 │   ├── api-keys.plugin.tsx   ← API keys
 │   ├── invitations.plugin.tsx ← Invitations
 │   ├── users.plugin.tsx      ← Accounts: role, status, removal, ownership transfer, reset link
@@ -492,7 +496,10 @@ src/pages/
 │   ├── attachment-gone.tsx   ← 410 page for an attachment no longer stored (#181)
 │   ├── api-keys.tsx          ← API keys management
 │   ├── domains.tsx           ← Domains management
-│   ├── domain-detail.tsx     ← Domain verification status
+│   ├── domain-detail.tsx     ← Domain verification status; panels in the three below (#387)
+│   ├── domain-detail-dns.tsx ← Failing banner, verification cards, DMARC panel, records table
+│   ├── domain-detail-dkim.tsx ← DKIM key and rotation panel (#250)
+│   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel (#250)
 │   ├── templates.tsx         ← Templates list + create
 │   ├── template-detail.tsx   ← Template edit form
 │   ├── webhooks.tsx          ← Webhooks list + create

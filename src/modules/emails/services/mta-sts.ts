@@ -2,9 +2,35 @@ import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { resolveTxtRecords } from "../../../utils/dns-txt.ts";
 import { logger } from "../../../utils/logger.ts";
-import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
-import type { LookupAll } from "./mx-address.ts";
 import { withTimeout } from "./mx-route.ts";
+import {
+  parseMtaStsPolicy,
+  parseMtaStsTxt,
+  type MtaStsPolicy,
+} from "./mta-sts-policy.ts";
+import { MtaStsPolicyCache } from "./mta-sts-cache.ts";
+import {
+  MtaStsFetchError,
+  policyAddress,
+  readPolicyBody,
+  type MtaStsDeps,
+} from "./mta-sts-fetch.ts";
+
+export {
+  MTA_STS_MAX_AGE_CAP_SECONDS,
+  MTA_STS_POLICY_MAX_BYTES,
+  matchingMxHosts,
+  mxMatchesPattern,
+  parseMtaStsPolicy,
+  parseMtaStsTxt,
+  type MtaStsPolicy,
+} from "./mta-sts-policy.ts";
+export { MtaStsPolicyCache } from "./mta-sts-cache.ts";
+/** @public Kept from before the split (#387), when only this file used it. */
+export type { MtaStsMode } from "./mta-sts-policy.ts";
+/** @public Kept from before the split (#387), when only this file used it. */
+export { MTA_STS_CACHE_LIMIT } from "./mta-sts-cache.ts";
+export { MtaStsFetchError, type MtaStsDeps } from "./mta-sts-fetch.ts";
 
 /**
  * Outbound MTA-STS (RFC 8461, #250): a recipient domain can publish a
@@ -43,64 +69,24 @@ import { withTimeout } from "./mx-route.ts";
  * every lookup and the fetch are replaceable ({@link setMtaStsDeps}).
  */
 
-/** Longest `max_age` honoured, in seconds (RFC 8461 3.2: 31557600, about a year). */
-export const MTA_STS_MAX_AGE_CAP_SECONDS = 31_557_600;
-
-/** Largest policy file read, in bytes (RFC 8461 3.3 suggests 64 KB). */
-export const MTA_STS_POLICY_MAX_BYTES = 64 * 1024;
+/*
+ * Split by concern (#387): the TXT record, policy file and MX matching
+ * in `mta-sts-policy.ts`, the cache class in `mta-sts-cache.ts`, the
+ * fetch's seams and steps in `mta-sts-fetch.ts`. This file keeps the
+ * replaceable deps, the process-wide cache and everything that defaults
+ * to them: `setMtaStsDeps`, `fetchMtaStsPolicy` and the discovery.
+ */
 
 /** Longest a policy fetch may take, headers and body (RFC 8461 3.3 suggests 60 s at most). */
 const MTA_STS_FETCH_TIMEOUT_MS = 10_000;
 
-/** Most recipient domains whose policy is cached; the oldest entry is evicted past it. */
-export const MTA_STS_CACHE_LIMIT = 10_000;
-
-/**
- * How long a failed policy fetch is not retried for the same domain and
- * policy `id`. Without it, every attempt to a domain whose policy host is
- * down would wait out the fetch timeout again.
- */
-const MTA_STS_FETCH_RETRY_AFTER_MS = 5 * 60_000;
-
 /** Longest the TXT lookup may take; past it, the lookup counts as failed. */
 const DNS_LOOKUP_TIMEOUT_MS = 15_000;
-
-/** A policy's mode (RFC 8461 5). */
-export type MtaStsMode = "enforce" | "testing" | "none";
-
-/** A parsed MTA-STS policy. */
-export interface MtaStsPolicy {
-  mode: MtaStsMode;
-  /** MX patterns, lowercased, without a trailing dot: `mx.example.com` or `*.example.com`. */
-  mx: string[];
-  /** Lifetime of the policy in seconds, capped at {@link MTA_STS_MAX_AGE_CAP_SECONDS}. */
-  maxAge: number;
-}
 
 /** A domain's policy in force for an attempt, and the TXT `id` it was fetched under. */
 export interface ActiveMtaStsPolicy {
   id: string;
   policy: MtaStsPolicy;
-}
-
-/** The lookups, the fetch and the clock, replaceable in tests. */
-export interface MtaStsDeps {
-  resolveTxt: (name: string) => Promise<string[][]>;
-  /** Address lookup of `mta-sts.<domain>`. */
-  lookup: LookupAll;
-  /** Bun's fetch: `tls`, `decompress` and `redirect: "manual"` are used. */
-  fetch: (url: string, init: BunFetchRequestInit) => Promise<Response>;
-  /** HTTPS port of the policy host: 443. Tests point it at a local server. */
-  httpsPort: number;
-  /**
-   * Trust anchors (PEM) instead of the system store, for the policy fetch
-   * and for verified SMTP TLS in enforce mode. Tests only: production
-   * leaves it unset.
-   */
-  ca?: string;
-  fetchTimeoutMs: number;
-  dnsTimeoutMs: number;
-  now: () => number;
 }
 
 const realDeps: MtaStsDeps = {
@@ -129,211 +115,6 @@ export function setMtaStsDeps(override: Partial<MtaStsDeps> | null): void {
 /** The trust anchors for verified TLS: `undefined` (the system store) outside tests. */
 export function mtaStsTrustAnchors(): string | undefined {
   return deps.ca;
-}
-
-/* ─── TXT record ─── */
-
-/** A policy `id`: 1 to 32 letters and digits (RFC 8461 3.1). */
-const STS_ID_RE = /^[A-Za-z0-9]{1,32}$/;
-
-/** An extension field name (RFC 8461 3.1, `sts-ext-name`). */
-const STS_EXT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$/;
-
-/** An extension field value: printable ASCII except `;` and `=`. */
-const STS_EXT_VALUE_RE = /^[\x21-\x3a\x3c\x3e-\x7e]+$/;
-
-/**
- * The policy `id` announced by the TXT records of `_mta-sts.<domain>`, or
- * `null` when none is (RFC 8461 3.1): records not starting with `v=STSv1`
- * are ignored, and anything but exactly one remaining, valid record means
- * no policy is announced. Each record is given as its strings, which are
- * joined.
- */
-export function parseMtaStsTxt(records: string[][]): string | null {
-  const candidates = records
-    .map((chunks) => chunks.join(""))
-    .filter((text) => text.startsWith("v=STSv1"));
-  if (candidates.length !== 1) return null;
-  const fields = (candidates[0] ?? "").split(";").map((field) => field.trim());
-  if (fields[0] !== "v=STSv1") return null;
-  let id: string | null = null;
-  for (const [index, field] of fields.slice(1).entries()) {
-    /** A trailing `;` leaves one empty field; any other empty field is malformed. */
-    if (field === "") {
-      if (index === fields.length - 2) continue;
-      return null;
-    }
-    const eq = field.indexOf("=");
-    if (eq <= 0) return null;
-    const name = field.slice(0, eq);
-    const value = field.slice(eq + 1);
-    if (name === "id") {
-      if (id !== null || !STS_ID_RE.test(value)) return null;
-      id = value;
-    } else if (!STS_EXT_NAME_RE.test(name) || !STS_EXT_VALUE_RE.test(value)) {
-      return null;
-    }
-  }
-  return id;
-}
-
-/* ─── Policy file ─── */
-
-/** A DNS label: letters, digits and inner hyphens, at most 63 characters. */
-const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
-
-/** A host name, or one with a single leading `*.` wildcard label (RFC 8461 3.2). */
-const MX_PATTERN_RE = new RegExp(`^(?:\\*\\.)?${LABEL}(?:\\.${LABEL})*$`);
-
-/** One `key: value` line of a policy file (RFC 8461 3.2). */
-const POLICY_LINE_RE = /^([A-Za-z0-9_.-]{1,32}):[ \t]*(.*?)[ \t]*$/;
-
-/** An `mx` pattern, lowercased and without a trailing dot, or `null` when invalid. */
-function mxPattern(value: string): string | null {
-  const pattern = value.toLowerCase().replace(/\.$/, "");
-  if (pattern.length === 0 || pattern.length > 253) return null;
-  return MX_PATTERN_RE.test(pattern) ? pattern : null;
-}
-
-/**
- * Parses a policy file (RFC 8461 3.2), strictly: `version: STSv1`, `mode`
- * one of `enforce`, `testing` and `none`, `max_age` of 1 to 10 digits
- * (capped at {@link MTA_STS_MAX_AGE_CAP_SECONDS}), and at least one `mx`
- * pattern unless the mode is `none`. A required field that is missing,
- * repeated or invalid, or any invalid `mx` pattern, makes the whole policy
- * invalid: `null`. Lines end in CRLF or LF. Unknown keys and lines that are
- * not `key: value` are ignored (RFC 8461 3.2: unknown fields SHOULD be
- * ignored), so stray text never turns an enforce policy into no policy.
- * A body larger than {@link MTA_STS_POLICY_MAX_BYTES} is invalid.
- */
-export function parseMtaStsPolicy(body: string): MtaStsPolicy | null {
-  if (Buffer.byteLength(body, "utf8") > MTA_STS_POLICY_MAX_BYTES) return null;
-  const single: Record<"version" | "mode" | "max_age", string | undefined> = {
-    version: undefined,
-    mode: undefined,
-    max_age: undefined,
-  };
-  const mx: string[] = [];
-  for (const line of body.split(/\r?\n/)) {
-    const match = POLICY_LINE_RE.exec(line);
-    if (!match) continue;
-    const key = match[1] ?? "";
-    const value = match[2] ?? "";
-    if (key === "mx") {
-      const pattern = mxPattern(value);
-      if (pattern === null) return null;
-      mx.push(pattern);
-    } else if (key === "version" || key === "mode" || key === "max_age") {
-      if (single[key] !== undefined) return null;
-      single[key] = value;
-    }
-  }
-  if (single.version !== "STSv1") return null;
-  const mode = single.mode;
-  if (mode !== "enforce" && mode !== "testing" && mode !== "none") return null;
-  if (single.max_age === undefined || !/^\d{1,10}$/.test(single.max_age)) return null;
-  if (mode !== "none" && mx.length === 0) return null;
-  return {
-    mode,
-    mx: [...new Set(mx)],
-    maxAge: Math.min(Number(single.max_age), MTA_STS_MAX_AGE_CAP_SECONDS),
-  };
-}
-
-/* ─── MX matching ─── */
-
-/**
- * Whether `mxHost` matches a policy pattern (RFC 8461 4.1), ignoring case
- * and a trailing dot: an exact name, or `*.example.com`, which matches
- * exactly one leftmost label (`mx1.example.com`, not `a.b.example.com` and
- * not `example.com`).
- */
-export function mxMatchesPattern(mxHost: string, pattern: string): boolean {
-  const host = mxHost.trim().toLowerCase().replace(/\.$/, "");
-  const want = pattern.toLowerCase().replace(/\.$/, "");
-  if (!want.startsWith("*.")) return host === want;
-  const suffix = want.slice(1);
-  if (!host.endsWith(suffix)) return false;
-  const label = host.slice(0, host.length - suffix.length);
-  return label.length > 0 && !label.includes(".");
-}
-
-/** The hosts, in their order, that match at least one of the policy's patterns. */
-export function matchingMxHosts(hosts: string[], policy: MtaStsPolicy): string[] {
-  return hosts.filter((host) =>
-    policy.mx.some((pattern) => mxMatchesPattern(host, pattern)),
-  );
-}
-
-/* ─── Policy fetch ─── */
-
-/** Thrown when a policy could not be fetched or is invalid. */
-export class MtaStsFetchError extends Error {
-  override readonly name = "MtaStsFetchError";
-}
-
-/**
- * Resolves the policy host to the one address to connect to: refused when
- * it resolves to nothing, or when any address is not public (the MX
- * address rule, `resolveMxAddresses`) unless `allowPrivate`; a scoped
- * address (zone id) is always refused. IPv4 first.
- */
-async function policyAddress(
-  host: string,
-  allowPrivate: boolean,
-  policyDeps: MtaStsDeps,
-): Promise<string> {
-  let addresses: { address: string }[];
-  try {
-    addresses = await withTimeout(policyDeps.lookup(host), policyDeps.dnsTimeoutMs);
-  } catch {
-    throw new MtaStsFetchError(`policy host ${host} could not be resolved`);
-  }
-  if (addresses.length === 0) {
-    throw new MtaStsFetchError(`policy host ${host} resolved to no addresses`);
-  }
-  if (
-    addresses.some(
-      ({ address }) =>
-        address.includes("%") ||
-        isIP(address) === 0 ||
-        (!allowPrivate && isBlockedIp(address)),
-    )
-  ) {
-    /** No address in the message: it is logged with the domain. */
-    throw new MtaStsFetchError(`policy host ${host} resolves to a non-public address`);
-  }
-  const chosen = addresses.find(({ address }) => isIP(address) === 4) ?? addresses[0];
-  if (!chosen) throw new MtaStsFetchError(`policy host ${host} resolved to no addresses`);
-  return chosen.address;
-}
-
-/** Reads at most {@link MTA_STS_POLICY_MAX_BYTES} of the body as UTF-8, or throws. */
-async function readPolicyBody(response: Response): Promise<string> {
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MTA_STS_POLICY_MAX_BYTES) {
-        throw new MtaStsFetchError(
-          `policy larger than ${MTA_STS_POLICY_MAX_BYTES} bytes`,
-        );
-      }
-      chunks.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
-  } catch {
-    throw new MtaStsFetchError("policy is not valid UTF-8");
-  }
 }
 
 /**
@@ -414,99 +195,6 @@ export async function fetchMtaStsPolicy(
     throw new MtaStsFetchError(
       `policy read failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-  }
-}
-
-/* ─── Cache ─── */
-
-/** A cached policy of one recipient domain. */
-interface CachedPolicy {
-  id: string;
-  policy: MtaStsPolicy;
-  /** Epoch ms past which the policy is no longer used. */
-  expiresAt: number;
-  /** A testing-mode "would have failed" warning was logged for this `id`. */
-  warned: boolean;
-}
-
-/**
- * Policies by recipient domain (#250), in memory, at most `limit` domains:
- * a new domain past the limit evicts the entry stored longest ago. Also
- * remembers failed fetches, by domain and `id`, for
- * {@link MTA_STS_FETCH_RETRY_AFTER_MS}, under the same bound.
- */
-export class MtaStsPolicyCache {
-  private readonly policies = new Map<string, CachedPolicy>();
-  private readonly failures = new Map<string, { id: string; retryAt: number }>();
-
-  constructor(private readonly limit = MTA_STS_CACHE_LIMIT) {}
-
-  /** The unexpired policy of `domain`, if any; an expired one is dropped. */
-  get(domain: string, now: number): CachedPolicy | undefined {
-    const entry = this.policies.get(domain);
-    if (entry === undefined) return undefined;
-    if (now >= entry.expiresAt) {
-      this.policies.delete(domain);
-      return undefined;
-    }
-    return entry;
-  }
-
-  /** Stores `domain`'s freshly fetched policy, as the newest entry. */
-  set(domain: string, id: string, policy: MtaStsPolicy, now: number): void {
-    this.failures.delete(domain);
-    bounded(this.policies, domain, this.limit, {
-      id,
-      policy,
-      expiresAt: now + policy.maxAge * 1000,
-      warned: false,
-    });
-  }
-
-  /** Records a failed fetch of `domain`'s policy `id`. */
-  failed(domain: string, id: string, now: number): void {
-    bounded(this.failures, domain, this.limit, {
-      id,
-      retryAt: now + MTA_STS_FETCH_RETRY_AFTER_MS,
-    });
-  }
-
-  /** Whether a fetch of `domain`'s policy `id` failed recently, so is not tried again yet. */
-  recentlyFailed(domain: string, id: string, now: number): boolean {
-    const failure = this.failures.get(domain);
-    return failure !== undefined && failure.id === id && now < failure.retryAt;
-  }
-
-  /**
-   * True the first time it is called for `domain`'s cached policy `id`,
-   * false after: a testing-mode warning is logged once per policy.
-   */
-  firstWarning(domain: string, id: string): boolean {
-    const entry = this.policies.get(domain);
-    if (entry === undefined || entry.id !== id || entry.warned) return false;
-    entry.warned = true;
-    return true;
-  }
-
-  /** Number of cached policies. */
-  get size(): number {
-    return this.policies.size;
-  }
-
-  clear(): void {
-    this.policies.clear();
-    this.failures.clear();
-  }
-}
-
-/** Sets `key` as the newest entry of `map`, evicting the oldest past `limit`. */
-function bounded<T>(map: Map<string, T>, key: string, limit: number, value: T): void {
-  map.delete(key);
-  map.set(key, value);
-  while (map.size > limit) {
-    const oldest = map.keys().next();
-    if (oldest.done === true) break;
-    map.delete(oldest.value);
   }
 }
 

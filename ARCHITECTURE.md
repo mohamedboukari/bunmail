@@ -146,7 +146,10 @@ bunmail/
 │   │   │   │   ├── provider-bucket.ts    ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
 │   │   │   │   ├── rate-budget.ts        ← MAIL_MX_RATE_PER_MIN token bucket per provider bucket, in memory or shared in Redis (#250, #391)
 │   │   │   │   ├── mx-transport.ts       ← One MX session: pooled transport, owned socket closed however it ends, deadline, STARTTLS recorder (#250)
-│   │   │   │   ├── mta-sts.ts            ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
+│   │   │   │   ├── mta-sts.ts            ← Outbound MTA-STS: replaceable deps, pinned policy fetch, per-domain cache, discovery (#250); re-exports the mta-sts-*.ts files (#387)
+│   │   │   │   ├── mta-sts-policy.ts     ← TXT record and policy file parsing, MX matching
+│   │   │   │   ├── mta-sts-cache.ts      ← The policy cache class: bounded, failed fetches remembered
+│   │   │   │   ├── mta-sts-fetch.ts      ← Fetch seams, policy host address check, capped body read
 │   │   │   │   ├── list-unsubscribe.ts   ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   │   │   │   ├── from-name.ts          ← From display-name rules (#250)
 │   │   │   │   ├── attachments.ts        ← Attachment rules: filename, Content-ID, strict base64, limits, blocked types, derived type (#181)
@@ -272,7 +275,10 @@ bunmail/
 │   │   │   │   ├── connection-limit.ts   ← Per-IP connection rate limit, shared store (#185)
 │   │   │   │   ├── arf-parser.service.ts ← Pure ARF (RFC 5965) feedback-report parser (#191)
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
-│   │   │   │   ├── dkim-verifier.service.ts ← DKIM signature verification (RFC 6376, rsa-sha256 and ed25519-sha256) for feedback reports (#373)
+│   │   │   │   ├── dkim-verifier.service.ts ← DKIM signature verification (RFC 6376, rsa-sha256 and ed25519-sha256) for feedback reports (#373): verifyDkimSignatures, the dkim-verifier-*.service.ts files below (#387)
+│   │   │   │   ├── dkim-verifier-parse.service.ts ← Message split, tag-lists, domains and selectors, the signature's tags
+│   │   │   │   ├── dkim-verifier-canonical.service.ts ← Header and body canonicalization, the signed header data
+│   │   │   │   ├── dkim-verifier-key.service.ts ← Key record lookup and checks, the signature check
 │   │   │   │   ├── inbound-notify.service.ts ← "New email for <address>" notifications: plain text, no inbound content by default, automatic mail skipped (#106, #250)
 │   │   │   │   ├── notify-throttle.ts    ← Notification budgets: 5 per address, 30 per domain, per 10 min, in memory (#250)
 │   │   │   │   ├── threading.ts          ← Pure Message-ID extraction and reply chain rules (#192)
@@ -285,7 +291,8 @@ bunmail/
 │   │   │   │   └── inbound.serialization.ts
 │   │   │   └── types/
 │   │   │       ├── inbound.types.ts
-│   │   │       └── feedback-report.types.ts ← Parsed report, action and outcome (#191)
+│   │   │       ├── feedback-report.types.ts ← Parsed report, action and outcome (#191)
+│   │   │       └── dkim.types.ts         ← DKIM verifier results, seams, parsed signature and key (#373)
 │   │   ├── smtp-submission/                ← AUTH-required SMTP relay for apps to send THROUGH BunMail (#120)
 │   │   │   ├── smtp-submission.plugin.ts    ← Route: GET /stats (usage + quota, #123)
 │   │   │   ├── errors.ts                    ← SubmissionRejectedError: a message refused on its content (SMTP 550)
@@ -398,7 +405,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions); auth, account and passkeys are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, #387)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387)
 │       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
@@ -440,7 +447,10 @@ bunmail/
 │       │   ├── email-detail.tsx          ← Single email view
 │       │   ├── api-keys.tsx              ← API keys list + create + revoke
 │       │   ├── domains.tsx               ← Domains list + add + delete
-│       │   ├── domain-detail.tsx         ← Domain verification status, DMARC policy, records to publish, MX and mail flow (#250)
+│       │   ├── domain-detail.tsx         ← Domain verification status, DMARC policy, records to publish, MX and mail flow (#250); panels in domain-detail-*.tsx (#387)
+│       │   ├── domain-detail-dns.tsx     ← Failing banner, verification cards, DMARC panel, records table
+│       │   ├── domain-detail-dkim.tsx    ← DKIM key and rotation panel
+│       │   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel
 │       │   ├── templates.tsx             ← Templates list + create
 │       │   ├── template-detail.tsx       ← Template edit form
 │       │   ├── webhooks.tsx              ← Webhooks list + create

@@ -134,7 +134,10 @@ src/modules/emails/
 │   ├── provider-bucket.ts          ← Throttle key of an MX host: microsoft, google, yahoo, apple, else its registrable domain (#250)
 │   ├── rate-budget.ts              ← MAIL_MX_RATE_PER_MIN token bucket per provider bucket, in memory or shared in Redis (#250, #391)
 │   ├── mx-transport.ts             ← One MX session: pooled transport, owned socket, deadline, STARTTLS recorder (#250)
-│   ├── mta-sts.ts                  ← Outbound MTA-STS: TXT and policy parsing, pinned policy fetch, per-domain cache (#250)
+│   ├── mta-sts.ts                  ← Outbound MTA-STS: replaceable deps (`setMtaStsDeps`), pinned policy fetch, process-wide cache, discovery (#250); re-exports the three below (#387)
+│   ├── mta-sts-policy.ts           ← TXT record and policy file parsing, MX matching (pure)
+│   ├── mta-sts-cache.ts            ← `MtaStsPolicyCache`: bounded per-domain cache, failed fetches remembered
+│   ├── mta-sts-fetch.ts            ← `MtaStsDeps`, `MtaStsFetchError`, policy host address check, capped body read
 │   ├── list-unsubscribe.ts         ← Per-email List-Unsubscribe: one-click token or static domain settings (#249)
 │   ├── queue.service.ts            ← Async queue processor with retries + webhook dispatch: the public surface, re-exported from the files below (#380)
 │   ├── queue-worker.service.ts     ← Poll loop, its state (running, timer, sends in flight) and the per-attempt lease renewal

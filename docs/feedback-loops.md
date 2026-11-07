@@ -75,10 +75,14 @@ src/modules/inbound/
 ├── services/
 │   ├── arf-parser.service.ts        ← isFeedbackReport, parseFeedbackReport (pure)
 │   ├── dkim-verifier.service.ts     ← verifyDkimSignatures: DKIM verdict per signature (#373)
+│   ├── dkim-verifier-parse.service.ts ← message split, tag-lists, the signature's tags (#387)
+│   ├── dkim-verifier-canonical.service.ts ← canonicalization, the signed header data (#387)
+│   ├── dkim-verifier-key.service.ts ← key record lookup and checks, the signature check (#387)
 │   ├── feedback-handler.service.ts  ← handleFeedbackReport (core, injected deps), handleInboundFeedbackReport (wired)
 │   └── smtp-receiver-data.service.ts ← the feedback branch, before the bounce parser
 └── types/
-    └── feedback-report.types.ts     ← FeedbackReport, FeedbackAction, FeedbackOutcome
+    ├── feedback-report.types.ts     ← FeedbackReport, FeedbackAction, FeedbackOutcome
+    └── dkim.types.ts                ← DkimSignatureResult, DkimResult, DkimVerifyDeps; the verifier's internal types (#387)
 ```
 
 Suppression side: `addFromComplaint` in `src/modules/suppressions/services/suppression.service.ts` ([suppressions.md](suppressions.md#complaints-feedback-loops)).
