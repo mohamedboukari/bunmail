@@ -114,7 +114,7 @@ export interface SsoSettings {
   providers: readonly SsoProviderSettings[];
   /**
    * Providers listed in `SSO_PROVIDERS` with neither a client id nor a
-   * client secret: left out (no button, no routes), and `src/index.ts`
+   * client secret: left out (no button, no routes), and `src/boot.ts`
    * warns once at boot, naming the missing variables (never values).
    */
   skipped: ReadonlyArray<{ id: string; missing: readonly string[] }>;
@@ -122,7 +122,7 @@ export interface SsoSettings {
    * The `APP_BASE_URL` the redirect URIs are built on, without a trailing
    * slash, or `null` when it is not `https://` (or plain `http://` on a
    * loopback host). `null` with providers configured means SSO is off;
-   * `src/index.ts` warns once at boot (this file cannot log).
+   * `src/boot.ts` warns once at boot (this file cannot log).
    */
   baseUrl: string | null;
 }

@@ -6,7 +6,7 @@ import { DrizzleQueryError } from "drizzle-orm";
  * or `domain.verification_failed`. Inbound mail and domains have no owning
  * API key, and managing them is admin-only (#130), so delivering them to a
  * restricted key's webhook would bypass that boundary. The global
- * `.onError` handler in `src/index.ts` maps this to HTTP 403 with
+ * `.onError` handler in `src/app.ts` maps this to HTTP 403 with
  * `code: "INBOUND_EVENTS_REQUIRE_ADMIN"` (named after the first such event,
  * kept for compatibility).
  */
@@ -24,7 +24,7 @@ export class InboundEventsRequireAdminError extends Error {
  * Thrown by `webhook.service.createWebhook` when the API key already has
  * `WEBHOOKS_MAX_PER_API_KEY` webhooks (#258). Every event fans out to each
  * subscribed webhook of its key, so the cap bounds that fan-out. The
- * global `.onError` handler in `src/index.ts` maps this to HTTP 422 with
+ * global `.onError` handler in `src/app.ts` maps this to HTTP 422 with
  * `code: "WEBHOOK_LIMIT_REACHED"`; the dashboard shows the message.
  */
 export class WebhookLimitReachedError extends Error {
@@ -46,7 +46,7 @@ export class WebhookLimitReachedError extends Error {
  * Thrown by `webhook-delivery.service.replayDelivery` when the delivery
  * was already replayed `REPLAYS_PER_DELIVERY_PER_HOUR` times in the
  * current hour (#258). Mapped to HTTP 429 with a `Retry-After` header and
- * `code: "REPLAY_LIMIT_REACHED"` (REST, in `src/index.ts`); the dashboard
+ * `code: "REPLAY_LIMIT_REACHED"` (REST, in `src/app.ts`); the dashboard
  * answers 429 on the delivery page.
  */
 export class ReplayLimitReachedError extends Error {

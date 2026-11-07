@@ -110,7 +110,7 @@ function doesNotDecrypt(stored: string | null): boolean {
  * current `DKIM_ENCRYPTION_KEY` (#244): a regenerated `.env`, or a key
  * rotation that skipped re-encryption. Run at boot after
  * {@link encryptDomainKeys}; production refuses to start on any `active`
- * one (see `src/index.ts`), since every send from those domains would
+ * one (see `src/boot.ts`), since every send from those domains would
  * otherwise be held rather than signed. Pending rotation keys (#250) are
  * reported apart: mail is never signed with them, so they only warn.
  * Never logs or returns key material.

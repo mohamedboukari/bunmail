@@ -8,7 +8,7 @@ import type { AttachmentProblem } from "./services/attachments.ts";
  * its input (#245): the sender domain, the template, the subject or a
  * custom header (#177). Each
  * class carries its own HTTP status and stable `code`, so the global
- * `.onError` handler in `src/index.ts` maps them all with one branch
+ * `.onError` handler in `src/app.ts` maps them all with one branch
  * instead of letting them fall through to a masked 500. The SMTP
  * submission server answers every one of them with SMTP `550`.
  *

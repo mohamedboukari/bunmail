@@ -44,7 +44,7 @@ export interface SerializedSendError {
  * gate, the allowed senders, a revoked key, an `EmailSendRejectedError`
  * of any kind, a template too large), or `null` for any other error,
  * which the caller treats as unexpected. Shared by the global `onError`
- * handler (`src/index.ts`) and the batch endpoint (#178), so one item of
+ * handler (`src/app.ts`) and the batch endpoint (#178), so one item of
  * a batch fails exactly as the same send would on `/send`. Messages
  * never echo submitted content beyond what each error class documents.
  */

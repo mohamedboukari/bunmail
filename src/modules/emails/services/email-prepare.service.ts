@@ -239,7 +239,7 @@ export async function prepareEmail(
    * suppression list (and, with `SUPPRESSIONS_SHARED_HARD=true`, the
    * shared hard suppressions, #250) before any other work: no template
    * lookup, no domain check, no INSERT into `emails`. The error class is
-   * mapped to HTTP 422 by the global `onError` handler in `src/index.ts`,
+   * mapped to HTTP 422 by the global `onError` handler in `src/app.ts`,
    * with the `suppressionId` surfaced in the body so callers can pivot
    * directly to `DELETE /api/v1/suppressions/:id` when they want to undo
    * (`null` for a shared suppression, which is not theirs to lift).

@@ -74,7 +74,7 @@ export function readDkimEncryptionKey(): Buffer {
 /**
  * Dashboard auth env vars removed by account login (#216). A value left
  * in `.env` no longer does anything; `readLegacyAuthEnv` reports which are
- * still set so `src/index.ts` can warn once at boot (this file cannot
+ * still set so `src/boot.ts` can warn once at boot (this file cannot
  * log: the logger imports config).
  */
 const LEGACY_AUTH_ENV = ["DASHBOARD_PASSWORD", "SESSION_SECRET"] as const;

@@ -18,7 +18,7 @@ import {
 /**
  * Request context and the per-request log line (#284).
  *
- * `withRequestContext` is passed to Elysia's `wrap` (`src/index.ts`), so it
+ * `withRequestContext` is passed to Elysia's `wrap` (`src/app.ts`), so it
  * runs around the whole request pipeline: hooks, handler, error handler.
  * Inside it every log line carries the request's `requestId`, the ID goes
  * back to the client as `X-Request-Id`, and one line records the outcome:
