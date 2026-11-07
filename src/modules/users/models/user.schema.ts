@@ -4,8 +4,8 @@ import { USER_ROLES, literals } from "../types/user.types.ts";
 
 /**
  * Dashboard user accounts (#214): the identity only. Credentials live in
- * `user_credentials`, so a user can hold a password now and a TOTP secret,
- * passkeys or OAuth links later without touching this table.
+ * `user_credentials`, so a password, a TOTP secret, passkeys and SSO links
+ * were added without touching this table.
  *
  * Roles: exactly one `owner`, enforced by the partial unique index below,
  * plus admins and members (permission matrix in #218). The owner is

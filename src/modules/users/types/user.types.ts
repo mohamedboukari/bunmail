@@ -20,10 +20,9 @@ export function isUserRole(value: string): value is UserRole {
 }
 
 /**
- * Login methods. `password`, `totp` (the second factor, #220) and
- * `passkey` (WebAuthn, a first or second factor, #223) are implemented;
- * `oauth` is reserved so OAuth/SSO (#224) can add rows without a schema
- * change.
+ * Login methods: `password`, `totp` (the second factor, #220), `passkey`
+ * (WebAuthn, a first or second factor, #223) and `oauth` (an SSO link,
+ * #224: a first factor only, never a second factor).
  */
 export const CREDENTIAL_TYPES = ["password", "totp", "passkey", "oauth"] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
