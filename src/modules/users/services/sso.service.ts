@@ -103,6 +103,28 @@ function clientOf(provider: SsoProviderSettings): oauth.Client {
 }
 
 /**
+ * How the code exchange authenticates the client (#411):
+ * `client_secret_post` when the provider's discovery lists it, otherwise
+ * `client_secret_basic`, the OpenID Connect default when the list is
+ * missing.
+ *
+ * Post comes first because Basic is ambiguous in practice: RFC 6749
+ * 2.3.1 has the id and secret form-encoded before base64, which
+ * `oauth4webapi` does (every `-` and `.` becomes `%2D`, `%2E`), and Google
+ * does not decode them, so a Google client id is never found
+ * (`invalid_client`). In the body, the encoding is plain form encoding
+ * that every provider reads the same way.
+ */
+function clientAuthOf(
+  as: oauth.AuthorizationServer,
+  provider: SsoProviderSettings,
+): oauth.ClientAuth {
+  return as.token_endpoint_auth_methods_supported?.includes("client_secret_post") === true
+    ? oauth.ClientSecretPost(provider.clientSecret)
+    : oauth.ClientSecretBasic(provider.clientSecret);
+}
+
+/**
  * Starts a flow: generates `state`, `nonce` and a PKCE verifier, seals
  * them in the flow cookie value, and builds the authorization URL
  * (`response_type=code`, S256 challenge, the configured scopes, the fixed
@@ -280,7 +302,9 @@ function extraClaimProblem(
  * 5. RFC 9207: an `iss` parameter must equal the issuer, and must be
  *    present when the provider advertises it.
  * 6. An `error` parameter from the provider is refused.
- * 7. The code is exchanged with the verifier and `client_secret_basic`.
+ * 7. The code is exchanged with the verifier, the client authenticated
+ *    with `client_secret_post` when the provider lists it, else
+ *    `client_secret_basic` ({@link clientAuthOf}, #411).
  * 8. The ID token: `iss` exact, `aud` contains our client id, `azp`,
  *    `exp`/`iat` within {@link SSO_CLOCK_TOLERANCE_SECONDS}, `nonce`, `sub`,
  *    then its signature against the provider's JWKS.
@@ -364,7 +388,7 @@ async function validateCallback(
     const response = await oauth.authorizationCodeGrantRequest(
       as,
       client,
-      oauth.ClientSecretBasic(provider.clientSecret),
+      clientAuthOf(as, provider),
       callbackParams,
       ssoRedirectUri(context.baseUrl, provider.id),
       flow.codeVerifier,

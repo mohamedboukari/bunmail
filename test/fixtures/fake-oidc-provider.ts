@@ -3,7 +3,8 @@ import { createHash, randomBytes } from "crypto";
 /**
  * An in-process OpenID Connect provider for SSO tests (#224): `Bun.serve`
  * on 127.0.0.1 with a WebCrypto RSA key. It serves a discovery document,
- * a token endpoint (authorization code + PKCE S256, `client_secret_basic`)
+ * a token endpoint (authorization code + PKCE S256, `client_secret_basic`
+ * by default, `client_secret_post` when enabled, #411)
  * that returns an ID token signed with the key, and a JWKS. There is no
  * authorize page: a test reads the authorization URL BunMail built and
  * calls `issueCode` with what it carries, as the provider would after the
@@ -62,6 +63,19 @@ export class FakeOidcProvider {
   signWithWrongKey = false;
   /** Delay before the JWKS is served, in milliseconds. */
   jwksDelayMs = 0;
+  /**
+   * The client authentication methods the token endpoint accepts, also
+   * advertised as `token_endpoint_auth_methods_supported` (#411).
+   */
+  clientAuthMethods: Array<"client_secret_basic" | "client_secret_post"> = [
+    "client_secret_basic",
+  ];
+  /**
+   * Whether Basic credentials are form-decoded, as RFC 6749 2.3.1 says.
+   * `false` acts like Google, which compares them as sent: an id with a
+   * `-` or `.`, encoded by the client, is then not found (#411).
+   */
+  decodesBasicCredentials = true;
 
   /** Requests seen per path, to assert what BunMail did or did not call. */
   readonly hits = new Map<string, number>();
@@ -132,7 +146,7 @@ export class FakeOidcProvider {
       subject_types_supported: ["public"],
       id_token_signing_alg_values_supported: ["RS256"],
       code_challenge_methods_supported: ["S256"],
-      token_endpoint_auth_methods_supported: ["client_secret_basic"],
+      token_endpoint_auth_methods_supported: this.clientAuthMethods,
       ...this.documentExtra,
     };
   }
@@ -155,16 +169,34 @@ export class FakeOidcProvider {
     const refuse = (error: string, status = 400): Response =>
       Response.json({ error }, { status });
     const auth = request.headers.get("authorization") ?? "";
-    if (!auth.startsWith("Basic ")) return refuse("invalid_client", 401);
-    const [id, secret] = Buffer.from(auth.slice(6), "base64")
-      .toString("utf8")
-      .split(":")
-      .map((part) => decodeURIComponent(part.replace(/\+/g, " ")));
+    const form = new URLSearchParams(await request.text());
+    /** One method per request (RFC 6749 2.3): Basic and a body secret together are refused. */
+    if (auth !== "" && form.has("client_secret")) return refuse("invalid_request");
+    let id: string | undefined;
+    let secret: string | undefined;
+    if (
+      auth.startsWith("Basic ") &&
+      this.clientAuthMethods.includes("client_secret_basic")
+    ) {
+      [id, secret] = Buffer.from(auth.slice(6), "base64")
+        .toString("utf8")
+        .split(":")
+        .map((part) =>
+          this.decodesBasicCredentials
+            ? decodeURIComponent(part.replace(/\+/g, " "))
+            : part,
+        );
+    } else if (
+      auth === "" &&
+      form.has("client_secret") &&
+      this.clientAuthMethods.includes("client_secret_post")
+    ) {
+      id = form.get("client_id") ?? undefined;
+      secret = form.get("client_secret") ?? undefined;
+    }
     if (id !== this.clientId || secret !== this.clientSecret) {
       return refuse("invalid_client", 401);
     }
-    const form = new URLSearchParams(await request.text());
-    if (form.has("client_secret")) return refuse("invalid_request");
     if (form.get("grant_type") !== "authorization_code") {
       return refuse("unsupported_grant_type");
     }

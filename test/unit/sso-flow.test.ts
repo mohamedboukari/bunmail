@@ -75,6 +75,8 @@ beforeEach(() => {
   idp.claimOverrides = {};
   idp.signWithWrongKey = false;
   idp.jwksDelayMs = 0;
+  idp.clientAuthMethods = ["client_secret_basic"];
+  idp.decodesBasicCredentials = true;
   idp.hits.clear();
 });
 
@@ -480,6 +482,33 @@ describe("completeSsoCallback: provider answers", () => {
       params: idp.issueCode(authorizationUrl),
     });
     expect(reasonOf(result)).toBe("provider_error");
+  });
+});
+
+describe("completeSsoCallback: client authentication (#411)", () => {
+  test("like Google: post advertised and Basic not decoded, the sign-in works over post", async () => {
+    idp.clientAuthMethods = ["client_secret_basic", "client_secret_post"];
+    idp.decodesBasicCredentials = false;
+    /** The fake client id has a `-`, which Basic would send as `%2D`. */
+    expect(idp.clientId).toContain("-");
+    expect(reasonOf(await fullFlow())).toBe("ok");
+  });
+
+  test("a provider that only takes post", async () => {
+    idp.clientAuthMethods = ["client_secret_post"];
+    expect(reasonOf(await fullFlow())).toBe("ok");
+  });
+
+  test("no list in discovery: Basic, the OpenID Connect default", async () => {
+    idp.documentExtra = { token_endpoint_auth_methods_supported: undefined };
+    expect(reasonOf(await fullFlow())).toBe("ok");
+  });
+
+  test("Basic only: Basic is what is sent (a provider that does not decode it refuses)", async () => {
+    idp.decodesBasicCredentials = false;
+    expect(reasonOf(await fullFlow())).toBe("provider_error");
+    idp.decodesBasicCredentials = true;
+    expect(reasonOf(await fullFlow())).toBe("ok");
   });
 });
 
