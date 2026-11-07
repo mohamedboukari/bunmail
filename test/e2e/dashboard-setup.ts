@@ -38,6 +38,8 @@ import type {
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/server";
+import { InvalidDomainNameError } from "../../src/modules/domains/errors.ts";
+import { parseDomainName } from "../../src/modules/domains/services/domain-name.ts";
 
 /**
  * Shared setup for the dashboard e2e tests (`dashboard-*.test.ts`, #291).
@@ -805,34 +807,37 @@ export function registerDashboardMocks(): void {
     listDomains: mock(() => Promise.resolve([])),
     suggestedSpfRecord: mock(() => "v=spf1 a:mail.example.com -all"),
     spfAuthorizationTerm: mock(() => "a:mail.example.com"),
-    createDomain: mock(() =>
-      Promise.resolve({
-        id: "dom_test123",
-        name: "example.com",
-        dkimPrivateKey: null,
-        dkimPublicKey: null,
-        dkimSelector: "bunmail",
-        dkimPendingSelector: null,
-        dkimPendingPrivateKey: null,
-        dkimPendingPublicKey: null,
-        dkimPendingCreatedAt: null,
-        dkimPreviousSelector: null,
-        dkimPreviousPublicKey: null,
-        dkimRotatedAt: null,
-        spfVerified: false,
-        dkimVerified: false,
-        dmarcVerified: false,
-        verifiedAt: null,
-        lastCheckedAt: null,
-        nextCheckAt: null,
-        consecutiveFailures: 0,
-        lastCheckResult: null,
-        unsubscribeEmail: null,
-        unsubscribeUrl: null,
-        notifyEmail: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      }),
+    /** Refuses a name as the real service does (#406), so the error flash is exercised. */
+    createDomain: mock((input: { name: string }) =>
+      parseDomainName(input.name) === null
+        ? Promise.reject(new InvalidDomainNameError())
+        : Promise.resolve({
+            id: "dom_test123",
+            name: "example.com",
+            dkimPrivateKey: null,
+            dkimPublicKey: null,
+            dkimSelector: "bunmail",
+            dkimPendingSelector: null,
+            dkimPendingPrivateKey: null,
+            dkimPendingPublicKey: null,
+            dkimPendingCreatedAt: null,
+            dkimPreviousSelector: null,
+            dkimPreviousPublicKey: null,
+            dkimRotatedAt: null,
+            spfVerified: false,
+            dkimVerified: false,
+            dmarcVerified: false,
+            verifiedAt: null,
+            lastCheckedAt: null,
+            nextCheckAt: null,
+            consecutiveFailures: 0,
+            lastCheckResult: null,
+            unsubscribeEmail: null,
+            unsubscribeUrl: null,
+            notifyEmail: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }),
     ),
     getDomainById: mock(() => Promise.resolve(undefined)),
     getDomainByName: mock(() => Promise.resolve(undefined)),
@@ -840,6 +845,7 @@ export function registerDashboardMocks(): void {
     updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
     updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
     domainNameIs: mock(() => undefined),
+    findNonCanonicalDomainNames: mock(() => Promise.resolve([])),
     deleteDomain: mock(() => Promise.resolve(undefined)),
     getDkimDnsRecord: mock(() => null),
   }));

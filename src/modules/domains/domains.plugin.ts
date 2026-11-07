@@ -95,7 +95,8 @@ export const domainsPlugin = new Elysia({
       detail: {
         tags: ["Domains"],
         summary: "Register domain",
-        description: "Registers a new sender domain and generates DKIM keys.",
+        description:
+          "Registers a new sender domain and generates DKIM keys. The name is trimmed, lowercased, stripped of one final dot and, for an IDN, converted to its A-label; 422 INVALID_DOMAIN_NAME when it is not then a host name of at least two labels, 409 DOMAIN_ALREADY_REGISTERED when that name is already registered.",
         security: [{ bearerAuth: [] }],
       },
     },

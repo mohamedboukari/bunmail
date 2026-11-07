@@ -11,6 +11,7 @@ import {
   readAppVersion,
   runOwnerBootstrap,
   warnIgnoredSettings,
+  warnNonCanonicalDomainNames,
 } from "./boot.ts";
 import { useSharedBackend } from "./utils/shared-store.ts";
 import { connectRedisBackend } from "./utils/redis-store.ts";
@@ -35,6 +36,9 @@ await startTracing(config.tracing, appVersion);
 await encryptDomainKeys();
 
 await checkDomainKeysDecrypt();
+
+/** Domain names stored before #406 that creation would now refuse: reported, never fatal. */
+await warnNonCanonicalDomainNames();
 
 /** Same for webhook signing secrets from before #259, before the webhook worker starts. */
 await encryptWebhookSecrets();

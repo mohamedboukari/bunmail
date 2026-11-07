@@ -245,9 +245,9 @@ function foldSignature(tags: readonly string[]): string {
  */
 export function dkimSignMessage(message: Uint8Array, dkim: DkimOptions): Buffer {
   /**
-   * A domain is stored as entered, trimmed and lowercased (the create DTO
-   * does not refuse a final dot), so `example.com.` is possible: one final
-   * dot is dropped, as it names the same domain and `d=` takes none.
+   * A domain stored before #406 was kept as entered, trimmed and
+   * lowercased, so `example.com.` is possible: one final dot is dropped, as
+   * it names the same domain and `d=` takes none.
    */
   const domain = domainToASCII(dkim.domainName.trim().replace(/\.$/, "")).toLowerCase();
   if (!SIGNING_DOMAIN.test(domain))

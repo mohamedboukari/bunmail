@@ -1,8 +1,9 @@
 /**
  * Boot steps of `src/index.ts` that run before the HTTP server listens
  * (#387, split from `src/index.ts`): the running version, the DKIM key
- * decryption check, the owner bootstrap and the warnings about settings
- * that do nothing. `src/index.ts` calls them in order.
+ * decryption check, the stored domain name check (#406), the owner
+ * bootstrap and the warnings about settings that do nothing.
+ * `src/index.ts` calls them in order.
  */
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
@@ -10,6 +11,7 @@ import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
+import { findNonCanonicalDomainNames } from "./modules/domains/services/domain.service.ts";
 
 /**
  * The running version, from package.json. On the startup line and in the
@@ -68,6 +70,36 @@ export async function checkDomainKeysDecrypt(): Promise<void> {
         hint: "DKIM_ENCRYPTION_KEY differs from the key these were encrypted with (SECURITY.md, Rotation)",
       },
     );
+  }
+}
+
+/**
+ * Domain names stored before names were checked on create (#406): one
+ * `warn` per row that creation would now refuse, or store in another form
+ * (a final dot, a Unicode IDN). Such a name can miss sender-domain lookups
+ * and DNS checks. Nothing is changed and the boot goes on: the operator
+ * deletes the domain and adds it again under its normalised name.
+ */
+export async function warnNonCanonicalDomainNames(): Promise<void> {
+  try {
+    for (const domain of await findNonCanonicalDomainNames()) {
+      logger.warn(
+        domain.normalized === null
+          ? "Stored domain name is not a valid host name: domain creation would refuse it"
+          : "Stored domain name is not in normalised form: domain creation would store it differently",
+        {
+          domainId: domain.id,
+          name: domain.name,
+          normalized: domain.normalized,
+          hint: "delete the domain and add it again under a valid, normalised name (docs/domains.md)",
+        },
+      );
+    }
+  } catch (error: unknown) {
+    /** The query binds no values, and the logger strips any a drizzle error carries. */
+    logger.error("Stored domain name check failed; the boot goes on", {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 

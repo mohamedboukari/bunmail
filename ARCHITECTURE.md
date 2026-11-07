@@ -81,7 +81,7 @@ bunmail/
 ├── src/
 │   ├── index.ts                          ← Process entry: runs the boot steps in order, then starts the app, the background services and the signal handlers (#387)
 │   ├── app.ts                            ← The Elysia app: request context, security headers, OpenAPI, global `onError`, every route group; `startApp` listens
-│   ├── boot.ts                           ← Boot steps before the listener: app version, DKIM key decrypt check, owner bootstrap, ignored-settings warnings
+│   ├── boot.ts                           ← Boot steps before the listener: app version, DKIM key decrypt check, stored domain name check (#406), owner bootstrap, ignored-settings warnings
 │   ├── background-services.ts            ← Starts the queue, both SMTP listeners, purge, webhook worker, re-verification, DNSBL self-check, memory sweeps
 │   ├── process-lifecycle.ts              ← Crash logger (registered first) and the SIGINT/SIGTERM graceful shutdown (registered last)
 │   ├── config.ts                         ← Assembles `config` from config/ and re-exports its readers
@@ -201,9 +201,10 @@ bunmail/
 │   │   │       └── api-key.types.ts
 │   │   ├── domains/
 │   │   │   ├── domains.plugin.ts         ← CRUD + verify + DKIM rotation routes
-│   │   │   ├── errors.ts                 ← Already registered, invalid DKIM selector, rotation refused (#250)
+│   │   │   ├── errors.ts                 ← Already registered, invalid domain name (#406), invalid DKIM selector, rotation refused (#250)
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
+│   │   │   │   ├── domain-name.ts        ← Name normalisation and the host name rule on create (#406)
 │   │   │   │   ├── dkim-keys.ts          ← DKIM key pair, selector rules, dated selectors, TXT match (#250)
 │   │   │   │   ├── dkim-rotation.service.ts ← DKIM key rotation: start, complete, cancel (#250)
 │   │   │   │   ├── domain-dkim.service.ts ← DKIM options for out-of-queue mail (inbound notify, invitations, #217)
@@ -1448,7 +1449,7 @@ Every Redis key expires (counters with their window, reveals after 60 s, MX slot
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)
   - `EmailSendRejectedError` subclasses (`src/modules/emails/errors.ts`) → their own status and code: 404 `TEMPLATE_NOT_FOUND`; 422 `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (#245), `SUBJECT_REQUIRED`, `BODY_REQUIRED` (#250), `INVALID_CUSTOM_HEADER` (#177), `IDEMPOTENCY_KEY_REUSED` (#188), `MARKETING_REQUIRES_ONE_CLICK` (#250), `TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED` (with `index`, #181); an invalid `fromName` (`InvalidFromNameError`, #250) is 422 `VALIDATION_ERROR` with `details` naming `/fromName`, an invalid attachment input (`InvalidAttachmentError`, #181) the same at `/attachments/<i>/<field>`
-  - `DomainAlreadyRegisteredError` → 409 `DOMAIN_ALREADY_REGISTERED`; `InvalidDkimSelectorError` → 422 `INVALID_DKIM_SELECTOR`; `DkimRotationError` → 409 with its code (`DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE`, #250)
+  - `DomainAlreadyRegisteredError` → 409 `DOMAIN_ALREADY_REGISTERED`; `InvalidDomainNameError` → 422 `INVALID_DOMAIN_NAME` (#406); `InvalidDkimSelectorError` → 422 `INVALID_DKIM_SELECTOR`; `DkimRotationError` → 409 with its code (`DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE`, #250)
   - `TemplateTooLargeError` → 422 `TEMPLATE_OUTPUT_TOO_LARGE`
   - `InactiveApiKeyError` → 401 `API_KEY_REVOKED`
   - `ApiKeyCreatorInactiveError` → 403 `API_KEY_CREATOR_INACTIVE` (#219)

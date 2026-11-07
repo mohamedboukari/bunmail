@@ -1,4 +1,9 @@
 import { describe, test, expect, mock, beforeEach } from "bun:test";
+import { PgDialect } from "drizzle-orm/pg-core";
+import {
+  DomainAlreadyRegisteredError,
+  InvalidDomainNameError,
+} from "../../src/modules/domains/errors.ts";
 
 let selectResult: unknown[] = [];
 let insertResult: unknown[] = [];
@@ -27,8 +32,16 @@ void mock.module("../../src/db/index.ts", () => ({
   },
 }));
 
-const { listDomains, getDomainById, domainExistsByName, deleteDomain, getDkimDnsRecord } =
-  await import("../../src/modules/domains/services/domain.service.ts");
+const {
+  listDomains,
+  getDomainById,
+  domainExistsByName,
+  deleteDomain,
+  getDkimDnsRecord,
+  createDomain,
+  domainNameIs,
+  findNonCanonicalDomainNames,
+} = await import("../../src/modules/domains/services/domain.service.ts");
 
 const baseDomain = {
   id: "dom_x",
@@ -100,5 +113,92 @@ describe("getDkimDnsRecord", () => {
 
   test("returns null when the domain has no public key", () => {
     expect(getDkimDnsRecord({ ...baseDomain, dkimPublicKey: null })).toBeNull();
+  });
+});
+
+/** The bound values of a `domainNameIs` condition. */
+function boundNames(name: string): unknown[] {
+  return new PgDialect().sqlToQuery(domainNameIs(name)).params;
+}
+
+/** The error `createDomain` rejects with, or undefined when it resolves. */
+async function createError(name: string): Promise<unknown> {
+  try {
+    await createDomain({ name });
+    return undefined;
+  } catch (error: unknown) {
+    return error;
+  }
+}
+
+describe("createDomain: the name (#406)", () => {
+  test.each(["", "localhost", "https://example.com", "example.com:25", "-bad.com"])(
+    "refuses %p with InvalidDomainNameError before any lookup",
+    async (name) => {
+      /** A row that would make it a duplicate: never reached. */
+      selectResult = [{ id: "dom_x" }];
+      const error = await createError(name);
+      expect(error).toBeInstanceOf(InvalidDomainNameError);
+      expect(error).toMatchObject({ code: "INVALID_DOMAIN_NAME" });
+    },
+  );
+
+  test.each(["example.com", "Example.COM.", "  EXAMPLE.com  "])(
+    "%p is a duplicate of a registered example.com, named in its stored form",
+    async (name) => {
+      selectResult = [{ id: "dom_x" }];
+      const error = await createError(name);
+      expect(error).toBeInstanceOf(DomainAlreadyRegisteredError);
+      expect(error).toMatchObject({
+        message: 'Domain "example.com" is already registered.',
+      });
+    },
+  );
+
+  test("an IDN is a duplicate of its A-label", async () => {
+    selectResult = [{ id: "dom_x" }];
+    const error = await createError("bücher.example");
+    expect(error).toMatchObject({
+      message: 'Domain "xn--bcher-kva.example" is already registered.',
+    });
+  });
+});
+
+describe("domainNameIs (#406)", () => {
+  test("compares the normalised name", () => {
+    expect(boundNames("example.com")).toEqual(["example.com"]);
+    expect(boundNames("  Example.COM ")).toEqual(["example.com"]);
+  });
+
+  test("a final dot or a Unicode IDN also matches its form from before #406", () => {
+    expect(boundNames("Example.COM.")).toEqual(["example.com", "example.com."]);
+    expect(boundNames("bücher.example")).toEqual([
+      "xn--bcher-kva.example",
+      "bücher.example",
+    ]);
+  });
+});
+
+describe("findNonCanonicalDomainNames (#406)", () => {
+  test("reports the names creation would refuse or store differently, not a case difference", async () => {
+    selectResult = [
+      { id: "dom_ok", name: "example.com" },
+      { id: "dom_case", name: "Legacy.Example.com" },
+      { id: "dom_dot", name: "example.org." },
+      { id: "dom_idn", name: "bücher.example" },
+      { id: "dom_bad", name: "localhost" },
+      { id: "dom_url", name: "https://example.net" },
+    ];
+    expect(await findNonCanonicalDomainNames()).toEqual([
+      { id: "dom_dot", name: "example.org.", normalized: "example.org" },
+      { id: "dom_idn", name: "bücher.example", normalized: "xn--bcher-kva.example" },
+      { id: "dom_bad", name: "localhost", normalized: null },
+      { id: "dom_url", name: "https://example.net", normalized: null },
+    ]);
+  });
+
+  test("reports nothing when every name is in normalised form", async () => {
+    selectResult = [{ id: "dom_ok", name: "example.com" }];
+    expect(await findNonCanonicalDomainNames()).toEqual([]);
   });
 });

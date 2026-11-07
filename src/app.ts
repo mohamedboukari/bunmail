@@ -15,6 +15,7 @@ import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
   InvalidDkimSelectorError,
+  InvalidDomainNameError,
 } from "./modules/domains/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import {
@@ -173,6 +174,12 @@ export function startApp(appVersion: string) {
       /** A domain name already registered (case-insensitive) → 409. */
       if (error instanceof DomainAlreadyRegisteredError) {
         set.status = 409;
+        return { success: false, error: error.message, code: error.code };
+      }
+
+      /** A domain name that is not a host name once normalised (#406) → 422. */
+      if (error instanceof InvalidDomainNameError) {
+        set.status = 422;
         return { success: false, error: error.message, code: error.code };
       }
 
