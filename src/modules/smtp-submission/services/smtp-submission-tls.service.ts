@@ -4,22 +4,17 @@ import { createServer as createTlsServer, type Server as TlsServer } from "tls";
 import type { SMTPServer } from "smtp-server";
 import { logger } from "../../../utils/logger.ts";
 
-/**
- * `SMTPServer#connect` (#349): the method smtp-server itself calls with each
- * accepted socket, public in smtp-server 3.19.23 but missing from
- * `@types/smtp-server`. Implicit TLS hands it the sockets of a TLS server
- * the runtime terminates itself, because smtp-server's own implicit TLS
- * (and STARTTLS) wraps an accepted socket with `new tls.TLSSocket(socket,
- * { isServer: true })`, which never handshakes under Bun. `smtp-server` is
- * pinned to that exact version in package.json, and
- * `test/integration/smtp-submission-tls.integration.test.ts` fails if an
- * upgrade breaks the handover.
+/*
+ * `SMTPServer#connect` (#349) is the method smtp-server itself calls with
+ * each accepted socket; smtp-server types it since 3.20, so the module
+ * augmentation it needed with `@types/smtp-server` is gone. Implicit TLS
+ * hands it the sockets of a TLS server the runtime terminates itself,
+ * because smtp-server's own implicit TLS (and STARTTLS) wraps an accepted
+ * socket with `new tls.TLSSocket(socket, { isServer: true })`, which never
+ * handshakes under Bun. `smtp-server` is pinned to an exact version in
+ * package.json, and `test/integration/smtp-submission-tls.integration.test.ts`
+ * fails if an upgrade breaks the handover.
  */
-declare module "smtp-server" {
-  interface SMTPServer {
-    connect(socket: Socket, socketOptions: { id: string }): void;
-  }
-}
 
 /**
  * How long a connection to the implicit-TLS port may take to finish its
