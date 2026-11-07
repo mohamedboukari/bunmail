@@ -26,6 +26,7 @@ Every line written while handling a piece of work carries that work's ID, automa
 | Signed-in dashboard user (added to the request's context) | `userId` | the session guard, once the session is verified (#222) |
 | Purge cycle (trash, tombstones, expired sessions) | `job: "purge"` | the purge worker |
 | DNSBL self-check of the sending IPs (#250) | `job: "dnsbl-self-check"`, `jobId` (`dbl_` run id) | the daily self-check worker |
+| TLS report run (#345) | `job: "tlsrpt-report"`, `jobId` (`trj_` run id) | the TLS-RPT report job ([tls-rpt.md](tls-rpt.md)) |
 
 Contexts nest: a webhook fired while sending an email logs with the email's `jobId`.
 

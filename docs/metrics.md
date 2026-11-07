@@ -85,6 +85,8 @@ No label carries an email address, a domain, an API key or a raw path, so the nu
 | `bunmail_smtp_messages_accepted_total` | counter | `listener` | Messages accepted: inbound stored (mail, DSNs, DMARC and feedback reports, unsubscribes), submission queued for sending |
 | `bunmail_inbound_dnsbl_unchecked_total` | counter | `kind` (`lookup_failed`, `refused`, `unexpected`) | Inbound connections let through without a DNSBL answer, every one (the log warning is throttled, #365) |
 | `bunmail_webhook_attempts_total` | counter | `outcome` (`delivered`, `retry`, `failed`) | Webhook delivery attempts; `failed` is the last attempt failing |
+| `bunmail_tlsrpt_sessions_total` | counter | `result` (`success`, `failure`, `dropped`) | MX sessions recorded for TLS reports (`dropped`: not recorded, too many recordings running) (#345, only with `TLSRPT_ENABLED`, see [tls-rpt.md](tls-rpt.md)) |
+| `bunmail_tlsrpt_reports_total` | counter | `scheme` (`mailto`, `https`), `outcome` (`sent`, `skipped`, `suppressed`, `capped`, `retry`, `dropped`) | TLS report deliveries, one per reporting address and attempt; `skipped` is a `mailto:` address without a usable `SYSTEM_MAIL_FROM`, `dropped` the last attempt failing; `suppressed` a mail address on the suppression list, `capped` the destination's daily cap; reports deferred by `TLSRPT_MAX_REPORTS_PER_DAY` count as `scheme="any"`, `outcome="capped"` |
 | `bunmail_webhook_deliveries_pending` | gauge | | Webhook deliveries still to make, including scheduled retries |
 | `bunmail_webhook_deliveries_due` | gauge | | Pending webhook deliveries due now |
 | `bunmail_suppressions` | gauge | `reason` (`bounce`, `complaint`, `manual`, `unsubscribe`, `other`) | Active suppressions (not expired) |

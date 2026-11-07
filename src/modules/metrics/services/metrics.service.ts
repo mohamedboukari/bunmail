@@ -305,6 +305,40 @@ export function recordWebhookAttempt(outcome: "delivered" | "retry" | "failed"):
   webhookAttempts.inc({ outcome });
 }
 
+/* ─── TLS-RPT ─── */
+
+const tlsRptSessions = counter(
+  registry,
+  "bunmail_tlsrpt_sessions_total",
+  "MX sessions recorded for TLS reports (#345), by result (success, failure; dropped, not recorded because too many recordings were running).",
+  ["result"],
+);
+const tlsRptReports = counter(
+  registry,
+  "bunmail_tlsrpt_reports_total",
+  "TLS report deliveries (#345), by scheme (mailto, https) and outcome (sent; skipped, no usable sender; suppressed, the address is on the suppression list; capped, the destination's daily cap; retry; dropped, the last attempt failed); reports deferred by the global daily cap as scheme any, outcome capped.",
+  ["scheme", "outcome"],
+);
+
+/** Counts one session recorded on a TLS report, or one recording dropped. */
+export function recordTlsRptSession(result: "success" | "failure" | "dropped"): void {
+  tlsRptSessions.inc({ result });
+}
+
+/**
+ * Counts TLS report deliveries to one reporting address (`by`, default 1),
+ * or, with scheme `any` and outcome `capped`, reports deferred by the
+ * global daily cap (`TLSRPT_MAX_REPORTS_PER_DAY`), whose addresses are not
+ * looked up.
+ */
+export function recordTlsRptReport(
+  scheme: "mailto" | "https" | "any",
+  outcome: "sent" | "skipped" | "suppressed" | "retry" | "dropped" | "capped",
+  by = 1,
+): void {
+  tlsRptReports.inc({ scheme, outcome }, by);
+}
+
 /* ─── HTTP ─── */
 
 const httpRequests = counter(

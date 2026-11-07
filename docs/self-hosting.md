@@ -97,6 +97,17 @@ TRASH_RETENTION_DAYS=7
 # SUPPRESSIONS_SHARED_HARD=false
 # Optional: daily DNSBL self-check of the sending IPs (#250), on by default
 # SENDING_IP_DNSBL_CHECK=true
+# Optional: send daily SMTP TLS reports (RFC 8460) to recipient domains that
+# publish a _smtp._tls record (#345), off by default. Needs a contact address
+# (TLSRPT_CONTACT_EMAIL, else SYSTEM_MAIL_FROM); mail reports go out from
+# SYSTEM_MAIL_FROM. Organization name defaults to the contact's domain.
+# TLSRPT_ENABLED=true
+# TLSRPT_CONTACT_EMAIL=tls-reports@yourdomain.com
+# TLSRPT_ORGANIZATION_NAME=Your Company
+# Most report deliveries a day, all replicas together (1 to 100000, default 500)
+# TLSRPT_MAX_REPORTS_PER_DAY=500
+# Most reports one mail address or HTTPS origin gets a day (1 to 1000, default 50)
+# TLSRPT_MAX_REPORTS_PER_DESTINATION_PER_DAY=50
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -155,6 +166,8 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 > `MAIL_PUBLIC_IP` (#247, #248): the public IPs this server sends from, comma-separated. Optional: unset, BunMail uses the A/AAAA records of `MAIL_HOSTNAME`. SPF verification checks that the domain authorizes these addresses, and every boot logs whether their PTR records name `MAIL_HOSTNAME` and resolve back (`Reverse DNS confirmed for every sending IP`, or a `warn` with the fix). Behind NAT the container can't see its egress address: set this to the real one.
 
 > `SENDING_IP_DNSBL_CHECK` (#250): about a minute after boot, then every 24 hours, BunMail looks up each sending IP on three blocklists and shows the result on the dashboard home (**Blocklists** card); see [Blocklists](#blocklists-dnsbl-self-check-250) below. Default `true` (a few DNS lookups a day). `false` turns it off. Only `true` or `false`; anything else refuses to boot.
+
+> `TLSRPT_ENABLED` / `TLSRPT_CONTACT_EMAIL` / `TLSRPT_ORGANIZATION_NAME` (#345): with `TLSRPT_ENABLED=true`, BunMail records how its TLS sessions to each recipient domain went and, once a day, sends a TLS report (RFC 8460) to every domain that publishes a `_smtp._tls` TXT record (Gmail, Outlook and Yahoo do), by HTTPS POST or by mail, as the record asks. Default `false`: no lookups, no recording, no job. The contact address (`TLSRPT_CONTACT_EMAIL`, else `SYSTEM_MAIL_FROM`) goes into each report and its domain is the submitter; with TLS-RPT on and neither set, BunMail refuses to boot. Mail reports are sent from `SYSTEM_MAIL_FROM` and only DKIM-signed, so its domain must be registered and DKIM-verified; otherwise `mailto:` addresses are skipped with a warning. `TLSRPT_ORGANIZATION_NAME` (1 to 100 printable characters) defaults to the contact's domain. `TLSRPT_MAX_REPORTS_PER_DAY` (1 to 100000, default 500) caps report deliveries per UTC day across every replica: past it, the remaining reports are deferred to the next day (never sent in a burst, still within the 7-day retention) and one `TLS report daily cap reached` warning is logged; raise it if that warning shows up for legitimate traffic. `TLSRPT_MAX_REPORTS_PER_DESTINATION_PER_DAY` (1 to 1000, default 50; high enough for shared report collectors that receive many domains' reports on one HTTPS origin) caps the reports one mail address or one HTTPS origin gets per day, so many domains cannot aim BunMail's reports at one third party; if your recipients share a reporting service, raise it (a held-back report waits for the next day). Reporting addresses on the suppression list (any API key) get no report. Only `true` or `false` for the switch; anything malformed refuses to boot. See [tls-rpt.md](tls-rpt.md).
 
 > `MAIL_MX_CONCURRENCY` / `MAIL_MX_RATE_PER_MIN` (#91, #250): outbound throttling per **provider bucket**: every Microsoft MX (`*.outlook.com`) is one bucket, every Google MX (`*.google.com`, `*.googlemail.com`) another, likewise Yahoo (`*.yahoodns.net`) and Apple (`*.icloud.com`), and any other MX counts as its registrable domain. `MAIL_MX_CONCURRENCY` (default `1`) is the number of parallel SMTP sessions per bucket. `MAIL_MX_RATE_PER_MIN` is optional (unset: no budget; a whole number from 1 to 100000, anything else refuses to boot): at most that many messages per minute per bucket, as a token bucket. A message over it is deferred, not failed: its email goes back to `queued` until a token is due, without counting an attempt, recording an error or firing a webhook. With `REDIS_URL` set, both hold across every replica (set the same values on each; see [Running several replicas](#running-several-replicas)); without it they are per replica, so N replicas allow N times them. See [docs/emails.md](emails.md#throttle-provider-buckets-and-rate-budget-250).
 

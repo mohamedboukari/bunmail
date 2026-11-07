@@ -11,9 +11,11 @@ import {
 import { MtaStsPolicyCache } from "./mta-sts-cache.ts";
 import {
   MtaStsFetchError,
+  isCertificateError,
   policyAddress,
   readPolicyBody,
   type MtaStsDeps,
+  type MtaStsFailureKind,
 } from "./mta-sts-fetch.ts";
 
 export {
@@ -30,7 +32,11 @@ export { MtaStsPolicyCache } from "./mta-sts-cache.ts";
 export type { MtaStsMode } from "./mta-sts-policy.ts";
 /** @public Kept from before the split (#387), when only this file used it. */
 export { MTA_STS_CACHE_LIMIT } from "./mta-sts-cache.ts";
-export { MtaStsFetchError, type MtaStsDeps } from "./mta-sts-fetch.ts";
+export {
+  MtaStsFetchError,
+  type MtaStsDeps,
+  type MtaStsFailureKind,
+} from "./mta-sts-fetch.ts";
 
 /**
  * Outbound MTA-STS (RFC 8461, #250): a recipient domain can publish a
@@ -165,6 +171,7 @@ export async function fetchMtaStsPolicy(
   } catch (error) {
     throw new MtaStsFetchError(
       `policy fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+      isCertificateError(error) ? "webpki-invalid" : "fetch-error",
     );
   }
 
@@ -177,17 +184,18 @@ export async function fetchMtaStsPolicy(
       ?.trim()
       .toLowerCase();
     if (contentType !== "text/plain") {
-      throw new MtaStsFetchError("policy is not served as text/plain");
+      throw new MtaStsFetchError("policy is not served as text/plain", "policy-invalid");
     }
     const encoding = (response.headers.get("content-encoding") ?? "")
       .trim()
       .toLowerCase();
     if (encoding !== "" && encoding !== "identity") {
-      throw new MtaStsFetchError("policy is served encoded");
+      throw new MtaStsFetchError("policy is served encoded", "policy-invalid");
     }
     const body = await readPolicyBody(response);
     const policy = parseMtaStsPolicy(body);
-    if (policy === null) throw new MtaStsFetchError("policy is invalid");
+    if (policy === null)
+      throw new MtaStsFetchError("policy is invalid", "policy-invalid");
     return policy;
   } catch (error) {
     await response.body?.cancel().catch(() => undefined);
@@ -233,8 +241,19 @@ async function lookupTxt(domain: string, policyDeps: MtaStsDeps): Promise<TxtAns
   }
 }
 
+/**
+ * What discovery found for a domain on one attempt (#345): the policy in
+ * force (`null`: none), and, when a policy was announced but its fetch
+ * failed now or recently, why (`failure`). A failure with a kept cached
+ * policy still has that policy in force.
+ */
+export interface MtaStsDiscovery {
+  policy: ActiveMtaStsPolicy | null;
+  failure: MtaStsFailureKind | null;
+}
+
 /** Discoveries in progress, by domain: concurrent attempts share one. */
-const inFlight = new Map<string, Promise<ActiveMtaStsPolicy | null>>();
+const inFlight = new Map<string, Promise<MtaStsDiscovery>>();
 
 /**
  * The MTA-STS policy in force for `domain` on this attempt (#250), or
@@ -246,6 +265,17 @@ export async function discoverMtaStsPolicy(
   domain: string,
   options: { allowPrivate: boolean; deps?: MtaStsDeps; cache?: MtaStsPolicyCache },
 ): Promise<ActiveMtaStsPolicy | null> {
+  return (await discoverMtaSts(domain, options)).policy;
+}
+
+/**
+ * {@link discoverMtaStsPolicy} with the reason a policy fetch failed
+ * (#345), for TLS-RPT. The same discovery, shared with concurrent calls.
+ */
+export async function discoverMtaSts(
+  domain: string,
+  options: { allowPrivate: boolean; deps?: MtaStsDeps; cache?: MtaStsPolicyCache },
+): Promise<MtaStsDiscovery> {
   const name = domain.trim().toLowerCase().replace(/\.$/, "");
   if (options.deps !== undefined || options.cache !== undefined) {
     return discover(
@@ -271,7 +301,7 @@ async function discover(
   allowPrivate: boolean,
   policyDeps: MtaStsDeps,
   cache: MtaStsPolicyCache,
-): Promise<ActiveMtaStsPolicy | null> {
+): Promise<MtaStsDiscovery> {
   const txt = await lookupTxt(domain, policyDeps);
   const now = policyDeps.now();
   const cached = cache.get(domain, now);
@@ -283,18 +313,19 @@ async function discover(
       code: txt.code,
       cachedPolicy: kept !== null,
     });
-    return kept;
+    return { policy: kept, failure: null };
   }
   /** No record (or no longer one): a cached policy stays until its `max_age` (RFC 8461 5). */
-  if (txt.kind === "none") return kept;
-  if (cached && cached.id === txt.id) return kept;
-  if (cache.recentlyFailed(domain, txt.id, now)) {
+  if (txt.kind === "none") return { policy: kept, failure: null };
+  if (cached && cached.id === txt.id) return { policy: kept, failure: null };
+  const recent = cache.recentFailure(domain, txt.id, now);
+  if (recent !== null) {
     logger.debug("MTA-STS policy fetch failed recently, not retried yet", {
       domain,
       policyId: txt.id,
       cachedPolicy: kept !== null,
     });
-    return kept;
+    return { policy: kept, failure: recent };
   }
 
   try {
@@ -306,15 +337,17 @@ async function discover(
       mode: policy.mode,
       maxAge: policy.maxAge,
     });
-    return { id: txt.id, policy };
+    return { policy: { id: txt.id, policy }, failure: null };
   } catch (error) {
-    cache.failed(domain, txt.id, policyDeps.now());
+    const failure = error instanceof MtaStsFetchError ? error.kind : "fetch-error";
+    cache.failed(domain, txt.id, policyDeps.now(), failure);
     logger.warn("MTA-STS policy fetch failed", {
       domain,
       policyId: txt.id,
       reason: error instanceof Error ? error.message : String(error),
+      failure,
       cachedPolicy: kept !== null,
     });
-    return kept;
+    return { policy: kept, failure };
   }
 }

@@ -46,8 +46,9 @@ export function policyHosts(
 
 /**
  * Logs, once per domain and policy `id`, that a `testing` policy would
- * have failed this delivery in enforce mode (#250). BunMail sends no
- * TLS-RPT report, so the operator's log is where this shows.
+ * have failed this delivery in enforce mode (#250). With `TLSRPT_ENABLED`
+ * the recipient domain also sees it in its TLS report (#345); the
+ * operator's log is where it shows here.
  */
 export function warnTestingPolicy(
   domain: string,

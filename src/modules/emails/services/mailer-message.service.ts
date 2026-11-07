@@ -40,6 +40,19 @@ export interface UnsubscribeOptions {
   url?: string;
 }
 
+/**
+ * A message that is a report (RFC 6522 `multipart/report`, #345): its root
+ * is `multipart/report; report-type=<reportType>`, its first part the
+ * human-readable text and its attachment the report. Only BunMail builds
+ * one (TLS-RPT, RFC 8460 section 5.3), never from caller input: the header
+ * values are domain names it checked. Sent only DKIM-signed.
+ */
+export interface MailReport {
+  reportType: "tlsrpt";
+  /** `TLS-Report-Domain` and `TLS-Report-Submitter` (RFC 8460 section 5.3). */
+  headers: Readonly<Record<"TLS-Report-Domain" | "TLS-Report-Submitter", string>>;
+}
+
 /** Everything one MX group's message is built from. */
 export interface MxGroupMessage {
   /** RCPT TO for this group only. */
@@ -71,6 +84,8 @@ export interface MxGroupMessage {
   autoSubmitted?: boolean;
   /** `transactional`: no `List-Unsubscribe` (#250). */
   category?: EmailCategory | null;
+  /** A report (#345): `multipart/report`, see {@link MailReport}. */
+  report?: MailReport;
 }
 
 /** What a `Feedback-ID` header identifies (#250). */
@@ -231,6 +246,12 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
     headers["Auto-Submitted"] = "auto-generated";
     headers["X-Auto-Response-Suppress"] = "All";
   }
+  /** A report's own header fields (#345), never with a line break. */
+  if (args.report) {
+    for (const [name, value] of Object.entries(args.report.headers)) {
+      headers[name] = value.replace(/[\r\n]/g, "");
+    }
+  }
   if (Object.keys(headers).length > 0) mailOptions.headers = headers;
 
   return mailOptions;
@@ -309,9 +330,11 @@ export async function signMessage(message: MessageParts): Promise<SignedMessage>
   if (!dkim) return { kind: "unsigned" };
   let composed: Buffer;
   try {
-    composed = await new MailComposer(buildMailOptions({ ...message, recipients: [] }))
-      .compile()
-      .build();
+    const root = new MailComposer(
+      buildMailOptions({ ...message, recipients: [] }),
+    ).compile();
+    if (message.report) asReport(root, message.report);
+    composed = await root.build();
   } catch (error) {
     logger.error("Message could not be composed", {
       messageId: message.messageId,
@@ -338,6 +361,21 @@ export async function signMessage(message: MessageParts): Promise<SignedMessage>
     bytes: raw.byteLength,
   });
   return { kind: "signed", raw };
+}
+
+/**
+ * Turns a composed message into a report (#345, RFC 6522): its root, the
+ * `multipart/mixed` node Nodemailer builds for a text part and an
+ * attachment, becomes `multipart/report; report-type=<type>`, keeping its
+ * parts and boundary. Any other shape (no attachment, an HTML part) is not
+ * a report: it throws, and the message is not sent.
+ */
+function asReport(root: ReturnType<MailComposer["compile"]>, report: MailReport): void {
+  const header = root.getHeader("Content-Type");
+  if (typeof header !== "string" || !header.toLowerCase().startsWith("multipart/mixed")) {
+    throw new Error("A report needs a text part and the report attachment");
+  }
+  root.setHeader("Content-Type", `multipart/report; report-type=${report.reportType}`);
 }
 
 /**

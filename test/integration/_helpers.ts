@@ -76,6 +76,10 @@ export async function truncateAll(): Promise<void> {
   assertWipeableDatabase();
   await db.execute(
     drizzleSql`TRUNCATE TABLE
+      tlsrpt_daily_sends,
+      tlsrpt_destination_sends,
+      tlsrpt_results,
+      tlsrpt_reports,
       audit_events,
       user_devices,
       user_recovery_codes,

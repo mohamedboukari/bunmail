@@ -28,3 +28,7 @@ export { userTokens } from "../modules/users/models/user-token.schema.ts";
 export { userDevices } from "../modules/users/models/user-device.schema.ts";
 export { userRecoveryCodes } from "../modules/users/models/user-recovery-code.schema.ts";
 export { auditEvents } from "../modules/audit/models/audit-event.schema.ts";
+export { tlsRptReports } from "../modules/tls-rpt/models/tls-rpt-report.schema.ts";
+export { tlsRptResults } from "../modules/tls-rpt/models/tls-rpt-result.schema.ts";
+export { tlsRptDailySends } from "../modules/tls-rpt/models/tls-rpt-daily-send.schema.ts";
+export { tlsRptDestinationSends } from "../modules/tls-rpt/models/tls-rpt-daily-send.schema.ts";

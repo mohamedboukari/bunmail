@@ -27,8 +27,10 @@ import type { DkimOptions } from "./mailer-message.service.ts";
  * Header fields the signature covers, in `h=` order: nodemailer's former
  * default list, plus `List-Unsubscribe-Post` (RFC 8058 requires it signed
  * for one-click unsubscribe, which Gmail and Yahoo rely on, #241),
- * `Feedback-ID`, `Content-Disposition` and `Auto-Submitted` (#345). Each field present is signed once per instance; a field
- * absent is not listed, unless it is over-signed.
+ * `Feedback-ID`, `Content-Disposition` and `Auto-Submitted` (#345), and
+ * the TLS report fields `TLS-Report-Domain` and `TLS-Report-Submitter`
+ * (RFC 8460 section 5.3, #345). Each field present is signed once per
+ * instance; a field absent is not listed, unless it is over-signed.
  */
 export const DKIM_SIGNED_HEADERS: readonly string[] = [
   "From",
@@ -63,6 +65,8 @@ export const DKIM_SIGNED_HEADERS: readonly string[] = [
   "Feedback-ID",
   "Content-Disposition",
   "Auto-Submitted",
+  "TLS-Report-Domain",
+  "TLS-Report-Submitter",
 ];
 
 /**

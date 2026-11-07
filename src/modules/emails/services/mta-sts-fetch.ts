@@ -33,9 +33,41 @@ export interface MtaStsDeps {
 
 /* ─── Policy fetch ─── */
 
+/**
+ * Why a policy fetch failed, as TLS-RPT reports it (RFC 8460 section
+ * 4.3.2.1, #345): the fetch itself (`fetch-error`: DNS, connection, HTTP
+ * status), the certificate of the policy host (`webpki-invalid`), or the
+ * policy served (`policy-invalid`: type, encoding, size, syntax).
+ */
+export type MtaStsFailureKind = "fetch-error" | "webpki-invalid" | "policy-invalid";
+
 /** Thrown when a policy could not be fetched or is invalid. */
 export class MtaStsFetchError extends Error {
   override readonly name = "MtaStsFetchError";
+  readonly kind: MtaStsFailureKind;
+
+  constructor(message: string, kind: MtaStsFailureKind = "fetch-error") {
+    super(message);
+    this.kind = kind;
+  }
+}
+
+/**
+ * Whether a failed HTTPS fetch failed on the server's certificate (#345):
+ * Bun's and Node's certificate error codes, or their OpenSSL messages.
+ */
+export function isCertificateError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code: unknown = Reflect.get(error, "code");
+  if (
+    typeof code === "string" &&
+    /^(CERT_|DEPTH_ZERO|SELF_SIGNED|UNABLE_TO_|HOSTNAME_MISMATCH|ERR_TLS_CERT)/.test(code)
+  ) {
+    return true;
+  }
+  return /certificate|self[- ]signed|altnames|unable to (get|verify)/i.test(
+    error.message,
+  );
 }
 
 /**
@@ -88,6 +120,7 @@ export async function readPolicyBody(response: Response): Promise<string> {
       if (total > MTA_STS_POLICY_MAX_BYTES) {
         throw new MtaStsFetchError(
           `policy larger than ${MTA_STS_POLICY_MAX_BYTES} bytes`,
+          "policy-invalid",
         );
       }
       chunks.push(value);
@@ -98,6 +131,6 @@ export async function readPolicyBody(response: Response): Promise<string> {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks));
   } catch {
-    throw new MtaStsFetchError("policy is not valid UTF-8");
+    throw new MtaStsFetchError("policy is not valid UTF-8", "policy-invalid");
   }
 }
