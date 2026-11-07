@@ -282,6 +282,19 @@ if (config.sso.providers.length > 0 && config.sso.baseUrl === null) {
 }
 
 /**
+ * A provider listed in `SSO_PROVIDERS` without client credentials is left
+ * out (#224): no button, no routes. Say so once per provider, naming the
+ * missing variables (never values), so the missing button has a reason.
+ */
+for (const skipped of config.sso.skipped) {
+  logger.warn("SSO provider skipped: no client credentials", {
+    provider: skipped.id,
+    missing: skipped.missing,
+    hint: "set both variables to show its sign-in button, or remove it from SSO_PROVIDERS",
+  });
+}
+
+/**
  * Main Elysia application.
  *
  * Registers all plugins (route groups) and starts listening.

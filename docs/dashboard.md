@@ -256,7 +256,7 @@ Single sign-on with an OpenID Connect provider (#224): an account links an ident
 
 ### Signing in with SSO (#224)
 
-While SSO is on (providers in `.env` and an `https://` `APP_BASE_URL`), the login page shows one **Sign in with `<label>`** button per provider (the label escaped), under the password form and the passkey button, hidden while the address is rate-limited. Internals and every rule: [docs/users.md](users.md#signing-in-with-sso).
+While SSO is on (providers in `.env` and an `https://` `APP_BASE_URL`), the login page shows one **Sign in with `<label>`** button per provider whose client id and secret are set (the label escaped, with the provider's logo chosen by its issuer's host, a key icon for an unknown one; `src/pages/components/sso-logo.tsx`), under the password form and the passkey button, hidden while the address is rate-limited. Internals and every rule: [docs/users.md](users.md#signing-in-with-sso).
 
 1. `POST /dashboard/login/sso/:provider` (public; no fields): auth-page headers; same-origin (`403` otherwise: blocks login CSRF); the per-IP login limiter, **checked but not counted** (`429` with `Retry-After` and the login page disabled when over budget, a lockout recorded once per address and window); the start's own budget, **20 starts per address per 15 minutes**, counted and never given back (`429` `Too many sign-in attempts. Try again in N minute(s).`, recorded once per window); the provider must be configured and SSO on (else `/dashboard/login?error=sso`); then discovery (usually cached) and the encrypted `bm_sso` cookie (`purpose: "login"`, 10 minutes, `SameSite=Lax`) and a `302` to the provider. A provider that cannot be reached: `/dashboard/login?error=sso_unavailable` (`The sign-in provider could not be reached. Try again later.`); a failed discovery is remembered for 30 s, so the next starts answer that at once without asking the provider again.
 2. `GET /dashboard/login/sso/:provider/callback`: the same first steps as a link callback (headers with `Referrer-Policy: no-referrer`, the cookie cleared, the uncounted refusals, the limiter counted, the provider), then for a `login` flow (or an unreadable cookie with no session cookie): every flow check, then the identity by `(issuer, sub)` only (an identity linked nowhere is first linked by its verified email when the provider has `SSO_<ID>_AUTO_LINK=true`), then the account rules, then the browser's previous session is replaced and the session opened.
@@ -520,6 +520,7 @@ src/pages/
     ├── flash-message.tsx     ← Success/error banners
     ├── empty-state.tsx       ← Empty table placeholder
     ├── qr-code.tsx           ← QR code as inline SVG, drawn on the server from the `uqr` module matrix (#220)
+    ├── sso-logo.tsx          ← Login page SSO button logos, inline SVG chosen by the issuer's host (#224)
     └── time-display.tsx      ← <TimeDisplay> + hydration script (#104)
 ```
 

@@ -4,6 +4,7 @@ import {
 } from "../../modules/users/services/session-policy.service.ts";
 import { PageAssets } from "../static-assets.tsx";
 import { PasskeyCeremony } from "../components/passkey-ceremony.tsx";
+import { SsoLogo, type SsoLogoKind } from "../components/sso-logo.tsx";
 
 /**
  * Login page: standalone (no sidebar navigation).
@@ -22,8 +23,9 @@ import { PasskeyCeremony } from "../components/passkey-ceremony.tsx";
  *                 passkey, so no email is typed.
  * @param sso      The configured SSO providers while SSO is on (#224): one
  *                 "Sign in with <label>" button each, a same-origin POST
- *                 form to `/dashboard/login/sso/<id>`. The label is
- *                 operator-set and rendered escaped.
+ *                 form to `/dashboard/login/sso/<id>`, with the logo
+ *                 chosen by the provider's issuer (`ssoLogoKind`). The
+ *                 label is operator-set and rendered escaped.
  */
 export function LoginPage({
   error,
@@ -34,7 +36,7 @@ export function LoginPage({
   error?: string;
   disabled?: boolean;
   passkey?: boolean;
-  sso?: ReadonlyArray<{ id: string; label: string }>;
+  sso?: ReadonlyArray<{ id: string; label: string; logo: SsoLogoKind }>;
 }) {
   return (
     <html lang="en" class="h-full">
@@ -143,10 +145,12 @@ export function LoginPage({
                   >
                     <button
                       type="submit"
-                      class="w-full px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors break-all"
-                      safe
+                      class="w-full flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 text-sm font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                     >
-                      {`Sign in with ${provider.label}`}
+                      <SsoLogo kind={provider.logo} />
+                      <span class="break-all" safe>
+                        {`Sign in with ${provider.label}`}
+                      </span>
                     </button>
                   </form>
                 ))}

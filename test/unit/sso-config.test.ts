@@ -24,14 +24,14 @@ const base: Record<string, string | undefined> = {
 
 describe("readSsoSettings: off", () => {
   test("unset or blank SSO_PROVIDERS: no providers, nothing else read", () => {
-    expect(readSsoSettings({})).toEqual({ providers: [], baseUrl: null });
+    expect(readSsoSettings({})).toEqual({ providers: [], skipped: [], baseUrl: null });
     expect(
       readSsoSettings({
         SSO_PROVIDERS: " , ",
         SSO_X_ISSUER: "not a url",
         APP_BASE_URL: "https://mail.example.com/",
       }),
-    ).toEqual({ providers: [], baseUrl: "https://mail.example.com" });
+    ).toEqual({ providers: [], skipped: [], baseUrl: "https://mail.example.com" });
   });
 });
 
@@ -301,6 +301,186 @@ describe("readSsoSettings: refusals", () => {
     expect(() =>
       readSsoSettings({ ...base, APP_BASE_URL: "", SSO_CORP_ISSUER: "nope" }),
     ).toThrow(/SSO_CORP_ISSUER/);
+  });
+});
+
+describe("readSsoSettings: presets (google, gitlab)", () => {
+  const google: Record<string, string | undefined> = {
+    APP_BASE_URL: "https://mail.example.com",
+    SSO_PROVIDERS: "google",
+    SSO_GOOGLE_CLIENT_ID: "123.apps.googleusercontent.com",
+    SSO_GOOGLE_CLIENT_SECRET: "GOCSPX-abc",
+  };
+
+  test("google with only a client id and secret: Google's issuer and label", () => {
+    const [provider] = readSsoSettings(google).providers;
+    expect(provider?.id).toBe("google");
+    expect(provider?.issuer).toBe("https://accounts.google.com");
+    expect(provider?.label).toBe("Google");
+    expect(provider?.scopes).toBe(DEFAULT_SSO_SCOPES);
+  });
+
+  test("gitlab with only a client id and secret: gitlab.com's issuer and label", () => {
+    const [provider] = readSsoSettings({
+      APP_BASE_URL: "https://mail.example.com",
+      SSO_PROVIDERS: "gitlab",
+      SSO_GITLAB_CLIENT_ID: "app-id",
+      SSO_GITLAB_CLIENT_SECRET: "gloas-secret",
+    }).providers;
+    expect(provider?.issuer).toBe("https://gitlab.com");
+    expect(provider?.label).toBe("GitLab");
+  });
+
+  test("an explicit issuer and label win over the preset (self-hosted GitLab)", () => {
+    const [provider] = readSsoSettings({
+      APP_BASE_URL: "https://mail.example.com",
+      SSO_PROVIDERS: "gitlab",
+      SSO_GITLAB_ISSUER: "https://gitlab.example.com",
+      SSO_GITLAB_LABEL: "Company GitLab",
+      SSO_GITLAB_CLIENT_ID: "app-id",
+      SSO_GITLAB_CLIENT_SECRET: "gloas-secret",
+    }).providers;
+    expect(provider?.issuer).toBe("https://gitlab.example.com");
+    expect(provider?.label).toBe("Company GitLab");
+  });
+
+  test("a blank issuer or label falls back to the preset", () => {
+    const [provider] = readSsoSettings({
+      ...google,
+      SSO_GOOGLE_ISSUER: "  ",
+      SSO_GOOGLE_LABEL: "",
+    }).providers;
+    expect(provider?.issuer).toBe("https://accounts.google.com");
+    expect(provider?.label).toBe("Google");
+  });
+
+  test("an explicit issuer on a preset is validated as any other", () => {
+    expect(() =>
+      readSsoSettings({ ...google, SSO_GOOGLE_ISSUER: "http://accounts.google.com" }),
+    ).toThrow(/SSO_GOOGLE_ISSUER must be an https:\/\/ URL/);
+  });
+
+  test("a non-preset id without an issuer still refuses to boot", () => {
+    for (const id of ["microsoft", "okta", "keycloak"]) {
+      const prefix = `SSO_${id.toUpperCase()}_`;
+      expect(() =>
+        readSsoSettings({
+          APP_BASE_URL: "https://mail.example.com",
+          SSO_PROVIDERS: id,
+          [`${prefix}CLIENT_ID`]: "client",
+          [`${prefix}CLIENT_SECRET`]: "secret",
+        }),
+      ).toThrow(new RegExp(`${prefix}ISSUER must be set`));
+    }
+  });
+
+  test("the default Google issuer still feeds the duplicate-issuer refusal", () => {
+    expect(() =>
+      readSsoSettings({
+        ...google,
+        SSO_PROVIDERS: "google,google-ws",
+        SSO_GOOGLE_WS_ISSUER: "https://accounts.google.com",
+        SSO_GOOGLE_WS_CLIENT_ID: "456.apps.googleusercontent.com",
+        SSO_GOOGLE_WS_CLIENT_SECRET: "GOCSPX-def",
+      }),
+    ).toThrow(/SSO_GOOGLE_WS_ISSUER is also the issuer of "google"/);
+  });
+});
+
+describe("readSsoSettings: the client credentials are the switch", () => {
+  test("google is enabled by its credentials alone, without SSO_PROVIDERS", () => {
+    const settings = readSsoSettings({
+      APP_BASE_URL: "https://mail.example.com",
+      SSO_GOOGLE_CLIENT_ID: "123.apps.googleusercontent.com",
+      SSO_GOOGLE_CLIENT_SECRET: "GOCSPX-abc",
+    });
+    expect(settings.providers.map((provider) => provider.id)).toEqual(["google"]);
+    expect(settings.providers[0]?.issuer).toBe("https://accounts.google.com");
+    expect(settings.skipped).toEqual([]);
+  });
+
+  test("unlisted presets follow the listed providers, in preset order", () => {
+    const settings = readSsoSettings({
+      ...base,
+      SSO_GITLAB_CLIENT_ID: "app-id",
+      SSO_GITLAB_CLIENT_SECRET: "gloas-secret",
+      SSO_GOOGLE_CLIENT_ID: "123.apps.googleusercontent.com",
+      SSO_GOOGLE_CLIENT_SECRET: "GOCSPX-abc",
+    });
+    expect(settings.providers.map((provider) => provider.id)).toEqual([
+      "corp",
+      "google",
+      "gitlab",
+    ]);
+  });
+
+  test("google without credentials: no provider and nothing skipped (no warning)", () => {
+    const settings = readSsoSettings({
+      APP_BASE_URL: "https://mail.example.com",
+      SSO_GOOGLE_CLIENT_ID: " ",
+      SSO_GOOGLE_LABEL: "Google",
+    });
+    expect(settings).toEqual({
+      providers: [],
+      skipped: [],
+      baseUrl: "https://mail.example.com",
+    });
+  });
+
+  test("a listed provider without credentials is skipped, named with its missing variables", () => {
+    const settings = readSsoSettings({
+      ...base,
+      SSO_CORP_CLIENT_ID: undefined,
+      SSO_CORP_CLIENT_SECRET: "   ",
+    });
+    expect(settings.providers).toEqual([]);
+    expect(settings.skipped).toEqual([
+      { id: "corp", missing: ["SSO_CORP_CLIENT_ID", "SSO_CORP_CLIENT_SECRET"] },
+    ]);
+  });
+
+  test("a listed google without credentials is skipped, not given the preset", () => {
+    const settings = readSsoSettings({ ...base, SSO_PROVIDERS: "google" });
+    expect(settings.providers).toEqual([]);
+    expect(settings.skipped.map((skipped) => skipped.id)).toEqual(["google"]);
+  });
+
+  test("a configured provider and an unconfigured one: only the configured one", () => {
+    const settings = readSsoSettings({
+      ...base,
+      SSO_PROVIDERS: "corp,okta",
+      SSO_OKTA_ISSUER: "https://example.okta.com",
+    });
+    expect(settings.providers.map((provider) => provider.id)).toEqual(["corp"]);
+    expect(settings.skipped.map((skipped) => skipped.id)).toEqual(["okta"]);
+  });
+
+  test("a half-configured provider refuses to boot, naming the missing variable", () => {
+    expect(() =>
+      readSsoSettings({
+        APP_BASE_URL: "https://mail.example.com",
+        SSO_GOOGLE_CLIENT_ID: "123.apps.googleusercontent.com",
+      }),
+    ).toThrow(/SSO_GOOGLE_CLIENT_SECRET must be set/);
+    expect(() =>
+      readSsoSettings({
+        APP_BASE_URL: "https://mail.example.com",
+        SSO_PROVIDERS: "google",
+        SSO_GOOGLE_CLIENT_SECRET: "GOCSPX-abc",
+      }),
+    ).toThrow(/SSO_GOOGLE_CLIENT_ID must be set/);
+    expect(() => readSsoSettings({ ...base, SSO_CORP_CLIENT_SECRET: "" })).toThrow(
+      /SSO_CORP_CLIENT_SECRET must be set/,
+    );
+  });
+
+  test("a skipped provider's id and duplicates are still checked", () => {
+    expect(() => readSsoSettings({ SSO_PROVIDERS: "google,google" })).toThrow(
+      /lists "google" twice/,
+    );
+    expect(() => readSsoSettings({ SSO_PROVIDERS: "Bad_Id" })).toThrow(
+      /SSO_PROVIDERS entries/,
+    );
   });
 });
 

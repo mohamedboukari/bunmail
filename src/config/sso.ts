@@ -43,6 +43,25 @@ const ENTRA_ISSUER_HOSTS: ReadonlySet<string> = new Set([
   "login.microsoftonline.de",
 ]);
 
+/** True for a Microsoft Entra ID issuer host (see {@link ENTRA_ISSUER_HOSTS}). */
+export function isEntraIssuerHost(hostname: string): boolean {
+  return ENTRA_ISSUER_HOSTS.has(hostname);
+}
+
+/**
+ * Defaults for a provider id that names a well-known OpenID provider
+ * (#224): its issuer and button label, so its client id and secret are
+ * all it needs. An explicit `SSO_<ID>_ISSUER` or `SSO_<ID>_LABEL` wins (a
+ * self-hosted GitLab, for one). A preset is also enabled without being
+ * listed in `SSO_PROVIDERS` once its client id or secret is set. Every
+ * other id needs `SSO_<ID>_ISSUER`: Microsoft's carries the tenant.
+ */
+const SSO_PROVIDER_PRESETS: ReadonlyMap<string, { issuer: string; label: string }> =
+  new Map([
+    ["google", { issuer: "https://accounts.google.com", label: "Google" }],
+    ["gitlab", { issuer: "https://gitlab.com", label: "GitLab" }],
+  ]);
+
 /** One label of a domain name in `SSO_<ID>_ALLOWED_DOMAINS`. */
 const DOMAIN_LABEL_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -91,8 +110,14 @@ export interface SsoProviderSettings {
 
 /** The SSO settings (#224), see {@link readSsoSettings}. */
 export interface SsoSettings {
-  /** The configured providers, validated; empty when `SSO_PROVIDERS` is unset. */
+  /** The configured providers, validated; empty when none has credentials. */
   providers: readonly SsoProviderSettings[];
+  /**
+   * Providers listed in `SSO_PROVIDERS` with neither a client id nor a
+   * client secret: left out (no button, no routes), and `src/index.ts`
+   * warns once at boot, naming the missing variables (never values).
+   */
+  skipped: ReadonlyArray<{ id: string; missing: readonly string[] }>;
   /**
    * The `APP_BASE_URL` the redirect URIs are built on, without a trailing
    * slash, or `null` when it is not `https://` (or plain `http://` on a
@@ -144,15 +169,26 @@ export function ssoEnvPrefix(id: string): string {
   return `SSO_${id.toUpperCase().replace(/-/g, "_")}_`;
 }
 
+/** True when an environment value is unset or only whitespace. */
+function isBlank(raw: string | undefined): boolean {
+  return (raw?.trim() ?? "") === "";
+}
+
 /**
  * Reads `SSO_<ID>_ISSUER`: an absolute `https://` URL (plain `http://`
  * only on a loopback host) with no credentials, query or fragment (OpenID
  * Connect Discovery section 2), at most {@link MAX_SSO_ISSUER_LENGTH}
  * characters. Kept exactly as written: the discovery document and every
- * ID token must carry this exact string.
+ * ID token must carry this exact string. Unset or blank: the preset's
+ * issuer (`fallback`) when the id has one, otherwise refused. The preset
+ * goes through the same checks as a configured value.
  */
-function readSsoIssuer(key: string, raw: string | undefined): string {
-  const issuer = raw?.trim() ?? "";
+function readSsoIssuer(
+  key: string,
+  raw: string | undefined,
+  fallback: string | undefined,
+): string {
+  const issuer = isBlank(raw) ? (fallback ?? "") : (raw?.trim() ?? "");
   if (issuer === "") {
     throw new Error(`[config] ${key} must be set: the provider's issuer URL.`);
   }
@@ -204,10 +240,13 @@ function readSsoClientValue(key: string, raw: string | undefined): string {
   return value;
 }
 
-/** Reads `SSO_<ID>_LABEL`: 1 to 64 characters, no control characters; the id when unset. */
-function readSsoLabel(key: string, id: string, raw: string | undefined): string {
+/**
+ * Reads `SSO_<ID>_LABEL`: 1 to 64 characters, no control characters.
+ * Unset or blank: `fallback` (the preset's label, otherwise the id).
+ */
+function readSsoLabel(key: string, fallback: string, raw: string | undefined): string {
   const label = raw?.trim() ?? "";
-  if (label === "") return id;
+  if (label === "") return fallback;
   if (label.length > MAX_SSO_LABEL_LENGTH || /\p{Cc}/u.test(label)) {
     throw new Error(
       `[config] ${key} must be 1 to ${MAX_SSO_LABEL_LENGTH} characters with no control characters.`,
@@ -257,13 +296,42 @@ function readSsoAllowedDomains(key: string, raw: string | undefined): string[] {
 }
 
 /**
- * Reads the SSO settings (#224): `SSO_PROVIDERS` (ids separated by
- * commas, each `^[a-z0-9-]{1,32}$`, no duplicates) and, per id, the
- * `SSO_<ID>_*` variables (see `ssoEnvPrefix`): `ISSUER`, `CLIENT_ID`,
- * `CLIENT_SECRET` (required), `LABEL` (default: the id), `SCOPES`
- * (default `openid email profile`), `ALLOWED_DOMAINS` (optional) and
- * `AUTO_LINK` (strict boolean, default false; `true` needs allowed
- * domains and is refused for a Microsoft Entra issuer). Unset `SSO_PROVIDERS`: no providers, nothing else is read.
+ * The provider ids to read (#224): those listed in `SSO_PROVIDERS` (ids
+ * separated by commas), in order, then every preset id not listed whose
+ * client id or secret is set. A preset with only one of the two is read
+ * too, so the half-configured provider refuses to boot.
+ */
+function ssoProviderIds(env: Record<string, string | undefined>): string[] {
+  const ids = (env["SSO_PROVIDERS"] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  for (const presetId of SSO_PROVIDER_PRESETS.keys()) {
+    const prefix = ssoEnvPrefix(presetId);
+    const hasCredential =
+      !isBlank(env[`${prefix}CLIENT_ID`]) || !isBlank(env[`${prefix}CLIENT_SECRET`]);
+    if (hasCredential && !ids.includes(presetId)) ids.push(presetId);
+  }
+  return ids;
+}
+
+/**
+ * Reads the SSO settings (#224). The providers are the ids of
+ * `SSO_PROVIDERS` (each `^[a-z0-9-]{1,32}$`, no duplicates) plus the
+ * presets (`google`, `gitlab`) whose credentials are set (see
+ * `ssoProviderIds`). Per id, the `SSO_<ID>_*` variables (see
+ * `ssoEnvPrefix`):
+ *
+ * - `CLIENT_ID` and `CLIENT_SECRET` are the switch: with neither set the
+ *   provider is skipped (listed in `skipped`, warned about at boot), with
+ *   one of the two it refuses to boot (almost always a typo, which a
+ *   hidden button would mask).
+ * - `ISSUER` (required, except for a preset: its issuer), `LABEL`
+ *   (default: the preset's label, else the id), `SCOPES` (default
+ *   `openid email profile`), `ALLOWED_DOMAINS` (optional) and `AUTO_LINK`
+ *   (strict boolean, default false; `true` needs allowed domains and is
+ *   refused for a Microsoft Entra issuer).
+ *
  * Two ids with the same issuer are refused: a link is keyed by the
  * issuer (`oidc:<issuer>`), so they would share every link while keeping
  * their own client settings and labels.
@@ -277,22 +345,30 @@ export function readSsoSettings(
   env: Record<string, string | undefined> = process.env,
 ): SsoSettings {
   const baseUrl = ssoBaseUrlFrom(env["APP_BASE_URL"] ?? "");
-  const ids = (env["SSO_PROVIDERS"] ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-
+  const seen = new Set<string>();
   const providers: SsoProviderSettings[] = [];
-  for (const id of ids) {
+  const skipped: Array<{ id: string; missing: readonly string[] }> = [];
+  for (const id of ssoProviderIds(env)) {
     if (!SSO_PROVIDER_ID_RE.test(id)) {
       throw new Error(
         `[config] SSO_PROVIDERS entries must be 1 to 32 lowercase letters, digits or '-', got "${id}".`,
       );
     }
-    if (providers.some((provider) => provider.id === id)) {
+    if (seen.has(id)) {
       throw new Error(`[config] SSO_PROVIDERS lists "${id}" twice.`);
     }
+    seen.add(id);
     const prefix = ssoEnvPrefix(id);
+    const clientIdKey = `${prefix}CLIENT_ID`;
+    const clientSecretKey = `${prefix}CLIENT_SECRET`;
+    if (isBlank(env[clientIdKey]) && isBlank(env[clientSecretKey])) {
+      skipped.push({ id, missing: [clientIdKey, clientSecretKey] });
+      continue;
+    }
+    /** Read first: a half-configured provider names its missing variable. */
+    const clientId = readSsoClientValue(clientIdKey, env[clientIdKey]);
+    const clientSecret = readSsoClientValue(clientSecretKey, env[clientSecretKey]);
+    const preset = SSO_PROVIDER_PRESETS.get(id);
     const allowedDomains = readSsoAllowedDomains(
       `${prefix}ALLOWED_DOMAINS`,
       env[`${prefix}ALLOWED_DOMAINS`],
@@ -308,9 +384,13 @@ export function readSsoSettings(
           "  → Linking by email is only safe for the email domains you control.",
       );
     }
-    const issuer = readSsoIssuer(`${prefix}ISSUER`, env[`${prefix}ISSUER`]);
+    const issuer = readSsoIssuer(
+      `${prefix}ISSUER`,
+      env[`${prefix}ISSUER`],
+      preset?.issuer,
+    );
     const issuerHost = new URL(issuer).hostname;
-    if (autoLink && ENTRA_ISSUER_HOSTS.has(issuerHost)) {
+    if (autoLink && isEntraIssuerHost(issuerHost)) {
       throw new Error(
         `[config] ${prefix}AUTO_LINK=true is not allowed for a Microsoft Entra issuer (${issuerHost}):\n` +
           "  → Entra's email claim is not a verified, immutable value; link identities under Account > Sign-in methods.",
@@ -326,16 +406,13 @@ export function readSsoSettings(
     providers.push({
       id,
       issuer,
-      clientId: readSsoClientValue(`${prefix}CLIENT_ID`, env[`${prefix}CLIENT_ID`]),
-      clientSecret: readSsoClientValue(
-        `${prefix}CLIENT_SECRET`,
-        env[`${prefix}CLIENT_SECRET`],
-      ),
-      label: readSsoLabel(`${prefix}LABEL`, id, env[`${prefix}LABEL`]),
+      clientId,
+      clientSecret,
+      label: readSsoLabel(`${prefix}LABEL`, preset?.label ?? id, env[`${prefix}LABEL`]),
       scopes: readSsoScopes(`${prefix}SCOPES`, env[`${prefix}SCOPES`]),
       allowedDomains,
       autoLink,
     });
   }
-  return { providers, baseUrl };
+  return { providers, skipped, baseUrl };
 }
