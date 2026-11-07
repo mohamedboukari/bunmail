@@ -142,6 +142,25 @@ describe("requestLogPath", () => {
     expect(requestLogPath("http://x/api/v1/emails/msg_123")).toBe(
       "/api/v1/emails/msg_123",
     );
+    /** Dotted tokens: unsubscribe and tracking links (#187), whose click token carries the URL. */
+    expect(
+      requestLogPath(
+        "http://x/t/o/0123456789abcdef01234567.0123456789abcdef0123456789abcdef.gif",
+      ),
+    ).toBe("/t/o/:token");
+    expect(
+      requestLogPath(
+        "http://x/t/c/0123456789abcdef01234567.0.aHR0cHM6Ly9leGFtcGxlLmNvbS8.0123456789abcdef0123456789abcdef",
+      ),
+    ).toBe("/t/c/:token");
+    /** Masked whatever the length or encoding (Elysia percent-decodes params). */
+    expect(requestLogPath("http://x/t/c/%61%62c")).toBe("/t/c/:token");
+    expect(requestLogPath("http://x/t/o/short.gif")).toBe("/t/o/:token");
+    expect(requestLogPath("http://x/u/abc/extra")).toBe("/u/:token/:token");
+    expect(requestLogPath("http://x/t/x/abc")).toBe("/t/x/abc");
+    expect(requestLogPath("http://x/dashboard/assets/dashboard.css")).toBe(
+      "/dashboard/assets/dashboard.css",
+    );
   });
 });
 

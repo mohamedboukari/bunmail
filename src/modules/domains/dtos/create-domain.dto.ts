@@ -37,7 +37,7 @@ export const unsubscribeEmailSchema = t.String({
  */
 export const trackingFlagSchema = t.Boolean({
   description:
-    "Open or click tracking opt-in for mail from this domain (default false). Also needs TRACKING_ENABLED=true; each send can opt out, and transactional mail is tracked only when the send asks. Nothing is tracked yet in this version: the setting is only stored.",
+    "Open or click tracking opt-in for mail from this domain (default false). Also needs TRACKING_ENABLED=true; each send can opt out, and transactional mail is tracked only when the send asks.",
 });
 
 export const createDomainDto = t.Object({

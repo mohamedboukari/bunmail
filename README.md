@@ -117,6 +117,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 - **Tags**: label a send with up to 10 `key: value` tags (REST `tags`, or `X-BunMail-Tag` on SMTP submission), filter the email log with `?tag=key:value` (several must all match) or the dashboard's tag filter, and route webhooks on the `tags` every `email.*` event carries
 - **Attachments**: up to 10 files per send (REST `attachments`, Resend-compatible, or the parts of an SMTP-submitted message), `ATTACHMENTS_MAX_TOTAL_MB` in total (default 5, up to 18); executables, scripts and installers refused by extension and by sniffed content, types derived from the bytes, inline `cid:` images; files kept only until the email is sent, fails or bounces, and downloadable from the dashboard as forced downloads until then ([docs/api.md](docs/api.md#post-apiv1emailssend))
 - **One-click unsubscribe**: single-recipient mail carries a per-recipient RFC 8058 `List-Unsubscribe` link (and an `unsub+` mailto when inbound SMTP is on); using it suppresses that recipient for the sending key and fires `email.unsubscribed` ([docs/suppressions.md](docs/suppressions.md#one-click-unsubscribe))
+- **Open and click tracking** (off by default): a 1x1 pixel and signed redirects on your own host, opted in per domain by admins and per send, single-recipient mail only, with no IP address or user agent stored ([docs/tracking.md](docs/tracking.md))
 - **DMARC aggregate report ingest**: daily `rua` reports from Microsoft / Google / Yahoo are auto-parsed (gzip / zip / raw XML) and surfaced in the dashboard so misaligned source IPs are visible at a glance
 - **DANE (opt-in)**: with `DANE_ENABLED=true` and a local validating resolver (the compose `dane` profile), recipient domains with DNSSEC-signed MX and TLSA records (RFC 7672) only get mail over TLS whose certificate matches them, never in plaintext; DANE wins over MTA-STS ([docs/emails.md](docs/emails.md#dane-345))
 - **TLS reports (opt-in)**: with `TLSRPT_ENABLED=true`, BunMail sends recipient domains that publish a `_smtp._tls` record (Gmail, Outlook, Yahoo) a daily SMTP TLS report (RFC 8460) on how its TLS sessions to them went, by HTTPS (through the SSRF guard) or DKIM-signed mail ([docs/tls-rpt.md](docs/tls-rpt.md))
@@ -127,7 +128,7 @@ Run [mail-tester.com](https://www.mail-tester.com) to get a deliverability score
 
 ## API Endpoints
 
-All endpoints (except `/health`, the public unsubscribe pages at `/u/:token`, and `/metrics`, which takes its own `METRICS_TOKEN`) require `Authorization: Bearer <api-key>`. Full reference: [docs/api.md](docs/api.md).
+All endpoints (except `/health`, the public unsubscribe pages at `/u/:token`, the tracking pixel and redirect at `/t/`, and `/metrics`, which takes its own `METRICS_TOKEN`) require `Authorization: Bearer <api-key>`. Full reference: [docs/api.md](docs/api.md).
 
 ### Emails
 

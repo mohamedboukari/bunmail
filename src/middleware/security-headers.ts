@@ -57,6 +57,11 @@ function isUnsubscribePath(pathname: string): boolean {
   return pathname.startsWith("/u/");
 }
 
+/** True for the public open and click tracking endpoints (`/t/...`, #187). */
+function isTrackingPath(pathname: string): boolean {
+  return pathname.startsWith("/t/");
+}
+
 /** One year: the usual HSTS lifetime. No `includeSubDomains`: other subdomains may not serve HTTPS. */
 const HSTS = "max-age=31536000";
 
@@ -72,6 +77,9 @@ const HSTS = "max-age=31536000";
  *   #249), whose URL carries a token. The landing page, favicon and API keep their
  *   own caching, and so do the dashboard's static assets, whose handler
  *   overrides it (`static-assets.tsx`).
+ * - On the tracking endpoints (`/t/...`, #187): `Cache-Control: no-store,
+ *   private` and `Referrer-Policy: no-referrer`, so a cache never keeps a
+ *   pixel or redirect and a followed link never reveals its tracking URL.
  */
 export function securityHeaders(
   pathname: string,
@@ -90,6 +98,14 @@ export function securityHeaders(
   if (opts.httpsBaseUrl) headers["strict-transport-security"] = HSTS;
   if (isDashboardPath(pathname) || isUnsubscribePath(pathname)) {
     headers["cache-control"] = "no-store";
+  }
+  /**
+   * Tracking (#187): the URL carries a token, and the redirect must not
+   * tell the target where the click came from.
+   */
+  if (isTrackingPath(pathname)) {
+    headers["cache-control"] = "no-store, private";
+    headers["referrer-policy"] = "no-referrer";
   }
   return headers;
 }

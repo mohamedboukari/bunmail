@@ -201,7 +201,7 @@ export const sendEmailDto = t.Object({
       },
       {
         description:
-          "Open and click tracking. false always opts out. true asks for it, also on transactional mail; it is honoured only when TRACKING_ENABLED is on, the sender domain has opted in, the email has exactly one recipient (no cc or bcc) and APP_BASE_URL is https, else the response carries the tracking_disabled warning. Unset: as the sender domain's opt-in, except transactional mail, which is not tracked. Nothing is tracked yet in this version: the decision is only stored.",
+          "Open and click tracking. false always opts out. true asks for it, also on transactional mail; it is honoured only when TRACKING_ENABLED is on, the sender domain has opted in, the email has exactly one recipient (no cc or bcc) and APP_BASE_URL is https, else the response carries the tracking_disabled warning. Unset: as the sender domain's opt-in, except transactional mail, which is not tracked. Opens are counted with a 1x1 image and clicks through a redirect on APP_BASE_URL; tracking URLs never reach the text part.",
       },
     ),
   ),

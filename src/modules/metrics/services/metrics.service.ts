@@ -339,6 +339,23 @@ export function recordTlsRptReport(
   tlsRptReports.inc({ scheme, outcome }, by);
 }
 
+/* ─── Open and click tracking ─── */
+
+const trackingRequests = counter(
+  registry,
+  "bunmail_tracking_requests_total",
+  "Open pixel and click redirect requests (#187), by kind (open, click) and result (recorded; deduped, the same email, type and link within 60 s; capped, the email's cap or the per-second budget; invalid, the token did not verify; untracked, served with nothing to record).",
+  ["kind", "result"],
+);
+
+/** Counts one tracking request by its result. */
+export function recordTrackingRequest(
+  kind: "open" | "click",
+  result: "recorded" | "deduped" | "capped" | "invalid" | "untracked",
+): void {
+  trackingRequests.inc({ kind, result });
+}
+
 /* ─── HTTP ─── */
 
 const httpRequests = counter(
@@ -385,6 +402,7 @@ export function httpArea(path: string): string {
   if (first === "api" && second === "docs") return "api/docs";
   if (first === "dashboard") return "dashboard";
   if (first === "u") return "unsubscribe";
+  if (first === "t") return "tracking";
   if (first === "health" && second === undefined) return "health";
   if (first === "metrics" && second === undefined) return "metrics";
   return "other";

@@ -18,6 +18,7 @@ import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { recipientOrder } from "../../bounces/services/return-path.ts";
 import { composeMessageBody } from "./message-body.ts";
+import type { BodyTracking } from "../../tracking/services/body-tracking.ts";
 import { discoverMtaSts, type MtaStsDiscovery } from "./mta-sts.ts";
 import { resolveRoute } from "./mailer-dane.service.ts";
 import { tlsRptPolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
@@ -259,6 +260,12 @@ export async function sendMail(options: {
    * defaults, as for every other send.
    */
   deliveryLimits?: DeliveryLimits;
+  /**
+   * Open and click tracking (#187), built by the queue for an email whose
+   * row says it is tracked while `TRACKING_ENABLED` is on: the links are
+   * rewritten and the pixel added to the HTML part. Absent: untouched.
+   */
+  tracking?: BodyTracking;
 }): Promise<SendMailResult> {
   if (options.report && !options.dkim) {
     throw new Error("A report is only sent DKIM-signed");
@@ -292,13 +299,22 @@ export async function sendMail(options: {
 
   const customHeaders = safeCustomHeaders(options.headers, options.messageId);
 
-  /** Wrapper and text alternative (#250): once per call, the same for every transaction. */
-  const body = composeMessageBody(options.html ?? null, options.text ?? null);
-  if (body.wrapped || body.textDerived) {
+  /**
+   * Wrapper and text alternative (#250), and tracking (#187): once per
+   * call, the same for every transaction.
+   */
+  const body = composeMessageBody(
+    options.html ?? null,
+    options.text ?? null,
+    options.tracking,
+  );
+  if (body.wrapped || body.textDerived || body.tracked) {
     logger.debug("Message body composed", {
       messageId: options.messageId,
       wrapped: body.wrapped,
       textDerived: body.textDerived,
+      trackedLinks: body.tracked?.links ?? 0,
+      trackingPixel: body.tracked?.pixel ?? false,
     });
   }
 

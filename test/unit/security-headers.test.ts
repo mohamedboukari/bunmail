@@ -72,6 +72,16 @@ describe("securityHeaders", () => {
     },
   );
 
+  test.each(["/t/o/token.gif", "/t/c/token"])(
+    "%p (tracking, #187) is never cached and sends no referrer",
+    (path) => {
+      const headers = securityHeaders(path, { httpsBaseUrl: false });
+      expect(headers["cache-control"]).toBe("no-store, private");
+      expect(headers["referrer-policy"]).toBe("no-referrer");
+      expect(headers["content-security-policy"]).toBe(BASELINE_CSP);
+    },
+  );
+
   test.each(["/", "/favicon.svg", "/api/v1/emails", "/dashboardx"])(
     "%p keeps its own caching",
     (path) => {

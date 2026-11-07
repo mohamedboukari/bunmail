@@ -6,6 +6,7 @@ import {
   recordSmtpConnection,
   recordSmtpMessageAccepted,
   recordSmtpRejection,
+  recordTrackingRequest,
   recordWebhookAttempt,
   renderMetrics,
 } from "../../src/modules/metrics/services/metrics.service.ts";
@@ -23,6 +24,8 @@ describe("httpArea", () => {
     ["/api/docs/json", "api/docs"],
     ["/dashboard/emails/msg_1", "dashboard"],
     ["/u/:token", "unsubscribe"],
+    ["/t/o/:token", "tracking"],
+    ["/t/c/:token", "tracking"],
     ["/health", "health"],
     ["/metrics", "metrics"],
     ["/", "other"],
@@ -110,6 +113,13 @@ describe("part 2 counters in the scrape", () => {
     expect(await sample(conn)).toBe((before[0] ?? 0) + 1);
     expect(await sample(rej)).toBe((before[1] ?? 0) + 2);
     expect(await sample(ok)).toBe((before[2] ?? 0) + 1);
+  });
+
+  test("tracking requests by kind and result (#187)", async () => {
+    const series = 'bunmail_tracking_requests_total{kind="click",result="deduped"}';
+    const before = await sample(series);
+    recordTrackingRequest("click", "deduped");
+    expect(await sample(series)).toBe(before + 1);
   });
 
   test("webhook attempts by outcome", async () => {
