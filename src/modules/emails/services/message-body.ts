@@ -1,4 +1,8 @@
 import { htmlToText } from "./html-to-text.ts";
+import {
+  applyBodyTracking,
+  type BodyTracking,
+} from "../../tracking/services/body-tracking.ts";
 
 /**
  * The body parts of an outgoing message, composed at send time (#250)
@@ -13,6 +17,11 @@ import { htmlToText } from "./html-to-text.ts";
  *   HTML ({@link htmlToText}), so the message is `multipart/alternative`.
  *   HTML-only mail scores worse with spam filters and is unreadable in
  *   text-only clients. A caller's own text is always kept as is.
+ * - **Tracking (#187):** with a `tracking` argument, the links are
+ *   rewritten and the open pixel inserted, after the text alternative was
+ *   derived from the original HTML, so the text part never carries a
+ *   tracking URL. The caller passes it only for an email whose row says
+ *   it is tracked while `TRACKING_ENABLED` is still on.
  *
  * Pure: no I/O, no logging.
  */
@@ -38,6 +47,8 @@ export interface ComposedBody {
   wrapped: boolean;
   /** The text part was derived from the HTML. */
   textDerived: boolean;
+  /** What tracking changed (#187); absent when the message is not tracked. */
+  tracked?: { links: number; pixel: boolean };
 }
 
 /**
@@ -50,17 +61,25 @@ export interface ComposedBody {
 export function composeMessageBody(
   html: string | null,
   text: string | null,
+  tracking?: BodyTracking,
 ): ComposedBody {
   if (html === null || html.trim() === "") {
     return { html, text, wrapped: false, textDerived: false };
   }
+  /** The text alternative comes from the original HTML, before any tracking. */
+  const derived = text !== null && text.trim() !== "" ? null : htmlToText(html);
   const wrappedHtml = wrapHtmlDocument(html);
   const wrapped = wrappedHtml !== html;
-  if (text !== null && text.trim() !== "") {
-    return { html: wrappedHtml, text, wrapped, textDerived: false };
-  }
-  const derived = htmlToText(html);
-  return derived === ""
-    ? { html: wrappedHtml, text, wrapped, textDerived: false }
-    : { html: wrappedHtml, text: derived, wrapped, textDerived: true };
+  const parts =
+    derived === null || derived === ""
+      ? { text, textDerived: false }
+      : { text: derived, textDerived: true };
+  if (tracking === undefined) return { html: wrappedHtml, ...parts, wrapped };
+  const tracked = applyBodyTracking(wrappedHtml, tracking);
+  return {
+    html: tracked.html,
+    ...parts,
+    wrapped,
+    tracked: { links: tracked.links, pixel: tracked.pixel },
+  };
 }

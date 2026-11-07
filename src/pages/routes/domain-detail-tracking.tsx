@@ -26,8 +26,7 @@ export function TrackingPanel({
       </p>
       <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Open counts are unreliable: Apple Mail fetches every image on delivery, other
-        clients block images, and link scanners click links. Nothing is tracked yet in
-        this version: the setting is only stored.
+        clients block images, and link scanners click links.
       </p>
       {!trackingEnabled && (
         <p class="text-sm text-amber-700 dark:text-amber-400 mb-4">

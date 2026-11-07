@@ -27,8 +27,8 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `tags`          | jsonb          | nullable                | Labels set on the send (#189), key to value, stored as a jsonb object; null when none. At most 10, keys `^[A-Za-z0-9_-]{1,40}$` unique ignoring case, values 1 to 256 characters. See [Tags](#tags-189). |
 | `track_opens`   | boolean        | NOT NULL, default false | Whether opens of this email are tracked (#187), decided once at create by every gate. See [Open and click tracking](#open-and-click-tracking-187). |
 | `track_clicks`  | boolean        | NOT NULL, default false | Whether clicks of this email are tracked (#187), decided like `track_opens`. |
-| `first_opened_at` | timestamptz  | nullable                | When the first open was recorded (#187); null until then (always null for now). |
-| `first_clicked_at` | timestamptz | nullable                | When the first click was recorded (#187); null until then (always null for now). |
+| `first_opened_at` | timestamptz  | nullable                | When the first open was recorded (#187), set once in the event's transaction; null until then. |
+| `first_clicked_at` | timestamptz | nullable                | When the first click was recorded (#187), set once in the event's transaction; null until then. |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
@@ -78,7 +78,7 @@ Indexes: `uq_email_attachments_email_position` (unique `(email_id, position)`; a
 
 **Table:** `email_events` (#187)
 
-One row per recorded open or click of an email (migration `0042`). Nothing writes it yet: recording comes with the tracking endpoints. See [Open and click tracking](#open-and-click-tracking-187).
+One row per recorded open or click of an email (migration `0042`), written by the tracking endpoints ([tracking.md](tracking.md)). See [Open and click tracking](#open-and-click-tracking-187).
 
 | Column          | Type         | Constraints                        | Description |
 |-----------------|--------------|------------------------------------|-------------|
@@ -146,7 +146,7 @@ src/modules/emails/
 │   ├── tags.ts                     ← Pure tag and tag-filter rules shared by REST, SMTP submission and the dashboard (#189)
 │   ├── attachments.ts              ← Attachment rules: filename, Content-ID, strict base64, limits, blocked types, derived type (#181)
 │   ├── attachment-storage.ts       ← Storage interface for attachment bytes (Postgres today) and the metadata reads (#181)
-│   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
+│   ├── message-body.ts             ← Send-time body: HTML document wrapper, text alternative (#250), tracking (#187)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
 │   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing: `sendMail`, and the rest of the public surface re-exported from the files below (#380)
 │   ├── mailer-message.service.ts   ← One transaction's message: headers, List-Unsubscribe, Feedback-ID, attachments; signing it (`signMessage`) and one `mail` per transaction (`buildTransactionMails`, #345)
@@ -245,7 +245,7 @@ The rules (`services/from-name.ts`) keep a name a plain label that cannot pose a
 
 ## Body composition (#250)
 
-The mailer composes the body once per send attempt (`composeMessageBody`, `services/message-body.ts`), the same for every SMTP transaction. Nothing is written back: `html` and `text_content` keep what the caller sent, and so do API responses.
+The mailer composes the body once per send attempt (`composeMessageBody`, `services/message-body.ts`), the same for every SMTP transaction. A tracked email also gets its links rewritten and the open pixel, after the text alternative (see [Open and click tracking](#open-and-click-tracking-187)). Nothing is written back: `html` and `text_content` keep what the caller sent, and so do API responses.
 
 - **HTML document wrapper.** HTML with no `<html>` element (`/<html[\s>]/i`) is a fragment, which some clients and filters treat as careless or generated mail. It is sent wrapped in `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>...</body></html>`. A full document is sent unchanged.
 - **Text alternative.** An email with HTML and no text (none, or only whitespace, after the template is rendered) gets a `text/plain` part derived from the HTML, so it goes out as `multipart/alternative`. The caller's text, when there is any, is always sent as is. HTML with no text in it (only images) gets no text part.
@@ -267,7 +267,7 @@ BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound no
 
 ## Open and click tracking (#187)
 
-**Foundation only: nothing is tracked yet.** This version stores the settings and each email's decision; the open pixel, the click redirect, recording, webhooks and the events API come later.
+Opens are counted with a 1x1 pixel and clicks through a signed redirect on `APP_BASE_URL`. The routes, recording and token details are in [tracking.md](tracking.md); webhooks, the events API and the dashboard timeline come later.
 
 `tracking: { opens?, clicks? }` on `POST /api/v1/emails/send` and each `/batch` item. `createEmail` decides each kind once (`decideTracking`, `services/tracking-decision.ts`) and stores it in `emails.track_opens` / `track_clicks`, so retries are identical and a later domain change does not alter queued mail. Every gate must allow it:
 
@@ -289,7 +289,13 @@ The last two are the one-click unsubscribe conditions, `oneClickBlocker` in `lis
 
 A send can never turn on what its domain has off, whatever its key's role: only the domain setting opens that gate. BunMail's own mail (invitations, alerts, notifications, TLS reports) is sent without an `emails` row, so it never reaches the decision. A refused `true` logs `Tracking requested but not enabled for this send` (`warn`, with the gate as `reason`); the decision itself is logged at `debug`.
 
-Responses carry `tracking: { opens, clicks }`, `firstOpenedAt` and `firstClickedAt` (null until events are recorded).
+Responses carry `tracking: { opens, clicks }`, `firstOpenedAt` and `firstClickedAt` (null until the first open or click is recorded).
+
+**Injection at send time.** The queue builds the email's tracking on every attempt (`trackingForEmail`, `src/modules/tracking/services/tracking-injection.ts`) only when the row says it is tracked **and** `TRACKING_ENABLED` is still on (so turning the switch off takes effect at once), the email still names one recipient and `APP_BASE_URL` is still `https://`. `composeMessageBody` then, in this order: derives the text alternative from the **original** HTML (no tracking URL ever reaches the text part), wraps a fragment, rewrites the links (clicks) and inserts the pixel (opens) before the last `</body>` (or at the end). `emails.html` is never changed, so the dashboard preview never fires the pixel. Tokens are deterministic, so a retry composes the same body and the DKIM body hash (no `l=`) covers the final body.
+
+- **Pixel:** `<img src="${APP_BASE_URL}/t/o/<token>.gif" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px">`.
+- **Links rewritten:** only `<a>` tags whose `href` is quoted and, entities decoded and whitespace trimmed, an `http:` or `https:` URL; it becomes `${APP_BASE_URL}/t/c/<token>`, and the redirect goes to the URL's canonical form (`new URL(href).href`). Only the `href` value changes; every other byte stays (`rewriteLinks`, `src/modules/tracking/services/link-rewriter.ts`, one bounded linear pass).
+- **Never rewritten:** `mailto:`, `tel:`, fragments, relative links and other schemes; an `href` whose entities a browser might read differently (an unknown named reference, a legacy name a browser would decode, a numeric reference without `;` or to a remapped code point; raw query separators such as `&utm_source=` are fine); any link to the `APP_BASE_URL` host, whatever the scheme or path; the domain's `unsubscribe_url` (exactly, or under its path on a `/` boundary; a site-root URL only matches itself); anchors with `data-bunmail-notrack` (the attribute is removed from the sent HTML); anchors whose visible text is a URL (`https://...`, `www....`, `example.com/...`), which phishing filters flag; URLs over 2048 characters; every link after the first 100 `http(s)` links; anything inside comments, `<script>`, `<style>`, `<title>`, `<textarea>`, `<xmp>`, `<noscript>`, `<noembed>`, `<noframes>` and `<iframe>`, and everything after `<plaintext>`; the rest of a body after a tag, comment or one of those elements that never ends. The pixel goes before the last `</body>` that is real markup. The text part is never rewritten.
 
 ## Tags (#189)
 
@@ -526,7 +532,7 @@ The mailer's public surface: `sendMail` is defined here, the rest is re-exported
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
 Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's private key, with BunMail's own signer (see [DKIM signing](#dkim-signing-345)). `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
-`fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). `attachments` (#181), loaded by the queue, go on every transaction and retry (see [Attachments](#attachments-181)). The body is composed once per call, see [Body composition](#body-composition-250).
+`fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). `attachments` (#181), loaded by the queue, go on every transaction and retry (see [Attachments](#attachments-181)). The body is composed once per call, see [Body composition](#body-composition-250); `tracking` (#187), built by the queue, adds the rewritten links and the open pixel.
 
 Each transaction's outcome records `tls` and `updatedAt` on its delivery-state entry (#250, see [TLS record](#tls-record-250)). The SMTP session to each MX runs in `runMxSession` (`mx-transport.ts`), see [One session per MX](#one-session-per-mx-250).
 
@@ -597,8 +603,8 @@ The `to` list (#178): normalized from a string or an array, its stored form and 
 
 ### message-body.ts
 
-#### `composeMessageBody(html, text): { html, text, wrapped, textDerived }`
-The body a message is sent with (#250): HTML wrapped when it is a fragment (`wrapHtmlDocument`), text derived when there is none. Pure.
+#### `composeMessageBody(html, text, tracking?): { html, text, wrapped, textDerived, tracked? }`
+The body a message is sent with (#250): HTML wrapped when it is a fragment (`wrapHtmlDocument`), text derived when there is none (from the original HTML), then, with `tracking` (#187), links rewritten and the pixel inserted; `tracked` says how many links and whether the pixel was added. Pure.
 
 ### html-to-text.ts
 

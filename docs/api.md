@@ -82,6 +82,22 @@ See [suppressions.md](suppressions.md#one-click-unsubscribe).
 
 ---
 
+### Public tracking endpoints (#187)
+
+The URLs BunMail puts in tracked mail (see [Tracking](#post-apiv1emailssend) on the send and [tracking.md](tracking.md)). No Bearer token: the token in the path is the credential. Every response carries `Cache-Control: no-store, private`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex`, and sets no cookie. `HEAD` is answered like `GET` and never recorded.
+
+#### `GET /t/o/:token.gif`
+
+The open pixel: always the same 43-byte transparent GIF (`image/gif`) for a valid token, also when `TRACKING_ENABLED` is off, the email is no longer tracked or it is gone (nothing is then recorded). An invalid token: `404`, decided without the database.
+
+#### `GET /t/c/:token`
+
+The click redirect: `302` with `Location` set to exactly the `http(s)` URL BunMail signed for that email and link (its canonical form). Links already sent keep redirecting with the kill switch off, the email untracked or purged (nothing is then recorded). An invalid token: `404` with a neutral HTML page that never shows a URL. There is no open redirect: only URLs signed for that email are ever redirected to.
+
+Recording happens after the response, at most once per email, type and link per 60 seconds, at most 20 opens and 50 clicks per email. Invalid tokens only are rate limited: over 30 a minute from one client IP, `429` with `Retry-After`; valid requests are always served.
+
+---
+
 ### Emails
 
 All email endpoints are prefixed with `/api/v1/emails`.
@@ -109,7 +125,7 @@ Queue a new email for delivery. Supports direct content or template-based sendin
 | `category`   | string | No       | `transactional` or `marketing` (#250). Rules below. Returned as `category` on email responses (`null` when unset). |
 | `tags`       | object | No       | Labels, key to value (#189), e.g. `{"flow": "password-reset", "tenant": "t_42"}`, for filtering the list (`?tag=key:value`) and routing webhooks. Never sent to the recipient. Rules below. Returned as `tags` on email responses (`null` when unset). |
 | `attachments` | array | No       | Files to attach (#181), Resend-compatible: `[{ "filename", "content", "contentType"?, "contentId"? }]`, `content` in base64. Rules below. Returned as `attachments` on email responses, metadata only. |
-| `tracking`   | object | No       | Open and click tracking (#187): `{ "opens"?: boolean, "clicks"?: boolean }`. Rules below. Nothing is tracked yet in this version: the decision is only stored. Returned as `tracking` on email responses. |
+| `tracking`   | object | No       | Open and click tracking (#187): `{ "opens"?: boolean, "clicks"?: boolean }`. Rules below. Returned as `tracking` on email responses. |
 
 Oversize bodies return `422 Unprocessable Entity` from the validation layer.
 
@@ -167,7 +183,7 @@ Returned on email responses as `attachments`, in order, metadata only:
 
 A refused tag is `422 VALIDATION_ERROR` with `details[].path` `/tags/<key>` (or `/tags` when the key itself is invalid, or there are more than 10); the message names the key only when it is valid and never echoes the value, and nothing is queued. Tags may hold your own identifiers (a customer or tenant id): BunMail logs tag keys only, never values.
 
-**Tracking** (`tracking`, #187). **Nothing is tracked yet in this version:** the decision is stored on the email, and the open pixel and click redirect come later. Each kind (`opens`, `clicks`) is decided once, when the email is created:
+**Tracking** (`tracking`, #187). Opens are counted with a 1x1 pixel and clicks through a redirect on `APP_BASE_URL` (see [Public tracking endpoints](#public-tracking-endpoints-187)); the text part is never changed. Each kind (`opens`, `clicks`) is decided once, when the email is created:
 
 - `false` always opts out.
 - `true` asks for it, also on `transactional` mail. It is honoured only when every gate allows it; otherwise the email is queued untracked and `warnings` gets `tracking_disabled`.
@@ -425,7 +441,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 | `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Single-recipient mail carries BunMail's own per-recipient `/u/<token>` link instead when `APP_BASE_URL` is `https://` (#249). |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
 | `dkimSelector`      | string | No       | DKIM selector of the domain's key (#250): one lowercase DNS label, 1 to 63 characters, `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Defaults to `bunmail`. Anything else is `422`. |
-| `trackOpens`        | boolean | No      | Open tracking opt-in for mail from this domain (#187). Default `false`. Also needs `TRACKING_ENABLED=true`; each send can opt out, and `transactional` mail is tracked only when the send asks. Nothing is tracked yet in this version. |
+| `trackOpens`        | boolean | No      | Open tracking opt-in for mail from this domain (#187). Default `false`. Also needs `TRACKING_ENABLED=true`; each send can opt out, and `transactional` mail is tracked only when the send asks. |
 | `trackClicks`       | boolean | No      | Click tracking opt-in (#187), like `trackOpens`. |
 
 **Response:**

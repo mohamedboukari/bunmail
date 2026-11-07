@@ -33,6 +33,7 @@ import {
   recordSendOutcome,
   releaseRowWithEvents,
 } from "./queue-outcome.service.ts";
+import { trackingForEmail } from "../../tracking/services/tracking-injection.ts";
 
 /** The mailer, injectable so tests can drive the queue without SMTP. */
 export interface QueueDeps {
@@ -197,6 +198,13 @@ export async function sendClaimedEmail(
      */
     const attachments = await loadOutboundAttachments(emailId);
 
+    /**
+     * Open and click tracking (#187): decided at create and stored on the
+     * row; applied only while `TRACKING_ENABLED` is still on. Deterministic
+     * tokens, so a retry carries the same body.
+     */
+    const tracking = trackingForEmail(email, domain?.unsubscribeUrl ?? null);
+
     const result = await deps.sendMail({
       from: email.fromAddress,
       /** Display name (#250): `From:` header only. */
@@ -224,6 +232,7 @@ export async function sendClaimedEmail(
         apiKeyId: email.apiKeyId,
       },
       returnPath: signReturnPath ? { emailId } : undefined,
+      tracking,
     });
     sent = {
       deliveryState: result.deliveryState,

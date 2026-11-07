@@ -42,14 +42,18 @@ const SECURITY_STATUSES = new Set([401, 403, 429]);
 
 /**
  * A path segment that looks like a credential: 32 or more URL-safe
- * characters (a base64url token, a hex hash). Masked in the request line.
+ * characters (a base64url token, a hex hash), dots included so the
+ * dotted unsubscribe and tracking tokens (`/u/`, `/t/o/<token>.gif`,
+ * `/t/c/<token>`, whose click token carries the target URL, #187) are
+ * masked too. Masked in the request line.
  */
-const TOKEN_SEGMENT_RE = /^[A-Za-z0-9_-]{32,}$/;
+const TOKEN_SEGMENT_RE = /^[A-Za-z0-9_.-]{32,}$/;
 
 /**
  * The path as it appears in the request line: the query string dropped
- * (owner setup links carry their token there) and token-like segments
- * replaced with `:token`, so no credential reaches the logs.
+ * (owner setup links carry their token there), every segment after `/u/`,
+ * `/t/o/` and `/t/c/` and other token-like segments replaced with
+ * `:token`, so no credential reaches the logs.
  */
 export function requestLogPath(url: string): string {
   let pathname: string;
@@ -58,9 +62,25 @@ export function requestLogPath(url: string): string {
   } catch {
     return "(unparseable)";
   }
-  return pathname
-    .split("/")
-    .map((segment) => (TOKEN_SEGMENT_RE.test(segment) ? ":token" : segment))
+  const segments = pathname.split("/");
+  /**
+   * Every segment after `/u/`, `/t/o/` and `/t/c/` is a credential
+   * (unsubscribe and tracking tokens; a click token carries the target URL
+   * with its query, #187): masked whatever its length or encoding.
+   */
+  const tokenFrom =
+    segments[1] === "u"
+      ? 2
+      : segments[1] === "t" && (segments[2] === "o" || segments[2] === "c")
+        ? 3
+        : -1;
+  return segments
+    .map((segment, index) =>
+      (tokenFrom > 0 && index >= tokenFrom && segment !== "") ||
+      TOKEN_SEGMENT_RE.test(segment)
+        ? ":token"
+        : segment,
+    )
     .join("/");
 }
 

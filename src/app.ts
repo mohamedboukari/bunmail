@@ -28,6 +28,7 @@ import { withRequestContext } from "./middleware/request-context.ts";
 import { securityHeadersPlugin } from "./middleware/security-headers.ts";
 import { landingPlugin } from "./pages/landing.plugin.tsx";
 import { unsubscribePlugin } from "./pages/unsubscribe.plugin.tsx";
+import { trackingPlugin } from "./modules/tracking/tracking.plugin.ts";
 import { faviconPlugin } from "./pages/favicon.ts";
 import { notFoundResponse } from "./pages/routes/not-found.tsx";
 import { metricsPlugin } from "./modules/metrics/metrics.plugin.ts";
@@ -270,6 +271,8 @@ export function startApp(appVersion: string) {
     .use(landingPlugin)
     /** Public one-click unsubscribe pages at /u/:token (#249): no auth, token-verified */
     .use(unsubscribePlugin())
+    /** Public open pixel and click redirect at /t/ (#187): no auth, token-verified */
+    .use(trackingPlugin())
     /** Health check: used by Docker, load balancers, and uptime monitors */
     .get(
       "/health",

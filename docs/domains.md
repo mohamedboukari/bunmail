@@ -363,7 +363,7 @@ passes the same SPF/DKIM you already set up for outbound.
 
 ## Open and click tracking (#187)
 
-Each domain carries an opt-in for open and click tracking, `track_opens` and `track_clicks`, off by default. **Nothing is tracked yet in this version:** the opt-in and each email's decision are stored, and the open pixel and click redirect come later.
+Each domain carries an opt-in for open and click tracking, `track_opens` and `track_clicks`, off by default. Opens are counted with a 1x1 pixel and clicks through a signed redirect on `APP_BASE_URL` ([tracking.md](tracking.md)).
 
 - **Who sets it:** admins only. Over REST with an admin key (`trackOpens` / `trackClicks` on `POST /api/v1/domains` and `PATCH /api/v1/domains/:id`; every domain route is admin-only), or on the domain page in the dashboard (two checkboxes, `POST /dashboard/domains/:id/tracking`, `adminGuard`; a box left unticked turns that kind off). Every change is audited as `domain.updated` with the field names.
 - **Per domain, not per key:** the domain is the reputation and disclosure unit, and keys share domains. A send can opt out (`tracking: { opens: false }`) but never turn on what the domain has off, whatever its key's role.
