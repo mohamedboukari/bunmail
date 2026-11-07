@@ -90,6 +90,7 @@ export async function truncateAll(): Promise<void> {
       suppressions,
       idempotency_keys,
       inbound_emails,
+      email_events,
       email_attachments,
       emails,
       email_tombstones,
@@ -166,6 +167,9 @@ export const seed = {
       unsubscribeUrl?: string | null;
       /** Who added it (#219); null (default) = the owner. */
       createdByUserId?: string | null;
+      /** Open and click tracking opt-in (#187); false (default) = off. */
+      trackOpens?: boolean;
+      trackClicks?: boolean;
     } = {},
   ): Promise<{ id: string; name: string }> {
     const id = generateId("dom");
@@ -185,6 +189,8 @@ export const seed = {
       unsubscribeEmail: opts.unsubscribeEmail ?? null,
       unsubscribeUrl: opts.unsubscribeUrl ?? null,
       createdByUserId: opts.createdByUserId ?? null,
+      trackOpens: opts.trackOpens ?? false,
+      trackClicks: opts.trackClicks ?? false,
     });
     return { id, name };
   },

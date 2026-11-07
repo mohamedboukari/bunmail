@@ -56,6 +56,15 @@ export interface SerializedEmail {
   tags: EmailTags | null;
   /** Attachments (#181), in order, metadata only; empty when none. */
   attachments: SerializedAttachment[];
+  /**
+   * Whether opens and clicks of this email are tracked (#187), as decided
+   * when it was created (every gate allowed it).
+   */
+  tracking: { opens: boolean; clicks: boolean };
+  /** When the first open was recorded (#187); null until then. */
+  firstOpenedAt: Date | null;
+  /** When the first click was recorded (#187); null until then. */
+  firstClickedAt: Date | null;
   attempts: number;
   /**
    * When a deferred email will be retried (#180): set while `status` is
@@ -112,6 +121,9 @@ export function serializeEmail(
     category: isEmailCategory(email.category) ? email.category : null,
     tags: email.tags,
     attachments: attachments.map(serializeAttachment),
+    tracking: { opens: email.trackOpens, clicks: email.trackClicks },
+    firstOpenedAt: email.firstOpenedAt,
+    firstClickedAt: email.firstClickedAt,
     attempts: email.attempts,
     nextAttemptAt: email.status === "queued" ? email.nextAttemptAt : null,
     lastError: email.lastError,

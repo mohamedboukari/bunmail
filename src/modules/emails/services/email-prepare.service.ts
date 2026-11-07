@@ -15,6 +15,7 @@ import { validateCustomHeaders } from "./custom-headers.ts";
 import { checkFromName, describeFromNameProblem } from "./from-name.ts";
 import { checkTags, describeTagProblem } from "./tags.ts";
 import { oneClickBlocker } from "./list-unsubscribe.ts";
+import { decideTracking } from "./tracking-decision.ts";
 import {
   InvalidCustomHeaderError,
   SubjectRequiredError,
@@ -58,8 +59,9 @@ export interface PreparedEmail {
 /**
  * Every check `createEmail` runs before it inserts (custom headers,
  * display name, tags, marketing one-click, attachments, suppression, API
- * key and allowed senders, template, subject, body, sender domain),
- * returning the row and the attachments to insert. The text alternative
+ * key and allowed senders, template, subject, body, sender domain), and
+ * the open and click tracking decision (#187), returning the row and the
+ * attachments to insert. The text alternative
  * and the HTML document wrapper (#250) are not made here: the mailer adds
  * them per send, so the row keeps what the caller sent. Throws the same
  * errors `createEmail` documents. Reads through the shared pool and
@@ -181,14 +183,15 @@ export async function prepareEmail(
   /**
    * Marketing mail must carry the per-recipient one-click link (#250,
    * #249): one recipient and an https `APP_BASE_URL`. Refused before any
-   * database work, so nothing is queued without it.
+   * database work, so nothing is queued without it. The same conditions
+   * gate open and click tracking (#187), decided below.
    */
+  const blocker = oneClickBlocker({
+    toAddress,
+    cc: input.cc ?? null,
+    bcc: input.bcc ?? null,
+  });
   if (input.category === "marketing") {
-    const blocker = oneClickBlocker({
-      toAddress,
-      cc: input.cc ?? null,
-      bcc: input.bcc ?? null,
-    });
     if (blocker !== null) {
       logger.warn("Send blocked: marketing email cannot carry one-click unsubscribe", {
         id,
@@ -347,15 +350,51 @@ export async function prepareEmail(
 
   let domainId: string | null = null;
   let warnings: SendWarning[] = [];
+  let domainTracking: { opens: boolean; clicks: boolean } | null = null;
 
   /**
    * Sender-domain gate (#245): registration, the opt-in
    * `REQUIRE_VERIFIED_DOMAIN` check, and the warnings for records that
-   * are not verified. See `sender-domain.service.ts`.
+   * are not verified. See `sender-domain.service.ts`. It also reads the
+   * domain's tracking opt-in (#187).
    */
   if (senderDomain) {
-    ({ domainId, warnings } = await checkSenderDomain(senderDomain, { id, apiKeyId }));
+    ({
+      domainId,
+      warnings,
+      tracking: domainTracking,
+    } = await checkSenderDomain(senderDomain, { id, apiKeyId }));
   }
+
+  /**
+   * Open and click tracking (#187), decided once here and stored on the
+   * row. A `true` the gates cannot honour adds `tracking_disabled` to the
+   * warnings; the email is queued either way.
+   */
+  const tracking = decideTracking(input.tracking, {
+    enabled: config.tracking.enabled,
+    source,
+    category: input.category ?? null,
+    domain: domainTracking,
+    oneClickBlocker: blocker,
+  });
+  if (tracking.refusedBy !== null) {
+    warnings = [...warnings, "tracking_disabled"];
+    logger.warn("Tracking requested but not enabled for this send", {
+      id,
+      apiKeyId,
+      source,
+      domainId,
+      reason: tracking.refusedBy,
+      opensRequested: input.tracking?.opens === true,
+      clicksRequested: input.tracking?.clicks === true,
+    });
+  }
+  logger.debug("Tracking decided", {
+    id,
+    trackOpens: tracking.opens,
+    trackClicks: tracking.clicks,
+  });
 
   return {
     values: {
@@ -375,6 +414,8 @@ export async function prepareEmail(
       source,
       category: input.category ?? null,
       tags,
+      trackOpens: tracking.opens,
+      trackClicks: tracking.clicks,
     },
     warnings,
     senderDomain,

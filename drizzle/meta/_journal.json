@@ -295,6 +295,13 @@
       "when": 1794021584103,
       "tag": "0041_tls_rpt",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1794082448267,
+      "tag": "0042_email_tracking",
+      "breakpoints": true
     }
   ]
 }

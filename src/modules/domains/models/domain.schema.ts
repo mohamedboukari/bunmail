@@ -139,6 +139,16 @@ export const domains = pgTable(
      */
     notifyEmail: varchar("notify_email", { length: 255 }),
 
+    /**
+     * Open and click tracking opt-in for mail from this domain (#187), set
+     * by an admin. Off by default. Tracking also needs `TRACKING_ENABLED`,
+     * and a send can always opt out; `transactional` mail is tracked only
+     * when the send asks. Changing these does not affect mail already
+     * queued: the decision is stored on each email.
+     */
+    trackOpens: boolean("track_opens").notNull().default(false),
+    trackClicks: boolean("track_clicks").notNull().default(false),
+
     /** When this domain was added */
     createdAt: timestamp("created_at").notNull().defaultNow(),
 

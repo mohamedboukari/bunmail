@@ -39,6 +39,7 @@ import { readMetricsToken, readTracingSettings } from "./config/observability.ts
 import { readRedisUrl } from "./config/storage.ts";
 import { buildTlsRptConfig } from "./config/tls-rpt.ts";
 import { buildDaneConfig } from "./config/dane.ts";
+import { buildTrackingConfig } from "./config/tracking.ts";
 import { readSsoSettings } from "./config/sso.ts";
 
 export { optionalBoundedInt, optionalStrictBoolean } from "./config/env.ts";
@@ -139,6 +140,15 @@ export {
   readDaneEnabled,
   readDaneResolver,
 } from "./config/dane.ts";
+
+/** @public */
+export {
+  DEFAULT_EMAIL_EVENTS_RETENTION_DAYS,
+  MAX_EMAIL_EVENTS_RETENTION_DAYS,
+  MIN_EMAIL_EVENTS_RETENTION_DAYS,
+  readEmailEventsRetentionDays,
+  readTrackingEnabled,
+} from "./config/tracking.ts";
 
 /** The submission server's TLS settings and port, read once at boot (#349). */
 const submissionTls = readSubmissionTls();
@@ -288,4 +298,7 @@ export const config = {
 
   /** Outbound DANE for SMTP (RFC 7672, #345); see {@link buildDaneConfig}. */
   dane: buildDaneConfig(),
+
+  /** Open and click tracking (#187); see {@link buildTrackingConfig}. */
+  tracking: buildTrackingConfig(),
 } as const;

@@ -105,6 +105,11 @@ export function emailSendPages(app: GuardedDashboard) {
                 html: body.html || undefined,
                 text: body.text || undefined,
                 ...(headers ? { headers } : {}),
+                /**
+                 * Never tracked (#187): a message written by hand (often a
+                 * reply) and the form has no opt-out, so it always opts out.
+                 */
+                tracking: { opens: false, clicks: false },
               },
               chosenKey.id,
             );

@@ -180,3 +180,20 @@ describe("sendEmailDto: to as a string or an array (#178)", () => {
     );
   });
 });
+
+describe("sendEmailDto: tracking (#187)", () => {
+  test("accepts no tracking, either flag, or both", () => {
+    expect(check.Check(base)).toBe(true);
+    expect(check.Check({ ...base, tracking: {} })).toBe(true);
+    expect(check.Check({ ...base, tracking: { opens: true } })).toBe(true);
+    expect(check.Check({ ...base, tracking: { clicks: false } })).toBe(true);
+    expect(check.Check({ ...base, tracking: { opens: false, clicks: true } })).toBe(true);
+  });
+
+  test("rejects non-booleans", () => {
+    expect(check.Check({ ...base, tracking: { opens: "true" } })).toBe(false);
+    expect(check.Check({ ...base, tracking: { clicks: 1 } })).toBe(false);
+    expect(check.Check({ ...base, tracking: { opens: null } })).toBe(false);
+    expect(check.Check({ ...base, tracking: true })).toBe(false);
+  });
+});

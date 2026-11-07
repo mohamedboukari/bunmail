@@ -13,6 +13,7 @@ import {
   recordAuditEvent,
 } from "../../audit/services/audit.service.ts";
 import { purgeExpiredIdempotencyKeys } from "../../emails/services/idempotency.service.ts";
+import { purgeOldEmailEvents } from "../../emails/services/email-events.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
@@ -153,9 +154,44 @@ export async function runIdempotencyKeySweep(): Promise<{ deleted: number }> {
 }
 
 /**
+ * Deletes open and click events (#187) older than
+ * `EMAIL_EVENTS_RETENTION_DAYS`, in batches. Events of a deleted email go
+ * with it already; this bounds how long the rest is kept. A failure is
+ * logged with its error name only (a driver error's message embeds the
+ * query parameters) and rethrown, so the cycle reports it too.
+ */
+export async function runEmailEventsRetention(): Promise<{ deleted: number }> {
+  const { eventsRetentionDays: retentionDays } = config.tracking;
+  const startedAt = performance.now();
+  let deleted: number;
+  try {
+    deleted = await purgeOldEmailEvents(retentionDays);
+  } catch (error: unknown) {
+    logger.error("Email events retention sweep failed", {
+      retentionDays,
+      errorName: error instanceof Error ? error.name : typeof error,
+    });
+    throw error;
+  }
+  if (deleted > 0) {
+    logger.info("Email events retention sweep completed", {
+      deleted,
+      retentionDays,
+      durationMs: Math.round(performance.now() - startedAt),
+    });
+  } else {
+    logger.debug("Email events retention sweep found nothing to delete", {
+      retentionDays,
+    });
+  }
+  return { deleted };
+}
+
+/**
  * One purge cycle (trash, tombstone retention, expired sessions, stale
- * sign-in devices, audit log retention, expired idempotency keys) in its
- * own log context (#284), so every line it writes carries `job: "purge"`.
+ * sign-in devices, audit log retention, expired idempotency keys, open
+ * and click event retention) in its own log context (#284), so every
+ * line it writes carries `job: "purge"`.
  */
 function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
   return runWithLogContext({ job: "purge" }, () =>
@@ -166,6 +202,7 @@ function runCycle(): Promise<PromiseSettledResult<unknown>[]> {
       runDeviceSweep(),
       runAuditRetention(),
       runIdempotencyKeySweep(),
+      runEmailEventsRetention(),
     ]),
   );
 }

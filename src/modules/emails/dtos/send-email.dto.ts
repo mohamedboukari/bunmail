@@ -184,6 +184,28 @@ export const sendEmailDto = t.Object({
     ),
   ),
 
+  /**
+   * Open and click tracking for this send (#187). Only the shape is
+   * checked here (booleans; an unknown key is removed like any unknown
+   * property of the body); `createEmail` decides
+   * (`services/tracking-decision.ts`): `false` always opts out, `true`
+   * asks for it and adds the `tracking_disabled` warning when a gate keeps
+   * it off, unset inherits the sender domain's opt-in except for
+   * `transactional` mail.
+   */
+  tracking: t.Optional(
+    t.Object(
+      {
+        opens: t.Optional(t.Boolean()),
+        clicks: t.Optional(t.Boolean()),
+      },
+      {
+        description:
+          "Open and click tracking. false always opts out. true asks for it, also on transactional mail; it is honoured only when TRACKING_ENABLED is on, the sender domain has opted in, the email has exactly one recipient (no cc or bcc) and APP_BASE_URL is https, else the response carries the tracking_disabled warning. Unset: as the sender domain's opt-in, except transactional mail, which is not tracked. Nothing is tracked yet in this version: the decision is only stored.",
+      },
+    ),
+  ),
+
   headers: t.Optional(
     t.Record(
       t.String({ pattern: "^[\\x21-\\x39\\x3b-\\x7e]{1,64}$" }),

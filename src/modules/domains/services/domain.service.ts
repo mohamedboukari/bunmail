@@ -5,7 +5,11 @@ import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { encryptSecret } from "../../../utils/crypto.ts";
 import { asciiLowerCase, config } from "../../../config.ts";
-import type { Domain, CreateDomainInput } from "../types/domain.types.ts";
+import type {
+  Domain,
+  CreateDomainInput,
+  DomainSettingsChanges,
+} from "../types/domain.types.ts";
 import {
   DomainAlreadyRegisteredError,
   InvalidDkimSelectorError,
@@ -109,6 +113,8 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
         unsubscribeEmail: input.unsubscribeEmail ?? null,
         unsubscribeUrl: input.unsubscribeUrl ?? null,
         notifyEmail: input.notifyEmail ?? null,
+        trackOpens: input.trackOpens ?? false,
+        trackClicks: input.trackClicks ?? false,
         createdByUserId: input.createdByUserId ?? null,
       })
       .returning();
@@ -129,6 +135,8 @@ export async function createDomain(input: CreateDomainInput): Promise<Domain> {
     id: domain!.id,
     name: domain!.name,
     createdByUserId: domain!.createdByUserId,
+    trackOpens: domain!.trackOpens,
+    trackClicks: domain!.trackClicks,
   });
 
   return domain!;
@@ -293,20 +301,26 @@ export async function updateDomainNotifyEmail(
 }
 
 /**
- * Updates a domain's `List-Unsubscribe` overrides (#243). Only the fields
- * present in `changes` are written; `null` clears one.
+ * Updates a domain's settings: the `List-Unsubscribe` overrides (#243)
+ * and the open and click tracking opt-in (#187). Only the fields present
+ * in `changes` are written; `null` clears an unsubscribe override. A
+ * tracking change applies to mail created from then on: queued mail keeps
+ * the decision stored on it.
  *
  * @param id - The domain ID to update
- * @param changes - New `unsubscribeEmail` and/or `unsubscribeUrl`
+ * @param changes - The fields to write
  * @returns The updated domain row, or undefined if not found
  */
-export async function updateDomainUnsubscribe(
+export async function updateDomainSettings(
   id: string,
-  changes: { unsubscribeEmail?: string | null; unsubscribeUrl?: string | null },
+  changes: DomainSettingsChanges,
 ): Promise<Domain | undefined> {
-  logger.info("Updating domain unsubscribe settings", {
+  logger.info("Updating domain settings", {
     id,
     fields: Object.keys(changes),
+    /** Booleans only: the unsubscribe values are never logged. */
+    trackOpens: changes.trackOpens,
+    trackClicks: changes.trackClicks,
   });
 
   const [domain] = await db
@@ -316,7 +330,7 @@ export async function updateDomainUnsubscribe(
     .returning();
 
   if (!domain) {
-    logger.warn("Domain not found for unsubscribe update", { id });
+    logger.warn("Domain not found for settings update", { id });
     return undefined;
   }
 

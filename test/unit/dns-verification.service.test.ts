@@ -113,6 +113,8 @@ const baseDomain = {
   unsubscribeEmail: null as string | null,
   unsubscribeUrl: null as string | null,
   notifyEmail: null as string | null,
+  trackOpens: false,
+  trackClicks: false,
   createdAt: new Date(),
   updatedAt: new Date(),
   createdByUserId: null,

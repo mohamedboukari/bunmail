@@ -843,7 +843,7 @@ export function registerDashboardMocks(): void {
     getDomainByName: mock(() => Promise.resolve(undefined)),
     domainExistsByName: mock(() => Promise.resolve(false)),
     updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
-    updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
+    updateDomainSettings: mock(() => Promise.resolve(undefined)),
     domainNameIs: mock(() => undefined),
     findNonCanonicalDomainNames: mock(() => Promise.resolve([])),
     deleteDomain: mock(() => Promise.resolve(undefined)),

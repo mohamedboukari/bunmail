@@ -106,6 +106,8 @@ const domain = {
   unsubscribeEmail: null,
   unsubscribeUrl: null,
   notifyEmail: null,
+  trackOpens: false,
+  trackClicks: false,
   createdAt: now,
   updatedAt: now,
   createdByUserId: null,
@@ -129,6 +131,10 @@ const email = {
   fromName: null,
   category: null,
   tags: null,
+  trackOpens: false,
+  trackClicks: false,
+  firstOpenedAt: null,
+  firstClickedAt: null,
   attempts: 1,
   nextAttemptAt: now,
   lockedBy: null,
@@ -244,6 +250,7 @@ describe("Dashboard page render smoke tests", () => {
         mx: { status: "none" as const, hosts: [] },
       },
       smtpEnabled: false,
+      trackingEnabled: false,
     };
     const html = await DomainDetailPage({ domain, ...dnsProps });
     expect(html).toContain("example.com");

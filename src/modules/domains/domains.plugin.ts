@@ -73,6 +73,9 @@ export const domainsPlugin = new Elysia({
         createdByUserId: apiKeyCreatedByUserId,
         /** Validated by the DTO (#250); omitted means `bunmail`. */
         dkimSelector: body.dkimSelector,
+        /** Tracking opt-in (#187); omitted means off. */
+        trackOpens: body.trackOpens,
+        trackClicks: body.trackClicks,
       });
       await recordAuditEvent({
         ...restAuditContext({ apiKeyId, apiKeyName, request, server }),
@@ -161,15 +164,17 @@ export const domainsPlugin = new Elysia({
   /**
    * PATCH /api/v1/domains/:id
    *
-   * Edits the domain's `List-Unsubscribe` overrides (#243). Omitted fields
-   * stay as they are; `null` clears one.
+   * Edits the domain's `List-Unsubscribe` overrides (#243) and its open
+   * and click tracking opt-in (#187). Omitted fields stay as they are;
+   * `null` clears an unsubscribe override. Admin keys only, like every
+   * domain route.
    */
   .patch(
     "/:id",
     async ({ params, body, set, apiKeyId, apiKeyName, request, server }) => {
       logger.info("PATCH /api/v1/domains/:id", { domainId: params.id });
 
-      const domain = await domainService.updateDomainUnsubscribe(params.id, body);
+      const domain = await domainService.updateDomainSettings(params.id, body);
 
       if (!domain) {
         set.status = 404;
@@ -194,9 +199,9 @@ export const domainsPlugin = new Elysia({
       body: updateDomainDto,
       detail: {
         tags: ["Domains"],
-        summary: "Update domain unsubscribe settings",
+        summary: "Update domain settings",
         description:
-          "Sets or clears the List-Unsubscribe mailbox and the RFC 8058 one-click HTTPS URL.",
+          "Sets or clears the List-Unsubscribe mailbox and the RFC 8058 one-click HTTPS URL, and turns open and click tracking on or off for mail from this domain (trackOpens, trackClicks; also needs TRACKING_ENABLED=true). Omitted fields are unchanged. A tracking change applies to mail created afterwards.",
         security: [{ bearerAuth: [] }],
       },
     },

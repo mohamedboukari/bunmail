@@ -25,7 +25,8 @@ type IdPrefix =
   | "dbl" // one run of the DNSBL self-check of the sending IPs (#250)
   | "trp" // TLS-RPT report: one policy domain and UTC day (#345)
   | "trr" // TLS-RPT result counter of a report (#345)
-  | "trj"; // one run of the TLS-RPT report job (#345)
+  | "trj" // one run of the TLS-RPT report job (#345)
+  | "evt"; // open or click event of an outbound email (#187)
 
 /**
  * Generates a prefixed unique ID.

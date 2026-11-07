@@ -36,6 +36,8 @@ const domain = {
   unsubscribeEmail: null,
   unsubscribeUrl: null,
   notifyEmail: null,
+  trackOpens: false,
+  trackClicks: false,
   createdAt: now,
   updatedAt: now,
   createdByUserId: null,
@@ -69,6 +71,7 @@ describe("DomainDetailPage: DNS panels (#250)", () => {
       dnsRecords: getRequiredDnsRecords(domain, settings),
       dns: { dmarc, mx: { status: "elsewhere", hosts: [`${XSS}.example`] } },
       smtpEnabled: true,
+      trackingEnabled: false,
     });
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<svg/onload");
@@ -88,6 +91,7 @@ describe("DomainDetailPage: DNS panels (#250)", () => {
       dnsRecords: getRequiredDnsRecords(domain, settings),
       dns: { dmarc, mx: { status: "here", hosts: ["mail.bunmail.test"] } },
       smtpEnabled: true,
+      trackingEnabled: false,
     });
     expect(html).toContain("_dmarc.acme.io (inherited)");
     expect(html).toContain("quarantine");
@@ -110,6 +114,7 @@ describe("DomainDetailPage: DNS panels (#250)", () => {
       dnsRecords: getRequiredDnsRecords(domain, settings),
       dns: { dmarc, mx: { status: "here", hosts: ["mail.bunmail.test"] } },
       smtpEnabled: false,
+      trackingEnabled: false,
     });
     expect(html).toContain("No DMARC record at _dmarc.acme.io");
     expect(html).toContain("SMTP_ENABLED=false");
@@ -143,6 +148,7 @@ describe("DomainDetailPage: re-verification (#250)", () => {
       dnsRecords: getRequiredDnsRecords(failing, settings),
       dns: { dmarc: await noDmarc(), mx: { status: "none", hosts: [] } },
       smtpEnabled: false,
+      trackingEnabled: false,
     });
     expect(html).toContain("Last checked");
     expect(html).toContain("DNS verification is failing");
@@ -161,6 +167,7 @@ describe("DomainDetailPage: re-verification (#250)", () => {
       dnsRecords: getRequiredDnsRecords(once, settings),
       dns: { dmarc: await noDmarc(), mx: { status: "none", hosts: [] } },
       smtpEnabled: false,
+      trackingEnabled: false,
     });
     expect(html).not.toContain("DNS verification is failing");
     expect(html).toContain("Not checked yet.");

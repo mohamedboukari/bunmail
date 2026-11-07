@@ -25,6 +25,10 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `source`        | varchar(10)    | NOT NULL, default `api` | Ingress channel: `api` (REST `POST /api/v1/emails/send`) or `smtp` (SMTP submission server, #120). Existing rows backfill to `api` (#137). |
 | `category`      | varchar(20)    | nullable                | `transactional` or `marketing`, as set on the send (#250); null keeps the default `List-Unsubscribe` behaviour. See [Category](#category-250). |
 | `tags`          | jsonb          | nullable                | Labels set on the send (#189), key to value, stored as a jsonb object; null when none. At most 10, keys `^[A-Za-z0-9_-]{1,40}$` unique ignoring case, values 1 to 256 characters. See [Tags](#tags-189). |
+| `track_opens`   | boolean        | NOT NULL, default false | Whether opens of this email are tracked (#187), decided once at create by every gate. See [Open and click tracking](#open-and-click-tracking-187). |
+| `track_clicks`  | boolean        | NOT NULL, default false | Whether clicks of this email are tracked (#187), decided like `track_opens`. |
+| `first_opened_at` | timestamptz  | nullable                | When the first open was recorded (#187); null until then (always null for now). |
+| `first_clicked_at` | timestamptz | nullable                | When the first click was recorded (#187); null until then (always null for now). |
 | `attempts`      | integer        | NOT NULL, default 0     | Number of delivery attempts                 |
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
@@ -72,6 +76,24 @@ Indexes: `uq_email_attachments_email_position` (unique `(email_id, position)`; a
 
 **Column added to `email_tombstones`** (#181): `attachments` (jsonb, nullable), each file's `filename`, `contentType` and `size`, never the bytes; null when the email had none.
 
+**Table:** `email_events` (#187)
+
+One row per recorded open or click of an email (migration `0042`). Nothing writes it yet: recording comes with the tracking endpoints. See [Open and click tracking](#open-and-click-tracking-187).
+
+| Column          | Type         | Constraints                        | Description |
+|-----------------|--------------|------------------------------------|-------------|
+| `id`            | varchar(36)  | PK                                 | Prefixed ID (`evt_<24 hex>`) |
+| `email_id`      | varchar(36)  | NOT NULL, FK → emails (CASCADE)    | The email; its events go with it (trash purge, permanent delete) |
+| `api_key_id`    | varchar(36)  | NOT NULL, FK → api_keys (CASCADE)  | The email's sending key, copied for key-scoped lists and webhooks |
+| `type`          | varchar(10)  | NOT NULL, CHECK IN `open`,`click`  | What happened |
+| `link_position` | integer      | nullable                           | A click: index of the rewritten link |
+| `url`           | text         | nullable                           | A click: the target without query string and fragment |
+| `client_kind`   | varchar(16)  | NOT NULL, CHECK IN `image_proxy`,`unknown` | Coarse kind of client, derived at ingest; the user agent itself is never stored |
+| `machine`       | boolean      | NOT NULL                           | A guess that no person caused the event (known proxy, scanner timing) |
+| `occurred_at`   | timestamptz  | NOT NULL, default now              | When it happened |
+
+No IP address and no user agent are stored. Indexes: `email_events_email_id_occurred_at_idx` (`(email_id, occurred_at)`, the timeline and the cascade), `email_events_api_key_id_occurred_at_idx` (`(api_key_id, occurred_at DESC)`), `email_events_occurred_at_idx` (the retention sweep). Retention: the purge cycle deletes events older than `EMAIL_EVENTS_RETENTION_DAYS` (default 90, `runEmailEventsRetention` → `purgeOldEmailEvents`, in batches of 5000, logged as `Email events retention sweep completed`).
+
 **Table:** `idempotency_keys` (#188)
 
 One row per (API key, `Idempotency-Key`) used on `POST /api/v1/emails/send` within `IDEMPOTENCY_KEY_TTL_HOURS`. See [Idempotency Keys](#idempotency-keys).
@@ -100,6 +122,7 @@ src/modules/emails/
 │   ├── email.schema.ts             ← Drizzle pgTable + indexes
 │   ├── email-attachment.schema.ts  ← Attachment rows, bytes until the final state (#181)
 │   ├── email-tombstone.schema.ts   ← Post-purge audit snapshots (#34)
+│   ├── email-event.schema.ts       ← Open and click events, no IP or user agent (#187)
 │   └── idempotency-key.schema.ts   ← Idempotency keys of the send API (#188)
 ├── dtos/
 │   ├── send-email.dto.ts           ← Send email validation (direct + template), Idempotency-Key header
@@ -113,6 +136,8 @@ src/modules/emails/
 │   ├── email-trash.service.ts      ← Trash, restore, permanent delete and empty trash, scoped and unscoped
 │   ├── batch-send.service.ts       ← POST /batch: items in order, each created or refused on its own (#178)
 │   ├── recipient-limits.ts         ← Pure `to` list normalization and the 50 / 100 recipient caps (#178)
+│   ├── tracking-decision.ts        ← Pure open and click tracking decision: the gates, opt-out, transactional default (#187)
+│   ├── email-events.service.ts     ← Open and click events: the retention purge (#187)
 │   ├── idempotency.service.ts      ← Idempotency keys: request hash, claim, complete, expiry purge (#188)
 │   ├── tombstone.service.ts        ← Hard delete with a tombstone, tombstone reads and retention (#34)
 │   ├── sender-domain.service.ts    ← Sender-domain gate, warnings, REQUIRE_VERIFIED_DOMAIN re-check (#245)
@@ -161,7 +186,8 @@ src/modules/emails/
 │   ├── email-tombstone.serialization.ts ← Tombstone response mapper (#34)
 │   └── delivery-state.serialization.ts ← Public per-MX delivery state, also used by the detail page (#250)
 └── types/
-    ├── email.types.ts               ← Email, SendEmailInput, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
+    ├── email.types.ts               ← Email, SendEmailInput, TrackingRequest, EmailCategory, ListEmailsFilters, SendWarning, CreatedEmail, IdempotentSendResult
+    ├── email-event.types.ts         ← The `email_events` value sets: event types and client kinds (#187)
     └── dane.types.ts                ← SecureMx, DaneHost (#345)
 ```
 
@@ -239,6 +265,32 @@ Gmail and Yahoo require bulk senders to offer working one-click unsubscribe; ref
 
 BunMail's own automatic mail (invitations, new-device sign-in alerts, inbound notifications) is sent as `transactional` and never carries `List-Unsubscribe` (`carriesListUnsubscribe` in `mailer-message.service.ts` also refuses it for any `autoSubmitted` message).
 
+## Open and click tracking (#187)
+
+**Foundation only: nothing is tracked yet.** This version stores the settings and each email's decision; the open pixel, the click redirect, recording, webhooks and the events API come later.
+
+`tracking: { opens?, clicks? }` on `POST /api/v1/emails/send` and each `/batch` item. `createEmail` decides each kind once (`decideTracking`, `services/tracking-decision.ts`) and stores it in `emails.track_opens` / `track_clicks`, so retries are identical and a later domain change does not alter queued mail. Every gate must allow it:
+
+| Gate | Closed when |
+|---|---|
+| Ingress | SMTP submission (no opt-out channel yet); dashboard sends always opt out |
+| `TRACKING_ENABLED` | off (the default) |
+| Sender domain | unregistered, or its `track_opens` / `track_clicks` opt-in (set by an admin) is off |
+| Recipients | not exactly one recipient: one `to`, no cc, no bcc |
+| `APP_BASE_URL` | not an `https://` URL without query or fragment |
+
+The last two are the one-click unsubscribe conditions, `oneClickBlocker` in `list-unsubscribe.ts`. The send's own request:
+
+| `tracking.opens` / `.clicks` | Result |
+|---|---|
+| `false` | Not tracked, whatever the gates say |
+| `true` | Tracked when every gate allows it, also for `transactional` mail; otherwise not tracked and the response's `warnings` gets `tracking_disabled` (one, for either kind) |
+| unset | Tracked when every gate allows it, except `transactional` mail, which is not tracked |
+
+A send can never turn on what its domain has off, whatever its key's role: only the domain setting opens that gate. BunMail's own mail (invitations, alerts, notifications, TLS reports) is sent without an `emails` row, so it never reaches the decision. A refused `true` logs `Tracking requested but not enabled for this send` (`warn`, with the gate as `reason`); the decision itself is logged at `debug`.
+
+Responses carry `tracking: { opens, clicks }`, `firstOpenedAt` and `firstClickedAt` (null until events are recorded).
+
 ## Tags (#189)
 
 `tags` on the send (REST and the dashboard's service call), or one `X-BunMail-Tag: key=value` header per tag on SMTP submission ([smtp-submission.md](smtp-submission.md#what-gets-relayed)), stored in `emails.tags`. They label the send for filtering and webhook routing ("what is the bounce rate on password resets?"); they are never sent to the recipient.
@@ -276,7 +328,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - In **production** mode (`BUNMAIL_ENV=production`), the domain must be registered or the send is rejected with `422 SENDER_DOMAIN_NOT_REGISTERED` (SMTP `550`)
 - In **development** mode, unregistered domains are allowed (`domain_id` stays null) with the warning `domain_unregistered`
 
-**Warnings.** For a registered domain, each stored verification flag that is false adds a warning: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (in that order; `[]` when all are verified). The flags are a snapshot from the last **Verify** run (see #250). `POST /api/v1/emails/send` returns them as a top-level `warnings` array next to `data`, the dashboard send flash names them in plain words, and every send with warnings logs `Email queued from a sender domain with unverified DNS records` at `warn` (`id`, `apiKeyId`, `source`, `domain`, `warnings`): the only trace for SMTP submission, which has no channel for them. The email is queued either way.
+**Warnings.** For a registered domain, each stored verification flag that is false adds a warning: `dkim_unverified`, `spf_unverified`, `dmarc_unverified` (in that order; `[]` when all are verified). The flags are a snapshot from the last **Verify** run (see #250). `POST /api/v1/emails/send` returns them as a top-level `warnings` array next to `data`, the dashboard send flash names them in plain words, and every send with warnings logs `Email queued from a sender domain with unverified DNS records` at `warn` (`id`, `apiKeyId`, `source`, `domain`, `warnings`): the only trace for SMTP submission, which has no channel for them. The email is queued either way. The same `warnings` array can also carry `tracking_disabled` (#187, see [Open and click tracking](#open-and-click-tracking-187)), which that line leaves out.
 
 **`REQUIRE_VERIFIED_DOMAIN=true`** (default `false`) makes DKIM a requirement:
 
@@ -454,8 +506,18 @@ Deletes expired rows in batches; run by the purge worker (`runIdempotencyKeySwee
 
 ### sender-domain.service.ts
 
-#### `checkSenderDomain(name, ids, deps?): Promise<{ domainId, warnings }>`
-The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIED_DOMAIN` inline re-verification with its negative cache, and the warnings. `deps` (verifier, clock, cache) is injectable for tests.
+#### `checkSenderDomain(name, ids, deps?): Promise<{ domainId, warnings, tracking }>`
+The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIED_DOMAIN` inline re-verification with its negative cache, and the warnings. `tracking` is the domain's open and click opt-in (#187), null when unregistered. `deps` (verifier, clock, cache) is injectable for tests.
+
+### tracking-decision.ts
+
+#### `decideTracking(request, context): { opens, clicks, refusedBy }`
+The open and click tracking decision (#187), pure: `context` holds `TRACKING_ENABLED`, the source, the category, the domain's opt-in and the `oneClickBlocker` result. `refusedBy` names the first closed gate when the send asked for `true` and did not get it (the `tracking_disabled` warning). See [Open and click tracking](#open-and-click-tracking-187).
+
+### email-events.service.ts
+
+#### `purgeOldEmailEvents(retentionDays, batchSize?): Promise<number>`
+Deletes open and click events older than `retentionDays` (#187), on the database clock, in batches of 5000 (at most 100 per pass). Called by the purge cycle (`runEmailEventsRetention`).
 
 ### mailer.service.ts
 

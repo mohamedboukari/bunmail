@@ -17,6 +17,7 @@ import {
 } from "./domain-detail-dns.tsx";
 import { DkimKeyPanel } from "./domain-detail-dkim.tsx";
 import { MailFlowPanel } from "./domain-detail-mail-flow.tsx";
+import { TrackingPanel } from "./domain-detail-tracking.tsx";
 
 interface DomainDetailPageProps {
   domain: Domain;
@@ -26,6 +27,8 @@ interface DomainDetailPageProps {
   dns: DomainDnsStatus;
   /** `SMTP_ENABLED`: with the MX, decides which mail flows are active. */
   smtpEnabled: boolean;
+  /** `TRACKING_ENABLED` (#187): the tracking panel says when it keeps everything off. */
+  trackingEnabled: boolean;
   flash?: { message: string; type: "success" | "error" };
 }
 
@@ -38,6 +41,7 @@ export function DomainDetailPage({
   dnsRecords,
   dns,
   smtpEnabled,
+  trackingEnabled,
   flash,
 }: DomainDetailPageProps) {
   return (
@@ -205,6 +209,9 @@ export function DomainDetailPage({
           </button>
         </form>
       </div>
+
+      {/* Open and click tracking opt-in (#187) */}
+      <TrackingPanel domain={domain} trackingEnabled={trackingEnabled} />
 
       {/* Domain details */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5">

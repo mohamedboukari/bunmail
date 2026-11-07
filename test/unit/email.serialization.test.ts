@@ -27,6 +27,10 @@ describe("serializeEmail", () => {
     fromName: null,
     category: null,
     tags: null,
+    trackOpens: false,
+    trackClicks: false,
+    firstOpenedAt: null,
+    firstClickedAt: null,
     attempts: 1,
     nextAttemptAt: new Date("2024-01-01"),
     lockedBy: null,
@@ -59,6 +63,30 @@ describe("serializeEmail", () => {
     expect(labelled.fromName).toBe("Acme");
     expect(labelled.category).toBe("marketing");
     expect(serializeEmail({ ...email, category: "bogus" }, []).category).toBeNull();
+  });
+
+  test("exposes tracking and the first open and click (#187), off and null by default", () => {
+    const result = serializeEmail(email, []);
+    expect(result.tracking).toEqual({ opens: false, clicks: false });
+    expect(result.firstOpenedAt).toBeNull();
+    expect(result.firstClickedAt).toBeNull();
+
+    const tracked = serializeEmail(
+      {
+        ...email,
+        trackOpens: true,
+        trackClicks: false,
+        firstOpenedAt: new Date("2024-06-02"),
+        firstClickedAt: null,
+      },
+      [],
+    );
+    expect(tracked.tracking).toEqual({ opens: true, clicks: false });
+    expect(tracked.firstOpenedAt).toEqual(new Date("2024-06-02"));
+    expect(tracked.firstClickedAt).toBeNull();
+    /** The raw column names never leak. */
+    expect("trackOpens" in tracked).toBe(false);
+    expect("trackClicks" in tracked).toBe(false);
   });
 
   test("maps toAddress to to", () => {
