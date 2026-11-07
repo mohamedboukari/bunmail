@@ -35,6 +35,7 @@ import { html } from "@elysiajs/html";
 import { and, eq } from "drizzle-orm";
 import { db, seed, sessions, truncateAll } from "./_helpers.ts";
 import { FakeOidcProvider } from "../fixtures/fake-oidc-provider.ts";
+import { handoffTargetOf } from "../fixtures/sso-handoff.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { readSessionCookie, readSsoFlowCookie } from "../../src/pages/session.ts";
@@ -144,10 +145,10 @@ async function signIn(): Promise<Response> {
       body: "",
     }),
   );
-  expect(start.status).toBe(302);
+  const location = handoffTargetOf(start, await start.text());
   const flowSetCookie = start.headers.getSetCookie().find((c) => c.startsWith("bm_sso="));
   const flow = readSsoFlowCookie(flowSetCookie ?? null) ?? "";
-  const params = idp.issueCode(start.headers.get("location") ?? "");
+  const params = idp.issueCode(location);
   return app.handle(
     new Request(`${ORIGIN}${CALLBACK}?${params.toString()}`, {
       headers: { cookie: `bm_sso=${flow}` },

@@ -23,6 +23,7 @@ import {
 } from "../../modules/users/services/session-policy.service.ts";
 import { isWellFormedToken } from "../../modules/users/services/token.service.ts";
 import { LoginPage } from "../routes/login.tsx";
+import { SsoHandoffPage } from "../routes/sso-handoff.tsx";
 import { readSessionCookie, readSsoFlowCookie } from "../session.ts";
 import {
   SESSION_STORE_DOWN,
@@ -58,8 +59,9 @@ import {
  * provider sends the browser back to, which finishes a sign-in or a link
  * (the link is started on Account > Sign-in methods, `sso.plugin.tsx`).
  *
- * Redirects are fixed: the provider's authorization URL (from its
- * discovery document), `/dashboard`, the second login step, the login
+ * Destinations are fixed: the provider's authorization URL (from its
+ * discovery document, through the hand-off page `SsoHandoffPage`, #409),
+ * `/dashboard`, the second login step, the login
  * page and the Sign-in methods page. No return parameter is read, so
  * there is no open redirect.
  */
@@ -253,8 +255,9 @@ export function ssoLoginPages(app: PublicDashboard) {
        * address bucket per 15 minutes, counted, never given back: 429); the
        * provider (configured, SSO on); then discovery
        * (usually cached), `state`, `nonce` and a PKCE verifier sealed in
-       * the `bm_sso` cookie (`purpose=login`), and a 302 to the provider's
-       * authorization endpoint with the fixed redirect URI.
+       * the `bm_sso` cookie (`purpose=login`), and the hand-off page to the
+       * provider's authorization endpoint with the fixed redirect URI: a
+       * `302` there would be blocked by CSP `form-action 'self'` (#409).
        *
        * The attempt is counted at the callback: a flow that never comes
        * back costs nothing, one that fails costs one, one that succeeds is
@@ -370,7 +373,14 @@ export function ssoLoginPages(app: PublicDashboard) {
             issueSsoFlowCookie(set, started.flowCookie);
             /** `debug`: one line per click; the callback logs the outcome. */
             logger.debug("SSO sign-in started", { provider: provider.id, ip });
-            return redirect(set, started.authorizationUrl);
+            /** A hand-off page, not a `302`: CSP `form-action 'self'` blocks that redirect (#409). */
+            setAuthPageHeaders(set);
+            return (
+              <SsoHandoffPage
+                label={provider.label}
+                authorizationUrl={started.authorizationUrl}
+              />
+            );
           } catch (error: unknown) {
             logger.error("SSO sign-in start failed", {
               provider: provider.id,
