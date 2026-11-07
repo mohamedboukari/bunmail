@@ -1,7 +1,7 @@
 /**
  * Thrown by `email.service.createEmail` when the recipient is on the
  * suppression list for the calling API key. The global `.onError`
- * handler in `src/index.ts` recognises this class and maps it to
+ * handler in `src/app.ts` recognises this class and maps it to
  * HTTP 422 with a structured body, without that handler, Elysia would
  * default to 500.
  *

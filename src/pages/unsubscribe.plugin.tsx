@@ -101,7 +101,7 @@ function pageSubject(target: UnsubscribeTarget): {
 
 /**
  * Builds the plugin. Each instance has its own limiter state, so a test
- * can use a fresh one; `src/index.ts` mounts one.
+ * can use a fresh one; `src/app.ts` mounts one.
  *
  * @param limit Requests per client bucket per window (default 30 a minute).
  */

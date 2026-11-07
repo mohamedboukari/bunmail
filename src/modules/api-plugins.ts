@@ -9,7 +9,7 @@ import { smtpSubmissionPlugin } from "./smtp-submission/smtp-submission.plugin.t
 import { dmarcReportsPlugin } from "./dmarc-reports/dmarc-reports.plugin.ts";
 
 /**
- * Every REST API plugin (`/api/v1/...`), in mount order. `src/index.ts`
+ * Every REST API plugin (`/api/v1/...`), in mount order. `src/app.ts`
  * mounts exactly this list, and the authorization matrix test (#228)
  * mounts the same list, so a new API module is covered by that test as
  * soon as it is added here.

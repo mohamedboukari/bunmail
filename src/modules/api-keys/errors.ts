@@ -1,7 +1,7 @@
 /**
  * Thrown by `email.service.createEmail` when the calling API key has a
  * non-empty `allowedSenders` allowlist and the message's `From` address
- * isn't on it (#126). The global `.onError` handler in `src/index.ts`
+ * isn't on it (#126). The global `.onError` handler in `src/app.ts`
  * maps this to HTTP 403 with `code: "UNAUTHORIZED_SENDER"`; the SMTP
  * submission server maps it to SMTP 550.
  *

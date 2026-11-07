@@ -140,7 +140,7 @@ When adding an endpoint:
 2. Add route handler in the feature plugin.
 3. Implement service logic under `services/`.
 4. If response shape differs from raw model, add/update a serializer.
-5. Ensure the plugin is in `apiPlugins` (`src/modules/api-plugins.ts`), which `src/index.ts` mounts, and add the route to the `ROUTES` table in `test/integration/authz-matrix.integration.test.ts` (access level, valid body, owned resource).
+5. Ensure the plugin is in `apiPlugins` (`src/modules/api-plugins.ts`), which `src/app.ts` mounts (called from `src/index.ts`), and add the route to the `ROUTES` table in `test/integration/authz-matrix.integration.test.ts` (access level, valid body, owned resource).
 6. Log per the Logging rules above: failure paths with context; any new background work wrapped in `runWithLogContext`.
 7. Add/extend tests.
 

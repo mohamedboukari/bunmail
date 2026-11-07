@@ -79,7 +79,11 @@ bunmail/
 ├── .gitignore
 ├── drizzle/                              ← Generated migrations
 ├── src/
-│   ├── index.ts                          ← Elysia app entry point
+│   ├── index.ts                          ← Process entry: runs the boot steps in order, then starts the app, the background services and the signal handlers (#387)
+│   ├── app.ts                            ← The Elysia app: request context, security headers, OpenAPI, global `onError`, every route group; `startApp` listens
+│   ├── boot.ts                           ← Boot steps before the listener: app version, DKIM key decrypt check, owner bootstrap, ignored-settings warnings
+│   ├── background-services.ts            ← Starts the queue, both SMTP listeners, purge, webhook worker, re-verification, DNSBL self-check, memory sweeps
+│   ├── process-lifecycle.ts              ← Crash logger (registered first) and the SIGINT/SIGTERM graceful shutdown (registered last)
 │   ├── config.ts                         ← Assembles `config` from config/ and re-exports its readers
 │   ├── config/                           ← Env readers with validation and the `config` section builders, one file per area (env, app, mail, auth, sso, smtp, retention, observability, storage)
 │   ├── db/
@@ -121,7 +125,7 @@ bunmail/
 │   │   ├── dns-wire.ts                   ← DNS wire format for dns-txt.ts: name checks, query, strict response parse (pure)
 │   │   └── crypto.ts                     ← API key hashing + AES-256-GCM encryptSecret/decryptSecret (#23)
 │   ├── modules/
-│   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by index.ts and the authz matrix test (#228)
+│   │   ├── api-plugins.ts                ← Every REST API plugin, mounted by app.ts and the authz matrix test (#228)
 │   │   ├── emails/
 │   │   │   ├── emails.plugin.ts          ← POST /send, GET /emails
 │   │   │   ├── errors.ts                 ← Typed send rejections with status + code (#245)
@@ -1412,7 +1416,7 @@ Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners
 | **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (default `2525`; use `25` in production) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). Spam protection: `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` connections per `60` seconds). See [docs/inbound.md](docs/inbound.md). |
 | **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (`465` with a TLS cert, `587` without) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`: implicit TLS from the first byte, terminated by Bun's TLS server (`SMTP_SUBMISSION_TLS_MODE`, default `implicit`; `starttls` refuses to boot on Bun, which cannot upgrade a connection server-side, #349), or `SMTP_SUBMISSION_ALLOW_INSECURE=true` for plaintext AUTH on a trusted network (default `false`: with neither TLS nor this flag the server refuses to start); per-IP connection and failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` per `60` seconds) and `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failures per `900` seconds); `SMTP_SUBMISSION_DAILY_QUOTA` per key per UTC day (`0`: unlimited). See [docs/smtp-submission.md](docs/smtp-submission.md). |
 
-Both are started from [src/index.ts](src/index.ts) after the queue processor and stopped in the graceful shutdown handler.
+Both are started from [src/background-services.ts](src/background-services.ts) after the queue processor and stopped in the graceful shutdown handler ([src/process-lifecycle.ts](src/process-lifecycle.ts)).
 
 ### Several replicas
 
@@ -1436,7 +1440,7 @@ Every Redis key expires (counters with their window, reveals after 60 s, MX slot
 ## Error Handling
 
 - Services throw; routes don't catch
-- Elysia's global `onError` handler in [src/index.ts](src/index.ts) maps known error classes to structured JSON responses:
+- Elysia's global `onError` handler in [src/app.ts](src/app.ts) maps known error classes to structured JSON responses:
   - Request validation failure → 422 with `{ code: "VALIDATION_ERROR", details: [{ path, message }] }` (submitted values never echoed); malformed JSON → 400 `INVALID_BODY`
   - `NOT_FOUND` → 404 (HTML for `Accept: text/html`, JSON otherwise)
   - `SuppressedRecipientError` → 422 with `{ code: "RECIPIENT_SUPPRESSED", suppressionId }` (#25)

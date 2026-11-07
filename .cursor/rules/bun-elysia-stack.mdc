@@ -20,7 +20,11 @@ alwaysApply: true
 
 ```
 src/
-  index.ts                 ← Elysia app + plugin registration + lifecycle
+  index.ts                 ← Process entry: runs the boot steps in order
+  app.ts                   ← Elysia app + plugin registration + global onError
+  boot.ts                  ← Boot steps before the listener (checks, owner bootstrap)
+  background-services.ts   ← Starts the queue, SMTP listeners and workers
+  process-lifecycle.ts     ← Crash logger + graceful shutdown
   config.ts                ← Env reads + runtime validation; throws at import
   db/
     index.ts               ← Drizzle DB connection
@@ -54,7 +58,7 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 
 ## Elysia rules
 
-- One `Elysia` plugin per feature, exported from `<feature>.plugin.ts`. Compose them in `src/index.ts` via `.use()`.
+- One `Elysia` plugin per feature, exported from `<feature>.plugin.ts`. Compose them in `src/app.ts` via `.use()`.
 - Set `normalize: true` on every plugin so `/api/v1/foo` and `/api/v1/foo/` both work.
 - Validate request body / params / query with `t.Object({...})` from Elysia's `t`.
 - **Do not write business logic or DB calls inside route handlers.** Handlers parse → call a service → serialize → return. If the handler is more than ~10 lines, the service is missing logic.
@@ -100,7 +104,7 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 ## Error handling
 
 - Services throw; routes don't catch.
-- A global `onError` handler in `src/index.ts` catches `NOT_FOUND`, formats unhandled errors as `{ success: false, error }`, and hides stack traces in production.
+- A global `onError` handler in `src/app.ts` catches `NOT_FOUND`, formats unhandled errors as `{ success: false, error }`, and hides stack traces in production.
 
 ## Documentation
 

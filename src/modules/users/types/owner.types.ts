@@ -20,7 +20,7 @@ export interface OwnerSetupLink {
 }
 
 /**
- * What the boot-time owner bootstrap did (#215), so `src/index.ts` can log
+ * What the boot-time owner bootstrap did (#215), so `src/boot.ts` can log
  * the right line:
  *
  * - `created`: no owner existed; one was created with a setup link.

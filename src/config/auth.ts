@@ -33,7 +33,7 @@ export function ownerEmailProblem(raw: string): string | null {
  *   dashboard guard since account login (#216) replaced the shared
  *   password: a deploy cannot come up without an owner who can claim
  *   and sign in to the dashboard.
- * - Unset in development: `null`; `src/index.ts` warns and skips the owner
+ * - Unset in development: `null`; `src/boot.ts` warns and skips the owner
  *   bootstrap (this file cannot log: the logger imports config).
  * - Set but malformed, or over 254 characters: refuses to boot in every
  *   environment, because an explicit value with a typo is a mistake to
@@ -237,7 +237,7 @@ export function buildDashboardConfig() {
     /**
      * Legacy dashboard auth env vars (`DASHBOARD_PASSWORD`,
      * `SESSION_SECRET`) that are still set although #216 removed them.
-     * Only read by `src/index.ts`, which logs one warning at boot.
+     * Only read by `src/boot.ts`, which logs one warning at boot.
      */
     legacyAuthEnv: readLegacyAuthEnv(),
 
