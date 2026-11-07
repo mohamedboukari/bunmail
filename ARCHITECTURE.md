@@ -1408,7 +1408,7 @@ Because compose always sets `BUNMAIL_ENV=production`, the app refuses to start u
 
 **Local development:** Use [Neon](https://neon.tech) (free PostgreSQL cloud) to avoid installing PostgreSQL locally. Set `DATABASE_URL` in `.env`.
 
-**Production:** `docker compose up -d --build` starts the app (published on `127.0.0.1:$PORT`, behind a reverse proxy) and PostgreSQL (compose network only). Host-specific ports and mounts live in an untracked `docker-compose.override.yml` copied from `docker-compose.override.example.yml` (#205). The container runs `bun run db:migrate && bun run start`, so pending migrations apply on every start.
+**Production:** `docker compose up -d --build` starts the app (published on `127.0.0.1:$PORT`, behind a reverse proxy) and PostgreSQL (compose network only). Host-specific ports and mounts live in an untracked `docker-compose.override.yml` copied from `docker-compose.override.example.yml` (#205). The container runs `bun run db:migrate && exec bun src/index.ts`, so pending migrations apply on every start and the server is the container's main process: `docker stop` reaches it as SIGTERM and the graceful shutdown runs (queue leases released, listeners closed, traces flushed) within Docker's 10-second grace period.
 
 ### Optional SMTP listeners
 
