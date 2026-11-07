@@ -406,7 +406,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
 
 | Field               | Type   | Required | Description                                                                                      |
 |---------------------|--------|----------|--------------------------------------------------------------------------------------------------|
-| `name`              | string | Yes      | Domain name (e.g. "example.com")                                                                 |
+| `name`              | string | Yes      | Domain name (e.g. "example.com"), at most 255 characters. Normalised, then checked (#406): see below. |
 | `unsubscribeEmail`  | string | No       | Mailbox emitted in `List-Unsubscribe: <mailto:...>`. Defaults to `unsubscribe@<name>` if omitted. |
 | `unsubscribeUrl`    | string | No       | RFC 8058 one-click endpoint; must start with `https://`. When set, mail also carries `List-Unsubscribe-Post: List-Unsubscribe=One-Click`. Single-recipient mail carries BunMail's own per-recipient `/u/<token>` link instead when `APP_BASE_URL` is `https://` (#249). |
 | `notifyEmail`       | string | No       | Address notified when inbound mail is received for this domain (#106). Use an external mailbox. Editable later from the dashboard; empty clears it. |
@@ -486,7 +486,17 @@ Every domain response also carries (#250):
 ---
 
 
-The name is stored lowercase (DNS names are case-insensitive), and every lookup by name ignores case, also for domains registered before that. Registering a name that already exists in any case returns `409 DOMAIN_ALREADY_REGISTERED`.
+The name is normalised (#406): trimmed, lowercased (DNS names are case-insensitive), one final dot dropped, and a Unicode IDN converted to its A-label (`bücher.example` is stored as `xn--bcher-kva.example`). It must then be a host name of at least two labels, each 1 to 63 letters, digits or inner hyphens, 253 characters at most, with a top label that is not all digits; anything else (a URL, a port, a space, a single label such as `localhost`, an empty label, an IP address) is refused with `422`, and nothing is stored:
+
+```json
+{
+  "success": false,
+  "error": "The domain name must be a host name such as example.com: at least two labels of 1 to 63 letters, digits or inner hyphens, 253 characters at most, with no scheme, port, path or spaces.",
+  "code": "INVALID_DOMAIN_NAME"
+}
+```
+
+Every lookup by name ignores case and normalises the name the same way, also for domains registered before that. Registering a name that already exists in any form (`Example.COM.` and `example.com` are the same domain) returns `409 DOMAIN_ALREADY_REGISTERED`. See [docs/domains.md](domains.md#domain-name-406).
 
 #### `GET /api/v1/domains`
 
@@ -962,6 +972,6 @@ Some responses carry additional structured fields: e.g. suppression-list rejecti
 | 403    | Authenticated but not permitted: `From` not in the key's allowed-senders list (`UNAUTHORIZED_SENDER`), or a restricted key calling an admin-only endpoint (`ADMIN_REQUIRED`, #130), or a restricted key subscribing a webhook to `email.received`, `domain.verified` or `domain.verification_failed` (`INBOUND_EVENTS_REQUIRE_ADMIN`), or creating an API key with a key whose dashboard user is deactivated or removed (`API_KEY_CREATOR_INACTIVE`, #219) |
 | 404    | Resource not found, or a send's `templateId` is not a template of the calling key (`TEMPLATE_NOT_FOUND`, #245) |
 | 413    | Request body larger than the limit, rejected before it is read: 12 MiB plus the base64 of `ATTACHMENTS_MAX_TOTAL_MB` plus 64 KiB (about 19.3 MB with the default 5 MB, #181) |
-| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender, subject or body (#245, #250): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`), `SUBJECT_REQUIRED` or `BODY_REQUIRED`, or a suppressed recipient (`RECIPIENT_SUPPRESSED`), or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a `marketing` send that cannot carry the one-click unsubscribe link (`MARKETING_REQUIRES_ONE_CLICK`, #250), or a send over the recipient caps (`TOO_MANY_RECIPIENTS`, #178), or an `Idempotency-Key` header on the batch endpoint (`IDEMPOTENCY_KEY_NOT_SUPPORTED`, #178), or a send refused on its attachments (`TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED`, #181), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250) |
-| 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively; a DKIM key rotation step refused on the domain's state (#250): `DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE` |
+| 422    | Validation error: `VALIDATION_ERROR` with `details: [{ path, message }]` (the submitted values are never echoed), a webhook URL rejected by the SSRF guard (`WEBHOOK_URL_BLOCKED`, #128), a rendered template over its size limit (`TEMPLATE_OUTPUT_TOO_LARGE`), or a send refused on its sender, subject or body (#245, #250): `SENDER_DOMAIN_NOT_REGISTERED`, `SENDER_DOMAIN_UNVERIFIED` (`REQUIRE_VERIFIED_DOMAIN=true`), `SUBJECT_REQUIRED` or `BODY_REQUIRED`, or a suppressed recipient (`RECIPIENT_SUPPRESSED`), or on a custom header (`INVALID_CUSTOM_HEADER`, #177), or an `Idempotency-Key` reused with another body (`IDEMPOTENCY_KEY_REUSED`, #188), or a `marketing` send that cannot carry the one-click unsubscribe link (`MARKETING_REQUIRES_ONE_CLICK`, #250), or a send over the recipient caps (`TOO_MANY_RECIPIENTS`, #178), or an `Idempotency-Key` header on the batch endpoint (`IDEMPOTENCY_KEY_NOT_SUPPORTED`, #178), or a send refused on its attachments (`TOO_MANY_ATTACHMENTS`, `ATTACHMENTS_TOO_LARGE`, `ATTACHMENT_TYPE_NOT_ALLOWED`, #181), or a webhook create past `WEBHOOKS_MAX_PER_API_KEY` (`WEBHOOK_LIMIT_REACHED`, #258), or a DKIM selector that is not one lowercase DNS label (`VALIDATION_ERROR` on `POST /api/v1/domains`; `INVALID_DKIM_SELECTOR` from the service, #250), or a domain name that is not a host name once normalised (`INVALID_DOMAIN_NAME` on `POST /api/v1/domains`, #406) |
+| 409    | `DOMAIN_ALREADY_REGISTERED`: `POST /api/v1/domains` with a name already registered, compared case-insensitively after normalisation (#406); a DKIM key rotation step refused on the domain's state (#250): `DKIM_ROTATION_PENDING`, `DKIM_NO_PENDING_ROTATION`, `DKIM_PENDING_NOT_PUBLISHED`, `DKIM_PENDING_KEY_UNREADABLE` |
 | 429    | Rate limit exceeded, or a delivery replayed 5 times this hour (`REPLAY_LIMIT_REACHED`, #258); both send `Retry-After` |

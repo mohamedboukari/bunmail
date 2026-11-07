@@ -4,9 +4,14 @@ import { domains } from "../models/domain.schema.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { encryptSecret } from "../../../utils/crypto.ts";
-import { config } from "../../../config.ts";
+import { asciiLowerCase, config } from "../../../config.ts";
 import type { Domain, CreateDomainInput } from "../types/domain.types.ts";
-import { DomainAlreadyRegisteredError, InvalidDkimSelectorError } from "../errors.ts";
+import {
+  DomainAlreadyRegisteredError,
+  InvalidDkimSelectorError,
+  InvalidDomainNameError,
+} from "../errors.ts";
+import { normalizeDomainName, parseDomainName } from "./domain-name.ts";
 import {
   DEFAULT_DKIM_SELECTOR,
   dkimRecordValue,
@@ -20,9 +25,18 @@ const UNIQUE_VIOLATION = "23505";
 /**
  * Matches a domain row by name, case-insensitively: DNS names are, and
  * rows created before names were stored lowercase may carry capitals.
+ * The name is normalised as on create (#406), so `Example.COM.` and
+ * `example.com` find the same row, and a Unicode IDN finds its A-label.
+ * When normalising changes more than the case, the name trimmed and
+ * lowercased as before #406 matches too, so a row stored in that form
+ * (a final dot, a Unicode name) is still found by every lookup that
+ * found it before.
  */
 export function domainNameIs(name: string): SQL {
-  return sql`lower(${domains.name}) = ${name.trim().toLowerCase()}`;
+  const normalized = normalizeDomainName(name);
+  const asBefore = name.trim().toLowerCase();
+  if (normalized === asBefore) return sql`lower(${domains.name}) = ${normalized}`;
+  return sql`lower(${domains.name}) in (${normalized}, ${asBefore})`;
 }
 
 /**
@@ -32,13 +46,24 @@ export function domainNameIs(name: string): SQL {
  * alongside the domain name. The user must add a DNS TXT record
  * with the public key before DKIM verification can pass.
  *
+ * The name is normalised, then checked (#406, see `domain-name.ts`): a
+ * name that is not a host name throws {@link InvalidDomainNameError}.
+ *
  * @param input - The domain name to register
  * @returns The newly created domain row
  */
 export async function createDomain(input: CreateDomainInput): Promise<Domain> {
   const id = generateId("dom");
-  /** Stored lowercase: DNS names are case-insensitive. */
-  const name = input.name.trim().toLowerCase();
+  /**
+   * Stored normalised (#406): trimmed, lowercase (DNS names are
+   * case-insensitive), no final dot, an IDN as its A-label.
+   */
+  const name = parseDomainName(input.name);
+  if (name === null) {
+    /** Not the value itself: it can be anything, the length is enough to investigate. */
+    logger.warn("Domain not created: invalid name", { length: input.name.length });
+    throw new InvalidDomainNameError();
+  }
   /** A DNS label (#250); the DTO checks it too, this covers the dashboard. */
   const dkimSelector = input.dkimSelector ?? DEFAULT_DKIM_SELECTOR;
   if (!isValidDkimSelector(dkimSelector)) {
@@ -147,6 +172,29 @@ export async function listDomains(): Promise<Domain[]> {
   logger.debug("Domains listed", { count: result.length });
 
   return result;
+}
+
+/** A stored domain name that domain creation would no longer store as is (#406). */
+export interface NonCanonicalDomainName {
+  id: string;
+  name: string;
+  /** What creation would store for it, or `null` when it would refuse it. */
+  normalized: string | null;
+}
+
+/**
+ * The stored domain names that creation would now refuse, or store in
+ * another form than case alone (a final dot, a Unicode IDN, spaces): rows
+ * created before names were checked (#406). Nothing is changed; the boot
+ * reports them.
+ */
+export async function findNonCanonicalDomainNames(): Promise<NonCanonicalDomainName[]> {
+  const rows = await db.select({ id: domains.id, name: domains.name }).from(domains);
+  return rows.flatMap((row) => {
+    const normalized = parseDomainName(row.name);
+    if (normalized !== null && normalized === asciiLowerCase(row.name)) return [];
+    return [{ id: row.id, name: row.name, normalized }];
+  });
 }
 
 /**

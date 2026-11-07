@@ -7,9 +7,10 @@ Manages sender domains, auto-generates DKIM keys, and verifies DNS records (SPF,
 ```
 src/modules/domains/
 ├── domains.plugin.ts               ← Elysia plugin (route group)
-├── errors.ts                       ← DomainAlreadyRegisteredError, InvalidDkimSelectorError, DkimRotationError (#250)
+├── errors.ts                       ← DomainAlreadyRegisteredError, InvalidDomainNameError (#406), InvalidDkimSelectorError, DkimRotationError (#250)
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
+│   ├── domain-name.ts              ← Name normalisation and the host name rule on create (#406)
 │   ├── dkim-keys.ts                ← Key generation, selector rules, dated selectors, TXT match (#250)
 │   ├── dkim-rotation.service.ts    ← DKIM key rotation: start, complete, cancel (#250)
 │   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
@@ -70,6 +71,17 @@ Table: `domains`
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
 | created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed: who created it (#219, attribution only; NULL = the owner) |
+
+## Domain Name (#406)
+
+`POST /api/v1/domains` and the dashboard's add form normalise the name, then check it (`domain-name.ts`):
+
+1. **Normalise**: trim; convert a Unicode IDN to its A-label with `node:url`'s `domainToASCII` (`bücher.example` becomes `xn--bcher-kva.example`; only a name with non-ASCII characters and no ASCII space or control character is converted); lowercase ASCII letters; drop one final dot (`Example.COM.` becomes `example.com`).
+2. **Check**: a host name of at least two labels, each 1 to 63 letters, digits or inner hyphens (no leading or trailing hyphen), 253 characters at most, whose top label is not all digits (so an IPv4 address is refused). A URL (`https://example.com`), a port (`example.com:25`), a space, an `@`, an empty label (`example..com`, `example.com..`) and a single label (`localhost`) are all refused.
+
+A refused name is `422 INVALID_DOMAIN_NAME` over REST (the message never repeats the submitted value) and an error flash on the dashboard; nothing is stored. The normalised name is what is stored and compared: `Example.COM.` and `example.com` are the same domain (`409 DOMAIN_ALREADY_REGISTERED`).
+
+**Rows stored before #406** are never changed. At boot (`warnNonCanonicalDomainNames` in `src/boot.ts`), each stored name that creation would now refuse, or store differently than by case alone (a final dot, a Unicode IDN), is logged once as a `warn` with its `domainId`, `name` and `normalized` form (`null` when refused); the boot goes on. Such a name can miss sender-domain lookups and DNS checks: delete the domain and add it again under its normalised name (its DKIM key changes, so publish the new TXT record).
 
 ## DKIM Key Generation
 
@@ -194,7 +206,7 @@ There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 ### domain.service.ts
 
 #### `createDomain(input): Promise<Domain>`
-Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. The name is trimmed and stored lowercase; a name already registered in any case throws `DomainAlreadyRegisteredError` (`409 DOMAIN_ALREADY_REGISTERED`), and lookups by name ignore case. The key is generated under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
+Creates a domain record and auto-generates a 2048-bit RSA keypair for DKIM signing. The name is normalised and checked (see Domain Name above; a refused one throws `InvalidDomainNameError`, `422 INVALID_DOMAIN_NAME`, #406) and stored in that form; a name already registered in any form throws `DomainAlreadyRegisteredError` (`409 DOMAIN_ALREADY_REGISTERED`). Lookups by name (`domainNameIs`, used by `getDomainByName`, `domainExistsByName`, the sender-domain check and the queue's legacy lookup) ignore case and normalise the name the same way; when that changes more than the case, the name trimmed and lowercased as before #406 matches too, so a row stored in that form is still found. The key is generated under `input.dkimSelector` (default `bunmail`; an invalid one throws `InvalidDkimSelectorError`, #250). `input.createdByUserId` (#219) records who added it: the dashboard user, or over REST the calling key's user (null = the owner).
 
 #### `getDkimDnsRecord(domain): string | null`
 Returns the DKIM DNS TXT record value (`v=DKIM1; k=rsa; p=<base64>`) for a domain.
@@ -216,6 +228,13 @@ Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243); only the fields prese
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
 Hard-deletes a domain and its keys.
+
+#### `findNonCanonicalDomainNames(): Promise<NonCanonicalDomainName[]>`
+The stored names that creation would now refuse or store differently than by case alone (#406), as `{ id, name, normalized }` (`normalized` is `null` when refused). Read-only; the boot logs one `warn` per entry.
+
+### domain-name.ts (#406)
+
+Pure helpers, no database: `normalizeDomainName(input)` (trim, IDN to A-label, ASCII lowercase, one final dot dropped; never refuses) and `parseDomainName(input)` (the normalised name, or `null` when it is not a host name; see Domain Name above). The label and length rule is `isLowerAsciiDomain` from `src/config/sso.ts`, shared with SSO's allowed domains (#224); the all-digit top label check is added here.
 
 ### dkim-keys.ts (#250)
 
@@ -313,7 +332,8 @@ All routes require Bearer token auth and are rate-limited.
 
 `POST /api/v1/domains` accepts an optional `notifyEmail` field to set the
 inbound-notification address at create time (see below), and an optional
-`dkimSelector` (see Selector above).
+`dkimSelector` (see Selector above). The `name` is normalised and checked
+(see Domain Name above): `422 INVALID_DOMAIN_NAME` when it is not a host name.
 
 ## Inbound Notifications (#106)
 

@@ -8,6 +8,7 @@ import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
   InvalidDkimSelectorError,
+  InvalidDomainNameError,
 } from "../../modules/domains/errors.ts";
 import * as domainService from "../../modules/domains/services/domain.service.ts";
 import { verifyDomain } from "../../modules/domains/services/dns-verification.service.ts";
@@ -112,7 +113,7 @@ export function domainPages(app: GuardedDashboard) {
             });
 
             logger.info("Domain added via dashboard", {
-              name: body.name,
+              name: domain.name,
               userId: auth.user.id,
             });
             set.status = 302;
@@ -121,6 +122,8 @@ export function domainPages(app: GuardedDashboard) {
           } catch (error) {
             if (error instanceof DomainAlreadyRegisteredError) {
               logger.warn("Domain not added via dashboard: already registered");
+            } else if (error instanceof InvalidDomainNameError) {
+              logger.warn("Domain not added via dashboard: invalid name");
             } else if (error instanceof InvalidDkimSelectorError) {
               logger.warn("Domain not added via dashboard: invalid DKIM selector");
             } else {

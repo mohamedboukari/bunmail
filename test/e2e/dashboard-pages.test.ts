@@ -279,6 +279,28 @@ describe("Dashboard E2E: pages behind a session", () => {
       expect(location).toContain("flash=");
     });
 
+    test("POST /dashboard/domains with an invalid name redirects with an error flash (#406)", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/dashboard/domains", {
+          method: "POST",
+          headers: {
+            cookie: sessionCookie,
+            "content-type": "application/x-www-form-urlencoded",
+            origin: "http://localhost",
+          },
+          body: new URLSearchParams({ name: "https://example.com" }).toString(),
+        }),
+      );
+      expect(response.status).toBe(302);
+      const location = response.headers.get("location") ?? "";
+      expect(location).toStartWith("/dashboard/domains?flash=");
+      expect(location).toContain("flashType=error");
+      const flash = new URL(location, "http://localhost").searchParams.get("flash");
+      expect(flash).toContain("must be a host name such as example.com");
+      /** The submitted value is not echoed into the redirect URL. */
+      expect(flash).not.toContain("https://");
+    });
+
     test("rejects a cross-origin POST with 403 (CSRF guard, #133)", async () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/api-keys", {

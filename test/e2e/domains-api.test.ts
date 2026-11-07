@@ -1,6 +1,8 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Elysia } from "elysia";
 import { readJson } from "../read-json.ts";
+import { InvalidDomainNameError } from "../../src/modules/domains/errors.ts";
+import { parseDomainName } from "../../src/modules/domains/services/domain-name.ts";
 
 /**
  * E2E tests for the Domains API (/api/v1/domains).
@@ -44,6 +46,7 @@ interface DomainListResponse {
 interface ErrorResponse {
   success: false;
   error: string;
+  code?: string;
 }
 
 /* ─── Mock config ─── */
@@ -117,7 +120,12 @@ const mockDomain = {
 
 /* ─── Mock domain service ─── */
 void mock.module("../../src/modules/domains/services/domain.service.ts", () => ({
-  createDomain: mock(() => Promise.resolve(mockDomain)),
+  /** Refuses a name as the real service does (#406), so the 422 path is exercised. */
+  createDomain: mock((input: { name: string }) =>
+    parseDomainName(input.name) === null
+      ? Promise.reject(new InvalidDomainNameError())
+      : Promise.resolve(mockDomain),
+  ),
   suggestedSpfRecord: mock(() => "v=spf1 a:mail.example.com -all"),
   spfAuthorizationTerm: mock(() => "a:mail.example.com"),
   listDomains: mock(() => Promise.resolve([mockDomain])),
@@ -134,6 +142,7 @@ void mock.module("../../src/modules/domains/services/domain.service.ts", () => (
   updateDomainNotifyEmail: mock(() => Promise.resolve(undefined)),
   updateDomainUnsubscribe: mock(() => Promise.resolve(undefined)),
   domainNameIs: mock(() => undefined),
+  findNonCanonicalDomainNames: mock(() => Promise.resolve([])),
 }));
 
 /* ─── Mock the live DNS status (#250): no real DNS in e2e ─── */
@@ -192,8 +201,18 @@ void mock.module("../../src/middleware/rate-limit.ts", () => ({
 /* ─── Import plugin after mocking ─── */
 const { domainsPlugin } = await import("../../src/modules/domains/domains.plugin.ts");
 
-/** Test app instance with the domains plugin */
-const app = new Elysia().use(domainsPlugin);
+/**
+ * Test app instance with the domains plugin, and the invalid domain name
+ * branch of the global onError in `src/app.ts` (#406).
+ */
+const app = new Elysia()
+  .onError(({ error, set }) => {
+    if (error instanceof InvalidDomainNameError) {
+      set.status = 422;
+      return { success: false, error: error.message, code: error.code };
+    }
+  })
+  .use(domainsPlugin);
 
 /* ─── Tests ─── */
 
@@ -220,6 +239,30 @@ describe("Domains API E2E", () => {
       expect(body.data.dkimPrivateKey).toBeUndefined();
       expect(body.data.dkimPublicKey).toBeUndefined();
     });
+
+    test.each(["https://example.com", "localhost", "example.com:25", "exa mple.com"])(
+      "returns 422 INVALID_DOMAIN_NAME for %p, without echoing it (#406)",
+      async (name) => {
+        const response = await app.handle(
+          new Request("http://localhost/api/v1/domains", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer test_key",
+            },
+            body: JSON.stringify({ name }),
+          }),
+        );
+        expect(response.status).toBe(422);
+        const body = await readJson<ErrorResponse>(response);
+        expect(body).toEqual({
+          success: false,
+          error: new InvalidDomainNameError().message,
+          code: "INVALID_DOMAIN_NAME",
+        });
+        expect(body.error).not.toContain(name);
+      },
+    );
 
     test("returns 422 on missing name", async () => {
       const response = await app.handle(

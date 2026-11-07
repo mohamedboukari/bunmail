@@ -14,6 +14,24 @@ export class DomainAlreadyRegisteredError extends Error {
 }
 
 /**
+ * A domain name that is not a host name once normalised (#406): a URL, a
+ * port, a space, a single label, an empty or malformed label, an IP
+ * address or over 253 characters. Mapped to `422 INVALID_DOMAIN_NAME` by
+ * the global error handler; the dashboard shows the message as is. The
+ * message never repeats the submitted value.
+ */
+export class InvalidDomainNameError extends Error {
+  override readonly name = "InvalidDomainNameError";
+  readonly code = "INVALID_DOMAIN_NAME";
+
+  constructor() {
+    super(
+      "The domain name must be a host name such as example.com: at least two labels of 1 to 63 letters, digits or inner hyphens, 253 characters at most, with no scheme, port, path or spaces.",
+    );
+  }
+}
+
+/**
  * A DKIM selector that is not one lowercase DNS label (#250). Mapped to
  * `422 INVALID_DKIM_SELECTOR` by the global error handler; the REST DTO
  * rejects one first (`422 VALIDATION_ERROR`), so this covers the dashboard.

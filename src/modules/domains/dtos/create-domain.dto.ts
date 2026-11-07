@@ -31,7 +31,12 @@ export const unsubscribeEmailSchema = t.String({
 });
 
 export const createDomainDto = t.Object({
-  /** The domain name to register (e.g. "example.com") */
+  /**
+   * The domain name to register (e.g. "example.com"). Only its length is
+   * checked here: the service normalises it (trim, lowercase, one final
+   * dot dropped, a Unicode IDN to its A-label) and refuses anything that
+   * is not then a host name with `422 INVALID_DOMAIN_NAME` (#406).
+   */
   name: t.String({ minLength: 1, maxLength: 255 }),
 
   /**
