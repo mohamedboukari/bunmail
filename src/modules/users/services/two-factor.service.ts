@@ -1,47 +1,33 @@
-import { and, count, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
-import { config } from "../../../config.ts";
-import { decryptSecret, encryptSecret } from "../../../utils/crypto.ts";
-import { generateId } from "../../../utils/id.ts";
-import { UserStoreError, withSanitizedErrors } from "../errors.ts";
-import { sessions } from "../models/session.schema.ts";
+import { withSanitizedErrors } from "../errors.ts";
 import { users } from "../models/user.schema.ts";
 import { userCredentials } from "../models/user-credential.schema.ts";
 import { userRecoveryCodes } from "../models/user-recovery-code.schema.ts";
 import type {
   AttemptLimiter,
-  ConfirmEnrolmentResult,
-  DbExecutor,
   DisableTwoFactorResult,
-  PendingEnrolment,
   PendingSession,
   RegenerateRecoveryCodesResult,
-  RemovedSecondFactors,
   SecondFactorMethod,
   SessionClient,
-  Tx,
   TwoFactorLoginResult,
-  TwoFactorStatus,
 } from "../types/user.types.ts";
 import { verifyPassword } from "./password.service.ts";
 import {
-  generateRecoveryCodes,
-  hashRecoveryCode,
-  normalizeRecoveryCode,
-} from "./recovery-code.service.ts";
-import {
-  elevatePendingSession,
-  lockPendingSession,
-  markSessionMfa,
-  setTotpPendingSecret,
-  totpPendingSecretOf,
-} from "./session.service.ts";
-import * as totp from "./totp.service.ts";
+  NO_CLIENT,
+  issueRecoveryCodes,
+  matchSecondFactor,
+  selfAudit,
+  totpCredentialOf,
+} from "./two-factor-match.service.ts";
+import { elevatePendingSession, lockPendingSession } from "./session.service.ts";
 import {
   recordFactorRemovalRefused,
   removalBreaksOwnerSsoRule,
 } from "./sso-owner-rule.service.ts";
 import { recordAuditEvent } from "../../audit/services/audit.service.ts";
+import { passwordHashOf } from "./two-factor-enrolment.service.ts";
 
 /**
  * TOTP two-factor authentication for the dashboard (#220): enrolment,
@@ -79,347 +65,29 @@ import { recordAuditEvent } from "../../audit/services/audit.service.ts";
  * shows it. Database errors leave this module as `UserStoreError`.
  */
 
-/** The credential type of the second factor. */
-const TOTP_CREDENTIAL = "totp";
-
-/** The credential type the disable step re-verifies. */
-const PASSWORD_CREDENTIAL = "password";
-
-/** SQLSTATE of a unique violation: a second `totp` row for the account. */
-const UNIQUE_VIOLATION = "23505";
-
-/** No request metadata (a script, a test): the event is still recorded. */
-const NO_CLIENT: SessionClient = { ip: null, userAgent: null };
-
-/** The account acting on its own second factor, as the audit log records it (#221). */
-function selfAudit(
-  userId: string,
-  client: SessionClient,
-): {
-  actor: { type: "user"; id: string };
-  ip: string | null;
-  userAgent: string | null;
-  target: { type: "user"; id: string };
-} {
-  return {
-    actor: { type: "user", id: userId },
-    ...client,
-    target: { type: "user", id: userId },
-  };
-}
-
-/** A matched second factor, with the `totp` credential it belongs to. */
-type FactorMatch =
-  | { ok: true; method: "totp"; credentialId: string }
-  | {
-      ok: true;
-      method: "recovery_code";
-      credentialId: string;
-      recoveryCodesLeft: number;
-    }
-  | { ok: false; reason: "wrong_code" | "not_enabled" };
-
-/** The account's `totp` credential, if it has one. */
-async function totpCredentialOf(
-  executor: DbExecutor,
-  userId: string,
-): Promise<
-  | { id: string; secretHash: string | null; counter: number | null; createdAt: Date }
-  | undefined
-> {
-  const [row] = await executor
-    .select({
-      id: userCredentials.id,
-      secretHash: userCredentials.secretHash,
-      counter: userCredentials.counter,
-      createdAt: userCredentials.createdAt,
-    })
-    .from(userCredentials)
-    .where(
-      and(eq(userCredentials.userId, userId), eq(userCredentials.type, TOTP_CREDENTIAL)),
-    )
-    .limit(1);
-  return row;
-}
-
-/** The secret's key bytes from its stored (encrypted base32) form. Throws when unreadable. */
-function secretKey(encrypted: string): Buffer {
-  const key = totp.base32Decode(decryptSecret(encrypted, config.dkimEncryptionKey));
-  if (!key) throw new Error("Stored TOTP secret is not valid base32");
-  return key;
-}
-
-/** Inserts fresh recovery codes for a `totp` credential and returns them for display. */
-async function issueRecoveryCodes(
-  tx: Tx,
-  userId: string,
-  credentialId: string,
-): Promise<string[]> {
-  const codes = generateRecoveryCodes();
-  await tx.insert(userRecoveryCodes).values(
-    codes.map((code) => ({
-      id: generateId("rcv"),
-      userId,
-      credentialId,
-      /** Generated codes always normalize; the fallback only satisfies the type. */
-      codeHash: hashRecoveryCode(normalizeRecoveryCode(code) ?? code),
-    })),
-  );
-  return codes;
-}
-
-/** Unused recovery codes of an account. */
-async function recoveryCodesLeft(executor: DbExecutor, userId: string): Promise<number> {
-  const [row] = await executor
-    .select({ left: count() })
-    .from(userRecoveryCodes)
-    .where(and(eq(userRecoveryCodes.userId, userId), isNull(userRecoveryCodes.usedAt)));
-  return row?.left ?? 0;
-}
-
 /**
- * Checks a submitted second factor inside the caller's transaction and
- * spends it:
+ * The service's public surface (#387). The second login step, disabling
+ * and regenerating live here; the rest is in one file per concern, beside
+ * this one:
  *
- * - Six digits: a TOTP code. It must match a step within the window and
- *   newer than the stored one (`matchTotpStep`, constant-time compares),
- *   and the compare-and-swap on `counter` must win; otherwise
- *   `wrong_code` (wrong, expired or replayed: one answer).
- * - Otherwise, when `allowRecovery`: a recovery code, spent by a
- *   conditional `UPDATE ... SET used_at = now() WHERE ... used_at IS
- *   NULL`, so it works exactly once even under concurrent submissions.
+ *   - `two-factor-match.service.ts`: the `totp` credential, its secret, recovery codes, checking a code
+ *   - `two-factor-enrolment.service.ts`: status, the password hash, starting and confirming an enrolment
+ *   - `two-factor-recovery.service.ts`: removing every second factor, which ones an account has
+ *
+ * Importers keep using this module.
  */
-async function matchSecondFactor(
-  tx: Tx,
-  userId: string,
-  input: string,
-  nowMs: number,
-  allowRecovery: boolean,
-): Promise<FactorMatch> {
-  const credential = await totpCredentialOf(tx, userId);
-  if (!credential?.secretHash) return { ok: false, reason: "not_enabled" };
-
-  if (totp.looksLikeTotpCode(input)) {
-    const step = totp.matchTotpStep(
-      secretKey(credential.secretHash),
-      input,
-      nowMs,
-      credential.counter,
-    );
-    if (step === null) return { ok: false, reason: "wrong_code" };
-    const swapped = await tx
-      .update(userCredentials)
-      .set({ counter: step, lastUsedAt: sql`now()` })
-      .where(
-        and(
-          eq(userCredentials.id, credential.id),
-          or(isNull(userCredentials.counter), lt(userCredentials.counter, step)),
-        ),
-      )
-      .returning({ id: userCredentials.id });
-    if (swapped.length === 0) return { ok: false, reason: "wrong_code" };
-    return { ok: true, method: "totp", credentialId: credential.id };
-  }
-
-  const normalized = allowRecovery ? normalizeRecoveryCode(input) : null;
-  if (normalized === null) return { ok: false, reason: "wrong_code" };
-  const spent = await tx
-    .update(userRecoveryCodes)
-    .set({ usedAt: sql`now()` })
-    .where(
-      and(
-        eq(userRecoveryCodes.userId, userId),
-        eq(userRecoveryCodes.codeHash, hashRecoveryCode(normalized)),
-        isNull(userRecoveryCodes.usedAt),
-      ),
-    )
-    .returning({ id: userRecoveryCodes.id });
-  if (spent.length === 0) return { ok: false, reason: "wrong_code" };
-  return {
-    ok: true,
-    method: "recovery_code",
-    credentialId: credential.id,
-    recoveryCodesLeft: await recoveryCodesLeft(tx, userId),
-  };
-}
-
-/* ─── Status and enrolment ─── */
-
-/** Whether the account has a second factor, since when, and its unused recovery codes. */
-export async function twoFactorStatus(userId: string): Promise<TwoFactorStatus> {
-  return withSanitizedErrors(async () => {
-    const credential = await totpCredentialOf(db, userId);
-    if (!credential) return { enabled: false, enabledAt: null, recoveryCodesLeft: 0 };
-    return {
-      enabled: true,
-      enabledAt: credential.createdAt,
-      recoveryCodesLeft: await recoveryCodesLeft(db, userId),
-    };
-  });
-}
-
-/** The account's `password` credential hash, or null (also the passkey re-auth, #223). */
-export async function passwordHashOf(userId: string): Promise<string | null> {
-  const [credential] = await withSanitizedErrors(() =>
-    db
-      .select({ secretHash: userCredentials.secretHash })
-      .from(userCredentials)
-      .where(
-        and(
-          eq(userCredentials.userId, userId),
-          eq(userCredentials.type, PASSWORD_CREDENTIAL),
-        ),
-      )
-      .limit(1),
-  );
-  return credential?.secretHash ?? null;
-}
-
-/**
- * Starts an enrolment in this session, after the user re-entered the
- * current password: a stolen session cookie alone must not be able to
- * turn 2FA on (which would sign the owner's other devices out and put
- * the account behind a code only the thief has). In order:
- *
- * 1. An account that already has a second factor is refused
- *    (`already_enabled`), before any password work.
- * 2. The password budget (`limiter`: the password change's keys,
- *    `password:user:<id>` and `password:ip:<bucket>`): over budget is
- *    refused (`rate_limited`), then the attempt is counted with no await
- *    in between.
- * 3. Exactly one argon2id verify of the current password; wrong (or no
- *    password credential): `wrong_password`, nothing written.
- * 4. A new random secret (20 bytes), encrypted and kept on the session
- *    row until it is confirmed; the budget is cleared. Starting again
- *    replaces it (the earlier QR code stops working).
- *
- * The pending secret is written only here, after the password check, so
- * `confirmEnrolment` (which needs it) can never run without a start that
- * passed the check.
- */
-export async function startEnrolment(
-  userId: string,
-  sessionId: string,
-  password: string,
-  limiter: AttemptLimiter,
-): Promise<
-  | { ok: true }
-  | { ok: false; reason: "already_enabled" | "rate_limited" | "wrong_password" }
-> {
-  if ((await twoFactorStatus(userId)).enabled) {
-    return { ok: false, reason: "already_enabled" };
-  }
-  if (await limiter.take()) return { ok: false, reason: "rate_limited" };
-  const hash = await passwordHashOf(userId);
-  if (hash === null || !(await verifyPassword(password, hash))) {
-    return { ok: false, reason: "wrong_password" };
-  }
-  const encrypted = encryptSecret(totp.generateTotpSecret(), config.dkimEncryptionKey);
-  await setTotpPendingSecret(userId, sessionId, encrypted);
-  await limiter.clear();
-  return { ok: true };
-}
-
-/**
- * The enrolment started in this session, decrypted for the page: the
- * secret (manual entry) and the `otpauth://` URI (QR code) for `account`.
- * `null` when none was started here.
- */
-export async function pendingEnrolment(
-  userId: string,
-  sessionId: string,
-  account: string,
-): Promise<PendingEnrolment | null> {
-  const encrypted = await totpPendingSecretOf(db, userId, sessionId);
-  if (encrypted === null) return null;
-  const secret = decryptSecret(encrypted, config.dkimEncryptionKey);
-  return { secret, uri: totp.otpauthUri(secret, account) };
-}
-
-/**
- * Confirms the enrolment started in this session with a first code from
- * the app. In one transaction, the session row locked:
- *
- * 1. The pending secret must exist (`no_pending`) and the account must
- *    not have a second factor yet (`already_enabled`, the pending secret
- *    is then cleared).
- * 2. The code must match (`wrong_code`; the pending secret stays, so the
- *    user can try again).
- * 3. The `totp` credential is stored (the encrypted secret, and the
- *    matched step as `counter`, so this very code cannot be replayed at
- *    the next sign-in); ten recovery codes are created (hashes only);
- *    every OTHER session of the account is deleted, as a password change
- *    does: they were opened with the password alone; this session
- *    becomes `mfa` and its pending secret is cleared.
- *
- * A second confirmation racing from another session of the account hits
- * the one-`totp`-per-user unique index and gets `already_enabled`.
- *
- * @returns the raw recovery codes, for the one-time reveal.
- */
-export async function confirmEnrolment(
-  userId: string,
-  sessionId: string,
-  code: string,
-  client: SessionClient = NO_CLIENT,
-  nowMs: number = Date.now(),
-): Promise<ConfirmEnrolmentResult> {
-  try {
-    return await withSanitizedErrors(() =>
-      db.transaction(async (tx): Promise<ConfirmEnrolmentResult> => {
-        const encrypted = await totpPendingSecretOf(tx, userId, sessionId, true);
-        if (encrypted === null) return { ok: false, reason: "no_pending" };
-        if (await totpCredentialOf(tx, userId)) {
-          await tx
-            .update(sessions)
-            .set({ totpPendingSecret: null })
-            .where(eq(sessions.id, sessionId));
-          return { ok: false, reason: "already_enabled" };
-        }
-
-        const step = totp.matchTotpStep(secretKey(encrypted), code, nowMs, null);
-        if (step === null) return { ok: false, reason: "wrong_code" };
-
-        const credentialId = generateId("crd");
-        await tx.insert(userCredentials).values({
-          id: credentialId,
-          userId,
-          type: TOTP_CREDENTIAL,
-          secretHash: encrypted,
-          counter: step,
-          lastUsedAt: sql`now()`,
-        });
-        const recoveryCodes = await issueRecoveryCodes(tx, userId, credentialId);
-
-        const revoked = await tx
-          .delete(sessions)
-          .where(and(eq(sessions.userId, userId), ne(sessions.id, sessionId)))
-          .returning({ id: sessions.id });
-        await markSessionMfa(tx, sessionId);
-        await tx
-          .update(users)
-          .set({ updatedAt: sql`now()` })
-          .where(eq(users.id, userId));
-        /** Recorded with the change (#221): both commit, or neither. */
-        await recordAuditEvent(
-          {
-            ...selfAudit(userId, client),
-            action: "auth.two_factor.enabled",
-            metadata: { sessionsRevoked: revoked.length },
-          },
-          tx,
-        );
-
-        return { ok: true, recoveryCodes, sessionsRevoked: revoked.length };
-      }),
-    );
-  } catch (error: unknown) {
-    if (error instanceof UserStoreError && error.sqlState === UNIQUE_VIOLATION) {
-      return { ok: false, reason: "already_enabled" };
-    }
-    throw error;
-  }
-}
+export {
+  twoFactorStatus,
+  passwordHashOf,
+  startEnrolment,
+  pendingEnrolment,
+  confirmEnrolment,
+} from "./two-factor-enrolment.service.ts";
+export {
+  removeSecondFactors,
+  removedAny,
+  secondFactorsOf,
+} from "./two-factor-recovery.service.ts";
 
 /* ─── Second login step ─── */
 
@@ -568,72 +236,4 @@ export async function regenerateRecoveryCodes(
       return { ok: true, recoveryCodes };
     }),
   );
-}
-
-/* ─── Recovery (lost authenticator) ─── */
-
-/** The credential type of a passkey (#223). */
-const PASSKEY_CREDENTIAL = "passkey";
-
-/**
- * Removes every second factor of the account, inside the caller's
- * transaction: the TOTP credential with its recovery codes (#220) and
- * every passkey (#223). The recovery path when the authenticator or the
- * passkeys are lost. Called by a completed admin-issued password reset
- * (#277) and a completed owner setup link (`reset-owner`), which already
- * sign every session of the account out. Pending enrolment secrets on its
- * sessions are cleared too.
- *
- * @returns what was removed, for the security email and the audit log.
- */
-export async function removeSecondFactors(
-  executor: DbExecutor,
-  userId: string,
-): Promise<RemovedSecondFactors> {
-  const removed = await executor
-    .delete(userCredentials)
-    .where(
-      and(
-        eq(userCredentials.userId, userId),
-        inArray(userCredentials.type, [TOTP_CREDENTIAL, PASSKEY_CREDENTIAL]),
-      ),
-    )
-    .returning({ type: userCredentials.type });
-  await executor
-    .update(sessions)
-    .set({ totpPendingSecret: null })
-    .where(eq(sessions.userId, userId));
-  return {
-    totp: removed.some((row) => row.type === TOTP_CREDENTIAL),
-    passkeys: removed.filter((row) => row.type === PASSKEY_CREDENTIAL).length,
-  };
-}
-
-/** Whether a removal took any second factor away. */
-export function removedAny(removed: RemovedSecondFactors): boolean {
-  return removed.totp || removed.passkeys > 0;
-}
-
-/**
- * Which second factors the account has (#223): whether it has TOTP and
- * how many passkeys. The second login step offers exactly these.
- */
-export async function secondFactorsOf(
-  userId: string,
-): Promise<{ totp: boolean; passkeys: number }> {
-  const rows = await withSanitizedErrors(() =>
-    db
-      .select({ type: userCredentials.type })
-      .from(userCredentials)
-      .where(
-        and(
-          eq(userCredentials.userId, userId),
-          inArray(userCredentials.type, [TOTP_CREDENTIAL, PASSKEY_CREDENTIAL]),
-        ),
-      ),
-  );
-  return {
-    totp: rows.some((row) => row.type === TOTP_CREDENTIAL),
-    passkeys: rows.filter((row) => row.type === PASSKEY_CREDENTIAL).length,
-  };
 }
