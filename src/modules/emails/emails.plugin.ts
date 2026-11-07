@@ -2,6 +2,9 @@ import { Elysia, t } from "elysia";
 import { sendEmailDto, sendEmailHeadersDto } from "./dtos/send-email.dto.ts";
 import { batchSendEmailDto, MAX_BATCH_EMAILS } from "./dtos/batch-send-email.dto.ts";
 import { listEmailsDto } from "./dtos/list-emails.dto.ts";
+import { listEmailEventsDto } from "./dtos/list-email-events.dto.ts";
+import { serializeEmailEvent } from "./serializations/email-event.serialization.ts";
+import { listEmailEvents } from "./services/email-events.service.ts";
 import {
   serializeEmail,
   type SerializedEmail,
@@ -62,6 +65,7 @@ async function serializeOneEmail(row: Email): Promise<SerializedEmail> {
  * - GET  /                      → List emails (excludes trashed)
  * - GET  /trash                 → List trashed emails
  * - GET  /:id                   → Get a single email by ID (excludes trashed)
+ * - GET  /:id/events            → Its recorded opens and clicks (#187)
  * - DELETE /:id                 → Move email to trash
  * - POST /bulk-delete           → Bulk-trash emails (body: {ids: string[]})
  * - POST /:id/restore           → Restore a trashed email
@@ -381,6 +385,44 @@ export const emailsPlugin = new Elysia({
         tags: ["Emails"],
         summary: "Get email by ID",
         description: "Returns a single email by its ID. Scoped to the current API key.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * GET /api/v1/emails/:id/events (#187): the email's recorded opens and
+   * clicks, oldest first, paginated like the list. Scoped like `GET /:id`.
+   */
+  .get(
+    "/:id/events",
+    async ({ params, query, apiKeyId, set }) => {
+      const page = query.page ?? 1;
+      const limit = query.limit ?? 20;
+      logger.info("GET /api/v1/emails/:id/events", {
+        emailId: params.id,
+        apiKeyId,
+        page,
+      });
+      const events = await listEmailEvents(params.id, apiKeyId, { page, limit });
+      if (!events) {
+        set.status = 404;
+        return { success: false, error: "Email not found" };
+      }
+      return {
+        success: true,
+        data: events.data.map(serializeEmailEvent),
+        pagination: { page, limit, total: events.total },
+      };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      query: listEmailEventsDto,
+      detail: {
+        tags: ["Emails"],
+        summary: "List an email's opens and clicks",
+        description:
+          "Returns the recorded open and click events of one email (open and click tracking), oldest first, paginated (at most 100 per page). Each event has its type, time, the click URL without query string and fragment, the link position, a coarse client kind and a machine guess; no IP address or user agent is stored. Open counts are unreliable: Apple Mail Privacy Protection fetches images at delivery, proxies cache them, and link scanners click links. Scoped to the current API key: 404 for an email of another key or in the trash.",
         security: [{ bearerAuth: [] }],
       },
     },

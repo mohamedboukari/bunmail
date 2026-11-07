@@ -24,5 +24,9 @@ export type WebhookEventType =
   | "email.complained"
   | "email.received"
   | "email.unsubscribed"
+  /** A recorded open of a tracked email (#187), with `first` and `machine`. */
+  | "email.opened"
+  /** A recorded click of a tracked email (#187), with the URL and link position. */
+  | "email.clicked"
   | "domain.verified"
   | "domain.verification_failed";

@@ -1110,6 +1110,7 @@ tlsrpt_reports ──1:N──▶ tlsrpt_results  (CASCADE on parent delete, #34
 | GET    | /api/v1/emails                      | List sent emails (excludes trash); `status`, `source` and repeatable `tag=key:value` filters | Yes  |
 | GET    | /api/v1/emails/trash                | List trashed emails                        | Yes  |
 | GET    | /api/v1/emails/:id                  | Get email by ID, with its per-MX `deliveryState` (#250) | Yes  |
+| GET    | /api/v1/emails/:id/events           | Its recorded opens and clicks, oldest first, paginated (#187) | Yes  |
 | DELETE | /api/v1/emails/:id                  | Move email to trash                        | Yes  |
 | POST   | /api/v1/emails/bulk-delete          | Bulk move to trash (`{ ids: [] }`)         | Yes  |
 | POST   | /api/v1/emails/:id/restore          | Restore from trash                         | Yes  |
@@ -1152,7 +1153,7 @@ tlsrpt_reports ──1:N──▶ tlsrpt_results  (CASCADE on parent delete, #34
 | GET    | /api/v1/webhooks/deliveries/:deliveryId | Single delivery + payload + last response | Yes |
 | POST   | /api/v1/webhooks/deliveries/:deliveryId/replay | Replay a delivery, flips to `pending` (5 per delivery per hour, #258) | Yes |
 
-Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (#191), `email.unsubscribed` (#249), all scoped to the sending key; `email.received`, `domain.verification_failed` and `domain.verified` (#250) to admin keys only. See [docs/webhooks.md](docs/webhooks.md#event-types).
+Events: `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained` (#191), `email.unsubscribed` (#249), `email.opened` and `email.clicked` (#187, every recorded open and click, enqueued in the recording transaction), all scoped to the sending key; `email.received`, `domain.verification_failed` and `domain.verified` (#250) to admin keys only. See [docs/webhooks.md](docs/webhooks.md#event-types).
 
 ### Templates
 

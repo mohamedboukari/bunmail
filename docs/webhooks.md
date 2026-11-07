@@ -94,6 +94,8 @@ Indexes:
 | `email.complained` | A mailbox provider's feedback loop reported that a recipient marked the message as spam (an ARF `abuse` or `fraud` report linked to the email by its Message-ID), and a permanent `complaint` suppression was created or strengthened (#191). Fires once per suppression change: a repeated report for an address already suppressed as `complaint` fires nothing. Needs `SMTP_ENABLED=true` and feedback-loop enrolment, see [feedback-loops.md](feedback-loops.md). |
 | `email.received`   | An inbound email is accepted by the SMTP receiver. Admin keys only (see below) |
 | `email.unsubscribed` | A recipient used the per-recipient one-click unsubscribe link or `unsub+` mailto, and a permanent `unsubscribe` suppression was created (#249). Fires once per suppression: repeated requests fire nothing. See [suppressions.md](suppressions.md#one-click-unsubscribe). |
+| `email.opened` | A recorded open of a tracked email (#187): the pixel was fetched and the event was recorded (after the 60 s dedupe and the per-email cap of 20). Fires for every recorded open, with `first` (the email's first) and `machine` (likely a proxy or scanner), so a consumer can tell an Apple Mail prefetch from a person. See [tracking.md](tracking.md). |
+| `email.clicked` | A recorded click of a tracked email (#187), with the URL (without query string and fragment) and the link position. Every recorded click (60 s dedupe per link, cap of 50 per email), with `first` and `machine`. |
 | `domain.verification_failed` | A verified domain flipped to failing: two DNS checks in a row (by the re-verification loop or Verify) found a record missing or wrong (#250). `verifiedAt` is cleared in the same transaction. A failed lookup (SERVFAIL, timeout) never counts. Fires once per flip. Admin keys only. See [domains.md](domains.md#failure-rule-250). |
 | `domain.verified` | A domain that was not verified (new, or flipped to failing) passed every check (#250). Admin keys only. |
 
@@ -101,7 +103,7 @@ Indexes:
 
 Events are scoped to the API key that owns the webhook:
 
-- `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
+- `email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`, `email.opened`, `email.clicked`: delivered only to webhooks owned by the API key that sent the email. Another key's webhooks never see them, even if they subscribe to the same event type.
 - `email.received`: inbound mail has no owning key, so it is delivered only to webhooks owned by **admin** keys, matching the admin-only inbound API (#130). A restricted key that tries to subscribe to it gets `403` with `code: "INBOUND_EVENTS_REQUIRE_ADMIN"`.
 - `domain.verification_failed`, `domain.verified` (#250): domains have no owning key and managing them is admin-only, so these too go to **admin** keys' webhooks only, and a restricted key that subscribes gets the same `403 INBOUND_EVENTS_REQUIRE_ADMIN`.
 - Webhooks of a **revoked** key receive nothing, and deliveries already queued for them are marked `failed` instead of sent.
@@ -145,7 +147,7 @@ Events are scoped to the API key that owns the webhook:
 
 **`to`** is the email's `to` list as stored: one address, or several comma-separated (`"a@example.com, b@example.org"`) for a send with an array `to` (#178). It stays a string, unlike the REST email's `to`, so existing consumers keep working.
 
-**`tags`** (#189): every `email.*` event built from an email row (`email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
+**`tags`** (#189): every `email.*` event built from an email row (`email.queued`, `email.sent`, `email.failed`, `email.bounced`, `email.complained`, `email.unsubscribed`, `email.opened`, `email.clicked`) carries the email's tags as set on the send, key to value, or `null` when it has none, so a consumer can route on them. `email.received` (an inbound message, not a sent email) and `domain.*` do not carry it. The examples below leave it out for brevity.
 
 `email.bounced`:
 
@@ -180,6 +182,28 @@ The send-time path (`source: "inline"`) also carries `recipient`, the address th
   }
 }
 ```
+
+`email.clicked` (#187):
+
+```json
+{
+  "event": "email.clicked",
+  "timestamp": "2026-11-07T10:05:01.000Z",
+  "data": {
+    "emailId": "msg_abc123...",
+    "recipient": "user@example.com",
+    "occurredAt": "2026-11-07T10:05:00.000Z",
+    "url": "https://example.com/pricing",
+    "linkPosition": 2,
+    "first": true,
+    "machine": false,
+    "clientKind": "unknown",
+    "tags": { "flow": "welcome" }
+  }
+}
+```
+
+`email.opened` has the same shape without `url` and `linkPosition`. `clientKind` is `image_proxy` (a mail provider's image proxy) or `unknown`; `machine` is a guess (a known proxy, a click within 10 s of sending, several links within 2 s). Open counts are unreliable: Apple Mail Privacy Protection fetches images at delivery, proxies cache them, and link scanners click links.
 
 `domain.verification_failed` (#250):
 
@@ -382,6 +406,7 @@ What each caller does when its transaction fails:
 | Email queue before a send (input error, unreadable DKIM key: `email.failed`) | The status and `email.failed` | Nothing was sent, so all or nothing: the row is left to its lease |
 | DSN bounce (`email.bounced`, #236) | Suppression, email marked `bounced`, event | `Bounce not recorded`, the receiver answers `451`, the sending MTA retries |
 | Unsubscribe (`email.unsubscribed`, #249) | Suppression and event | `Unsubscribe not recorded`; the page errors, the mailto gets `451` |
+| Open and click tracking (`email.opened`, `email.clicked`, #187) | The event row, `first_opened_at` / `first_clicked_at` and the webhook event, under a lock on the email row | `Tracking event not recorded` (error name and SQLSTATE); the pixel or redirect was already served, nothing is recorded and no webhook fires |
 | Feedback loop (`email.complained`, #191) | Suppression and event (a complaint with no determinable recipient: the event alone) | `Complaint not recorded`, `451` |
 | Inbound mail (`email.received`) | The `inbound_emails` row and its event | `Inbound email not stored`, `451` |
 | Domain check (`domain.verification_failed`, `domain.verified`, #250) | The domain's new verification state and its event | Logged at `error` (`Domain re-verification failed`, by error name); the domain keeps its previous state and is checked again when its claim lease ends (15 minutes). From Verify, the request fails |

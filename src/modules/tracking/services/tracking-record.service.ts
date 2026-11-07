@@ -4,7 +4,8 @@ import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { sqlStateOf } from "../../../utils/db-error.ts";
-import { emails } from "../../emails/models/email.schema.ts";
+import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
+import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
 import { emailEvents } from "../../emails/models/email-event.schema.ts";
 import type { Tx } from "../../emails/types/email.types.ts";
 import { clientKindOf, storedClickUrl } from "./tracking-client.ts";
@@ -77,29 +78,38 @@ interface EventToStore {
   url: string | null;
   clientKind: TrackingClientKind;
   machine: boolean;
+  /** The email's one recipient, for the webhook payload. */
+  recipient: string;
+  /** The email's tags (#189), carried by the webhook; null when none. */
+  tags: EmailTags | null;
 }
 
 /**
  * Stores one event and, when it is the email's first of its type, sets
  * `first_opened_at` / `first_clicked_at` with a conditional `UPDATE`,
- * all in `tx`. Returns whether it was the first. The webhook events of a
- * later part go through the outbox in this same transaction.
+ * then enqueues `email.opened` / `email.clicked` for the sending key's
+ * webhooks through the outbox (#184), all in `tx`: the event row and its
+ * webhook deliveries commit together or not at all. Returns whether it was
+ * the first.
  */
 async function storeEvent(
   tx: Tx,
   event: EventToStore,
 ): Promise<{ id: string; first: boolean }> {
   const id = generateId("evt");
-  await tx.insert(emailEvents).values({
-    id,
-    emailId: event.emailId,
-    apiKeyId: event.apiKeyId,
-    type: event.kind,
-    linkPosition: event.position,
-    url: event.url,
-    clientKind: event.clientKind,
-    machine: event.machine,
-  });
+  const [inserted] = await tx
+    .insert(emailEvents)
+    .values({
+      id,
+      emailId: event.emailId,
+      apiKeyId: event.apiKeyId,
+      type: event.kind,
+      linkPosition: event.position,
+      url: event.url,
+      clientKind: event.clientKind,
+      machine: event.machine,
+    })
+    .returning({ occurredAt: emailEvents.occurredAt });
   const column = event.kind === "open" ? emails.firstOpenedAt : emails.firstClickedAt;
   const updated = await tx
     .update(emails)
@@ -110,7 +120,25 @@ async function storeEvent(
     )
     .where(and(eq(emails.id, event.emailId), isNull(column)))
     .returning({ id: emails.id });
-  return { id, first: updated.length > 0 };
+  const first = updated.length > 0;
+
+  /** Every recorded event fires, with `first` and `machine`, so a consumer can tell a prefetch from a person. */
+  await enqueueEvent(
+    tx,
+    event.kind === "open" ? "email.opened" : "email.clicked",
+    {
+      emailId: event.emailId,
+      recipient: event.recipient,
+      occurredAt: (inserted?.occurredAt ?? new Date()).toISOString(),
+      ...(event.kind === "click" ? { url: event.url, linkPosition: event.position } : {}),
+      first,
+      machine: event.machine,
+      clientKind: event.clientKind,
+      tags: event.tags,
+    },
+    { apiKeyId: event.apiKeyId },
+  );
+  return { id, first };
 }
 
 /** The events of one email and type matching `extra`, counted in `tx`. */
@@ -144,6 +172,8 @@ async function recordInTransaction(
     const [email] = await tx
       .select({
         apiKeyId: emails.apiKeyId,
+        toAddress: emails.toAddress,
+        tags: emails.tags,
         trackOpens: emails.trackOpens,
         trackClicks: emails.trackClicks,
         sentAt: emails.sentAt,
@@ -192,6 +222,9 @@ async function recordInTransaction(
       url: hit.url === null ? null : storedClickUrl(hit.url),
       clientKind,
       machine,
+      /** Tracked mail has exactly one recipient (one `to`, no cc or bcc). */
+      recipient: email.toAddress.trim().toLowerCase(),
+      tags: email.tags,
     });
     logger.debug("Tracking event recorded", {
       emailId: hit.emailId,

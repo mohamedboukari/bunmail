@@ -5,6 +5,7 @@ import { AttachmentGonePage } from "../routes/attachment-gone.tsx";
 import { attachmentContentDisposition } from "../../modules/emails/services/attachments.ts";
 import { memberGuard } from "../guards.tsx";
 import * as emailService from "../../modules/emails/services/email.service.ts";
+import { listEmailEvents } from "../../modules/emails/services/email-events.service.ts";
 import type { emailTrashPages } from "./emails-trash.plugin.tsx";
 
 /**
@@ -36,11 +37,14 @@ export function emailDetailPages(app: ReturnType<typeof emailTrashPages>) {
           const attachments = (await emailService.attachmentsFor([email.id])).get(
             email.id,
           );
+          /** Opens and clicks (#187): at most 70 per email (the caps), so one page holds them all. */
+          const events = await listEmailEvents(email.id, null, { page: 1, limit: 100 });
           return (
             <EmailDetailPage
               email={email}
               isTrashed={live === undefined}
               attachments={attachments ?? []}
+              events={events?.data ?? []}
             />
           );
         },
