@@ -33,6 +33,7 @@ The following are in scope:
 - SQL injection or other injection attacks
 - Cross-site scripting (XSS) in the dashboard
 - SMTP relay abuse (open relay, header injection)
+- Header fields added to a signed message in transit that still verify (outbound DKIM over-signs `From`, `Subject`, `Reply-To` and the other fields a reader sees, #345)
 - DKIM private key exposure
 - Information disclosure (API keys, secrets, stack traces)
 - Denial of service via API abuse

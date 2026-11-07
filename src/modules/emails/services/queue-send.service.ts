@@ -2,7 +2,12 @@ import { randomBytes } from "crypto";
 import { sql } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
-import type { sendMail, DkimOptions, OutboundAttachment } from "./mailer.service.ts";
+import {
+  DkimSigningFailedError,
+  type sendMail,
+  type DkimOptions,
+  type OutboundAttachment,
+} from "./mailer.service.ts";
 import { attachmentStorage } from "./attachment-storage.ts";
 import { listUnsubscribeOptions, oneClickBlocker } from "./list-unsubscribe.ts";
 import { isEmailCategory } from "../types/email.types.ts";
@@ -100,7 +105,7 @@ export async function sendClaimedEmail(
      * `DKIM_ENCRYPTION_KEY` within the retry window still delivers it.
      */
     if (domain?.dkimKeyUnreadable && config.env === "production") {
-      await holdForUnreadableDkimKey(email, claim, domain.name);
+      await holdForDkimKey(email, claim, domain.name, "unreadable");
       return;
     }
     if (domain?.dkimKeyUnreadable) {
@@ -228,7 +233,17 @@ export async function sendClaimedEmail(
     };
   } catch (error) {
     /**
-     * `sendMail` only throws for fundamental input errors now (no
+     * A DKIM key that decrypts but cannot sign (#345): nothing was sent,
+     * and never unsigned. Held on the retry backoff like a key that does
+     * not decrypt (#244), in every environment: no delivery state change,
+     * no failure counted against a recipient, no suppression.
+     */
+    if (error instanceof DkimSigningFailedError) {
+      await holdForDkimKey(email, claim, error.domain, "unusable");
+      return;
+    }
+    /**
+     * Otherwise `sendMail` only throws for fundamental input errors (no
      * valid recipients after parsing): never for transport / SMTP
      * failures, which return as `failed`/`retry` groups in state.
      * So this catch is a one-shot terminal: mark `failed`, no retry.
@@ -357,17 +372,25 @@ async function dropSuppressedRecipients(
 }
 
 /**
- * Holds an email whose sender domain has a DKIM key that does not decrypt
- * (#244, production only): back to `queued` on the retry backoff (#180),
- * or `failed` with `email.failed` once the email is too old to retry.
- * Nothing is sent, so no delivery state changes.
+ * Holds an email whose sender domain's DKIM key cannot sign it: a key that
+ * does not decrypt (#244, `unreadable`, production only) or one that
+ * decrypts but the signer cannot use (#345, `unusable`: does not parse,
+ * another type than RSA or ed25519, an invalid domain or selector). Back to
+ * `queued` on the retry backoff (#180), or `failed` with `email.failed`
+ * once the email is too old to retry. Nothing is sent, so no delivery state
+ * changes.
  */
-async function holdForUnreadableDkimKey(
+async function holdForDkimKey(
   email: ClaimedEmail,
   claim: Claim,
   domainName: string,
+  problem: "unreadable" | "unusable",
 ): Promise<void> {
-  const lastError = `DKIM key for ${domainName} cannot be decrypted with DKIM_ENCRYPTION_KEY: not sent unsigned`;
+  const lastError =
+    problem === "unreadable"
+      ? `DKIM key for ${domainName} cannot be decrypted with DKIM_ENCRYPTION_KEY: not sent unsigned`
+      : `DKIM key for ${domainName} cannot be used to sign: not sent unsigned`;
+  const what = problem === "unreadable" ? "DKIM key unreadable" : "DKIM signing failed";
   const retryDelayMs = nextRetryDelayMs(claim.attempt, email.ageMs, retryMaxAgeMs());
   if (retryDelayMs !== null) {
     const retrySeconds = Math.round(retryDelayMs / 1000);
@@ -380,7 +403,7 @@ async function holdForUnreadableDkimKey(
       },
       db,
     );
-    logger.error("Email held: DKIM key unreadable", {
+    logger.error(`Email held: ${what}`, {
       emailId: email.id,
       domain: domainName,
       attempt: claim.attempt,
@@ -404,7 +427,7 @@ async function holdForUnreadableDkimKey(
       },
     ]),
   );
-  logger.error("Email failed: DKIM key unreadable for the whole retry window", {
+  logger.error(`Email failed: ${what} for the whole retry window`, {
     emailId: email.id,
     domain: domainName,
     attempt: claim.attempt,

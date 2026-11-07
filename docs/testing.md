@@ -164,3 +164,5 @@ Inputs are generated in the test, never stored as fixtures. Budgets are delibera
 
 `test/dkim-vectors.ts` builds signed messages (nodemailer's own signer for relaxed/relaxed RSA, a plain RFC 6376 signer for simple, `l=`, `i=`, `x=` and ed25519-sha256), each with the DNS answers it needs and the expected verdict; `test/unit/dkim-verifier.test.ts` runs them with fresh keys over an injected `resolveTxt`, no `mock.module`. `test/fixtures/dkim-differential.json` is one run of the same vectors with mailauth's verdicts (default and strict mode), recorded with mailauth 7.1.1 before it was removed (#373; the recording script went with it); `test/unit/dkim-differential.test.ts` checks the verifier against it and lists every intended difference with its reason.
 
+The outbound signer (#345) is checked in `test/unit/dkim-signer.test.ts` and `dkim-oversign.test.ts` by the built-in verifier and by `test/dkim-independent.ts`, a relaxed/relaxed verifier written from the RFCs that shares no code with the signer or the verifier (the signer reuses the verifier's canonicalization, so the built-in verifier alone could not catch a mistake in it).
+

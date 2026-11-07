@@ -124,7 +124,8 @@ src/modules/emails/
 │   ├── message-body.ts             ← Send-time body: HTML document wrapper and text alternative (#250)
 │   ├── html-to-text.ts             ← Bounded, linear HTML-to-text converter for the text alternative (#250)
 │   ├── mailer.service.ts           ← Direct-to-MX delivery (Nodemailer per MX session) + DKIM signing: `sendMail`, and the rest of the public surface re-exported from the files below (#380)
-│   ├── mailer-message.service.ts   ← One transaction's message: headers, DKIM signed headers, List-Unsubscribe, Feedback-ID, attachments
+│   ├── mailer-message.service.ts   ← One transaction's message: headers, List-Unsubscribe, Feedback-ID, attachments; signing it (`signMessage`) and one `mail` per transaction (`buildTransactionMails`, #345)
+│   ├── dkim-signer.service.ts      ← BunMail's own DKIM signer: relaxed/relaxed, rsa-sha256 or ed25519-sha256, over-signed headers (#345)
 │   ├── mailer-state.service.ts     ← Starting delivery state: entries per domain, pre-#250 entries, signed return paths (#236)
 │   ├── mailer-mta-sts.service.ts   ← MTA-STS mode, hosts to try and verified TLS of a domain (#250)
 │   ├── mailer-delivery.service.ts  ← MX sessions: failover, throttle, rate budget, `mx.deliver` and `mx.session` spans
@@ -295,7 +296,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 - **Refusal:** name/value syntax and the count are checked by the DTO first (`422 VALIDATION_ERROR`); reserved names, duplicates and the total size by `createEmail` (`422 INVALID_CUSTOM_HEADER`, SMTP `550`). Nothing is queued. The message names the header when its name is valid, never the value.
 - **Storage:** `emails.headers` (jsonb object, the caller's spelling of each name). Returned as `headers` on email responses (`null` when none). Retries resend the same set.
 - **Sending:** the queue passes the stored set to `sendMail`, which re-applies the rules (dropping, with a `warn` naming the header, anything a row written another way might hold) and hands the rest to Nodemailer's `headers` option before BunMail's own `List-Unsubscribe` pair, so a custom header can never replace `Message-ID`, `From`, `List-Unsubscribe` or any other header BunMail sets. Nodemailer may normalize the case of a name (`X-Correlation-Id` is written `X-Correlation-ID`) and MIME-encodes non-ASCII values.
-- **DKIM:** `In-Reply-To` and `References` are in the signed header list (`DKIM_SIGNED_HEADERS`); `X-*` headers are not signed.
+- **DKIM:** `In-Reply-To` and `References` are in the signed header list (`DKIM_SIGNED_HEADERS`) and over-signed (see [DKIM signing](#dkim-signing-345)); `X-*` headers are not signed.
 - **SMTP submission** relays `In-Reply-To`, `References` and `X-*` from the submitted message through the same rules, dropping (not refusing) any that fail: see [smtp-submission.md](smtp-submission.md).
 - **Logs** carry header names, counts and the rule broken, never values.
 
@@ -355,9 +356,25 @@ Every outbound message carries an RFC 2369 `List-Unsubscribe` header, except `tr
 
 **Why always-on?** Gmail and Yahoo's Feb-2024 sender requirements treat the presence of `List-Unsubscribe` as a positive ranking signal, including on transactional mail. The mailto-only form is sufficient for transactional senders. Bulk / promotional senders (Gmail's "high volume" threshold, more than 5k a day to Gmail) need RFC 8058 one-click that is **honored within 2 days**: send each such message to one recipient and set an `https://` `APP_BASE_URL`, so it carries the per-recipient link. A static `unsubscribe_url` only meets that requirement if your own handler can identify the recipient from the URL itself.
 
-**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `mailer-message.service.ts`). RFC 8058 requires that for one-click unsubscribe, and nodemailer's default list leaves the Post header out (#241).
+**Signed:** both `List-Unsubscribe` and `List-Unsubscribe-Post` are covered by the DKIM signature (`DKIM_SIGNED_HEADERS` in `dkim-signer.service.ts`), and over-signed, so neither can be added to a message that went out without it (#345). RFC 8058 requires the pair signed for one-click unsubscribe (#241).
 
 **Why per-domain config?** The default `unsubscribe@<domain>` mailbox often doesn't exist; emitting unroutable addresses is worse than a working override. Set `unsubscribeEmail` to a real mailbox you read, and `unsubscribeUrl` to a handler that processes the POST body (Gmail sends `List-Unsubscribe=One-Click` form-encoded).
+
+## DKIM signing (#345)
+
+Every message whose sender domain has a usable key is signed by BunMail's own signer (`dkim-signer.service.ts`), not by Nodemailer's: Nodemailer lists each header field in `h=` once and only when present, so it cannot over-sign.
+
+- **Tags:** `v=1`, `a=rsa-sha256` (or `ed25519-sha256` for an ed25519 key, RFC 8463; domains get RSA-2048 keys today), `c=relaxed/relaxed`, `d=` (the domain as an A-label, without a final dot: a domain can be stored as `example.com.`), `q=dns/txt`, `s=`, `bh=`, `h=`, `b=`, in the order Nodemailer used. No `t=`, `x=`, `i=` or `l=`, as before. The field is folded under 77 characters a line; `h=` breaks after a `:`.
+- **`h=`:** each field of `DKIM_SIGNED_HEADERS` (Nodemailer's former default list plus `List-Unsubscribe-Post`, `Feedback-ID`, `Content-Disposition` and `Auto-Submitted`) once per instance present, signed bottom up (RFC 6376 section 5.4.2), and, for the over-signed set, **once more**: that extra entry selects no field, so the signature also covers the absence of any further instance (RFC 6376 section 8.15). A field of the set added after signing, above or below the original, breaks the signature.
+- **Over-signed set (`DKIM_OVERSIGNED_HEADERS`), present or not:** `From`, `Sender`, `Reply-To`, `To`, `Cc`, `Subject`, `Date`, `Message-ID`, `In-Reply-To`, `References`, `MIME-Version`, `Content-Type`, `Content-Transfer-Encoding`, `Content-Disposition`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `Auto-Submitted`, `Feedback-ID`: what a reader sees, what threads the message, what decides how its body is decoded or shown (an added `Content-Disposition` can turn a single-part body into an attachment), the unsubscribe pair, what marks the message automatic, and what a provider's feedback loop charges complaints to. A second `From:` added in transit (shown instead of the real one by some clients) was the known trick; under Nodemailer's signer it still verified. Not over-signed: the `Resent-*` fields a legitimate resend adds, the other `List-*` fields a mailing list adds, and `Content-ID` / `Content-Description`.
+- **Canonicalization:** the inbound verifier's own code (`dkim-verifier-canonical.service.ts` and `dkim-verifier-parse.service.ts`, #373), imported across modules rather than moved to `src/utils/` (two modules use it, below the three-module rule for a shared helper), so the signer and the verifier cannot drift apart. The unit tests also check every signed message with a verifier written apart from both (`test/dkim-independent.ts`).
+- **How the bytes reach the MX:** `sendMail` calls `signMessage` once per call, before any DNS lookup or connection: it composes the message with Nodemailer's `MailComposer`, from the options `buildMailOptions` builds (so headers, body, attachments, custom headers, `List-Unsubscribe` and `Feedback-ID` are what Nodemailer would send), and signs it. `buildTransactionMails` then gives every transaction of every MX session the signed bytes as `raw` with its own envelope (per-recipient return paths included, #236). Nodemailer sends `raw` as it is: no header added, nothing re-encoded or re-signed. Every recipient gets the same signed message.
+- **No DKIM key:** unsigned, as before. A key that does not decrypt: held in production (#244).
+- **A key that cannot sign is never sent unsigned.** A key that decrypts but cannot be used (does not parse, another type than RSA or ed25519), or an invalid domain or selector: `signMessage` logs `DKIM signing failed: not sent unsigned` at `error` (domain, selector, the error's name and code, never the key) and throws `DkimSigningFailedError`, so `sendMail` rejects before any DNS lookup or transport is created. `buildTransactionMails` also refuses unsigned options for a message that has a key.
+- **A message that cannot be composed is not a DKIM problem.** BunMail composes before signing, so with a key the composer's error surfaces there: it is logged as `Message could not be composed` (`error`, error name and code) and each transaction fails with it, as Nodemailer reports it for the same message without a key (no SMTP reply, so `retry`, until `MAIL_RETRY_MAX_AGE_HOURS`). No MX is contacted for it, and it is never held as a key problem.
+  - **Queued sends** are held exactly like a key that does not decrypt (#244), in every environment (`holdForDkimKey` in `queue-send.service.ts`): back to `queued` on the retry backoff with `last_error` `DKIM key for <domain> cannot be used to sign: not sent unsigned` and `Email held: DKIM signing failed` at `error`; once too old to retry, `failed` with `email.failed` (`Email failed: DKIM signing failed for the whole retry window`). The delivery state is untouched: no failure is counted against a recipient and nothing is suppressed. Fixing the key within the retry window delivers the email.
+  - **Mail sent outside the queue** gets it as any other thrown send: invitations, new-device and two-factor alerts (`sendSystemMail`) return `send_failed` (`errorName: "DkimSigningFailedError"`, for an invitation the link is then shown once to the inviter), and an inbound notification logs `Inbound notification failed to send` at `warn`.
+- **Logs:** `Message DKIM-signed` at `debug` (message id, domain, selector, size).
 
 ## Service Methods
 
@@ -438,14 +455,28 @@ The sender-domain gate used by `createEmail`: registration, the `REQUIRE_VERIFIE
 The mailer's public surface: `sendMail` is defined here, the rest is re-exported from the `mailer-*.service.ts` files beside it, one per concern (#380, see the module layout above). `buildMailOptions` is in `mailer-message.service.ts`.
 
 #### `sendMail(options): Promise<{ messageId, deliveryState }>`
-Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's RSA private key. `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
+Sends an email via direct SMTP. When `dkim` options are provided, signs the message with the domain's private key, with BunMail's own signer (see [DKIM signing](#dkim-signing-345)). `headers` (the row's custom headers, #177) are re-checked and added to every MX group's message. `returnPath: { emailId }` (set by the queue when `SMTP_ENABLED=true` and the sender domain's MX points here, #236) sends each recipient in its own transaction with its signed return path as envelope sender.
 
 `fromName` sets the `From:` display name and `category: "transactional"` leaves out `List-Unsubscribe` (#250). `attachments` (#181), loaded by the queue, go on every transaction and retry (see [Attachments](#attachments-181)). The body is composed once per call, see [Body composition](#body-composition-250).
 
 Each transaction's outcome records `tls` and `updatedAt` on its delivery-state entry (#250, see [TLS record](#tls-record-250)). The SMTP session to each MX runs in `runMxSession` (`mx-transport.ts`), see [One session per MX](#one-session-per-mx-250).
 
 #### `buildMailOptions(args): Mail.Options`
-Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, attachments with their derived types and inline `cid`, `List-Unsubscribe` unless `carriesListUnsubscribe` says no, DKIM; never file or URL access). The body is used as given (`sendMail` composes it first). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
+Pure: builds one transaction's Nodemailer options (headers, envelope, custom headers, attachments with their derived types and inline `cid`, `List-Unsubscribe` unless `carriesListUnsubscribe` says no; never file or URL access). Never DKIM: `buildTransactionMails` signs. The body is used as given (`sendMail` composes it first). `envelopeFrom` sets `MAIL FROM` (the signed return path, #236); it defaults to `from`. Tests render it with a stream transport.
+
+#### `signMessage(message): Promise<SignedMessage>`
+Composes and DKIM-signs a message once (#345): `{ kind: "signed", raw }`, `{ kind: "unsigned" }` without `dkim`, or `{ kind: "uncomposable", error }` when the message cannot be built (logged on its own, failed per transaction by `mailer-delivery.service.ts`). Throws `DkimSigningFailedError` (`domain`, a fixed message safe to log) when the key cannot sign, after logging the error; the caller must not send (see [DKIM signing](#dkim-signing-345)).
+
+#### `buildTransactionMails(message, signed, transactions): Array<transaction & { mail }>`
+Each transaction of one message with its Nodemailer options. With `signed` (from `signMessage`): the signed bytes as `raw` with the transaction's own `envelope`, sent unchanged by Nodemailer. With `null`: `buildMailOptions` per transaction, as before, only for a message without `dkim`; with one it throws `DkimSigningFailedError`. Pure; called per MX session plan by `mailer-delivery.service.ts`.
+
+### dkim-signer.service.ts
+
+#### `dkimSignMessage(message, dkim): Buffer`
+Signs a composed message and returns the exact bytes to send: the `DKIM-Signature` field on top, every bare CR or LF made CRLF (what Nodemailer's SMTP data stream would do while sending, so the signed bytes are the sent bytes). Throws `DkimSignError` (fixed text, safe to log) for an invalid domain or selector or a key type other than RSA or ed25519, and `node:crypto`'s error for a key that does not parse; no error carries the key.
+
+#### `signedHeaderNames(fields): string[]`
+The `h=` list: each name of `DKIM_SIGNED_HEADERS` once per instance present, plus once more for a name in `DKIM_OVERSIGNED_HEADERS`, present or not.
 
 ### custom-headers.ts
 
@@ -564,7 +595,7 @@ Each `emails` row can address recipients across multiple domains (`to` + `cc` + 
 2. **Groups recipients by domain** (#250): one group, and one delivery-state entry, per recipient domain.
 3. On every attempt, resolves the MX set of each pending domain, once per domain, in parallel (see [MX resolution and failover](#mx-resolution-and-failover-250)). Domains that resolve to the same hosts in the same order share a session, one transaction each.
 4. Generates one canonical `Message-ID:` for the whole email so all recipients see the same identifier (bounce/complaint feedback loops join on this).
-5. For each group, submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only, to the first MX host that takes it.
+5. For each group, submits the **same DKIM-signed message** with `envelope.to` overridden to that group's recipients only, to the first MX host that takes it. The message is composed and signed once per call, before any DNS lookup, and handed to Nodemailer as `raw` bytes (#345, see [DKIM signing](#dkim-signing-345)).
 
 The `To:` / `Cc:` headers on the rendered message always carry the **original full lists** so every recipient sees who else was addressed: every `to` address of an array send (#178) included. BCC addresses appear only in their group's envelope, never in the rendered headers.
 

@@ -1,48 +1,10 @@
+import MailComposer from "nodemailer/lib/mail-composer";
 import type Mail from "nodemailer/lib/mailer";
 import { logger } from "../../../utils/logger.ts";
 import { filterCustomHeaders } from "./custom-headers.ts";
+import { DkimSignError, dkimSignMessage } from "./dkim-signer.service.ts";
 import type { CustomHeaders } from "../models/email.schema.ts";
 import type { EmailCategory } from "../types/email.types.ts";
-
-/**
- * Headers covered by the DKIM signature. Setting `headerFieldNames`
- * replaces nodemailer's default list, so the defaults are restated, plus
- * `List-Unsubscribe-Post` (RFC 8058 requires it to be signed for one-click
- * unsubscribe, which Gmail and Yahoo rely on) and `Feedback-ID`. Listing a
- * header that a message doesn't have costs nothing.
- */
-export const DKIM_SIGNED_HEADERS = [
-  "From",
-  "Sender",
-  "Reply-To",
-  "Subject",
-  "Date",
-  "Message-ID",
-  "To",
-  "Cc",
-  "MIME-Version",
-  "Content-Type",
-  "Content-Transfer-Encoding",
-  "Content-ID",
-  "Content-Description",
-  "Resent-Date",
-  "Resent-From",
-  "Resent-Sender",
-  "Resent-To",
-  "Resent-Cc",
-  "Resent-Message-ID",
-  "In-Reply-To",
-  "References",
-  "List-Id",
-  "List-Help",
-  "List-Unsubscribe",
-  "List-Unsubscribe-Post",
-  "List-Subscribe",
-  "List-Post",
-  "List-Owner",
-  "List-Archive",
-  "Feedback-ID",
-].join(":");
 
 /**
  * One attachment as the mailer sends it (#181): already checked, typed
@@ -175,9 +137,10 @@ export function carriesListUnsubscribe(
 
 /**
  * Builds the Nodemailer options for one MX group's message: headers,
- * envelope, the custom headers (#177), `List-Unsubscribe`, DKIM. The body
- * is used as given: `sendMail` composes it first ({@link composeMessageBody}).
- * Pure, so tests can render the exact message with a stream transport.
+ * envelope, the custom headers (#177), `List-Unsubscribe`. The body is used
+ * as given: `sendMail` composes it first ({@link composeMessageBody}). Never
+ * DKIM: {@link signMessage} signs (#345). Pure, so tests can
+ * render the exact message with a stream transport.
  */
 export function buildMailOptions(args: MxGroupMessage): Mail.Options {
   const mailOptions: Mail.Options = {
@@ -270,14 +233,147 @@ export function buildMailOptions(args: MxGroupMessage): Mail.Options {
   }
   if (Object.keys(headers).length > 0) mailOptions.headers = headers;
 
-  if (args.dkim) {
-    mailOptions.dkim = {
-      domainName: args.dkim.domainName,
-      keySelector: args.dkim.keySelector,
-      privateKey: args.dkim.privateKey,
-      headerFieldNames: DKIM_SIGNED_HEADERS,
-    };
-  }
-
   return mailOptions;
+}
+
+/** The parts of a message that are the same in every transaction of a session. */
+export type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
+
+/** One transaction's envelope: its `RCPT TO` and its `MAIL FROM`. */
+export interface TransactionEnvelope {
+  recipients: string[];
+  envelopeFrom: string;
+}
+
+/**
+ * What can be logged of a compose or signing failure: the signer's own fixed
+ * text, else the error's name and code only (a `node:crypto` or Nodemailer
+ * message may quote input).
+ */
+function failureDetail(err: unknown): Record<string, string> {
+  if (err instanceof DkimSignError) return { reason: err.message };
+  if (!(err instanceof Error)) return { errorName: typeof err };
+  const code: unknown = Reflect.get(err, "code");
+  return typeof code === "string"
+    ? { errorName: err.name, errorCode: code }
+    : { errorName: err.name };
+}
+
+/**
+ * A message that has a DKIM key the signer cannot use (#345): the key does
+ * not parse, is of another type than RSA or ed25519, or the domain or
+ * selector is invalid. Thrown by {@link signMessage} before anything is
+ * sent: such a message is never sent unsigned. The queue holds the email on
+ * the retry backoff, as for a key that does not decrypt (#244); mail sent
+ * outside the queue reports it as a failed send. Also thrown by
+ * {@link buildTransactionMails} when asked for unsigned options of a message
+ * that has a key. The message is fixed text with the domain, safe to log.
+ */
+export class DkimSigningFailedError extends Error {
+  override name = "DkimSigningFailedError";
+  readonly domain: string;
+
+  constructor(domain: string) {
+    super(`DKIM key for ${domain} cannot be used to sign: not sent unsigned`);
+    this.domain = domain;
+  }
+}
+
+/**
+ * What {@link signMessage} made of a message: `unsigned` (no DKIM key, sent
+ * as before), `signed` (the bytes to send), or `uncomposable` (the message
+ * itself could not be built, key or not: reported per transaction as
+ * Nodemailer would, see `mailer-delivery.service.ts`).
+ */
+export type SignedMessage =
+  | { kind: "unsigned" }
+  | { kind: "signed"; raw: Buffer }
+  | { kind: "uncomposable"; error: unknown };
+
+/**
+ * Composes and signs a message once (#345). The message is composed by
+ * Nodemailer's own `MailComposer` from the options {@link buildMailOptions}
+ * builds, so headers, body, attachments, `List-Unsubscribe` and
+ * `Feedback-ID` are exactly what Nodemailer would send, then signed by
+ * {@link dkimSignMessage} (over-signed headers).
+ *
+ * Composing and signing fail apart. A message that cannot be composed is
+ * `uncomposable`, logged on its own (`Message could not be composed`): it
+ * fails as it would without a key, never as a DKIM problem. A key that
+ * cannot sign throws {@link DkimSigningFailedError}, after logging
+ * `DKIM signing failed` at `error` with the domain, selector and the
+ * error's name and code (never the key): the caller must not send.
+ */
+export async function signMessage(message: MessageParts): Promise<SignedMessage> {
+  const dkim = message.dkim;
+  if (!dkim) return { kind: "unsigned" };
+  let composed: Buffer;
+  try {
+    composed = await new MailComposer(buildMailOptions({ ...message, recipients: [] }))
+      .compile()
+      .build();
+  } catch (error) {
+    logger.error("Message could not be composed", {
+      messageId: message.messageId,
+      ...failureDetail(error),
+    });
+    return { kind: "uncomposable", error };
+  }
+  let raw: Buffer;
+  try {
+    raw = dkimSignMessage(composed, dkim);
+  } catch (err) {
+    logger.error("DKIM signing failed: not sent unsigned", {
+      messageId: message.messageId,
+      domain: dkim.domainName,
+      selector: dkim.keySelector,
+      ...failureDetail(err),
+    });
+    throw new DkimSigningFailedError(dkim.domainName);
+  }
+  logger.debug("Message DKIM-signed", {
+    messageId: message.messageId,
+    domain: dkim.domainName,
+    selector: dkim.keySelector,
+    bytes: raw.byteLength,
+  });
+  return { kind: "signed", raw };
+}
+
+/**
+ * Each transaction of one message with its Nodemailer options (`mail`), in
+ * the order given. With `signed` (from {@link signMessage}): every
+ * transaction gets those bytes as `raw`, which Nodemailer sends unchanged,
+ * with only the transaction's envelope beside them, so all transactions
+ * carry the same signed message. With `null`: {@link buildMailOptions} per
+ * transaction, as before, only for a message without a DKIM key; a message
+ * with one throws {@link DkimSigningFailedError}, so no caller can send it
+ * unsigned.
+ */
+export function buildTransactionMails<T extends TransactionEnvelope>(
+  message: MessageParts,
+  signed: Buffer | null,
+  transactions: readonly T[],
+): Array<T & { mail: Mail.Options }> {
+  if (signed === null) {
+    if (message.dkim) throw new DkimSigningFailedError(message.dkim.domainName);
+    return transactions.map((transaction) => ({
+      ...transaction,
+      mail: buildMailOptions({
+        ...message,
+        recipients: transaction.recipients,
+        envelopeFrom: transaction.envelopeFrom,
+      }),
+    }));
+  }
+  return transactions.map((transaction) => ({
+    ...transaction,
+    mail: {
+      envelope: { from: transaction.envelopeFrom, to: transaction.recipients },
+      raw: signed,
+      /** Nothing to read, but the same sandbox as an unsigned message. */
+      disableFileAccess: true,
+      disableUrlAccess: true,
+    },
+  }));
 }
