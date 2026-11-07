@@ -12,7 +12,10 @@ import type {
 import type { Domain } from "../../src/modules/domains/types/domain.types.ts";
 import { UserStoreError } from "../../src/modules/users/errors.ts";
 import { logger } from "../../src/utils/logger.ts";
-import { buildMailOptions } from "../../src/modules/emails/services/mailer.service.ts";
+import {
+  buildMailOptions,
+  sendMail,
+} from "../../src/modules/emails/services/mailer.service.ts";
 
 /**
  * The invitation email (#217): the pure builder (escaping, exactly one
@@ -281,6 +284,37 @@ describe("sendInviteEmail", () => {
         errorName: "UserStoreError",
         sqlState: "57P01",
       });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a key that decrypts but cannot sign: send_failed through the real mailer, never sent unsigned (#345)", async () => {
+    const warn = spyOn(logger, "warn");
+    warn.mockClear();
+    try {
+      /**
+       * The real `sendMail`: it signs before any DNS lookup or connection, so
+       * a key that cannot sign throws there and nothing goes out.
+       */
+      const { deps: d } = deps({
+        send: sendMail,
+        resolveDkim: () => ({
+          domainName: "example.com",
+          keySelector: "bunmail",
+          privateKey: "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----",
+        }),
+      });
+      expect(await sendInviteEmail(INPUT, d)).toEqual({
+        sent: false,
+        reason: "send_failed",
+      });
+      const lines = warn.mock.calls.filter(([m]) => m === "Invitation email not sent");
+      expect(lines[0]?.[1]).toMatchObject({
+        reason: "send_failed",
+        errorName: "DkimSigningFailedError",
+      });
+      expect(JSON.stringify(lines)).not.toContain("FAKE");
     } finally {
       warn.mockRestore();
     }

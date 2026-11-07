@@ -74,7 +74,10 @@ export function canonicalBody(body: string, canon: Canonicalization): string {
  * instance not taken yet, and a name with none left selects nothing (an
  * over-signed field, RFC 6376 section 5.4.2).
  */
-function selectHeaders(fields: HeaderField[], names: string[]): HeaderField[] {
+function selectHeaders(
+  fields: readonly HeaderField[],
+  names: readonly string[],
+): HeaderField[] {
   const byName = new Map<string, HeaderField[]>();
   for (const field of fields) {
     const list = byName.get(field.name);
@@ -89,11 +92,16 @@ function selectHeaders(fields: HeaderField[], names: string[]): HeaderField[] {
   return selected;
 }
 
-/** The bytes the header signature covers (RFC 6376 section 3.7). */
+/**
+ * The bytes the header signature covers (RFC 6376 section 3.7). Takes only
+ * the two tags it reads, so the outbound signer
+ * (`emails/services/dkim-signer.service.ts`, #345) computes its data with
+ * this same code.
+ */
 export function signedHeaderData(
-  fields: HeaderField[],
+  fields: readonly HeaderField[],
   signatureField: HeaderField,
-  signature: ParsedSignature,
+  signature: Pick<ParsedSignature, "headerCanon" | "signedHeaders">,
 ): Buffer {
   const canon =
     signature.headerCanon === "relaxed" ? relaxedHeader : (raw: string): string => raw;

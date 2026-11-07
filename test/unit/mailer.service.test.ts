@@ -8,6 +8,9 @@ import {
   afterAll,
   spyOn,
 } from "bun:test";
+import { generateKeyPairSync } from "crypto";
+import MailComposer from "nodemailer/lib/mail-composer";
+import type { DeliveryGroup } from "../../src/modules/emails/models/email.schema.ts";
 import { SpanKind, SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace";
 
@@ -26,7 +29,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  *   - Direct-MX delivery configuration (port 25, opportunisticTLS,
  *     rejectUnauthorized: false)
  *   - List-Unsubscribe header construction (mailto, URL form, One-Click)
- *   - DKIM passthrough into nodemailer's mailOptions
+ *   - DKIM signing (#345): the signed message handed to nodemailer as `raw`
  *   - Multi-MX envelope splitting + BCC isolation (#87)
  *   - Stateful retry: existingState honoured, sent groups skipped (#97)
  *   - Group status semantics: sent / retry / failed (#97)
@@ -172,13 +175,16 @@ void mock.module("nodemailer", () => ({
   default: { createTransport: createTransportMock },
 }));
 
-const { sendMail } = await import("../../src/modules/emails/services/mailer.service.ts");
+const { sendMail, DkimSigningFailedError } =
+  await import("../../src/modules/emails/services/mailer.service.ts");
 const { startTracing, stopTracing, withSpan } =
   await import("../../src/utils/tracing.ts");
 const { logger } = await import("../../src/utils/logger.ts");
 const { parseReturnPath, recipientOrder, returnPathMacMatches } =
   await import("../../src/modules/bounces/services/return-path.ts");
 const { setMtaStsDeps } = await import("../../src/modules/emails/services/mta-sts.ts");
+const { verifyDkimSignatures } =
+  await import("../../src/modules/inbound/services/dkim-verifier.service.ts");
 
 /**
  * No MTA-STS policy anywhere: the TXT lookup goes through
@@ -196,6 +202,40 @@ afterAll(() => {
 /** Canonical Message-ID used across tests. Mirrors the queue's
  *  responsibility of generating + passing it on every call (#97). */
 const MID = "<test-mid@local>";
+
+/** A real RSA key, so the DKIM signer (#345) signs and the verifier can check. */
+const dkimKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const DKIM = {
+  domainName: "example.com",
+  keySelector: "bunmail",
+  privateKey: dkimKeys.privateKey.export({ type: "pkcs8", format: "pem" }),
+};
+const DKIM_TXT = `v=DKIM1; k=rsa; p=${dkimKeys.publicKey
+  .export({ type: "spki", format: "der" })
+  .toString("base64")}`;
+
+/** The signed message a captured transaction hands nodemailer as `raw`. */
+function rawOf(send: CapturedSend): Buffer {
+  const raw = send.mailOptions.raw;
+  if (!Buffer.isBuffer(raw)) throw new Error("expected a raw signed message");
+  return raw;
+}
+
+/** The DKIM results of a signed message, over a TXT lookup that knows only the test key. */
+async function verifyRaw(raw: Buffer): Promise<string[]> {
+  const results = await verifyDkimSignatures(raw, {
+    resolveTxt: async (name) =>
+      name === "bunmail._domainkey.example.com" ? [[DKIM_TXT]] : [],
+  });
+  return results.map((r) => r.result);
+}
+
+/** The `h=` names of a signed message's DKIM-Signature. */
+function signedNames(raw: Buffer): string[] {
+  const field = /^DKIM-Signature:[\s\S]*?\r\n(?![ \t])/.exec(raw.toString("latin1"))?.[0];
+  const h = /;\s*h=([^;]+);/.exec(field ?? "")?.[1] ?? "";
+  return h.replace(/\s+/g, "").split(":");
+}
 
 beforeEach(() => {
   captured.length = 0;
@@ -517,25 +557,31 @@ describe("sendMail: custom headers (#177)", () => {
   });
 });
 
-describe("sendMail: DKIM passthrough", () => {
-  test("passes DKIM options to nodemailer's mailOptions when provided", async () => {
+describe("sendMail: DKIM signing (#345)", () => {
+  test("signs with BunMail's signer and hands nodemailer the signed bytes as `raw`", async () => {
     await sendMail({
       from: "hello@example.com",
       to: "user@example.org",
       subject: "test",
+      text: "hi",
       messageId: MID,
-      dkim: {
-        domainName: "example.com",
-        keySelector: "bunmail",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----",
-      },
+      dkim: DKIM,
     });
-    const dkim = asRecord(captured[0]!.mailOptions.dkim);
-    expect(dkim.domainName).toBe("example.com");
-    expect(dkim.keySelector).toBe("bunmail");
-    expect(dkim.privateKey).toContain("BEGIN PRIVATE KEY");
-    /** One-click unsubscribe (RFC 8058) needs the Post header signed. */
-    expect(String(dkim.headerFieldNames).split(":")).toContain("List-Unsubscribe-Post");
+    const options = captured[0]!.mailOptions;
+    /** Nodemailer neither composes nor signs: no `dkim`, no header fields, only `raw`. */
+    expect(options.dkim).toBeUndefined();
+    expect(options.from).toBeUndefined();
+    expect(asRecord(options.envelope)).toEqual({
+      from: "hello@example.com",
+      to: ["user@example.org"],
+    });
+    expect(options.disableFileAccess).toBe(true);
+    expect(options.disableUrlAccess).toBe(true);
+    const raw = rawOf(captured[0]!);
+    expect(raw.toString("latin1")).toStartWith("DKIM-Signature: v=1; a=rsa-sha256;");
+    expect(await verifyRaw(raw)).toEqual(["pass"]);
+    /** One-click unsubscribe (RFC 8058) needs the Post header signed, over-signed here. */
+    expect(signedNames(raw)).toContain("list-unsubscribe-post");
   });
 
   test("omits DKIM when not provided", async () => {
@@ -546,6 +592,95 @@ describe("sendMail: DKIM passthrough", () => {
       messageId: MID,
     });
     expect(captured[0]!.mailOptions.dkim).toBeUndefined();
+    expect(captured[0]!.mailOptions.raw).toBeUndefined();
+    expect(captured[0]!.mailOptions.from).toBe("hello@example.com");
+  });
+
+  test("a key that cannot sign: throws DkimSigningFailedError before any DNS lookup or transport, never unsigned", async () => {
+    const errorSpy = spyOn(logger, "error");
+    const resolved: string[] = [];
+    mxResolver = async (domain) => {
+      resolved.push(domain);
+      return [{ exchange: "mx.example.org", priority: 10 }];
+    };
+    try {
+      let thrown: unknown;
+      try {
+        await sendMail({
+          from: "hello@example.com",
+          to: "user@example.org",
+          subject: "test",
+          messageId: MID,
+          dkim: {
+            domainName: "example.com",
+            keySelector: "bunmail",
+            privateKey: "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----",
+          },
+        });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(DkimSigningFailedError);
+      /** Nothing reached the transport, signed or not, and no MX was even looked up. */
+      expect(captured).toHaveLength(0);
+      expect(createTransportMock).not.toHaveBeenCalled();
+      expect(resolved).toEqual([]);
+      const call = errorSpy.mock.calls.find(([message]) =>
+        message.startsWith("DKIM signing failed"),
+      );
+      expect(call).toBeDefined();
+      expect(JSON.stringify(call)).not.toContain("FAKE");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("a message that cannot be composed, with a key, ends as it does without one: retry, no hold, no DKIM error", async () => {
+    /** Without a key: nodemailer composes and fails inside the transport. */
+    sendBehaviour = () => new Error("compose boom");
+    const withoutKey = await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject: "test",
+      messageId: MID,
+    });
+    sendBehaviour = null;
+    captured.length = 0;
+    createTransportMock.mockClear();
+
+    /** With a key: BunMail composes first and the same error fails the transaction. */
+    const compile = spyOn(MailComposer.prototype, "compile").mockImplementation(() => {
+      throw new Error("compose boom");
+    });
+    const errorSpy = spyOn(logger, "error");
+    errorSpy.mockClear();
+    try {
+      const withKey = await sendMail({
+        from: "hello@example.com",
+        to: "user@example.org",
+        subject: "test",
+        messageId: MID,
+        dkim: DKIM,
+      });
+      const pick = (group: DeliveryGroup | undefined) => ({
+        status: group?.status,
+        attempts: group?.attempts,
+        lastError: group?.lastError,
+      });
+      expect(pick(withKey.deliveryState["example.org"])).toEqual(
+        pick(withoutKey.deliveryState["example.org"]),
+      );
+      expect(withKey.deliveryState["example.org"]?.status).toBe("retry");
+      expect(withKey.deliveryState["example.org"]?.lastError).toContain("compose boom");
+      /** Nothing reached a transport, and it was not reported as a DKIM failure. */
+      expect(createTransportMock).not.toHaveBeenCalled();
+      const messages = errorSpy.mock.calls.map(([message]) => message);
+      expect(messages).toContain("Message could not be composed");
+      expect(messages.some((m) => m.startsWith("DKIM signing failed"))).toBe(false);
+    } finally {
+      compile.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });
 
@@ -1226,29 +1361,35 @@ describe("sendMail: signed per-recipient return paths (#236)", () => {
       bcc: BCC,
       subject: "test",
       messageId: MID,
-      dkim: { domainName: "example.com", keySelector: "bunmail", privateKey: "PEM" },
+      dkim: DKIM,
       returnPath: { emailId: EMAIL_ID },
     });
 
     expect(captured).toHaveLength(4);
     const froms = new Set<unknown>();
+    const firstRaw = rawOf(captured[0]!);
     for (const c of captured) {
       const { from, to } = envelopeOf(c);
       /** Only its own recipient, and a return path naming exactly that recipient. */
       expect(Array.isArray(to) && to.length === 1).toBe(true);
       expect(verifiedRecipient(from)).toBe(Array.isArray(to) ? String(to[0]) : "");
       froms.add(from);
-      /** Headers unchanged: From is the sender, To/Cc are the full lists, no Bcc. */
-      expect(c.mailOptions.from).toBe("hello@example.com");
-      expect(c.mailOptions.to).toBe(TO);
-      expect(c.mailOptions.cc).toBe(CC);
-      expect(c.mailOptions.bcc).toBeUndefined();
-      /** Every transaction is DKIM-signed and keeps List-Unsubscribe. */
-      expect(asRecord(c.mailOptions.dkim).domainName).toBe("example.com");
-      expect(asRecord(c.mailOptions.headers)["List-Unsubscribe"]).toBe(
-        "<mailto:unsubscribe@example.com>",
+      /**
+       * Every transaction carries the same DKIM-signed message (#345): From is
+       * the sender, To/Cc are the full lists, no Bcc, List-Unsubscribe kept.
+       */
+      const raw = rawOf(c);
+      expect(raw.equals(firstRaw)).toBe(true);
+      const header = raw.toString("latin1").split("\r\n\r\n")[0] ?? "";
+      expect(header).toContain("\r\nFrom: hello@example.com\r\n");
+      expect(header).toContain(`\r\nTo: ${TO}\r\n`);
+      expect(header).toContain(`\r\nCc: ${CC}\r\n`);
+      expect(header).not.toMatch(/^Bcc:/im);
+      expect(header).toContain(
+        "\r\nList-Unsubscribe: <mailto:unsubscribe@example.com>\r\n",
       );
     }
+    expect(await verifyRaw(firstRaw)).toEqual(["pass"]);
     expect(froms.size).toBe(4);
 
     /** One pooled single-connection transport for the MX, closed afterwards. */

@@ -69,7 +69,7 @@ export async function resolveDomainForEmail(
  *
  * On decrypt failure (wrong key, tampered ciphertext) the key is reported
  * as unreadable (#244). The send path then holds the email in production
- * (see {@link holdForUnreadableDkimKey}) rather than sending it unsigned:
+ * (see `holdForDkimKey` in `queue-send.service.ts`) rather than sending it unsigned:
  * a wrong `DKIM_ENCRYPTION_KEY` would otherwise strip DKIM from every
  * domain at once while the dashboard still says "verified". Development
  * still sends unsigned.
