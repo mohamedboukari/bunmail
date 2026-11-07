@@ -1,0 +1,54 @@
+diff --git a/dist/cjs/smtp-connection/index.js b/dist/cjs/smtp-connection/index.js
+index 875c2431c840e53d44eb789290f1d38136f01f54..ddbe37ae47ab7273075999f3f7cab83d5c1af516 100644
+--- a/dist/cjs/smtp-connection/index.js
++++ b/dist/cjs/smtp-connection/index.js
+@@ -1130,6 +1130,22 @@ class SMTPConnection extends node_events_1.EventEmitter {
+         try {
+             this._socket = node_tls_1.default.connect(opts, () => {
+                 this._clearPhase();
++                // bunmail: optional check of the TLS session (DANE, RFC 7672) before anything is sent over it
++                if (typeof this.options.verifyTlsSocket === 'function') {
++                    let rejection;
++                    try {
++                        rejection = this.options.verifyTlsSocket(this._socket);
++                    }
++                    catch (err) {
++                        rejection = err;
++                    }
++                    if (rejection) {
++                        this.upgrading = false;
++                        removePlainSocketListeners();
++                        this._socket.destroy();
++                        return callback(rejection);
++                    }
++                }
+                 this.secure = true;
+                 this.upgrading = false;
+                 this._socket.on('data', this._onSocketData);
+diff --git a/dist/esm/smtp-connection/index.js b/dist/esm/smtp-connection/index.js
+index cbaa2e47327fbdc265910864d6f096dfc123ee1f..99b803c93e101ca379db712eb144d0d9230f237d 100644
+--- a/dist/esm/smtp-connection/index.js
++++ b/dist/esm/smtp-connection/index.js
+@@ -1092,6 +1092,22 @@ class SMTPConnection extends EventEmitter {
+         try {
+             this._socket = tls.connect(opts, () => {
+                 this._clearPhase();
++                // bunmail: optional check of the TLS session (DANE, RFC 7672) before anything is sent over it
++                if (typeof this.options.verifyTlsSocket === 'function') {
++                    let rejection;
++                    try {
++                        rejection = this.options.verifyTlsSocket(this._socket);
++                    }
++                    catch (err) {
++                        rejection = err;
++                    }
++                    if (rejection) {
++                        this.upgrading = false;
++                        removePlainSocketListeners();
++                        this._socket.destroy();
++                        return callback(rejection);
++                    }
++                }
+                 this.secure = true;
+                 this.upgrading = false;
+                 this._socket.on('data', this._onSocketData);

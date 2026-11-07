@@ -1,7 +1,10 @@
 /**
- * The DNS wire format of TXT lookups (`dns-txt.ts`): name checks, the query,
- * and the strict parse of an untrusted response. Pure and synchronous: no
- * sockets, no clock, nothing logged.
+ * The DNS wire format of TXT lookups (`dns-txt.ts`) and of the DNSSEC-aware
+ * lookups of DANE (`dns-secure.ts`, #345): name checks, the query, and the
+ * strict parse of an untrusted response. Pure and synchronous: no sockets,
+ * no clock, nothing logged. The RDATA of the other record types (A, AAAA,
+ * MX, CNAME, TLSA) is decoded in `dns-rdata.ts`, on top of
+ * {@link parseAnswer}.
  *
  * - A response counts only when it carries our ID, QR set, opcode 0, and
  *   echoes our question (name compared case-insensitively in ASCII, type
@@ -22,6 +25,10 @@
  * - Strings are decoded as latin1, one character per byte, as Node does
  *   (its c-ares binding builds them with `OneByteString`), so ASCII
  *   records read the same as with Node and no byte is lost or replaced.
+ * - A {@link DnsQuestion} (any type) is sent with the AD bit set, which asks
+ *   a validating resolver to report whether the answer is authenticated
+ *   (RFC 6840 section 5.7, and 5.8 for the resolver side); its answer
+ *   carries the AD bit back as `authenticated`. TXT queries keep RD only.
  */
 
 /** A `node:dns` error code a TXT lookup rejects with. */
@@ -43,6 +50,16 @@ export interface TxtQuestion {
   labels: readonly string[];
 }
 
+/**
+ * A query of any type for the DNSSEC-aware lookups (`dns-secure.ts`): sent
+ * with RD and AD set (RFC 6840 section 5.7), CD clear, so the resolver
+ * validates and says whether the answer is authenticated.
+ */
+export interface DnsQuestion extends TxtQuestion {
+  /** QTYPE: one of the `TYPE_*` constants. */
+  qtype: number;
+}
+
 /** What one response says. */
 export type TxtResponseOutcome =
   /** Not an answer to our query (another ID, question or not a response): ignore it. */
@@ -52,12 +69,46 @@ export type TxtResponseOutcome =
   | { kind: "records"; records: string[][] }
   | { kind: "error"; code: DnsTxtErrorCode };
 
+/**
+ * What one response says about a {@link DnsQuestion}, before its RDATA is
+ * typed (`dns-rdata.ts`). NOERROR and NXDOMAIN are both answers: with the
+ * AD bit, an NXDOMAIN or an empty NOERROR is an authenticated denial
+ * (RFC 7672 section 2.1.1), which DANE must tell apart from a failure.
+ */
+export type ParsedAnswer<T> =
+  | { kind: "mismatch" }
+  | { kind: "truncated" }
+  /** Any other RCODE, or a malformed response (`EBADRESP`). */
+  | { kind: "error"; code: DnsTxtErrorCode }
+  | {
+      kind: "answer";
+      /** `NXDOMAIN`: the name (or the end of its CNAME chain) does not exist. */
+      nxdomain: boolean;
+      /** The AD bit of the response header. */
+      authenticated: boolean;
+      /** The records of the type asked, owned by the name asked or its CNAME chain; none for NXDOMAIN. */
+      records: T[];
+      /**
+       * The name asked, then every name its CNAME chain in the answer leads
+       * to, in order (the last one is the fully expanded name). Just the
+       * name asked for NXDOMAIN or without a CNAME.
+       */
+      chain: string[][];
+    };
+
 /** Size of the DNS header; a TCP message shorter than this is malformed. */
 export const DNS_HEADER_BYTES = 12;
-const TYPE_CNAME = 5;
-const TYPE_TXT = 16;
+export const TYPE_A = 1;
+export const TYPE_CNAME = 5;
+export const TYPE_MX = 15;
+export const TYPE_TXT = 16;
+export const TYPE_AAAA = 28;
 const TYPE_OPT = 41;
+export const TYPE_TLSA = 52;
 const CLASS_IN = 1;
+/** Header flags: RD (recursion desired) and AD (authentic data, RFC 4035 3.2.3, RFC 6840 5.7). */
+const FLAG_RD = 0x0100;
+const FLAG_AD = 0x0020;
 /** The UDP payload size advertised in EDNS0 (the DNS flag day 2020 value). */
 const EDNS_UDP_PAYLOAD = 1232;
 /** Longest name on the wire, length bytes and root label included (RFC 1035 2.3.4). */
@@ -122,19 +173,29 @@ function nameKey(labels: readonly string[]): string {
 
 /* ─── Query ─── */
 
+/** The QTYPE of a question: TXT unless it is a {@link DnsQuestion}. */
+function qtypeOf(question: TxtQuestion | DnsQuestion): number {
+  return "qtype" in question ? question.qtype : TYPE_TXT;
+}
+
 /**
- * The wire form of a TXT query (RD set, one question `<name> TXT IN`), with
- * an EDNS0 OPT record advertising 1232 bytes unless `edns` is false (the
- * retry after a FORMERR).
+ * The wire form of a query (one question `<name> <type> IN`), with an EDNS0
+ * OPT record advertising 1232 bytes unless `edns` is false (the retry after
+ * a FORMERR). A TXT query sets RD only; a {@link DnsQuestion} sets RD and
+ * AD (RFC 6840 section 5.7), never CD and never DO: the resolver validates,
+ * and its AD bit is all that is read back.
  */
-export function encodeQuery(question: TxtQuestion, edns = true): Uint8Array {
+export function encodeQuery(
+  question: TxtQuestion | DnsQuestion,
+  edns = true,
+): Uint8Array {
   const nameBytes = question.labels.reduce((total, label) => total + label.length + 1, 1);
   /** Header, name, QTYPE and QCLASS, then the OPT record (root name, 10 fixed bytes). */
   const bytes = new Uint8Array(DNS_HEADER_BYTES + nameBytes + 4 + (edns ? 11 : 0));
   const view = new DataView(bytes.buffer);
   view.setUint16(0, question.id);
-  /** QR 0, opcode 0, RD 1. */
-  view.setUint16(2, 0x0100);
+  /** QR 0, opcode 0, RD 1; AD 1 for a DNSSEC-aware question. */
+  view.setUint16(2, "qtype" in question ? FLAG_RD | FLAG_AD : FLAG_RD);
   view.setUint16(4, 1);
   view.setUint16(10, edns ? 1 : 0);
   let at = DNS_HEADER_BYTES;
@@ -143,7 +204,7 @@ export function encodeQuery(question: TxtQuestion, edns = true): Uint8Array {
     for (let i = 0; i < label.length; i++) bytes[at++] = label.charCodeAt(i);
   }
   bytes[at++] = 0;
-  view.setUint16(at, TYPE_TXT);
+  view.setUint16(at, qtypeOf(question));
   view.setUint16(at + 2, CLASS_IN);
   at += 4;
   if (edns) {
@@ -158,10 +219,10 @@ export function encodeQuery(question: TxtQuestion, edns = true): Uint8Array {
 /* ─── Response ─── */
 
 /** A structural error in a response; turned into `EBADRESP` at the top. */
-class MalformedResponse extends Error {}
+export class MalformedResponse extends Error {}
 
 /** A name read from a message, and where the bytes after it start. */
-interface ReadName {
+export interface ReadName {
   labels: string[];
   next: number;
 }
@@ -171,7 +232,7 @@ interface ReadName {
  * only backwards and past the header, at most {@link MAX_POINTER_JUMPS}
  * times, and at most 255 bytes on the wire.
  */
-function readName(message: Uint8Array, start: number): ReadName {
+export function readName(message: Uint8Array, start: number): ReadName {
   const labels: string[] = [];
   let at = start;
   let next = -1;
@@ -213,7 +274,7 @@ function latin1(message: Uint8Array, start: number, end: number): string {
 }
 
 /** One resource record's fixed fields and where its RDATA lies. */
-interface ResourceRecord {
+export interface ResourceRecord {
   owner: string[];
   type: number;
   rrClass: number;
@@ -257,14 +318,34 @@ function txtStrings(message: Uint8Array, record: ResourceRecord): string[] {
 }
 
 /**
- * What `response` says about `question`. Never throws: a response that is
- * not ours is a `mismatch`, a malformed one past the question an
- * `EBADRESP` error.
+ * What `response` says about a TXT `question`. Never throws: a response
+ * that is not ours is a `mismatch`, a malformed one past the question an
+ * `EBADRESP` error. NXDOMAIN is `ENOTFOUND`, no TXT record `ENODATA`.
  */
 export function parseTxtResponse(
   response: Uint8Array,
   question: TxtQuestion,
 ): TxtResponseOutcome {
+  const parsed = parseAnswer(response, question, txtStrings);
+  if (parsed.kind !== "answer") return parsed;
+  if (parsed.nxdomain) return { kind: "error", code: "ENOTFOUND" };
+  return parsed.records.length > 0
+    ? { kind: "records", records: parsed.records }
+    : { kind: "error", code: "ENODATA" };
+}
+
+/**
+ * What `response` says about `question`, its records of the type asked
+ * decoded by `decode` (which throws {@link MalformedResponse} on bad RDATA:
+ * a malformed record of the type asked rejects the whole response, even
+ * one that is not ours). Never throws: a response that is not ours is a
+ * `mismatch`, a malformed one past the question an `EBADRESP` error.
+ */
+export function parseAnswer<T>(
+  response: Uint8Array,
+  question: TxtQuestion | DnsQuestion,
+  decode: (message: Uint8Array, record: ResourceRecord) => T,
+): ParsedAnswer<T> {
   if (response.length < DNS_HEADER_BYTES) return { kind: "mismatch" };
   const view = new DataView(response.buffer, response.byteOffset, response.byteLength);
   const flags = view.getUint16(2);
@@ -288,7 +369,7 @@ export function parseTxtResponse(
     const qclass = view.getUint16(asked.next + 2);
     if (
       !sameName(asked.labels, question.labels) ||
-      type !== TYPE_TXT ||
+      type !== qtypeOf(question) ||
       qclass !== CLASS_IN
     ) {
       return { kind: "mismatch" };
@@ -301,7 +382,7 @@ export function parseTxtResponse(
   if ((flags & 0x0200) !== 0) return { kind: "truncated" };
 
   try {
-    return readSections(response, view, at, flags & 0x0f, question);
+    return readSections(response, view, at, flags, question, decode);
   } catch (error: unknown) {
     if (error instanceof MalformedResponse) return { kind: "error", code: "EBADRESP" };
     throw error;
@@ -309,20 +390,21 @@ export function parseTxtResponse(
 }
 
 /** Reads the answer, authority and additional sections after the question at `start`. */
-function readSections(
+function readSections<T>(
   response: Uint8Array,
   view: DataView,
   start: number,
-  headerRcode: number,
-  question: TxtQuestion,
-): TxtResponseOutcome {
+  flags: number,
+  question: TxtQuestion | DnsQuestion,
+  decode: (message: Uint8Array, record: ResourceRecord) => T,
+): ParsedAnswer<T> {
   const answerCount = view.getUint16(6);
   const authorityCount = view.getUint16(8);
   const additionalCount = view.getUint16(10);
   const answers: ResourceRecord[] = [];
   let at = start;
   let optRecords = 0;
-  let rcode = headerRcode;
+  let rcode = flags & 0x0f;
   for (let i = 0; i < answerCount + authorityCount + additionalCount; i++) {
     const record = readRecord(response, view, at);
     at = record.rdataEnd;
@@ -337,35 +419,53 @@ function readSections(
     }
   }
 
+  const authenticated = (flags & FLAG_AD) !== 0;
+  /** NXDOMAIN is an answer here; the TXT parse turns it into `ENOTFOUND`. */
+  if (rcode === 3) {
+    return {
+      kind: "answer",
+      nxdomain: true,
+      authenticated,
+      records: [],
+      chain: [[...question.labels]],
+    };
+  }
   const rcodeError = rcode === 0 ? null : (RCODE_ERRORS.get(rcode) ?? "EBADRESP");
   if (rcodeError !== null) return { kind: "error", code: rcodeError };
 
-  const owners = chainOwners(response, answers, question.labels);
-  const records: string[][] = [];
+  const qtype = qtypeOf(question);
+  const chain = cnameChain(response, answers, question.labels);
+  /**
+   * A CNAME query wants the CNAME of the name asked itself: the chain's
+   * later links are other names' records.
+   */
+  const owners = new Set(
+    (qtype === TYPE_CNAME ? chain.slice(0, 1) : chain).map((name) => nameKey(name)),
+  );
+  const records: T[] = [];
   for (const record of answers) {
-    if (record.type !== TYPE_TXT) continue;
-    /** Malformed TXT data rejects the response even when the record is not ours. */
-    const strings = txtStrings(response, record);
+    if (record.type !== qtype) continue;
+    /** Malformed data rejects the response even when the record is not ours. */
+    const decoded = decode(response, record);
     if (record.rrClass === CLASS_IN && owners.has(nameKey(record.owner))) {
-      records.push(strings);
+      records.push(decoded);
     }
   }
-  return records.length > 0
-    ? { kind: "records", records }
-    : { kind: "error", code: "ENODATA" };
+  return { kind: "answer", nxdomain: false, authenticated, records, chain };
 }
 
 /**
- * The name asked and every name the answer's CNAME chain leads to from it:
- * every CNAME RDATA is read once into an owner-to-target map (an owner with
- * two different targets is malformed), then the chain is walked from the
- * name asked, at most {@link MAX_CNAME_LINKS} links. A loop ends the walk.
+ * The name asked and every name the answer's CNAME chain leads to from it,
+ * in order: every CNAME RDATA is read once into an owner-to-target map (an
+ * owner with two different targets is malformed), then the chain is
+ * walked from the name asked, at most {@link MAX_CNAME_LINKS} links. A loop
+ * ends the walk.
  */
-function chainOwners(
+function cnameChain(
   response: Uint8Array,
   answers: readonly ResourceRecord[],
   asked: readonly string[],
-): Set<string> {
+): string[][] {
   const targets = new Map<string, string[]>();
   for (const record of answers) {
     if (record.type !== TYPE_CNAME || record.rrClass !== CLASS_IN) continue;
@@ -379,14 +479,16 @@ function chainOwners(
     targets.set(owner, target.labels);
   }
 
-  let current = nameKey(asked);
-  const owners = new Set([current]);
+  let current = [...asked];
+  const seen = new Set([nameKey(current)]);
+  const chain = [current];
   for (let links = 0; ; links++) {
-    const target = targets.get(current);
-    if (target === undefined) return owners;
+    const target = targets.get(nameKey(current));
+    if (target === undefined) return chain;
     if (links >= MAX_CNAME_LINKS) throw new MalformedResponse("CNAME chain too long");
-    current = nameKey(target);
-    if (owners.has(current)) return owners;
-    owners.add(current);
+    current = target;
+    if (seen.has(nameKey(current))) return chain;
+    seen.add(nameKey(current));
+    chain.push(current);
   }
 }

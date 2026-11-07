@@ -44,7 +44,7 @@ export type TlsRptReportRow = typeof tlsRptReports.$inferSelect;
 const CLAIM_LEASE_MINUTES = 180;
 
 function isPolicyType(value: string): value is TlsRptPolicyType {
-  return value === "sts" || value === "no-policy-found";
+  return value === "tlsa" || value === "sts" || value === "no-policy-found";
 }
 
 function isResultType(value: string): value is TlsRptResultType {

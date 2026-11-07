@@ -30,7 +30,7 @@ export const tlsRptResults = pgTable(
       .notNull()
       .references(() => tlsRptReports.id, { onDelete: "cascade" }),
 
-    /** `policy-type`: `sts` or `no-policy-found`. */
+    /** `policy-type`: `tlsa`, `sts` or `no-policy-found`. */
     policyType: varchar("policy_type", { length: 16 }).notNull(),
 
     /** Identifies the policy within the report: a hash of its type, string and MX patterns. */

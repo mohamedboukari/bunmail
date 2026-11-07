@@ -8,6 +8,8 @@ import type {
 } from "../types/tls-rpt.types.ts";
 import {
   classifySession,
+  daneUnknownPolicyOf,
+  dnssecInvalidObservation,
   noMatchingMxObservation,
   type SessionOutcome,
 } from "./tls-rpt-classify.ts";
@@ -163,4 +165,17 @@ export function observeMxSession(
 export function observeUnconnectedAttempt(target: TlsRptDomain): void {
   if (!deps.enabled()) return;
   recordInBackground(target, noMatchingMxObservation());
+}
+
+/**
+ * Records an MX host skipped because a DNSSEC lookup of DANE failed (#345,
+ * RFC 7672 section 2.1.2): a `dnssec-invalid` failure under the host's
+ * `tlsa` policy, nothing connected to.
+ */
+export function observeDaneLookupFailure(domain: string, mxHost: string): void {
+  if (!deps.enabled()) return;
+  recordInBackground(
+    { domain, policy: daneUnknownPolicyOf(mxHost) },
+    dnssecInvalidObservation(mxHost),
+  );
 }

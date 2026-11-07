@@ -8,6 +8,10 @@
 #
 # Set POSTGRES_PASSWORD in your .env file (required).
 # Never commit real credentials to version control.
+#
+# Optional profile `dane` (#345): a local validating DNS resolver (Unbound)
+# for outbound DANE. Off unless asked for (`docker compose --profile dane
+# up -d`, or COMPOSE_PROFILES=dane in .env); see docs/self-hosting.md, "DANE".
 
 # Log rotation (#284): BunMail writes one line per HTTP request, queue
 # attempt and SMTP session. Docker's json-file driver keeps at most 5 files
@@ -61,5 +65,91 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Validating DNS resolver for outbound DANE (#345, RFC 7672), only with the
+  # `dane` profile. DANE trusts the AD bit of exactly one resolver
+  # (DANE_RESOLVER), so it runs here, next to the app, on its own network at
+  # a fixed address (172.30.53.53), never published on a host port and
+  # answering only that network. It recurses from the root itself (no
+  # forwarder) and validates against the root trust anchor, refreshed by
+  # unbound-anchor at each start (RFC 5011). The app joins the `dane` network
+  # from docker-compose.override.yml (see docker-compose.override.example.yml)
+  # and needs DANE_ENABLED=true and DANE_RESOLVER=172.30.53.53 in .env.
+  unbound:
+    logging: *default-logging
+    profiles: ["dane"]
+    build:
+      dockerfile_inline: |
+        FROM alpine:3.24@sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a
+        RUN apk add --no-cache unbound \
+          && mkdir -p /var/lib/unbound \
+          && chown unbound:unbound /var/lib/unbound
+    configs:
+      - source: unbound_conf
+        target: /etc/unbound/unbound.conf
+    # unbound-anchor exits 1 after updating the anchor, which is not an error.
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        unbound-anchor -a /var/lib/unbound/root.key;
+        chown unbound:unbound /var/lib/unbound/root.key;
+        exec unbound -d -c /etc/unbound/unbound.conf
+    networks:
+      dane:
+        ipv4_address: 172.30.53.53
+    healthcheck:
+      test: ["CMD", "unbound-control", "-c", "/etc/unbound/unbound.conf", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   pgdata:
+
+# The `dane` profile's network (#345): created only when a service uses it
+# (the `dane` profile, or the app once the override attaches it).
+networks:
+  dane:
+    ipam:
+      config:
+        - subnet: 172.30.53.0/24
+
+configs:
+  unbound_conf:
+    content: |
+      server:
+        interface: 0.0.0.0
+        port: 53
+        do-ip4: yes
+        # Docker networks rarely route IPv6; asking v6 name servers would only time out.
+        do-ip6: no
+        do-udp: yes
+        do-tcp: yes
+        # Only the `dane` network (and the healthcheck on loopback) may ask.
+        access-control: 0.0.0.0/0 refuse
+        access-control: 127.0.0.0/8 allow
+        access-control: 172.30.53.0/24 allow
+        username: "unbound"
+        chroot: ""
+        directory: "/etc/unbound"
+        use-syslog: no
+        verbosity: 0
+        # DNSSEC validation, strictly: a bogus answer is SERVFAIL, never passed on.
+        module-config: "validator iterator"
+        auto-trust-anchor-file: "/var/lib/unbound/root.key"
+        harden-dnssec-stripped: yes
+        val-permissive-mode: no
+        harden-glue: yes
+        harden-below-nxdomain: yes
+        aggressive-nsec: yes
+        qname-minimisation: yes
+        hide-identity: yes
+        hide-version: yes
+        edns-buffer-size: 1232
+        prefetch: yes
+      remote-control:
+        # A local socket for the healthcheck only.
+        control-enable: yes
+        control-interface: /run/unbound.ctl

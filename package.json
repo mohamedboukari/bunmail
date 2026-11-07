@@ -90,5 +90,8 @@
   },
   "overrides": {
     "nodemailer": "10.3.1"
+  },
+  "patchedDependencies": {
+    "nodemailer@10.3.1": "patches/nodemailer@10.3.1.patch"
   }
 }

@@ -31,6 +31,10 @@ export interface FixtureServer {
   open: () => number;
   /** The most messages the server was receiving at once (start of DATA to its reply). */
   peak: () => number;
+  /** MAIL FROM commands the server received so far (#345: none after a failed DANE check). */
+  mailFroms: () => number;
+  /** The SNI of each TLS session so far, in order (#345). */
+  snis: () => string[];
   /** Resolves once no connection is open, or rejects after `withinMs`. */
   waitForNoneOpen: (withinMs: number) => Promise<void>;
   /**
@@ -63,6 +67,8 @@ export async function startFixtureServer(
   let closed = 0;
   let open = 0;
   let peak = 0;
+  let mailFroms = 0;
+  const snis: string[] = [];
   let resolvePort: (port: number) => void = () => undefined;
   const port = new Promise<number>((resolve) => {
     resolvePort = resolve;
@@ -84,6 +90,10 @@ export async function startFixtureServer(
         const closedCount: unknown = Reflect.get(line, "closed");
         const openCount: unknown = Reflect.get(line, "open");
         const peakCount: unknown = Reflect.get(line, "peak");
+        const mailFromCount: unknown = Reflect.get(line, "mailFrom");
+        const sni: unknown = Reflect.get(line, "sni");
+        if (typeof mailFromCount === "number") mailFroms = mailFromCount;
+        if (typeof sni === "string") snis.push(sni);
         if (typeof openCount === "number") open = openCount;
         if (typeof peakCount === "number") peak = peakCount;
         if (typeof reported === "number") resolvePort(reported);
@@ -100,6 +110,8 @@ export async function startFixtureServer(
     closed: () => closed,
     open: () => open,
     peak: () => peak,
+    mailFroms: () => mailFroms,
+    snis: () => [...snis],
     waitForNoneOpen: async (withinMs) => {
       /** Every connection the server accepted is gone (counters update in the background). */
       const allClosed = (): boolean => open === 0 && closed >= connections;

@@ -5,7 +5,7 @@
  * bootstrap and the warnings about settings that do nothing.
  * `src/index.ts` calls them in order.
  */
-import { config } from "./config.ts";
+import { config, daneResolverIsLocal } from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
@@ -208,6 +208,21 @@ export function warnIgnoredSettings(): void {
    * out (#224): no button, no routes. Say so once per provider, naming the
    * missing variables (never values), so the missing button has a reason.
    */
+  /**
+   * DANE (#345) believes the AD bit of `DANE_RESOLVER`. From a resolver that
+   * is not on this host or a private network, that bit crossed a network
+   * unprotected and an on-path attacker could set it (RFC 7672 section
+   * 2.1.1): warn once, never refuse (only the operator knows the path).
+   */
+  const resolver = config.dane.resolver;
+  if (config.dane.enabled && resolver !== null && !daneResolverIsLocal(resolver)) {
+    logger.warn("DANE_RESOLVER is not a local or private address", {
+      resolver: resolver.address,
+      port: resolver.port,
+      hint: "the AD bit of a remote resolver is not trustworthy over plain DNS (RFC 7672 section 2.1.1); run a local validating resolver (the compose dane profile)",
+    });
+  }
+
   for (const skipped of config.sso.skipped) {
     logger.warn("SSO provider skipped: no client credentials", {
       provider: skipped.id,

@@ -108,6 +108,11 @@ TRASH_RETENTION_DAYS=7
 # TLSRPT_MAX_REPORTS_PER_DAY=500
 # Most reports one mail address or HTTPS origin gets a day (1 to 1000, default 50)
 # TLSRPT_MAX_REPORTS_PER_DESTINATION_PER_DAY=50
+# Optional: outbound DANE (RFC 7672, #345), off by default. Needs a local
+# validating resolver as DANE_RESOLVER (an IP address): see "DANE (#345)" below.
+# DANE_ENABLED=true
+# DANE_RESOLVER=172.30.53.53
+# COMPOSE_PROFILES=dane
 # Number of trusted reverse-proxy hops: set to 1 when BunMail runs behind a
 # single proxy (see section 6) so dashboard login rate limiting (#109) keys off
 # the real client IP instead of the proxy's. Default 0 (raw socket IP).
@@ -511,6 +516,50 @@ certbot --nginx -d mail.yourdomain.com
 ```
 
 > **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. **Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy**; otherwise a direct request could forge `X-Forwarded-For` and get a fresh throttle bucket per request. Docker-published ports bypass UFW, so the default `docker-compose.yml` publishes `3000` on `127.0.0.1` only (#205); keep it that way when the proxy runs on the same host, and publish anything else from `docker-compose.override.yml`. BunMail logs `Request bypassed the trusted proxy` (at most once an hour, #256) when a request arrives with fewer `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS`.
+
+## DANE (#345)
+
+Optional, off by default. With `DANE_ENABLED=true` BunMail applies DANE for SMTP (RFC 7672) to outbound mail: a recipient domain whose MX records are DNSSEC-signed and whose MX host publishes signed TLSA records gets its mail only over STARTTLS with a certificate that matches them, never in plaintext; a failure is retried or tried on the next MX host, never bounced. Domains without DNSSEC are delivered exactly as before. How it decides: [emails.md](emails.md#dane-345).
+
+**Why a local validating resolver.** BunMail does not check DNSSEC signatures itself; it trusts the AD ("authenticated data") bit of one resolver, `DANE_RESOLVER`, and of no other. That bit is only as trustworthy as the path to the resolver (RFC 7672 section 2.1.1): from a public resolver (`8.8.8.8`, `1.1.1.1`) it crosses the internet unprotected, and an on-path attacker could set it on a forged answer. Docker's embedded DNS (`127.0.0.11`) forwards to whatever the host uses, so its AD bit is no better. So the resolver runs next to BunMail, recurses from the root itself and validates, and BunMail reaches it without leaving the host. `DANE_RESOLVER` is an IP address with an optional port (a host name is refused: resolving it would need a resolver already trusted), and BunMail refuses to boot with `DANE_ENABLED=true` and no `DANE_RESOLVER`.
+
+**With Docker Compose** (the `dane` profile of `docker-compose.yml`): an Unbound container built from a pinned Alpine image, on its own network `172.30.53.0/24` at the fixed address `172.30.53.53`, published on no host port and answering only that network. It validates against the root trust anchor (refreshed by `unbound-anchor` at each start, RFC 5011), with `harden-dnssec-stripped` and `val-permissive-mode: no`, so a bogus answer is a SERVFAIL, never passed on. A plain `docker compose up` does not start it and does not create its network.
+
+1. Attach the app to the resolver's network in `docker-compose.override.yml` (the commented block is in `docker-compose.override.example.yml`):
+
+   ```yaml
+   services:
+     app:
+       networks:
+         - default
+         - dane
+   ```
+
+2. In `.env`:
+
+   ```bash
+   DANE_ENABLED=true
+   DANE_RESOLVER=172.30.53.53
+   # Start the resolver with every plain `docker compose up -d` (the usual deploy)
+   COMPOSE_PROFILES=dane
+   ```
+
+3. Start it, or `docker compose --profile dane up -d` without `COMPOSE_PROFILES`:
+
+   ```bash
+   docker compose up -d --build
+   docker compose ps unbound          # healthy after a few seconds
+   ```
+
+   With `LOG_LEVEL=debug`, a send to a DANE domain then logs `DANE: MX records` with `"secure":true` and `DANE: applies to the MX host`.
+
+If `172.30.53.0/24` is already used on the host, change the subnet and the address in `docker-compose.yml` (`networks.dane` and `services.unbound`) and `DANE_RESOLVER` together.
+
+**All of outbound DNS goes there.** With `DANE_ENABLED=true`, every MX and address lookup of outbound delivery goes to `DANE_RESOLVER`, not only those of DNSSEC-signed domains. A split-horizon or internal name (an internal relay, a host reached with `MAIL_ALLOW_PRIVATE_MX=true`) must therefore be answered by that resolver too: add it to Unbound as a `stub-zone` or `forward-zone` (with `domain-insecure:` for a zone that is not signed), or leave DANE off. BunMail logs a `warn` at boot when `DANE_RESOLVER` is not a loopback, private (RFC 1918, ULA) or link-local address: a remote resolver's AD bit crossed the network unprotected.
+
+**Without the profile:** any validating resolver BunMail reaches over a path you trust works, for example the host Unbound of [Local resolver for DNSBL](#local-resolver-for-dnsbl) (Ubuntu's `unbound` package validates by default): `DANE_RESOLVER=172.17.0.1`. Never a resolver across the internet.
+
+**What to watch.** Every DANE lookup goes to this resolver: if it is down or unreachable, no MX set can be determined under DANE and all outbound mail waits in `retry` (logged at `warn`, `DANE: MX lookup failed, delivery delayed`) until it is back or `MAIL_RETRY_MAX_AGE_HOURS` passes. Hosts that fail DANE are logged at `warn` (`DANE: no authenticated TLS with the MX host`, `DANE: MX host skipped, a DNSSEC lookup failed`). With `TLSRPT_ENABLED=true` the receiving domains see these in their reports (`tlsa` policies). Under Bun 1.3.14 DANE-TA records are not used for authentication (Bun does not expose the server's certificate chain, see [emails.md](emails.md#dane-345)): a host that publishes only DANE-TA records gets mandatory TLS without authentication, and a host with DANE-EE records too is authenticated by those. To stop applying DANE, set `DANE_ENABLED=false` and restart; nothing is stored.
 
 ## Firewall Rules
 

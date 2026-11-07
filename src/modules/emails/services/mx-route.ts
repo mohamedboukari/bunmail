@@ -2,6 +2,7 @@ import { lookup, resolve4, resolve6, resolveMx } from "dns/promises";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmailsInText } from "../../../utils/redact.ts";
 import { classifySendFailure } from "../../../utils/smtp-error.ts";
+import type { DaneHost } from "../types/dane.types.ts";
 import { resolveMxAddresses, type LookupAll } from "./mx-address.ts";
 import {
   SMTP_SESSION_DEADLINE_MS,
@@ -257,7 +258,23 @@ export type SessionRunner = (session: {
   port: number;
   transactions: MxSessionTransaction[];
   deadlineMs: number;
+  /** DANE for this host (#345), from the `resolveHost` of the attempt; `null` without. */
+  dane: DaneHost | null;
 }) => Promise<MxSessionOutcome[]>;
+
+/** How one MX host is reached (#345): its checked addresses, and DANE when it applies. */
+export interface HostRoute {
+  /** The addresses to try, in order, already through the address check. */
+  addresses: string[];
+  dane: DaneHost | null;
+}
+
+/**
+ * Resolves one MX host just before it is tried (#345, DANE): throws to
+ * skip the host (the error is its failure, with no SMTP reply, so a
+ * transaction left without a host is retried).
+ */
+export type HostResolver = (mxHost: string, port: number) => Promise<HostRoute>;
 
 /**
  * The per-bucket lock, see `withMxLock`: held around one session, never
@@ -280,6 +297,32 @@ function attemptDeadlineError(deadlineMs: number): Error {
   return new Error(
     `SMTP session exceeded ${Math.round(deadlineMs / 1000)} s and was closed`,
   );
+}
+
+/**
+ * `work`, rejected with the attempt's deadline error once `budgetMs` has
+ * passed (#345: a DANE host resolution). The work itself goes on in the
+ * background until its own timeouts end it; its result is then ignored.
+ */
+async function withinBudget<T>(
+  work: Promise<T>,
+  budgetMs: number,
+  deadlineMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(attemptDeadlineError(deadlineMs)),
+      Math.max(0, budgetMs),
+    );
+  });
+  /** A late failure of the abandoned work must not be an unhandled rejection. */
+  void work.catch(() => undefined);
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -364,6 +407,12 @@ export async function deliverWithFailover(args: {
    * hold the report job for long.
    */
   maxHosts?: number;
+  /**
+   * Resolves each host in place of the address check (#345: a domain under
+   * DANE, whose hosts' addresses and TLSA records come from the trusted
+   * resolver). Absent: `resolveMxAddresses`, no DANE.
+   */
+  resolveHost?: HostResolver;
   routeDeps?: MxRouteDeps;
 }): Promise<RoutedOutcome[]> {
   const routeDeps = args.routeDeps ?? deps;
@@ -390,13 +439,33 @@ export async function deliverWithFailover(args: {
 
   for (const mxHost of args.hosts.slice(0, maxHosts)) {
     if (pending.length === 0 || budgetMs <= 0) break;
+    const port = routeDeps.smtpPort(mxHost);
     let addresses: string[];
+    let dane: DaneHost | null = null;
     try {
-      addresses = await resolveMxAddresses(mxHost, {
-        allowPrivate: args.allowPrivate,
-        lookup: routeDeps.lookup,
-        family: args.ipFamily ?? 4,
-      });
+      if (args.resolveHost === undefined) {
+        addresses = await resolveMxAddresses(mxHost, {
+          allowPrivate: args.allowPrivate,
+          lookup: routeDeps.lookup,
+          family: args.ipFamily ?? 4,
+        });
+      } else {
+        /**
+         * Under DANE (#345) the host's DNS lookups are part of the attempt:
+         * their time comes out of the session budget, and they are cut off
+         * when it runs out, so DNS can never stretch the attempt deadline.
+         */
+        const startedAt = Date.now();
+        try {
+          ({ addresses, dane } = await withinBudget(
+            args.resolveHost(mxHost, port),
+            budgetMs,
+            deadlineMs,
+          ));
+        } finally {
+          budgetMs -= Date.now() - startedAt;
+        }
+      }
     } catch (error) {
       /** Never connected: no session, so nothing known about TLS. */
       logger.debug("MX host skipped", {
@@ -442,9 +511,10 @@ export async function deliverWithFailover(args: {
           return await args.runSession({
             address,
             mxHost,
-            port: routeDeps.smtpPort(mxHost),
+            port,
             transactions: sessionTransactions,
             deadlineMs: budgetMs,
+            dane,
           });
         } finally {
           budgetMs -= Date.now() - startedAt;

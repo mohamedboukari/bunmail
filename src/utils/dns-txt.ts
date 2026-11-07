@@ -1,8 +1,14 @@
 import { randomInt } from "crypto";
 import { getServers } from "dns";
-import { createConnection, isIP, type Socket } from "net";
 import {
-  DNS_HEADER_BYTES,
+  exchangeTcp,
+  exchangeUdp,
+  parseServer,
+  type DnsServer,
+  type Exchange,
+  type ReplyCheck,
+} from "./dns-transport.ts";
+import {
   encodeQuery,
   nameLabels,
   parseTxtResponse,
@@ -23,7 +29,8 @@ import { logger } from "./logger.ts";
  * records. This module asks the system resolvers itself and returns Node's
  * shape: one entry per record, each the list of its strings. No dependency.
  * The wire format (name checks, query, strict response parse) is in
- * `dns-wire.ts`; this file is the transport.
+ * `dns-wire.ts`, the sockets in `dns-transport.ts`; this file is the
+ * lookup: servers, attempts, retries and errors.
  *
  * **Servers:** `dns.getServers()` (in Docker the compose or host resolver,
  * on a host its `/etc/resolv.conf`), or `options.servers` (tests). Each is
@@ -88,41 +95,10 @@ export interface TxtLookupOptions {
   timeoutMs?: number;
 }
 
-const DNS_PORT = 53;
-/** Datagrams larger than this are dropped unread. */
-const MAX_UDP_RESPONSE_BYTES = 4096;
 const DEFAULT_ATTEMPT_TIMEOUT_MS = 2_000;
 const DEFAULT_TIMEOUT_MS = 8_000;
 /** Passes over the server list; a server that answered is not asked again. */
 const ROUNDS = 2;
-
-/* ─── Servers ─── */
-
-/** A resolver to send queries to. */
-interface DnsServer {
-  address: string;
-  port: number;
-  family: 4 | 6;
-}
-
-/** A `dns.getServers()` entry as a server, or `null` when it cannot be read. */
-function parseServer(entry: string): DnsServer | null {
-  let address = entry;
-  let port = DNS_PORT;
-  const bracketed = /^\[([^\]]+)\](?::(\d{1,5}))?$/.exec(entry);
-  if (bracketed) {
-    address = bracketed[1] ?? "";
-    port = bracketed[2] === undefined ? DNS_PORT : Number(bracketed[2]);
-  } else if (isIP(entry) === 0) {
-    const withPort = /^([^:]+):(\d{1,5})$/.exec(entry);
-    if (!withPort) return null;
-    address = withPort[1] ?? "";
-    port = Number(withPort[2]);
-  }
-  const family = isIP(address);
-  if (family === 0 || port < 1 || port > 65_535) return null;
-  return { address, port, family: family === 4 ? 4 : 6 };
-}
 
 /* ─── Transports ─── */
 
@@ -137,195 +113,49 @@ function unanswered(code: DnsTxtErrorCode): AttemptOutcome {
   return { kind: "error", code, answered: false };
 }
 
-/** Turns a parsed response into an attempt outcome (`truncated` and `mismatch` handled by the caller). */
-function attemptOutcome(outcome: TxtResponseOutcome): AttemptOutcome {
+/** Turns a parsed reply into an attempt outcome. */
+function attemptOutcome(
+  outcome: Extract<TxtResponseOutcome, { kind: "records" | "error" }>,
+): AttemptOutcome {
   if (outcome.kind === "records") return outcome;
-  if (outcome.kind === "error") {
-    return { kind: "error", code: outcome.code, answered: outcome.code !== "EBADRESP" };
-  }
-  return unanswered("EBADRESP");
+  return { kind: "error", code: outcome.code, answered: outcome.code !== "EBADRESP" };
 }
 
-/** What a UDP attempt gave, or `truncated` when the answer needs TCP. */
-type UdpOutcome = AttemptOutcome | { kind: "truncated" };
-
-/**
- * Sends `query` over UDP from a fresh socket connected to `server` and
- * waits up to `timeoutMs` for an answer that passes the checks; others are
- * dropped. A socket that cannot be created or connected (Bun throws at
- * once for no route, EHOSTUNREACH) is `ECONNREFUSED`. The socket is closed
- * and the timer cleared on every path.
- */
-function queryUdp(
-  server: DnsServer,
-  query: Uint8Array,
+/** The transport's view of a TXT reply to `question`. */
+function txtCheck(
   question: TxtQuestion,
-  timeoutMs: number,
-): Promise<UdpOutcome> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let socket: { close(): void; readonly closed: boolean } | undefined;
-    /** The server's address as Bun formats it, to compare each datagram's source with. */
-    let remote: { address: string; port: number } | undefined;
-    const finish = (outcome: UdpOutcome): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      closeQuietly(socket);
-      resolve(outcome);
-    };
-    const timer = setTimeout(() => finish(unanswered("ETIMEOUT")), timeoutMs);
-    let opening: ReturnType<typeof connectUdp>;
-    try {
-      opening = connectUdp(
-        server,
-        (data, port, address, truncated) => {
-          if (settled) return;
-          /** The socket is connected, so the kernel filters too; checked again here. */
-          if (
-            remote === undefined ||
-            port !== remote.port ||
-            address !== remote.address
-          ) {
-            return;
-          }
-          if (truncated || data.byteLength > MAX_UDP_RESPONSE_BYTES) return;
-          const outcome = parseTxtResponse(data, question);
-          if (outcome.kind === "mismatch") return;
-          finish(outcome.kind === "truncated" ? outcome : attemptOutcome(outcome));
-        },
-        () => finish(unanswered("ECONNREFUSED")),
-      );
-    } catch {
-      finish(unanswered("ECONNREFUSED"));
-      return;
-    }
-    opening.then(
-      (opened) => {
-        socket = opened;
-        if (settled) {
-          closeQuietly(opened);
-          return;
-        }
-        remote = {
-          address: opened.remoteAddress.address,
-          port: opened.remoteAddress.port,
-        };
-        try {
-          if (!opened.send(query)) finish(unanswered("ECONNREFUSED"));
-        } catch {
-          finish(unanswered("ECONNREFUSED"));
-        }
-      },
-      () => finish(unanswered("ECONNREFUSED")),
-    );
-  });
+): (
+  message: Uint8Array,
+) => ReplyCheck<Extract<TxtResponseOutcome, { kind: "records" | "error" }>> {
+  return (message) => {
+    const outcome = parseTxtResponse(message, question);
+    if (outcome.kind === "mismatch" || outcome.kind === "truncated") return outcome;
+    return { kind: "reply", reply: outcome };
+  };
 }
 
-/** A UDP socket connected to `server`, delivering datagrams and errors to the callbacks. */
-function connectUdp(
-  server: DnsServer,
-  onData: (data: Uint8Array, port: number, address: string, truncated: boolean) => void,
-  onError: () => void,
-) {
-  return Bun.udpSocket({
-    hostname: server.family === 6 ? "::" : "0.0.0.0",
-    binaryType: "uint8array",
-    connect: { hostname: server.address, port: server.port },
-    socket: {
-      data(_socket, data, port, address, flags) {
-        onData(data, port, address, flags.truncated);
-      },
-      error() {
-        onError();
-      },
-    },
-  });
-}
-
-/** Closes a UDP socket once; Bun may already have closed it (an ICMP error). */
-function closeQuietly(
-  socket: { close(): void; readonly closed: boolean } | undefined,
-): void {
-  if (socket === undefined || socket.closed) return;
-  try {
-    socket.close();
-  } catch {
-    /** Already closed: nothing to release. */
-  }
+/** An exchange's outcome as an attempt outcome. */
+function fromExchange(
+  exchange: Exchange<Extract<TxtResponseOutcome, { kind: "records" | "error" }>>,
+): AttemptOutcome {
+  return exchange.kind === "reply"
+    ? attemptOutcome(exchange.reply)
+    : unanswered(exchange.code);
 }
 
 /**
- * Sends `query` over TCP to `server` with the two-byte length prefix and
- * reads one message back, up to `timeoutMs`. The message is read into one
- * buffer of the size the prefix gives (at most 65535 bytes, copied once);
- * over TCP a reply that is not ours, is truncated, or has bytes past the
- * message is `EBADRESP`. `node:net` rather than `Bun.connect`: its socket
- * exists before the connect completes, so the timeout destroys a stalled
- * connect at once instead of leaving it to the OS timeout. Exported for
+ * Sends `query` over TCP to `server` and reads one message back, up to
+ * `timeoutMs` (`exchangeTcp`): over TCP a reply that is not ours, is
+ * truncated, or has bytes past the message is `EBADRESP`. Exported for
  * the tests.
  */
-export function queryTcp(
+export async function queryTcp(
   server: DnsServer,
   query: Uint8Array,
   question: TxtQuestion,
   timeoutMs: number,
 ): Promise<AttemptOutcome> {
-  return new Promise((resolve) => {
-    let settled = false;
-    let socket: Socket | undefined;
-    const prefix = new Uint8Array(2);
-    let prefixBytes = 0;
-    let message: Uint8Array | undefined;
-    let filled = 0;
-
-    const finish = (outcome: AttemptOutcome): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket?.destroy();
-      resolve(outcome);
-    };
-    const fail = (code: DnsTxtErrorCode): void => finish(unanswered(code));
-    const timer = setTimeout(() => fail("ETIMEOUT"), timeoutMs);
-
-    /** Copies one chunk into the prefix, then the message; parses once the message is whole. */
-    const receive = (chunk: Uint8Array): void => {
-      let at = 0;
-      while (prefixBytes < 2 && at < chunk.length)
-        prefix[prefixBytes++] = chunk[at++] ?? 0;
-      if (prefixBytes < 2) return;
-      if (message === undefined) {
-        const length = ((prefix[0] ?? 0) << 8) | (prefix[1] ?? 0);
-        if (length < DNS_HEADER_BYTES) return fail("EBADRESP");
-        message = new Uint8Array(length);
-      }
-      const rest = chunk.length - at;
-      if (filled + rest > message.length) return fail("EBADRESP");
-      message.set(chunk.subarray(at), filled);
-      filled += rest;
-      if (filled < message.length) return;
-      const outcome = parseTxtResponse(message, question);
-      if (outcome.kind === "mismatch" || outcome.kind === "truncated")
-        return fail("EBADRESP");
-      finish(attemptOutcome(outcome));
-    };
-
-    const frame = new Uint8Array(query.length + 2);
-    new DataView(frame.buffer).setUint16(0, query.length);
-    frame.set(query, 2);
-    try {
-      socket = createConnection({ host: server.address, port: server.port });
-      socket.on("data", (chunk: Buffer) => {
-        if (!settled) receive(chunk);
-      });
-      socket.on("error", () => fail("ECONNREFUSED"));
-      socket.on("close", () => fail("EBADRESP"));
-      socket.write(frame);
-    } catch {
-      fail("ECONNREFUSED");
-    }
-  });
+  return fromExchange(await exchangeTcp(server, query, txtCheck(question), timeoutMs));
 }
 
 /* ─── Lookup ─── */
@@ -344,10 +174,15 @@ async function askServer(
     if (attemptEnds - Date.now() <= 0) return unanswered("ETIMEOUT");
     const question: TxtQuestion = { id: randomInt(0, 0x10000), labels };
     const query = encodeQuery(question, edns);
-    const udp = await queryUdp(server, query, question, attemptEnds - Date.now());
+    const udp = await exchangeUdp(
+      server,
+      query,
+      txtCheck(question),
+      attemptEnds - Date.now(),
+    );
     let outcome: AttemptOutcome;
     if (udp.kind !== "truncated") {
-      outcome = udp;
+      outcome = fromExchange(udp);
     } else if (attemptEnds - Date.now() <= 0) {
       outcome = unanswered("ETIMEOUT");
     } else {

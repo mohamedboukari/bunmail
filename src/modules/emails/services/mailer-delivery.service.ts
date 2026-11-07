@@ -1,6 +1,7 @@
 import { SpanKind, SpanStatusCode, type Span } from "@opentelemetry/api";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { redactEmailsInText } from "../../../utils/redact.ts";
 import { spanSafeMessage, withSpan } from "../../../utils/tracing.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { providerBucket } from "./provider-bucket.ts";
@@ -13,6 +14,9 @@ import {
   type SignedMessage,
 } from "./mailer-message.service.ts";
 import { verifiedTlsOptions } from "./mailer-mta-sts.service.ts";
+import { daneHostResolver, type DanePlan } from "./mailer-dane.service.ts";
+import type { DaneHost } from "../types/dane.types.ts";
+import { danePolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
 import { observeMxSession } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
 import type { TlsRptDomain } from "../../tls-rpt/types/tls-rpt.types.ts";
 
@@ -37,6 +41,13 @@ export interface MxSessionPlan {
   transactions: MxTransaction[];
   /** The domains' MTA-STS policy is in enforce mode: required, verified TLS (#250). */
   verifiedTls: boolean;
+  /**
+   * The domain's MX RRset is DNSSEC-validated (#345): DANE decides each
+   * host as delivery reaches it (`mailer-dane.service.ts`); `hosts` is then
+   * every MX host. A DANE plan holds one domain (its name is a reference
+   * identifier of the certificate check).
+   */
+  dane?: DanePlan;
   /**
    * The domains and their policies for TLS-RPT (#345): each session's TLS
    * outcome is recorded for them. Empty for a report, which is not recorded.
@@ -76,7 +87,10 @@ export interface DeliveryLimits {
  * (#91) of the provider bucket of the host it connects to (#250), released
  * before the next host is tried, and takes its rate tokens there
  * ({@link admitFor}). An enforced MTA-STS plan (#250) requires verified TLS
- * on every session.
+ * on every session. A DANE plan (#345) resolves each host through DANE
+ * first: a host with TLSA records gets a DANE session, which takes
+ * precedence over MTA-STS, and its TLS-RPT outcome goes under its `tlsa`
+ * policy.
  *
  * `signed` is the message as `sendMail` signed it once (#345): its bytes go
  * to every transaction unchanged.
@@ -104,6 +118,7 @@ export async function sendToMxHosts(
           0,
         ),
         "bunmail.mx.verified_tls": plan.verifiedTls,
+        "bunmail.mx.dane": plan.dane !== undefined,
       },
     },
     async (span) => {
@@ -190,7 +205,19 @@ async function deliverToMxHosts(
     ...(plan.limits === undefined
       ? {}
       : { deadlineMs: plan.limits.deadlineMs, maxHosts: plan.limits.maxMxHosts }),
-    runSession: (session) =>
+    ...(plan.dane === undefined || config.dane.resolver === null
+      ? {}
+      : {
+          resolveHost: daneHostResolver({
+            dane: plan.dane,
+            verifiedTls: plan.verifiedTls,
+            reportTargets: plan.tlsRpt,
+            resolver: config.dane.resolver,
+            allowPrivate: config.mail.allowPrivateMx,
+            ipFamily: config.mail.ipFamily,
+          }),
+        }),
+    runSession: ({ dane, ...session }) =>
       withSpan(
         "mx.session",
         {
@@ -201,22 +228,37 @@ async function deliverToMxHosts(
             /** The MX's own IP address, which the session connected to. */
             "network.peer.address": session.address,
             "bunmail.mx.transaction_count": session.transactions.length,
+            "bunmail.mx.dane_mode": daneMode(dane),
           },
         },
         async (span) => {
           const outcomes = await runMxSession({
             ...session,
             heloName: config.mail.hostname,
-            ...(plan.verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {}),
+            /** DANE takes precedence over MTA-STS for this host (RFC 8461 section 2). */
+            ...(dane !== null
+              ? { dane: { host: dane } }
+              : plan.verifiedTls
+                ? { verifiedTls: verifiedTlsOptions() }
+                : {}),
           });
           recordDeliverySpan(span, outcomes);
+          if (dane !== null) logDaneFailures(plan, dane, outcomes);
           /**
            * TLS-RPT (#345): recorded in the background, never awaited, each
-           * domain from its own transactions' outcomes only.
+           * domain from its own transactions' outcomes only; a DANE
+           * session under the host's `tlsa` policy.
            */
           observeMxSession(
             plan.tlsRpt.map((target) => ({
-              target,
+              target:
+                dane === null
+                  ? target
+                  : /** Records unsupported here (DANE-TA): reported as without DANE. */
+                    {
+                      domain: target.domain,
+                      policy: danePolicyOf(dane) ?? target.policy,
+                    },
               outcomes: outcomes.filter((o) => domainOf.get(o.key) === target.domain),
             })),
             { mxHost: session.mxHost, address: session.address },
@@ -224,6 +266,34 @@ async function deliverToMxHosts(
           return outcomes;
         },
       ),
+  });
+}
+
+/** How a session is secured under DANE, for its span (#345). */
+function daneMode(dane: DaneHost | null): string {
+  if (dane === null) return "none";
+  return dane.usable.length > 0 ? "authenticated" : "encrypted-only";
+}
+
+/**
+ * Logs at `warn` a DANE session that failed on TLS (#345): the domain, the
+ * MX host and the reason, recipient addresses redacted. The failure has
+ * no SMTP reply: the entry fails over or is retried, never bounced.
+ */
+function logDaneFailures(
+  plan: MxSessionPlan,
+  dane: DaneHost,
+  outcomes: readonly MxSessionOutcome[],
+): void {
+  const failure = outcomes.find(
+    (o) => o.error instanceof Error && o.error.message.startsWith("DANE:"),
+  );
+  if (!(failure?.error instanceof Error)) return;
+  logger.warn("DANE: no authenticated TLS with the MX host", {
+    domain: plan.domains.join(","),
+    mxHost: dane.mxHost,
+    baseDomain: dane.baseDomain,
+    reason: redactEmailsInText(failure.error.message),
   });
 }
 

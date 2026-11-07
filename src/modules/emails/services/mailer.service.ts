@@ -7,6 +7,7 @@
  *   - `dkim-signer.service.ts`: BunMail's own DKIM signer, with over-signed headers (#345)
  *   - `mailer-state.service.ts`: the starting delivery state and signed return paths
  *   - `mailer-mta-sts.service.ts`: the MTA-STS mode, hosts and verified TLS of a domain
+ *   - `mailer-dane.service.ts`: the route lookup and, under DANE, each MX host's TLSA policy
  *   - `mailer-delivery.service.ts`: the MX sessions, throttle, rate budget and spans
  *   - `mailer-outcome.service.ts`: recording each transaction's outcome on its entry
  *
@@ -17,8 +18,8 @@ import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { recipientOrder } from "../../bounces/services/return-path.ts";
 import { composeMessageBody } from "./message-body.ts";
-import { resolveMxRoute } from "./mx-route.ts";
 import { discoverMtaSts, type MtaStsDiscovery } from "./mta-sts.ts";
+import { resolveRoute } from "./mailer-dane.service.ts";
 import { tlsRptPolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
 import { observeUnconnectedAttempt } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
 import type {
@@ -119,7 +120,7 @@ export interface SendMailResult {
  * every group in `retry` before attempting.
  *
  * **Routing (#250):** every attempt resolves each pending domain's MX set
- * again ({@link resolveMxRoute}): NXDOMAIN, a null MX, or no MX and no
+ * again (`resolveMxRoute`): NXDOMAIN, a null MX, or no MX and no
  * address records fail the group; a temporary DNS error leaves it in
  * `retry`; no MX records means the implicit MX (the domain's own A/AAAA).
  * The group then goes to the hosts in preference order, failing over on
@@ -133,6 +134,16 @@ export interface SendMailResult {
  * failure. In `testing` mode the group is delivered as without a policy,
  * and what enforce mode would have refused is logged once per policy.
  * The mode is recorded on each entry (`mtaSts`).
+ *
+ * **DANE (#345):** with `DANE_ENABLED`, the MX set comes from the trusted
+ * resolver ({@link resolveRoute}); its lookup failing leaves the group in
+ * `retry`. A domain whose MX records are DNSSEC-validated gets a session
+ * plan of its own over every MX host in preference order; each host is
+ * then decided as it is reached (`mailer-dane.service.ts`): one with
+ * validated TLSA records only gets mail over TLS that matches them (DANE
+ * wins over MTA-STS there), and any DANE failure is retried or fails over
+ * to the next host, never sent in plaintext and never bounced. A report is
+ * sent without DANE (RFC 8460 section 3).
  *
  * **TLS-RPT (#345):** with `TLSRPT_ENABLED`, each MX session's TLS outcome
  * is recorded for the report of every recipient domain that publishes a
@@ -360,13 +371,16 @@ export async function sendMail(options: {
   const routes = new Map(
     await Promise.all(
       [...pendingByDomain.keys()].map(async (domain) => {
-        const [route, discovery] = await Promise.all([
-          resolveMxRoute(domain),
+        const [{ route, secureMx }, discovery] = await Promise.all([
+          resolveRoute(domain, !options.report),
           options.report
             ? noPolicy
             : discoverMtaSts(domain, { allowPrivate: config.mail.allowPrivateMx }),
         ]);
-        return [domain, { route, policy: discovery.policy, discovery }] as const;
+        return [
+          domain,
+          { route, secureMx, policy: discovery.policy, discovery },
+        ] as const;
       }),
     ),
   );
@@ -387,7 +401,7 @@ export async function sendMail(options: {
   for (const [domain, keys] of pendingByDomain) {
     const resolved = routes.get(domain);
     if (!resolved) continue;
-    const { route, policy, discovery } = resolved;
+    const { route, secureMx, policy, discovery } = resolved;
     const mtaSts = mtaStsModeOf(policy);
     /** The domain and its policy for TLS-RPT (#345); none for a report. */
     const tlsRpt = options.report ? null : { domain, policy: tlsRptPolicyOf(discovery) };
@@ -408,7 +422,9 @@ export async function sendMail(options: {
     if (route.implicit) {
       logger.debug("No MX records: delivering to the domain's own address", { domain });
     }
-    const hosts = policyHosts(domain, route.hosts, policy);
+    /** DANE (#345): every MX host, each decided when reached; MTA-STS applies host by host. */
+    const hosts =
+      secureMx === null ? policyHosts(domain, route.hosts, policy) : route.hosts;
     if (hosts.length === 0) {
       /** Enforce mode and no MX host the policy names: nothing is connected to. */
       if (tlsRpt) observeUnconnectedAttempt(tlsRpt);
@@ -429,14 +445,18 @@ export async function sendMail(options: {
       continue;
     }
     const verifiedTls = mtaSts === "enforce";
-    /** Enforced domains never share a session with unverified ones. */
-    const id = `${verifiedTls ? "mta-sts " : ""}${hosts.join(" ")}`;
+    /** Enforced domains never share a session with unverified ones; a DANE domain shares none. */
+    const id =
+      secureMx === null
+        ? `${verifiedTls ? "mta-sts " : ""}${hosts.join(" ")}`
+        : `dane ${domain}`;
     const plan = sessions.get(id) ?? {
       hosts,
       domains: [],
       transactions: [],
       verifiedTls,
       tlsRpt: [],
+      ...(secureMx === null ? {} : { dane: { secureMx, stsPolicy: policy } }),
       ...(options.deliveryLimits ? { limits: options.deliveryLimits } : {}),
     };
     plan.domains.push(domain);
