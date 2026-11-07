@@ -63,7 +63,7 @@ src/modules/inbound/
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
 │   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373); split by concern into the three below (#387)
 │   ├── dkim-verifier-parse.service.ts ← message split, tag-lists, the signature's tags
-│   ├── dkim-verifier-canonical.service.ts ← canonicalization, the signed header data
+│   ├── dkim-verifier-canonical.service.ts ← canonicalization, the signed header data (also used by the outbound DKIM signer, #345)
 │   ├── dkim-verifier-key.service.ts ← key record lookup and checks, the signature check
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails

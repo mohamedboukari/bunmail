@@ -136,7 +136,8 @@ bunmail/
 │   │   │   │   ├── custom-headers.ts     ← Custom header rules shared by REST, SMTP submission and the mailer (#177)
 │   │   │   │   ├── sender-domain.service.ts ← Sender-domain gate + warnings, REQUIRE_VERIFIED_DOMAIN (#245)
 │   │   │   │   ├── mailer.service.ts     ← Nodemailer transport + DKIM: `sendMail`, re-exports the mailer-*.service.ts files (#380)
-│   │   │   │   ├── mailer-message.service.ts ← One transaction's message: headers, DKIM, List-Unsubscribe, Feedback-ID
+│   │   │   │   ├── mailer-message.service.ts ← One transaction's message: headers, List-Unsubscribe, Feedback-ID; composed and DKIM-signed once per send (#345)
+│   │   │   │   ├── dkim-signer.service.ts ← BunMail's own DKIM signer, over-signed headers (#345)
 │   │   │   │   ├── mailer-state.service.ts ← Starting delivery state and signed return paths (#236)
 │   │   │   │   ├── mailer-mta-sts.service.ts ← MTA-STS mode, hosts and verified TLS of a domain (#250)
 │   │   │   │   ├── mailer-delivery.service.ts ← MX sessions: failover, throttle, rate budget, spans
@@ -277,7 +278,7 @@ bunmail/
 │   │   │   │   ├── feedback-handler.service.ts ← Message-ID link, recipient choice, complaint / opt-out, webhook (#191)
 │   │   │   │   ├── dkim-verifier.service.ts ← DKIM signature verification (RFC 6376, rsa-sha256 and ed25519-sha256) for feedback reports (#373): verifyDkimSignatures, the dkim-verifier-*.service.ts files below (#387)
 │   │   │   │   ├── dkim-verifier-parse.service.ts ← Message split, tag-lists, domains and selectors, the signature's tags
-│   │   │   │   ├── dkim-verifier-canonical.service.ts ← Header and body canonicalization, the signed header data
+│   │   │   │   ├── dkim-verifier-canonical.service.ts ← Header and body canonicalization, the signed header data (also used by the outbound signer, #345)
 │   │   │   │   ├── dkim-verifier-key.service.ts ← Key record lookup and checks, the signature check
 │   │   │   │   ├── inbound-notify.service.ts ← "New email for <address>" notifications: plain text, no inbound content by default, automatic mail skipped (#106, #250)
 │   │   │   │   ├── notify-throttle.ts    ← Notification budgets: 5 per address, 30 per domain, per 10 min, in memory (#250)
@@ -1334,7 +1335,9 @@ Sessions are throttled per **provider bucket** (#91, #250): every Microsoft, Goo
 **DKIM Signing:**
 - RSA 2048-bit key pair generated per domain
 - Private key encrypted at rest with AES-256-GCM via `DKIM_ENCRYPTION_KEY` (#23); public key provided as DNS TXT record value
-- Decrypted in memory on each send and handed to nodemailer's signer. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
+- Decrypted in memory on each send and used by BunMail's own signer (`dkim-signer.service.ts`, #345), not nodemailer's. A key that does not decrypt fails closed in production (#244): the boot refuses to start, naming the domains, and the queue holds the email on the retry backoff instead of sending it unsigned (development warns and sends unsigned)
+- relaxed/relaxed, rsa-sha256 (ed25519-sha256 for an ed25519 key), the same tags nodemailer emitted. **Over-signing (#345):** `h=` lists each signed field once per instance and the over-signed set (From, Sender, Reply-To, To, Cc, Subject, Date, Message-ID, In-Reply-To, References, MIME-Version, Content-Type, Content-Transfer-Encoding, Content-Disposition, List-Unsubscribe, List-Unsubscribe-Post, Auto-Submitted, Feedback-ID) once more, so a field of that set added in transit (a second `From:`) breaks the signature
+- The message is composed once per send with nodemailer's `MailComposer`, signed before any DNS lookup or connection, and handed to nodemailer as `raw` bytes with each transaction's envelope, so what is signed is exactly what is sent. A key that decrypts but cannot sign is never sent unsigned: a queued email is held on the retry backoff like an undecryptable key (#244), and system mail reports a failed send. See [docs/emails.md](docs/emails.md#dkim-signing-345)
 
 **Bounce → Suppression chain:** two paths converge on the same suppression list and webhook event.
 - **Inline 5xx** during the SMTP transaction → classified per group, or per refused recipient when the MX accepted others (#250) ([`classifySendFailure`](src/utils/smtp-error.ts)) and recorded by the queue's `recordSendOutcome` ([queue-outcome.service.ts](src/modules/emails/services/queue-outcome.service.ts)): the suppression, `email.bounced` and the email's status in one transaction (#184). Auto-suppress on attempt 1; **don't retry** (#68).

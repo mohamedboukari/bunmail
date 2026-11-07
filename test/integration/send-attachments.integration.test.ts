@@ -35,7 +35,8 @@ import {
 import { runQueueCycle } from "../../src/modules/emails/services/queue.service.ts";
 import { verifyDkimSignatures } from "../../src/modules/inbound/services/dkim-verifier.service.ts";
 import {
-  buildMailOptions,
+  buildTransactionMails,
+  signMessage,
   type sendMail,
 } from "../../src/modules/emails/services/mailer.service.ts";
 import { composeMessageBody } from "../../src/modules/emails/services/message-body.ts";
@@ -247,11 +248,14 @@ async function runQueue(outcome: Outcome = "sent"): Promise<MailerCall[]> {
   return calls;
 }
 
-/** Renders the message `sendMail` would send for a recorded call, DKIM signed. */
+/**
+ * Renders the message `sendMail` would send for a recorded call, DKIM signed
+ * by BunMail's own signer (#345): composed and signed by `signMessage`,
+ * handed to nodemailer as `raw` by `buildTransactionMails`.
+ */
 async function render(call: MailerCall): Promise<Buffer> {
   const body = composeMessageBody(call.html ?? null, call.text ?? null);
-  const options = buildMailOptions({
-    recipients: [call.to],
+  const message = {
     from: call.from,
     headerTo: call.to,
     headerCc: call.cc ?? null,
@@ -264,9 +268,16 @@ async function render(call: MailerCall): Promise<Buffer> {
     attachments: call.attachments,
     dkim: call.dkim,
     category: call.category ?? null,
-  });
+  };
+  const signing = await signMessage(message);
+  if (signing.kind === "uncomposable") throw new Error("expected a composable message");
+  const signed = signing.kind === "signed" ? signing.raw : null;
+  const [transaction] = buildTransactionMails(message, signed, [
+    { recipients: [call.to], envelopeFrom: call.from },
+  ]);
+  if (!transaction) throw new Error("expected one transaction");
   const transport = createTransport({ streamTransport: true, buffer: true });
-  const info = await transport.sendMail(options);
+  const info = await transport.sendMail(transaction.mail);
   if (!Buffer.isBuffer(info.message)) throw new Error("expected a buffered message");
   return info.message;
 }

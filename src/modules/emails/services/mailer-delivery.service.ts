@@ -7,7 +7,11 @@ import { providerBucket } from "./provider-bucket.ts";
 import { mxRateBudget, type RateBudget } from "./rate-budget.ts";
 import { runMxSession, type MxSessionOutcome } from "./mx-transport.ts";
 import { deliverWithFailover, type MxAdmit, type RoutedOutcome } from "./mx-route.ts";
-import { buildMailOptions, type MxGroupMessage } from "./mailer-message.service.ts";
+import {
+  buildTransactionMails,
+  type MessageParts,
+  type SignedMessage,
+} from "./mailer-message.service.ts";
 import { verifiedTlsOptions } from "./mailer-mta-sts.service.ts";
 
 /** One SMTP transaction to an MX: a delivery-state entry and its envelope. */
@@ -19,9 +23,6 @@ interface MxTransaction {
   /** MAIL FROM of this transaction. */
   envelopeFrom: string;
 }
-
-/** The parts of the message that are the same in every transaction. */
-type MessageParts = Omit<MxGroupMessage, "recipients" | "envelopeFrom">;
 
 /** The pending transactions of one or more domains that share their MX hosts. */
 export interface MxSessionPlan {
@@ -54,11 +55,15 @@ export interface MxSessionPlan {
  * ({@link admitFor}). An enforced MTA-STS plan (#250) requires verified TLS
  * on every session.
  *
+ * `signed` is the message as `sendMail` signed it once (#345): its bytes go
+ * to every transaction unchanged.
+ *
  * Never throws: every entry gets an outcome.
  */
 export async function sendToMxHosts(
   plan: MxSessionPlan,
   message: MessageParts,
+  signed: SignedMessage,
 ): Promise<RoutedOutcome[]> {
   /**
    * One `mx.deliver` span per group (#363), with an `mx.session` child per
@@ -79,7 +84,7 @@ export async function sendToMxHosts(
       },
     },
     async (span) => {
-      const outcomes = await deliverToMxHosts(plan, message);
+      const outcomes = await deliverToMxHosts(plan, message, signed);
       recordDeliverySpan(span, outcomes);
       return outcomes;
     },
@@ -122,19 +127,33 @@ function recordDeliverySpan(
 async function deliverToMxHosts(
   plan: MxSessionPlan,
   message: MessageParts,
+  signed: SignedMessage,
 ): Promise<RoutedOutcome[]> {
+  /**
+   * A message with a DKIM key that could not even be composed (#345): each
+   * transaction fails with the compose error, as Nodemailer reports it for
+   * a message without a key (no SMTP reply, so `retry`). No MX is contacted
+   * for a message that cannot be built.
+   */
+  if (signed.kind === "uncomposable") {
+    return plan.transactions.map((transaction) => ({
+      key: transaction.key,
+      error: signed.error,
+      tls: null,
+      mxHost: null,
+    }));
+  }
+  /** The message signed once by `sendMail` (#345), or unsigned without a DKIM key. */
+  const transactions = buildTransactionMails(
+    message,
+    signed.kind === "signed" ? signed.raw : null,
+    plan.transactions,
+  );
   return deliverWithFailover({
     domain: plan.domains.join(","),
     hosts: plan.hosts,
     allowPrivate: config.mail.allowPrivateMx,
-    transactions: plan.transactions.map((transaction) => ({
-      key: transaction.key,
-      mail: buildMailOptions({
-        ...message,
-        recipients: transaction.recipients,
-        envelopeFrom: transaction.envelopeFrom,
-      }),
-    })),
+    transactions: transactions.map(({ key, mail }) => ({ key, mail })),
     bucketOf: (mxHost) => {
       const bucket = providerBucket(mxHost);
       logger.debug("MX throttle bucket", { mxHost, bucket });

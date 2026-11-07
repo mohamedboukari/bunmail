@@ -3,7 +3,8 @@
  * rest of the public surface re-exported (#380). The helpers live in one
  * file per concern, beside this one:
  *
- *   - `mailer-message.service.ts`: the message (headers, DKIM, unsubscribe, Feedback-ID)
+ *   - `mailer-message.service.ts`: the message (headers, unsubscribe, Feedback-ID) and its signing
+ *   - `dkim-signer.service.ts`: BunMail's own DKIM signer, with over-signed headers (#345)
  *   - `mailer-state.service.ts`: the starting delivery state and signed return paths
  *   - `mailer-mta-sts.service.ts`: the MTA-STS mode, hosts and verified TLS of a domain
  *   - `mailer-delivery.service.ts`: the MX sessions, throttle, rate budget and spans
@@ -26,6 +27,9 @@ import type {
 import type { EmailCategory } from "../types/email.types.ts";
 import {
   safeCustomHeaders,
+  signMessage,
+  type MessageParts,
+  type SignedMessage,
   type DkimOptions,
   type FeedbackSource,
   type OutboundAttachment,
@@ -47,10 +51,12 @@ import { sendToMxHosts, type MxSessionPlan } from "./mailer-delivery.service.ts"
 import { recordOutcome, recordUnsent } from "./mailer-outcome.service.ts";
 
 export {
-  DKIM_SIGNED_HEADERS,
+  DkimSigningFailedError,
   buildMailOptions,
+  buildTransactionMails,
   carriesListUnsubscribe,
   feedbackIdHeader,
+  signMessage,
 } from "./mailer-message.service.ts";
 export type {
   DkimOptions,
@@ -141,6 +147,11 @@ export interface SendMailResult {
  * **Body (#250):** composed once per call ({@link composeMessageBody}): an
  * HTML fragment gets a minimal document wrapper, and HTML without a text
  * part gets a text alternative derived from it. Neither is stored.
+ *
+ * **DKIM (#345):** with `dkim`, the message is composed and signed once by
+ * BunMail's own signer, before any DNS lookup or connection. A key that
+ * cannot sign makes the call throw {@link DkimSigningFailedError}: nothing
+ * is sent, and never unsigned. Without `dkim` the message goes out unsigned.
  *
  * **Identity:** the caller passes `messageId` so the canonical
  * `Message-ID:` header is pinned across retries. Previously the
@@ -276,6 +287,37 @@ export async function sendMail(options: {
     pendingByDomain.set(group.domain, keys);
   }
 
+  /** The parts of the message that are the same in every transaction. */
+  const parts: MessageParts = {
+    from: options.from,
+    fromName: options.fromName ?? null,
+    headerTo: options.to,
+    headerCc: options.cc ?? null,
+    replyTo: options.replyTo ?? null,
+    subject: options.subject,
+    html: body.html,
+    text: body.text,
+    messageId: options.messageId,
+    headers: customHeaders,
+    attachments: options.attachments ?? [],
+    dkim: options.dkim,
+    unsubscribe: options.unsubscribe,
+    feedback: options.feedback,
+    autoSubmitted: options.autoSubmitted === true,
+    category: options.category ?? null,
+  };
+
+  /**
+   * DKIM (#345): composed and signed once per call, before any DNS lookup
+   * or connection, so every transaction carries the same signed bytes. A
+   * key that cannot sign throws {@link DkimSigningFailedError} here: nothing
+   * is sent, never unsigned. A message that cannot be composed fails each
+   * transaction as it would without a key. Nothing pending (every entry
+   * already settled): nothing to sign.
+   */
+  const signed: SignedMessage =
+    pendingByDomain.size > 0 ? await signMessage(parts) : { kind: "unsigned" };
+
   /**
    * Each domain resolved once per attempt, in parallel, never cached
    * (#250), its MTA-STS policy discovered alongside (cached per its `id`
@@ -373,24 +415,7 @@ export async function sendMail(options: {
   const deferredKeys: string[] = [];
   let deferredWaitMs = Number.POSITIVE_INFINITY;
   for (const plan of sessions.values()) {
-    const outcomes = await sendToMxHosts(plan, {
-      from: options.from,
-      fromName: options.fromName ?? null,
-      headerTo: options.to,
-      headerCc: options.cc ?? null,
-      replyTo: options.replyTo ?? null,
-      subject: options.subject,
-      html: body.html,
-      text: body.text,
-      messageId: options.messageId,
-      headers: customHeaders,
-      attachments: options.attachments ?? [],
-      dkim: options.dkim,
-      unsubscribe: options.unsubscribe,
-      feedback: options.feedback,
-      autoSubmitted: options.autoSubmitted === true,
-      category: options.category ?? null,
-    });
+    const outcomes = await sendToMxHosts(plan, parts, signed);
     for (const outcome of outcomes) {
       if (outcome.deferredMs !== undefined) {
         /** Not attempted: the entry stays exactly as it was. */
