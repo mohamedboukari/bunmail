@@ -21,6 +21,7 @@ import {
   SubjectRequiredError,
   TemplateNotFoundError,
   BodyRequiredError,
+  InvalidFromAddressError,
   InvalidFromNameError,
   InvalidTagError,
   MarketingRequiresOneClickError,
@@ -41,7 +42,7 @@ import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
-import { parseRecipients } from "../../../utils/recipients.ts";
+import { isEmailAddress, parseRecipients } from "../../../utils/recipients.ts";
 import type { SendEmailInput, EmailSource, SendWarning } from "../types/email.types.ts";
 
 /** A send that passed every check, ready to insert. */
@@ -73,7 +74,20 @@ export async function prepareEmail(
   source: EmailSource,
 ): Promise<PreparedEmail> {
   const id = generateId("msg");
-  const senderDomain = input.from.split("@")[1];
+
+  /**
+   * The sender address first: every check below, the sender domain above
+   * all, reads the domain after its one `@`. The REST DTO validates `from`,
+   * but SMTP submission and internal callers pass an address parsed from a
+   * header, which could hold a second `@` or a quoted local part; the
+   * domain then checked would not be the domain the mail is sent from.
+   */
+  if (!isEmailAddress(input.from)) {
+    logger.warn("Send blocked: invalid From address", { id, apiKeyId, source });
+    throw new InvalidFromAddressError();
+  }
+  /** Exactly one `@` (checked above), so this is the address's domain. */
+  const senderDomain = input.from.slice(input.from.indexOf("@") + 1);
   /** The `to` list (#178), normalized once: everything below reads it. */
   const toList = normalizeToList(input.to);
   const toAddress = joinToList(toList);

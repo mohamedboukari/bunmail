@@ -67,6 +67,23 @@ describe("Dashboard E2E: pages behind a session", () => {
       expect(html).toContain("API Keys");
     });
 
+    test("GET /dashboard/api-keys?tab= opens the matching tab; junk opens Active, never a 422", async () => {
+      /** The selected tab's link carries aria-selected="true" before its label. */
+      const selected = async (query: string): Promise<string | undefined> => {
+        const response = await app.handle(
+          new Request(`http://localhost/dashboard/api-keys${query}`, {
+            headers: { cookie: sessionCookie },
+          }),
+        );
+        expect(response.status).toBe(200);
+        const html = await response.text();
+        return /aria-selected="true"[^>]*>(Active|Revoked) \(/.exec(html)?.[1];
+      };
+      expect(await selected("")).toBe("Active");
+      expect(await selected("?tab=revoked")).toBe("Revoked");
+      expect(await selected("?tab=%3Cscript%3E")).toBe("Active");
+    });
+
     test("GET /dashboard/domains returns 200", async () => {
       const response = await app.handle(
         new Request("http://localhost/dashboard/domains", {

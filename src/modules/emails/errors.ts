@@ -169,6 +169,29 @@ export class InvalidFromNameError extends EmailSendRejectedError {
 }
 
 /**
+ * `from` is not one bare address in the shared shape (`isEmailAddress` in
+ * `src/utils/recipients.ts`): at most 254 characters, exactly one `@`, no
+ * quote, space, comma or angle bracket. Checked first in `createEmail`, so
+ * every ingress shares it (the REST DTO's `format: "email"` covers only the
+ * REST body; SMTP submission and internal callers pass a parsed address).
+ * Every later step, the sender domain above all, reads the domain after
+ * the one `@`. Answered like a request validation failure (`422
+ * VALIDATION_ERROR`, the field in `details`); the message never echoes the
+ * value.
+ */
+export class InvalidFromAddressError extends EmailSendRejectedError {
+  override readonly name = "InvalidFromAddressError";
+  readonly status = 422;
+  readonly code = "VALIDATION_ERROR";
+  /** The refused field. */
+  readonly field = "from";
+
+  constructor() {
+    super("from must be a single email address");
+  }
+}
+
+/**
  * A tag (#189) breaks a rule of `services/tags.ts`, in a send's `tags`
  * or in a `tag` list filter. Answered like a request validation failure
  * (`422 VALIDATION_ERROR`, `path` in `details`), as `InvalidFromNameError`

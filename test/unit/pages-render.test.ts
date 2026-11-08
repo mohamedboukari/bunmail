@@ -19,7 +19,7 @@ import { describe, test, expect } from "bun:test";
  * full HTML response path.
  */
 
-import { ApiKeysPage } from "../../src/pages/routes/api-keys.tsx";
+import { ApiKeysPage, apiKeysTabOf } from "../../src/pages/routes/api-keys.tsx";
 import { DomainDetailPage } from "../../src/pages/routes/domain-detail.tsx";
 import { DomainsPage } from "../../src/pages/routes/domains.tsx";
 import { EmailDetailPage } from "../../src/pages/routes/email-detail.tsx";
@@ -198,6 +198,7 @@ describe("Dashboard page render smoke tests", () => {
       creators,
       adminCreatorIds: new Set(),
       canManageAll: true,
+      tab: "active",
     });
     expect(typeof html).toBe("string");
     expect(html.length).toBeGreaterThan(100);
@@ -211,6 +212,7 @@ describe("Dashboard page render smoke tests", () => {
       canManageAll: true,
       flash: { message: "ok", type: "success" },
       rawKey: "bm_live_xxx",
+      tab: "active",
     });
     expect(html).toContain("Test");
   });
@@ -915,6 +917,7 @@ describe("Record ownership on the pages (#219)", () => {
       creators: names,
       adminCreatorIds: new Set(),
       canManageAll: false,
+      tab: "active",
     });
     expect(html).toContain("The keys you created");
     expect(html).not.toContain('name="isAdmin"');
@@ -942,14 +945,13 @@ describe("Record ownership on the pages (#219)", () => {
       creators: names,
       adminCreatorIds: new Set(),
       canManageAll: true,
+      tab: "revoked",
     });
     expect(html).toContain("Created by");
     expect(html).toContain("Ann");
-    expect(html).toContain("Owner");
     expect(html).toContain("Disabled: creator deactivated");
     expect(html).toContain("Disabled: creator removed");
     expect(html).toContain("Removed account");
-    expect(html).toContain("Revoked");
     expect(html).toContain('name="isAdmin"');
   });
 
@@ -1004,6 +1006,7 @@ describe("API keys page: the Make admin button (#219)", () => {
       creators: new Map(),
       adminCreatorIds: new Set(["usr_admin"]),
       canManageAll: true,
+      tab: "active",
     });
     expect(html).toContain("/dashboard/api-keys/key_admins/admin");
     expect(html).toContain("/dashboard/api-keys/key_owners/admin");
@@ -1083,5 +1086,75 @@ describe("Passkey pages (#223)", () => {
     expect(off).toContain("Your role requires a second factor");
     expect(off).not.toContain('data-passkey="create"');
     expect(off).toContain("No passkeys yet.");
+  });
+});
+
+describe("API keys page: Active and Revoked tabs", () => {
+  const keys = [
+    { ...apiKey, id: "key_live", name: "Live key" },
+    {
+      ...apiKey,
+      id: "key_gone",
+      name: "Gone key",
+      isActive: false,
+      disabledReason: null,
+    },
+    {
+      ...apiKey,
+      id: "key_off",
+      name: "Off key",
+      isActive: false,
+      disabledReason: "creator_deactivated" as const,
+    },
+  ];
+  const render = (tab: "active" | "revoked"): Promise<string> | string =>
+    ApiKeysPage({
+      keys,
+      creators: new Map(),
+      adminCreatorIds: new Set(),
+      canManageAll: true,
+      tab,
+    });
+
+  test("the default tab shows active keys only, with both counts", async () => {
+    const html = await render("active");
+    expect(html).toContain("Live key");
+    expect(html).not.toContain("Gone key");
+    expect(html).not.toContain("Off key");
+    expect(html).toContain("Active (1)");
+    expect(html).toContain("Revoked (2)");
+    expect(html).toContain('href="/dashboard/api-keys?tab=revoked"');
+    expect(html).toMatch(/aria-selected="true"[^>]*>Active \(1\)/);
+  });
+
+  test("the Revoked tab shows revoked and disabled keys only, without actions", async () => {
+    const html = await render("revoked");
+    expect(html).not.toContain("Live key");
+    expect(html).toContain("Gone key");
+    expect(html).toContain("Off key");
+    expect(html).toContain("Disabled: creator deactivated");
+    expect(html).not.toContain("/revoke");
+    expect(html).toMatch(/aria-selected="true"[^>]*>Revoked \(2\)/);
+  });
+
+  test("an empty tab says so instead of an empty table", async () => {
+    const html = await ApiKeysPage({
+      keys: [keys[0]!],
+      creators: new Map(),
+      adminCreatorIds: new Set(),
+      canManageAll: true,
+      tab: "revoked",
+    });
+    expect(html).toContain("No revoked or disabled API keys.");
+    expect(html).toContain("Revoked (0)");
+    expect(html).not.toContain("<table");
+  });
+
+  test("the tab query value is narrowed: only `revoked` opens that tab", () => {
+    expect(apiKeysTabOf("revoked")).toBe("revoked");
+    expect(apiKeysTabOf(undefined)).toBe("active");
+    expect(apiKeysTabOf("active")).toBe("active");
+    expect(apiKeysTabOf("REVOKED")).toBe("active");
+    expect(apiKeysTabOf("<script>")).toBe("active");
   });
 });
