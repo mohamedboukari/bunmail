@@ -271,7 +271,7 @@ Redirects are fixed (`/dashboard`, the second step, the login page): no return p
 
 ### Audit log (#221)
 
-`GET /dashboard/audit-log`, **Audit log** in the sidebar (admins and the owner; `adminGuard`, a member gets the 403 page and no sidebar link). Security-relevant actions, newest first: time (UTC), actor (an account's email, an API key's name, or BunMail itself for the boot, `reset-owner`, token reuse detection and the retention purge), action, target, outcome (`success`/`failure`) and client (IP and user agent). Filters by action, actor and outcome (unknown values are ignored); 50 per page. Read-only and `Cache-Control: no-store`; every value is escaped. What is recorded, how, and the append-only trigger: [docs/audit-log.md](audit-log.md).
+`GET /dashboard/audit-log`, **Audit log** in the sidebar (admins and the owner; `adminGuard`, a member gets the 403 page and no sidebar link). Security-relevant actions, newest first: time (UTC), actor (an account's email, an API key's name, or BunMail itself for the boot, `reset-owner`, token reuse detection and the retention purge), action, target, outcome (`success`/`failure`) and client (IP and user agent). Filters by action, actor and outcome (unknown values are ignored); 50 per page by default (see [Pagination](#pagination-429)). Read-only and `Cache-Control: no-store`; every value is escaped. What is recorded, how, and the append-only trigger: [docs/audit-log.md](audit-log.md).
 
 Recorded from the dashboard: sign-in (success, each failure with its reason, a lockout once per address and window, the 2FA step and its lock; with a password, a passkey or SSO), sign-out, session revocations and token reuse, two-factor changes, passkey changes, single sign-on links (linked, unlinked, refused), password change, reset links issued and completed, owner setup, invitations, role changes, deactivation, reactivation, removal, ownership transfer (and a wrong-password attempt), API key, domain, webhook and suppression changes. The REST API records its API key, domain, webhook and suppression changes with the calling key as the actor.
 
@@ -396,6 +396,15 @@ a Redis outage it falls back to per-replica memory).
 | GET /dashboard/suppressions      | Suppressions across every API key (#89)                           |
 | GET /dashboard/&lt;table&gt;/export.csv | The table as a streamed CSV download with the page's filters, for each table above (admin, rate limited, audited, #430): see [CSV exports](#csv-exports-430) |
 
+## Pagination (#429)
+
+Every list page (emails, inbound, both trash pages, tombstones, suppressions, audit log, DMARC reports, webhook deliveries) ends with the shared `components/pagination.tsx`:
+
+- **Left:** "Showing 26 to 50 of 340", or "No results" for an empty list (a hand-edited `?page=` past the end says there are no rows on that page and links back to the last one).
+- **Right:** a **Rows per page** select (25, 50, 100), then the numbered pages: the first, the last, the current page and its neighbours, with an ellipsis for each gap (`1 … 4 5 6 … 14`; a gap of one page shows that page). Previous / next arrows are disabled on the first / last page; the controls carry `aria-label`s and the current page `aria-current="page"`.
+- **Query params:** `?page=` and `?limit=`, parsed leniently by `parsePagination` (`src/pages/pagination.ts`): `limit` must be 25, 50 or 100, anything else (an old `limit=20` bookmark, junk, a huge value) falls back to the page's default, never a 422. The default is 25 rows (it was 20), 50 on the audit log. `page` is capped at 1,000,000.
+- **Filters are kept:** every page link carries the list's other query params (status, source, API key, tag, email, domain, message ID, action, actor, outcome). The select sits in a GET form that carries them as hidden inputs and no `page`, so a new size starts again on page 1. The form submits itself on change through `data-autosubmit` (`dashboard.js`, no inline script); without JavaScript a `<noscript>` **Apply** button submits it.
+
 ## Security headers (#255)
 
 Every response (dashboard, landing page, API, error pages) carries a `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: same-origin` (`src/middleware/security-headers.ts`, applied in `onRequest`). Every `/dashboard` and `/u/...` response is `Cache-Control: no-store` (except the static assets below). `Strict-Transport-Security: max-age=31536000` is added when `APP_BASE_URL` is `https://`. The public auth pages still set `Referrer-Policy: strict-origin` themselves.
@@ -421,6 +430,7 @@ The pages load exactly two files, both served by BunMail (`src/pages/static-asse
 | `data-action="toggle-theme"` | Switch light / dark, remembered in `localStorage('bm-theme')` |
 | `data-confirm="..."` | On a button or link: confirm before the click; on a form: confirm before it submits |
 | `data-navigate-on-change` | On a `<select>`: open the URL of the chosen option (email filters) |
+| `data-autosubmit` | On a `<select>`: submit its own form on change (the pagination's **Rows per page**, #429) |
 | `data-submit-once` | On `<body>` (dashboard layout): a submitted form's button is disabled with "Processing…" |
 | `data-bulk`, `data-bulk-all`, `data-bulk-row`, `data-bulk-bar`, `data-bulk-count` | Bulk selection: select-all, row boxes, the action bar and its count |
 | `data-chip-input` | Email chip input (`email-chip-input.tsx`) |
@@ -556,7 +566,7 @@ src/pages/
 └── components/
     ├── stats-card.tsx        ← Metric display card
     ├── status-badge.tsx      ← Status + verification badges
-    ├── pagination.tsx        ← Page navigation
+    ├── pagination.tsx        ← "Showing X to Y of Z", rows per page, numbered pages (#429)
     ├── flash-message.tsx     ← Success/error banners
     ├── empty-state.tsx       ← Empty table placeholder
     ├── export-csv-link.tsx   ← "Export CSV" link with the page's filters, admins and the owner only (#430)

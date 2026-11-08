@@ -1,14 +1,37 @@
 import { describe, test, expect } from "bun:test";
-import { MAX_PAGE, MAX_PAGE_SIZE, parsePagination } from "../../src/pages/pagination.ts";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE,
+  PAGE_SIZES,
+  parsePagination,
+} from "../../src/pages/pagination.ts";
 
-describe("parsePagination (#172)", () => {
+describe("parsePagination (#172, #429)", () => {
   test("uses defaults when params are missing", () => {
-    expect(parsePagination({})).toEqual({ page: 1, limit: 20 });
-    expect(parsePagination({}, 25)).toEqual({ page: 1, limit: 25 });
+    expect(DEFAULT_PAGE_SIZE).toBe(25);
+    expect(parsePagination({})).toEqual({ page: 1, limit: 25 });
+    expect(parsePagination({}, 50)).toEqual({ page: 1, limit: 50 });
   });
 
-  test("passes valid values through", () => {
-    expect(parsePagination({ page: "3", limit: "50" })).toEqual({ page: 3, limit: 50 });
+  test("offers exactly 25, 50 and 100 rows per page", () => {
+    expect([...PAGE_SIZES]).toEqual([25, 50, 100]);
+  });
+
+  test("passes every allowed size through", () => {
+    for (const size of PAGE_SIZES) {
+      expect(parsePagination({ page: "3", limit: String(size) })).toEqual({
+        page: 3,
+        limit: size,
+      });
+    }
+  });
+
+  test("any other limit falls back to the page's default, never a 422", () => {
+    /** The old default (an old bookmark), sizes in between, and below the smallest. */
+    for (const limit of ["20", "10", "1", "26", "75", "99", "101", "200"]) {
+      expect(parsePagination({ limit }).limit).toBe(25);
+      expect(parsePagination({ limit }, 50).limit).toBe(50);
+    }
   });
 
   test("page 0 or negative falls back to 1 (was a negative OFFSET, a 500)", () => {
@@ -19,19 +42,19 @@ describe("parsePagination (#172)", () => {
   test("non-numeric values fall back to defaults (limit=abc used to read every row)", () => {
     expect(parsePagination({ page: "abc", limit: "abc" })).toEqual({
       page: 1,
-      limit: 20,
+      limit: 25,
     });
-    expect(parsePagination({ page: "", limit: "" })).toEqual({ page: 1, limit: 20 });
+    expect(parsePagination({ page: "", limit: "" })).toEqual({ page: 1, limit: 25 });
   });
 
   test("limit 0 or negative falls back to the default", () => {
-    expect(parsePagination({ limit: "0" }).limit).toBe(20);
-    expect(parsePagination({ limit: "-5" }, 25).limit).toBe(25);
+    expect(parsePagination({ limit: "0" }).limit).toBe(25);
+    expect(parsePagination({ limit: "-5" }, 100).limit).toBe(100);
   });
 
-  test("a huge limit is capped at MAX_PAGE_SIZE", () => {
-    expect(parsePagination({ limit: "99999999" }).limit).toBe(MAX_PAGE_SIZE);
-    expect(MAX_PAGE_SIZE).toBe(100);
+  test("a huge limit falls back to the default instead of reading the table", () => {
+    expect(parsePagination({ limit: "99999999" }).limit).toBe(25);
+    expect(parsePagination({ limit: "1e3" }).limit).toBe(25);
   });
 
   test("a huge page is capped at MAX_PAGE (1e20 overflowed Postgres's OFFSET, a 500)", () => {
@@ -41,9 +64,9 @@ describe("parsePagination (#172)", () => {
   });
 
   test("decimals truncate like parseInt", () => {
-    expect(parsePagination({ page: "2.5", limit: "10.9" })).toEqual({
+    expect(parsePagination({ page: "2.5", limit: "50.9" })).toEqual({
       page: 2,
-      limit: 10,
+      limit: 50,
     });
   });
 
@@ -63,9 +86,7 @@ describe("parsePagination (#172)", () => {
         expect(Number.isInteger(p.page) && p.page >= 1 && p.page <= MAX_PAGE).toBe(true);
         /** The value the service turns into OFFSET must be a safe, non-negative integer. */
         expect(Number.isSafeInteger((p.page - 1) * p.limit)).toBe(true);
-        expect(
-          Number.isInteger(p.limit) && p.limit >= 1 && p.limit <= MAX_PAGE_SIZE,
-        ).toBe(true);
+        expect(PAGE_SIZES.some((size) => size === p.limit)).toBe(true);
       }
     }
   });

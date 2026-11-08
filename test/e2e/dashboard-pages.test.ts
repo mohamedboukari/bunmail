@@ -118,7 +118,7 @@ describe("Dashboard E2E: pages behind a session", () => {
       expect(location).toMatch(/[?&]reveal=[a-f0-9]{64}\b/);
     });
 
-    describe("dashboard pagination is clamped, never a 500 (#172)", () => {
+    describe("dashboard pagination is clamped, never a 500 (#172, #429)", () => {
       /** Renders /dashboard/inbound and checks what reached the service. */
       const expectListedWith = async (qs: string, expected: object): Promise<void> => {
         const inbound =
@@ -135,15 +135,20 @@ describe("Dashboard E2E: pages behind a session", () => {
       };
 
       test("garbage page/limit fall back to defaults", async () => {
-        await expectListedWith("page=0&limit=abc", { page: 1, limit: 20 });
-        await expectListedWith("page=-1&limit=0", { page: 1, limit: 20 });
+        await expectListedWith("page=0&limit=abc", { page: 1, limit: 25 });
+        await expectListedWith("page=-1&limit=0", { page: 1, limit: 25 });
       });
 
-      test("huge page/limit are capped", async () => {
+      test("huge page is capped, a huge limit falls back to the default", async () => {
         await expectListedWith("page=99999999999999999999&limit=99999999", {
           page: 1_000_000,
-          limit: 100,
+          limit: 25,
         });
+      });
+
+      test("an allowed size passes through, the old 20 falls back (#429)", async () => {
+        await expectListedWith("page=2&limit=100", { page: 2, limit: 100 });
+        await expectListedWith("limit=20", { page: 1, limit: 25 });
       });
     });
 

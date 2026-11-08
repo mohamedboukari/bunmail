@@ -122,7 +122,7 @@ Not recorded (yet): SMTP submission AUTH failures and REST requests with an inva
 
 ## The page
 
-`GET /dashboard/audit-log` (`adminGuard`: the owner and admins; a member gets the 403 page; the sidebar link is shown to admins and the owner only). `Cache-Control: no-store`. A table of time (UTC, exact), actor (label and id), action (label, code and metadata), target, outcome and client (IP and user agent), 50 per page by default (`?page=`, `?limit=` up to 100). Filters: `action` (one of the actions), `actor` (`user:<id>`, `api_key:<id>` or `system`) and `outcome`; an unknown value is ignored, never an error. Every value from the log is escaped (`safe`): user agents and key names are chosen by whoever sent the request. Read-only: there is no edit or delete action.
+`GET /dashboard/audit-log` (`adminGuard`: the owner and admins; a member gets the 403 page; the sidebar link is shown to admins and the owner only). `Cache-Control: no-store`. A table of time (UTC, exact), actor (label and id), action (label, code and metadata), target, outcome and client (IP and user agent), 50 per page by default (`?page=`, `?limit=` 25, 50 or 100 from the **Rows per page** select, #429). Filters: `action` (one of the actions), `actor` (`user:<id>`, `api_key:<id>` or `system`) and `outcome`; an unknown value is ignored, never an error. Every value from the log is escaped (`safe`): user agents and key names are chosen by whoever sent the request. Read-only: there is no edit or delete action.
 
 ## Tests
 
