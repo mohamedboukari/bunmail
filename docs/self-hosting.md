@@ -92,9 +92,13 @@ TRASH_RETENTION_DAYS=7
 # hours between checks of a passing domain, 6 to 168, default 24
 # DOMAIN_REVERIFY_ENABLED=true
 # DOMAIN_REVERIFY_INTERVAL_HOURS=24
-# Optional: also refuse addresses any API key hard-bounced or got a complaint
-# for (#250), default false
+# Optional: also refuse addresses any API key hard-bounced or got a verified
+# feedback-loop complaint for (#250), default false
 # SUPPRESSIONS_SHARED_HARD=false
+# Optional: DKIM signing domains (d=) of the feedback-loop providers whose
+# reports are trusted; only their complaints are shared by the flag above.
+# Comma-separated, exact match, default empty (no complaint is shared)
+# FEEDBACK_LOOP_DOMAINS=
 # Optional: daily DNSBL self-check of the sending IPs (#250), on by default
 # SENDING_IP_DNSBL_CHECK=true
 # Optional: send daily SMTP TLS reports (RFC 8460) to recipient domains that
@@ -188,7 +192,9 @@ INBOUND_NOTIFY_FROM_LOCAL=notifications
 
 > `MAIL_RETRY_MAX_AGE_HOURS`: how long an email that keeps failing temporarily (4xx replies such as greylisting or rate limits, connection errors) is retried before it is marked `failed`. Default `48`. Retries back off: 5 m, 15 m, 30 m, 1 h, 2 h, then every 4 h. A recipient whose last reply was `4.2.2` (mailbox full) when the window ends gets a 24-hour soft suppression and a soft `email.bounced` (#250); every other temporary failure gets neither.
 
-> `SUPPRESSIONS_SHARED_HARD` (#250): every API key sends from the same IP and DKIM domains, so one key's bad list damages delivery for all of them. With `true`, a send (REST, dashboard, SMTP submission, and the queue's re-check before a retry) is also refused when **any** key holds a permanent hard-bounce suppression or a feedback-loop complaint for the address. Unsubscribes, manual entries and temporary rows stay per key (they are the tenant's own decision). The refusal is the usual `422 RECIPIENT_SUPPRESSED` (SMTP `550`) with `suppressionId: null`: it never names the other key or its row, and each key's suppression list still shows only its own rows. Default `false`. Only `true` or `false`; anything else refuses to boot. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
+> `SUPPRESSIONS_SHARED_HARD` (#250): every API key sends from the same IP and DKIM domains, so one key's bad list damages delivery for all of them. With `true`, a send (REST, dashboard, SMTP submission, and the queue's re-check before a retry) is also refused when **any** key holds a permanent hard-bounce suppression or a **verified** feedback-loop complaint for the address. Unsubscribes, manual entries, unverified complaints and temporary rows stay per key. The refusal is the usual `422 RECIPIENT_SUPPRESSED` (SMTP `550`) with `suppressionId: null`: it never names the other key or its row, and each key's suppression list still shows only its own rows. Default `false`. Only `true` or `false`; anything else refuses to boot. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
+
+> `FEEDBACK_LOOP_DOMAINS`: the DKIM signing domains (`d=`) of the mailbox providers whose feedback-loop reports you trust, comma-separated, default empty. A complaint is **verified**, and so shared by `SUPPRESSIONS_SHARED_HARD`, only when its report carries a DKIM signature that passes for one of these domains, matched exactly (no subdomains, ASCII case and a final dot ignored). With the list empty no complaint is shared; complaints still suppress under the key that sent the email. The `dkimDomain` of a real report's `Complaint handled` log line shows the domain to list. Entries are normalised like domain names; anything that is not a domain of at least two labels refuses to boot. See [feedback-loops.md](feedback-loops.md#3-optional-list-the-providers-signing-domains-feedback_loop_domains).
 
 > `QUEUE_BATCH_SIZE` / `QUEUE_POLL_INTERVAL_MS` / `QUEUE_MAX_CONCURRENT_SENDS`: send queue throughput (#176). Every `QUEUE_POLL_INTERVAL_MS` (default `2000`, 250 to 60000, with +/-10% jitter) the queue claims up to `QUEUE_BATCH_SIZE` due emails (default `5`, 1 to 100), but never more than the free slots under `QUEUE_MAX_CONCURRENT_SENDS` (default `10`, 1 to 500), the cap on sends in flight per process. A slow receiver holds its slot instead of making the queue open more connections; sends waiting for a busy provider bucket (`MAIL_MX_CONCURRENCY`) hold theirs too. Raise the cap for high volume to many different domains; mind your IP reputation. Any other value refuses to boot. Each batch is shared across API keys round-robin (#258), so one key's backlog cannot delay another key's mail.
 

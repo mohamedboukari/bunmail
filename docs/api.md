@@ -975,7 +975,7 @@ HTTP/1.1 422 Unprocessable Entity
 }
 ```
 
-No row is inserted into `emails`, no queue entry is created. With `SUPPRESSIONS_SHARED_HARD=true` (#250) the same response is returned for an address another API key holds an automatic permanent hard bounce or complaint for, with `"suppressionId": null`: that row is not the caller's, so it is never named. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
+No row is inserted into `emails`, no queue entry is created. With `SUPPRESSIONS_SHARED_HARD=true` (#250) the same response is returned for an address another API key holds an automatic permanent hard bounce or verified feedback-loop complaint for, with `"suppressionId": null`: that row is not the caller's, so it is never named. See [suppressions.md](suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
 
 ### SMTP Submission
 

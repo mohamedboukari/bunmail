@@ -1,4 +1,5 @@
 import { isIP } from "net";
+import { parseDomainName } from "../modules/domains/services/domain-name.ts";
 import { readAppEnv, type AppEnv } from "./app.ts";
 import { ownerEmailProblem } from "./auth.ts";
 import {
@@ -138,13 +139,48 @@ export function readMailHostname(
 /**
  * Reads `SUPPRESSIONS_SHARED_HARD` (#250): whether the send gate also
  * refuses an address that ANY API key holds a permanent hard-bounce or
- * complaint suppression for. Unset or blank: `false`. Only `true` or
+ * verified complaint suppression for (see `readFeedbackLoopDomains`). Unset or blank: `false`. Only `true` or
  * `false`; anything else refuses to boot.
  */
 export function readSuppressionsSharedHard(
   raw: string | undefined = process.env["SUPPRESSIONS_SHARED_HARD"],
 ): boolean {
   return optionalStrictBoolean("SUPPRESSIONS_SHARED_HARD", false, raw);
+}
+
+/**
+ * Reads `FEEDBACK_LOOP_DOMAINS`: the DKIM signing domains (`d=`) of the
+ * mailbox providers whose feedback-loop reports BunMail trusts,
+ * comma-separated. A complaint is shared across API keys by
+ * `SUPPRESSIONS_SHARED_HARD` only when its report carries a passing DKIM
+ * signature of one of these domains (see `feedback-handler.service.ts`).
+ *
+ * Each entry is normalised like a registered domain name
+ * (`parseDomainName`: trimmed, an IDN turned into its A-label, ASCII
+ * lower-cased, one final dot dropped) and must be a domain of at least two
+ * labels; anything else (a single label, an IP address, a URL, an `@`)
+ * refuses to boot. Unset or blank gives an empty list: no report is
+ * verified and no complaint is shared. Duplicates are dropped. Exported
+ * for tests.
+ */
+export function readFeedbackLoopDomains(
+  raw: string | undefined = process.env["FEEDBACK_LOOP_DOMAINS"],
+): string[] {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const domains: string[] = [];
+  for (const entry of entries) {
+    const domain = parseDomainName(entry);
+    if (domain === null) {
+      throw new Error(
+        `[config] FEEDBACK_LOOP_DOMAINS must be domain names separated by commas, got "${entry}"`,
+      );
+    }
+    domains.push(domain);
+  }
+  return [...new Set(domains)];
 }
 
 /**
@@ -266,14 +302,23 @@ export function buildSuppressionsConfig() {
   return {
     /**
      * Whether the send gate also refuses an address that any API key holds
-     * a permanent hard-bounce or complaint suppression for
+     * a permanent hard-bounce or verified complaint suppression for
      * (`SUPPRESSIONS_SHARED_HARD`, default false, strictly `true` or
      * `false`). The sending IP and the DKIM domains are shared, so one
-     * key's bad list hurts every key's delivery. Unsubscribe, manual and
-     * temporary rows stay per key, and the refusal never names the other
-     * key or its row.
+     * key's bad list hurts every key's delivery. Unsubscribe, manual,
+     * unverified-complaint and temporary rows stay per key, and the refusal
+     * never names the other key or its row.
      */
     sharedHard: readSuppressionsSharedHard(),
+
+    /**
+     * DKIM signing domains of trusted feedback-loop senders
+     * (`FEEDBACK_LOOP_DOMAINS`, default empty). A complaint counts for the
+     * shared gate above only when its report carries a passing DKIM
+     * signature whose `d=` is exactly one of these; any other complaint
+     * still suppresses under the reporting email's own key.
+     */
+    feedbackLoopDomains: readFeedbackLoopDomains(),
   } as const;
 }
 

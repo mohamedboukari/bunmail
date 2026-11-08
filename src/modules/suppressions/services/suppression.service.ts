@@ -75,17 +75,17 @@ export type SuppressionMatch =
 
 /**
  * The condition behind {@link hasSharedHardSuppression}: a row of ANY API
- * key that holds an automatic permanent hard-bounce or complaint
+ * key that holds an automatic permanent hard-bounce or verified complaint
  * suppression for `target` (already normalised). Exported so a test can
  * EXPLAIN the lookup.
  *
  * Only rows the automatic paths wrote count, never a tenant's own
  * decision: a hard bounce carries `bounce_type = 'hard'` (a manual row
- * never has a bounce type), and a complaint from a feedback loop carries
- * the email it was about (a manual row never has `source_email_id`). So
- * a key cannot block another key's recipients through
- * `POST /api/v1/suppressions`. Unsubscribe, manual and temporary rows
- * never count.
+ * never has a bounce type), and a complaint counts only when its report
+ * was **verified** (`complaint_verified`, see `isVerifiedReport`): the
+ * tenant that sent an email knows its Message-ID, so an unverified report
+ * proves nothing beyond its own key, and a manual row is never verified.
+ * Unsubscribe, manual, unverified-complaint and temporary rows never count.
  *
  * The predicates are literals, not parameters, so the planner can match
  * the partial index `suppressions_shared_hard_email_idx` in every plan.
@@ -95,7 +95,7 @@ export function sharedHardSuppressionWhere(target: string): SQL | undefined {
     eq(suppressions.email, target),
     sql`${suppressions.expiresAt} IS NULL`,
     sql`${suppressions.reason} IN ('bounce', 'complaint')`,
-    sql`((${suppressions.reason} = 'bounce' AND ${suppressions.bounceType} = 'hard') OR (${suppressions.reason} = 'complaint' AND ${suppressions.sourceEmailId} IS NOT NULL))`,
+    sql`((${suppressions.reason} = 'bounce' AND ${suppressions.bounceType} = 'hard') OR (${suppressions.reason} = 'complaint' AND ${suppressions.complaintVerified} = true))`,
   );
 }
 
@@ -117,7 +117,7 @@ async function hasSharedHardSuppression(target: string): Promise<boolean> {
  * 1. The key's own active suppression ({@link findActiveSuppression}), of
  *    any reason.
  * 2. With `SUPPRESSIONS_SHARED_HARD=true` (#250), an automatic permanent
- *    hard bounce or complaint under ANY key (see
+ *    hard bounce or verified complaint under ANY key (see
  *    {@link hasSharedHardSuppression}): the sending IP and DKIM domains
  *    are shared, so one key's bad list must not damage every key's
  *    delivery. Logged at `info` with the requesting key and the redacted
@@ -219,6 +219,8 @@ export async function createSuppression(
           bounceType: null,
           diagnosticCode: null,
           sourceEmailId: null,
+          /** Nor is it a verified feedback-loop complaint. */
+          complaintVerified: false,
         },
         /** A permanent complaint is never replaced (#191). */
         setWhere: or(
@@ -394,9 +396,14 @@ export async function addFromUnsubscribe(
  * report a no-op. The check and the write are one statement, so two
  * reports racing each other change the row once.
  *
+ * `complaint_verified` (only verified complaints are shared, see
+ * {@link sharedHardSuppressionWhere}) only goes up: `existing OR new`. A
+ * verified report about an unverified permanent complaint upgrades it in a
+ * second statement, which is not a change (no second event).
+ *
  * @returns The row when this call created or changed it (the caller fires
  *   `email.complained` then), `undefined` when the address already had a
- *   permanent complaint suppression.
+ *   permanent complaint suppression (its flag possibly upgraded).
  * @param executor The transaction that also enqueues `email.complained` (#184).
  */
 export async function addFromComplaint(
@@ -414,6 +421,7 @@ export async function addFromComplaint(
       reason: "complaint",
       sourceEmailId: input.emailId,
       expiresAt: null,
+      complaintVerified: input.verified,
     })
     .onConflictDoUpdate({
       target: [suppressions.apiKeyId, suppressions.email],
@@ -423,6 +431,8 @@ export async function addFromComplaint(
         diagnosticCode: null,
         sourceEmailId: input.emailId,
         expiresAt: null,
+        /** Never downgraded: the row's flag OR this report's. */
+        complaintVerified: sql`${suppressions.complaintVerified} OR excluded.complaint_verified`,
       },
       /** Everything but a permanent complaint is replaced. */
       setWhere: or(
@@ -432,11 +442,31 @@ export async function addFromComplaint(
     })
     .returning();
 
+  /** A permanent complaint was on file: a verified report upgrades its flag. */
+  let upgraded = false;
+  if (!row && input.verified) {
+    const lifted = await executor
+      .update(suppressions)
+      .set({ complaintVerified: true })
+      .where(
+        and(
+          eq(suppressions.apiKeyId, input.apiKeyId),
+          eq(suppressions.email, target),
+          eq(suppressions.reason, "complaint"),
+          isNull(suppressions.expiresAt),
+          eq(suppressions.complaintVerified, false),
+        ),
+      )
+      .returning({ id: suppressions.id });
+    upgraded = lifted.length > 0;
+  }
+
   logger.info("Complaint suppression processed", {
     emailId: input.emailId,
     apiKeyId: input.apiKeyId,
     email: redactEmail(target),
-    outcome: row ? "suppressed" : "already-complained",
+    verified: input.verified,
+    outcome: row ? "suppressed" : upgraded ? "verified-upgrade" : "already-complained",
   });
 
   return row;
@@ -506,74 +536,4 @@ export async function deleteSuppression(
   return row;
 }
 
-/* ─── Unscoped variants for the dashboard (#89) ─── */
-
-/**
- * Paginated list across **all** API keys: admin-scoped view used by
- * `/dashboard/suppressions`. The scoped {@link listSuppressions} is
- * useless to the dashboard operator: auto-suppressions get filed
- * under whichever key the failing send happened to use, and the
- * operator's Bearer token usually isn't that key. Without this
- * unscoped read, recovering from a bad bounce means SSHing into the
- * DB. (#89)
- *
- * Filters:
- *   - `email`: case-insensitive *substring* match. The scoped variant
- *     uses exact match (it serves the hot-path send gate). The dashboard
- *     wants "find anything containing 'gmail.com'" UX, so we use ILIKE.
- *   - `apiKeyId`: exact match. Lets the operator drill into a single
- *     key's suppressions after spotting them in the global view.
- */
-export async function listAllSuppressions(filters: {
-  page: number;
-  limit: number;
-  email?: string;
-  apiKeyId?: string;
-}): Promise<{ data: Suppression[]; total: number }> {
-  const offset = (filters.page - 1) * filters.limit;
-
-  logger.debug("Listing all suppressions (unscoped)", { ...filters, offset });
-
-  const conditions = [];
-  if (filters.email) {
-    /** ILIKE for case-insensitive substring search: matches the
-     *  dashboard's "find anything with gmail.com" expectation. */
-    conditions.push(
-      sql`${suppressions.email} ILIKE ${"%" + filters.email.toLowerCase() + "%"}`,
-    );
-  }
-  if (filters.apiKeyId) {
-    conditions.push(eq(suppressions.apiKeyId, filters.apiKeyId));
-  }
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-  const [data, [countRow]] = await Promise.all([
-    db
-      .select()
-      .from(suppressions)
-      .where(where)
-      .orderBy(desc(suppressions.createdAt))
-      .limit(filters.limit)
-      .offset(offset),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(suppressions)
-      .where(where),
-  ]);
-
-  return { data, total: countRow?.count ?? 0 };
-}
-
-/**
- * Hard delete by ID, no api-key check. The dashboard caller already
- * authenticated against the dashboard session: we trust the operator
- * to delete any suppression they can see. Returns the deleted row
- * (for logging / serialisation) or `undefined` when nothing matched.
- */
-export async function deleteSuppressionByIdUnscoped(
-  id: string,
-): Promise<Suppression | undefined> {
-  logger.info("Deleting suppression (unscoped)", { id });
-  const [row] = await db.delete(suppressions).where(eq(suppressions.id, id)).returning();
-  return row;
-}
+/* The unscoped dashboard variants (#89) are in `suppression-unscoped.service.ts`. */

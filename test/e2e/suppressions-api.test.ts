@@ -115,9 +115,6 @@ void mock.module(
     addFromBounce: mock(() =>
       Promise.resolve({ applied: true, suppression: mockBounceSuppression }),
     ),
-    /** Dashboard-only; present so a leak of this mock has no holes (#293). */
-    listAllSuppressions: mock(() => Promise.resolve({ data: [], total: 0 })),
-    deleteSuppressionByIdUnscoped: mock(() => Promise.resolve(undefined)),
     addFromUnsubscribe: mock(() => Promise.resolve(undefined)),
     addFromComplaint: mock(() => Promise.resolve(undefined)),
     sharedHardSuppressionWhere: mock(() => undefined),

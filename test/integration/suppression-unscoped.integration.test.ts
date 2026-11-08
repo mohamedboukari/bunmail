@@ -15,7 +15,7 @@ import { eq } from "drizzle-orm";
 import {
   listAllSuppressions,
   deleteSuppressionByIdUnscoped,
-} from "../../src/modules/suppressions/services/suppression.service.ts";
+} from "../../src/modules/suppressions/services/suppression-unscoped.service.ts";
 import { truncateAll, seed, db, suppressions } from "./_helpers.ts";
 
 beforeEach(async () => {

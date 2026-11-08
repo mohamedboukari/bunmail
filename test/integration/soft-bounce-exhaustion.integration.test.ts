@@ -192,6 +192,7 @@ describe("soft suppression after an exhausted 4.2.2 retry window", () => {
       apiKeyId: ctx.apiKeyId,
       email: RECIPIENT,
       emailId: earlierId,
+      verified: false,
     });
     await endRetryWindow(ctx.emailId);
 

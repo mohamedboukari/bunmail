@@ -72,6 +72,16 @@ function toALabel(value: string, pattern: RegExp): string | null {
 }
 
 /**
+ * The `d=` tag of a signature (as `parseTagList` returned it) in the form
+ * the verifier looked its key up under: a lowercase A-label, or null when
+ * it is not a valid domain name. Lets a caller compare the signing domain
+ * of a passing result with exactly the name whose key verified it.
+ */
+export function signingDomainOf(value: string): string | null {
+  return toALabel(value, DOMAIN_NAME);
+}
+
+/**
  * Parses a tag-list (RFC 6376 section 3.2): `name=value` pairs separated by
  * `;`, FWS around names and values, an optional final `;`. Tag names are
  * case-sensitive. Returns null on a syntax error, a repeated tag included.

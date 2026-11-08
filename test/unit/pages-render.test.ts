@@ -410,6 +410,7 @@ describe("Dashboard page render smoke tests", () => {
       diagnosticCode: "5.1.1",
       sourceEmailId: "msg_abc",
       expiresAt: null,
+      complaintVerified: false,
       createdAt: now,
     };
     const apiKeyLabels = { [apiKey.id]: { name: apiKey.name } };

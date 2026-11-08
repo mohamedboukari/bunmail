@@ -8,9 +8,15 @@
  * is the security boundary: a report counts only when its
  * Original-Message-ID is exactly the Message-ID of an email BunMail sent.
  * Those ids are 128 random bits, so only someone holding the delivered
- * message (its recipients, their mailbox provider) can name one. DKIM on
- * the report is checked and logged, but not required: not every provider
- * signs its reports.
+ * message (its recipients, their mailbox provider) can name one. That is
+ * enough for the sending key's own list, but not across keys: the tenant
+ * that sent the email holds its Message-ID too. So DKIM on the report is
+ * checked, and the complaint is stored as **verified** only when a
+ * signature passes for one of the operator's `FEEDBACK_LOOP_DOMAINS` (see
+ * {@link isVerifiedReport}); only a verified complaint is shared with the
+ * other keys by `SUPPRESSIONS_SHARED_HARD`. An unverified one still
+ * suppresses under the email's own key, and fires `email.complained`, as
+ * before: not every provider signs its reports.
  *
  * Same shape as the bounce handler: a core (`handleFeedbackReport`) that
  * takes its side effects as callbacks for unit tests, and a wrapper
@@ -27,12 +33,18 @@ import {
 } from "../../suppressions/services/unsubscribe.service.ts";
 import type { AddFromComplaintInput } from "../../suppressions/types/suppression.types.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
+import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { loggableError } from "../../../utils/db-error.ts";
 import { parseRecipients } from "../../../utils/recipients.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { parseFeedbackReport } from "./arf-parser.service.ts";
-import { verifyDkimSignatures } from "./dkim-verifier.service.ts";
+import {
+  verifyDkimSignatures,
+  type DkimSignatureResult,
+  type DkimVerifyDeps,
+} from "./dkim-verifier.service.ts";
+import { lowerAscii, signingDomainOf } from "./dkim-verifier-parse.service.ts";
 import type {
   FeedbackAction,
   FeedbackOutcome,
@@ -63,12 +75,20 @@ export interface LinkedEmail {
   tags: EmailTags | null;
 }
 
-/** DKIM verdict on the report itself, for the log line only. */
+/** DKIM verdict on the report itself: logged, and the input of {@link isVerifiedReport}. */
 export interface DkimCheck {
   /** `pass`, `fail`, `neutral`, `none`, `temperror`, `permerror`, `policy`, or `skipped`. */
   result: string;
   /** `d=` of the signature the verdict is about, when there is one. */
   signingDomain: string | null;
+  /**
+   * The signing domain (`d=`, as a lowercase A-label) of EVERY signature
+   * that passed and may vouch for the report (see {@link signatureCanVouch}),
+   * in header order; empty when none did or DKIM was not checked. A report
+   * may carry several signatures (its provider's and a forwarder's), and
+   * any of them may be the one that makes it verified.
+   */
+  passingDomains: string[];
 }
 
 /**
@@ -102,8 +122,13 @@ export interface FeedbackHandlerDeps<T> {
     data: Record<string, unknown>,
     scope: { apiKeyId: string },
   ) => Promise<unknown>;
-  /** DKIM verdict on the report (logged, never required). */
+  /** DKIM verdict on the report (logged; decides whether the complaint is verified). */
   verifyDkim: () => Promise<DkimCheck>;
+  /**
+   * `FEEDBACK_LOOP_DOMAINS`, normalised: the signing domains whose passing
+   * signature makes a complaint verified. Empty: nothing is verified.
+   */
+  feedbackLoopDomains: readonly string[];
 }
 
 export interface HandleFeedbackResult {
@@ -122,6 +147,37 @@ export function classifyFeedbackType(feedbackType: string | null): FeedbackActio
   }
   if (feedbackType === "opt-out") return "opt-out";
   return "ignore";
+}
+
+/**
+ * Whether a report is a **verified** feedback-loop report: at least one of
+ * its DKIM signatures passed and may vouch for it (see `signatureCanVouch`:
+ * no testing-mode key, no `l=`, `h=` covering From and Content-Type)
+ * and its `d=` is exactly one of `allowedDomains` (`FEEDBACK_LOOP_DOMAINS`),
+ * compared without ASCII case and without a final dot. An empty allowlist
+ * verifies nothing.
+ *
+ * A passing signature alone is not enough: anyone can sign a hand-made
+ * report with a domain of their own. Only the domains the operator listed
+ * (their providers' feedback-loop signers) count.
+ *
+ * Exact match only, no subdomains: a listed `example.net` does not accept
+ * `d=fbl.example.net`. A subdomain rule would trust every name under the
+ * listed one, so one mistaken entry (a two-label public suffix such as
+ * `co.uk`, or a provider that hands out subdomains to its users) would let
+ * anyone verify; and there is no public suffix list here to guard against
+ * it. A miss only means the complaint stays per key, which is the safe
+ * side, and the log line's `dkimDomain` shows the exact `d=` to list.
+ */
+export function isVerifiedReport(
+  dkim: DkimCheck,
+  allowedDomains: readonly string[],
+): boolean {
+  if (allowedDomains.length === 0) return false;
+  const canonical = (domain: string): string =>
+    lowerAscii(domain.trim()).replace(/\.$/, "");
+  const allowed = new Set(allowedDomains.map(canonical));
+  return dkim.passingDomains.some((domain) => allowed.has(canonical(domain)));
 }
 
 /**
@@ -226,6 +282,10 @@ export async function handleFeedbackReport<T>(
     };
   }
 
+  /** Whether the complaint may be shared with other keys (see `isVerifiedReport`). */
+  const verified = isVerifiedReport(dkim, deps.feedbackLoopDomains);
+  const complaintContext = { ...linkedContext, verified };
+
   const payload = {
     emailId: original.id,
     recipient,
@@ -238,11 +298,11 @@ export async function handleFeedbackReport<T>(
 
   if (recipient === null) {
     logger.warn("Complaint not suppressed: recipient could not be determined", {
-      ...linkedContext,
+      ...complaintContext,
       originalRcptTo: report.originalRcptTo.map((address) => redactEmail(address)),
     });
     /** No state change to commit with: the event gets a transaction of its own. */
-    await recorded(linkedContext, () =>
+    await recorded(complaintContext, () =>
       deps.transaction((tx) =>
         deps.enqueueEvent(tx, "email.complained", payload, {
           apiKeyId: original.apiKeyId,
@@ -253,12 +313,13 @@ export async function handleFeedbackReport<T>(
   }
 
   /** The suppression and its event commit together, or neither does (#184). */
-  const suppression = await recorded(linkedContext, () =>
+  const suppression = await recorded(complaintContext, () =>
     deps.transaction(async (tx) => {
       const changed = await deps.addFromComplaint(tx, {
         apiKeyId: original.apiKeyId,
         email: recipient,
         emailId: original.id,
+        verified,
       });
       if (changed) {
         await deps.enqueueEvent(tx, "email.complained", payload, {
@@ -270,14 +331,14 @@ export async function handleFeedbackReport<T>(
   );
   if (!suppression) {
     logger.debug("Complaint already on file, nothing to do", {
-      ...linkedContext,
+      ...complaintContext,
       recipient: redactEmail(recipient),
     });
     return { outcome: "already-complained", emailId: original.id };
   }
 
   logger.info("Complaint handled", {
-    ...linkedContext,
+    ...complaintContext,
     recipient: redactEmail(recipient),
     suppressionId: suppression.id,
   });
@@ -330,6 +391,37 @@ async function findEmailByMessageId(messageId: string): Promise<LinkedEmail | un
   return undefined;
 }
 
+/** Header fields a signature must cover to vouch for a report (lowercase). */
+const REQUIRED_SIGNED_HEADERS = ["from", "content-type"] as const;
+
+/**
+ * Why a PASSING signature still cannot make a report verified, or `null`
+ * when it can. A pass only proves the signed parts were not changed, so
+ * the signature must cover everything the handler reads:
+ *
+ * - its key is not in testing mode (`t=y`): RFC 6376 section 3.6.1 says a
+ *   verifier must treat such a message like unsigned mail;
+ * - it has no `l=` tag (body length limit), whatever length it gives:
+ *   content appended after the signed part (another MIME part, or a whole
+ *   new body under a changed boundary) would still verify (RFC 6376
+ *   section 8.2);
+ * - its `h=` covers `From` and `Content-Type`: the report's parts are
+ *   found through the top-level `Content-Type` (its type and boundary), so
+ *   an unsigned one could be replaced to make a different part the
+ *   feedback report.
+ *
+ * @public Exported for its unit test only.
+ */
+export function signatureCanVouch(
+  signature: Pick<DkimSignatureResult, "testing" | "hasLengthLimit" | "signedHeaders">,
+): string | null {
+  if (signature.testing) return "key in testing mode";
+  if (signature.hasLengthLimit) return "body length limit (l=)";
+  const signed = new Set(signature.signedHeaders.map((name) => lowerAscii(name.trim())));
+  const missing = REQUIRED_SIGNED_HEADERS.filter((name) => !signed.has(name));
+  return missing.length === 0 ? null : `h= does not cover ${missing.join(", ")}`;
+}
+
 /**
  * DKIM verdict on the report (`dkim-verifier.service.ts`), bounded: no
  * DKIM-Signature means no lookup at all; a header section past 64 KB or
@@ -337,34 +429,65 @@ async function findEmailByMessageId(messageId: string): Promise<LinkedEmail | un
  * check gives up after 10 s. Runs only after the report was linked to one
  * of our emails, so an unlinkable flood never reaches DNS. ARC header
  * fields are not DKIM signatures and are not counted or verified.
+ *
+ * `passingDomains` lists the `d=` of every passing signature that may
+ * vouch for the report ({@link signatureCanVouch}). Every way the check
+ * gives up leaves the list empty.
+ *
+ * @public Exported for its unit test only (a signed fixture, a fixed key).
  */
-async function verifyReportDkim(raw: string, rawBytes: Buffer): Promise<DkimCheck> {
+export async function verifyReportDkim(
+  raw: string,
+  rawBytes: Buffer,
+  dkimDeps: DkimVerifyDeps,
+): Promise<DkimCheck> {
   const end = /\r?\n\r?\n/.exec(raw.slice(0, MAX_DKIM_HEADER_BYTES));
-  if (!end) return { result: "skipped", signingDomain: null };
+  if (!end) return { result: "skipped", signingDomain: null, passingDomains: [] };
   const signatures =
     raw.slice(0, end.index).match(/^dkim-signature[ \t]*:/gim)?.length ?? 0;
-  if (signatures === 0) return { result: "none", signingDomain: null };
-  if (signatures > MAX_DKIM_SIGNATURES) return { result: "skipped", signingDomain: null };
+  if (signatures === 0)
+    return { result: "none", signingDomain: null, passingDomains: [] };
+  if (signatures > MAX_DKIM_SIGNATURES) {
+    return { result: "skipped", signingDomain: null, passingDomains: [] };
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const verified = await Promise.race([
-      verifyDkimSignatures(rawBytes),
+      verifyDkimSignatures(rawBytes, dkimDeps),
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), DKIM_TIMEOUT_MS);
       }),
     ]);
-    if (verified === null) return { result: "temperror", signingDomain: null };
+    if (verified === null) {
+      return { result: "temperror", signingDomain: null, passingDomains: [] };
+    }
     const best = verified.find((result) => result.result === "pass") ?? verified[0];
+    const passingDomains: string[] = [];
+    for (const result of verified) {
+      if (result.result !== "pass") continue;
+      const domain = signingDomainOf(result.signingDomain ?? "");
+      if (domain === null) continue;
+      const refusal = signatureCanVouch(result);
+      if (refusal !== null) {
+        logger.debug("Feedback report signature passed but cannot verify the report", {
+          signingDomain: domain,
+          reason: refusal,
+        });
+        continue;
+      }
+      passingDomains.push(domain);
+    }
     return {
       result: best?.result ?? "none",
       signingDomain: best?.signingDomain ?? null,
+      passingDomains,
     };
   } catch (error) {
     logger.warn("Feedback report DKIM check failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    return { result: "temperror", signingDomain: null };
+    return { result: "temperror", signingDomain: null, passingDomains: [] };
   } finally {
     clearTimeout(timer);
   }
@@ -374,10 +497,14 @@ async function verifyReportDkim(raw: string, rawBytes: Buffer): Promise<DkimChec
  * Public entry point, called by the SMTP receiver for every message whose
  * top-level type is a `feedback-report`. The caller acknowledges the SMTP
  * transaction and stores nothing, whatever the outcome.
+ *
+ * @param dkimDeps - The DKIM verifier's TXT lookup and clock; the real ones
+ *   unless a test passes its own (a signed fixture's key, a fixed time).
  */
 export async function handleInboundFeedbackReport(
   raw: string,
   rawBytes: Buffer,
+  dkimDeps: DkimVerifyDeps = {},
 ): Promise<HandleFeedbackResult> {
   return handleFeedbackReport<Tx>(parseFeedbackReport(raw), {
     findEmailByMessageId,
@@ -385,6 +512,8 @@ export async function handleInboundFeedbackReport(
     addFromComplaint: (tx, input) => addFromComplaint(input, tx),
     unsubscribe,
     enqueueEvent,
-    verifyDkim: () => verifyReportDkim(raw, rawBytes),
+    verifyDkim: () => verifyReportDkim(raw, rawBytes, dkimDeps),
+    /** Read per report, so the list in effect is the current config. */
+    feedbackLoopDomains: config.suppressions.feedbackLoopDomains,
   });
 }

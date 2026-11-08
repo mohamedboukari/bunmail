@@ -3,7 +3,7 @@ import { SuppressionsPage } from "../routes/suppressions.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
-import * as suppressionService from "../../modules/suppressions/services/suppression.service.ts";
+import * as suppressionService from "../../modules/suppressions/services/suppression-unscoped.service.ts";
 import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
