@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -32,6 +33,10 @@ export function DmarcReportsPage({
     <BaseLayout title="DMARC Reports" activeNav="dmarc-reports">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-semibold">DMARC Reports</h1>
+        <ExportCsvLink
+          path="/dashboard/dmarc-reports/export.csv"
+          params={{ domain: domainFilter }}
+        />
       </div>
 
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">

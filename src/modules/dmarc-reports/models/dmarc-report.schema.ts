@@ -84,5 +84,10 @@ export const dmarcReports = pgTable(
     ),
     /** Dashboard "recent reports for X" hot path. */
     index("dmarc_reports_domain_date_end_idx").on(table.domain, table.dateEnd),
+    /** Keyset walk across every domain, newest window first: the CSV export (#430). */
+    index("dmarc_reports_date_end_id_idx").on(
+      table.dateEnd.desc().nullsFirst(),
+      table.id.desc().nullsFirst(),
+    ),
   ],
 );

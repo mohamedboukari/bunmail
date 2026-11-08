@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { VerificationBadge } from "../components/status-badge.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
@@ -25,6 +26,7 @@ interface DomainsPageProps {
 export function DomainsPage({ domains, flash, creators }: DomainsPageProps) {
   return (
     <BaseLayout title="Domains" activeNav="domains">
+      <ExportCsvLink path="/dashboard/domains/export.csv" />
       <h1 class="text-xl font-semibold mb-6">Domains</h1>
 
       {/* Flash message */}

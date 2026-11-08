@@ -269,6 +269,23 @@ const ROUTES: Record<string, RouteSpec> = {
 
   "GET /dashboard/suppressions": { access: "member" },
   "POST /dashboard/suppressions/:id/delete": { access: "admin" },
+
+  /** CSV exports (#430): admins and the owner only; members get 403 and see no link. */
+  "GET /dashboard/emails/export.csv": { access: "admin" },
+  "GET /dashboard/emails/trash/export.csv": { access: "admin" },
+  "GET /dashboard/emails/tombstones/export.csv": { access: "admin" },
+  "GET /dashboard/inbound/export.csv": { access: "admin" },
+  "GET /dashboard/inbound/trash/export.csv": { access: "admin" },
+  "GET /dashboard/suppressions/export.csv": { access: "admin" },
+  "GET /dashboard/audit-log/export.csv": { access: "admin" },
+  "GET /dashboard/dmarc-reports/export.csv": { access: "admin" },
+  "GET /dashboard/webhooks/:id/deliveries/export.csv": { access: "admin" },
+  "GET /dashboard/api-keys/export.csv": { access: "admin" },
+  "GET /dashboard/domains/export.csv": { access: "admin" },
+  "GET /dashboard/templates/export.csv": { access: "admin" },
+  "GET /dashboard/webhooks/export.csv": { access: "admin" },
+  "GET /dashboard/users/export.csv": { access: "admin" },
+  "GET /dashboard/invitations/export.csv": { access: "admin" },
 };
 
 /** The role guard each access level must carry. */

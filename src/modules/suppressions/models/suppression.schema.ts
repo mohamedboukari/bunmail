@@ -138,5 +138,11 @@ export const suppressions = pgTable(
     index("suppressions_shared_hard_email_idx")
       .on(table.email)
       .where(sql`expires_at IS NULL AND reason IN ('bounce', 'complaint')`),
+
+    /** Keyset walk across every key, newest first: the CSV export (#430) and the dashboard list. */
+    index("suppressions_created_id_idx").on(
+      table.createdAt.desc().nullsFirst(),
+      table.id.desc().nullsFirst(),
+    ),
   ],
 );

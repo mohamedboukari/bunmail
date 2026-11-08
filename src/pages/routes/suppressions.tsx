@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
@@ -53,6 +54,10 @@ export function SuppressionsPage({
 }: SuppressionsPageProps) {
   return (
     <BaseLayout title="Suppressions" activeNav="suppressions">
+      <ExportCsvLink
+        path="/dashboard/suppressions/export.csv"
+        params={{ email: filters.email, apiKeyId: filters.apiKeyId }}
+      />
       <h1 class="text-xl font-semibold mb-6">Suppressions</h1>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

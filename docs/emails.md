@@ -54,6 +54,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 - `idx_emails_lease` (`(lease_until)` WHERE `status = 'sending'`) reclaim of expired leases (#180)
 - `idx_emails_message_id` (`(message_id)`) Message-ID lookups: linking an inbound reply to the email it answers (#192), and the bounce and complaint joins
 - `idx_emails_tags` (GIN on `tags` with `jsonb_path_ops`) the tag filter's `tags @> jsonb_build_object(key, value)` containment (#189)
+- `idx_emails_live_created_id` (`(created_at DESC, id DESC)` WHERE `deleted_at IS NULL`) and `idx_emails_trash_deleted_id` (`(deleted_at DESC, id DESC)` WHERE `deleted_at IS NOT NULL`) the CSV exports' keyset walks of the list and the trash (migration `0044`, #430)
 
 **Table:** `email_attachments` (#181)
 

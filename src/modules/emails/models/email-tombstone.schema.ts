@@ -106,6 +106,12 @@ export const emailTombstones = pgTable(
     /** Dashboard list hot path: "show me the last week of tombstones
      *  for this api key", newest first. */
     index("idx_email_tombstones_api_key_purged").on(table.apiKeyId, table.purgedAt),
+
+    /** Keyset walk across every key, newest first: the CSV export (#430). */
+    index("idx_email_tombstones_purged_id").on(
+      table.purgedAt.desc().nullsFirst(),
+      table.id.desc().nullsFirst(),
+    ),
   ],
 );
 

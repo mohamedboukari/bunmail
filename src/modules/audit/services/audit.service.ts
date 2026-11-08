@@ -208,8 +208,10 @@ export async function recordAuditEvent<A extends AuditAction>(
   }
 }
 
-/** The `WHERE` clause of the page's filters. */
-function filterClause(filters: AuditEventFilters): SQL | undefined {
+/** The `WHERE` clause of the page's filters; shared with the CSV export (#430). */
+export function auditFilterClause(
+  filters: Omit<AuditEventFilters, "page" | "limit">,
+): SQL | undefined {
   const clauses: (SQL | undefined)[] = [];
   if (filters.action) clauses.push(eq(auditEvents.action, filters.action));
   if (filters.outcome) clauses.push(eq(auditEvents.outcome, filters.outcome));
@@ -231,7 +233,7 @@ function filterClause(filters: AuditEventFilters): SQL | undefined {
 export async function listAuditEvents(
   filters: AuditEventFilters,
 ): Promise<{ data: AuditEvent[]; total: number }> {
-  const where = filterClause(filters);
+  const where = auditFilterClause(filters);
   try {
     const [data, [countRow]] = await Promise.all([
       db

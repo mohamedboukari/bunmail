@@ -275,6 +275,39 @@ Redirects are fixed (`/dashboard`, the second step, the login page): no return p
 
 Recorded from the dashboard: sign-in (success, each failure with its reason, a lockout once per address and window, the 2FA step and its lock; with a password, a passkey or SSO), sign-out, session revocations and token reuse, two-factor changes, passkey changes, single sign-on links (linked, unlinked, refused), password change, reset links issued and completed, owner setup, invitations, role changes, deactivation, reactivation, removal, ownership transfer (and a wrong-password attempt), API key, domain, webhook and suppression changes. The REST API records its API key, domain, webhook and suppression changes with the calling key as the actor.
 
+### CSV exports (#430)
+
+Every dashboard table can be downloaded as CSV by **admins and the owner** (`adminGuard` on every export route; a member gets the 403 page and sees no link). An **Export CSV** link sits in the page header (on the API keys page, next to the tabs) and carries the page's current filters, so the file holds what the page lists, every page of it, not only the one on screen. Admins see every API key's records: the exports are unscoped, like the lists.
+
+| Page | Export route | Filters it follows | Columns |
+|------|--------------|--------------------|---------|
+| Emails | `GET /dashboard/emails/export.csv` | `status`, `source`, `apiKeyId`, `tag` (an invalid tag goes back to the list, which explains it) | `id`, `created_at`, `status`, `source`, `category`, `api_key_id`, `domain_id`, `from_address`, `from_name`, `to_address`, `cc`, `bcc`, `reply_to`, `subject`, `tags` (`key=value; ...`), `message_id`, `attempts`, `last_error`, `sent_at`, `first_opened_at`, `first_clicked_at` |
+| Emails trash | `GET /dashboard/emails/trash/export.csv` | none | the emails columns, then `deleted_at` |
+| Tombstones | `GET /dashboard/emails/tombstones/export.csv` | `messageId` | `id`, `purged_at`, `api_key_id`, `message_id`, `from_address`, `to_address`, `subject`, `status`, `sent_at`, `deleted_at` |
+| Inbound | `GET /dashboard/inbound/export.csv` | none | `id`, `received_at`, `from_address`, `to_address`, `subject`, `message_id`, `in_reply_to`, `in_reply_to_email_id` |
+| Inbound trash | `GET /dashboard/inbound/trash/export.csv` | none | the inbound columns, then `deleted_at` |
+| Suppressions | `GET /dashboard/suppressions/export.csv` | `email` (substring), `apiKeyId` | `id`, `created_at`, `api_key_id`, `email`, `reason`, `bounce_type`, `diagnostic_code`, `source_email_id`, `expires_at` |
+| Audit log | `GET /dashboard/audit-log/export.csv` | `action`, `actor`, `outcome` | `id`, `occurred_at`, `actor_type`, `actor_id`, `actor_label`, `action`, `outcome`, `target_type`, `target_id`, `target_label`, `ip`, `user_agent`, `metadata` (JSON) |
+| DMARC reports | `GET /dashboard/dmarc-reports/export.csv` | `domain` | `id`, `domain`, `org_name`, `org_email`, `report_id`, `date_begin`, `date_end`, `policy_p`, `policy_pct`, `received_at` |
+| Webhook deliveries | `GET /dashboard/webhooks/:id/deliveries/export.csv` | the webhook, `status` | `id`, `created_at`, `webhook_id`, `event`, `status`, `attempts`, `last_response_status`, `last_error`, `next_attempt_at`, `delivered_at` |
+| API keys | `GET /dashboard/api-keys/export.csv` | the open tab (`tab=revoked`, else Active) | `id`, `name`, `key_prefix`, `is_active`, `is_admin`, `allowed_senders`, `disabled_reason`, `last_used_at`, `created_at`, `created_by_user_id` |
+| Domains | `GET /dashboard/domains/export.csv` | none | `id`, `name`, `spf_verified`, `dkim_verified`, `dmarc_verified`, `verified_at`, `last_checked_at`, `consecutive_failures`, `dkim_selector`, `dkim_pending_selector`, `dkim_rotated_at`, `notify_email`, `unsubscribe_email`, `track_opens`, `track_clicks`, `created_at`, `created_by_user_id` |
+| Templates | `GET /dashboard/templates/export.csv` | none | `id`, `name`, `subject`, `variables`, `api_key_id`, `created_at`, `updated_at`, `created_by_user_id` |
+| Webhooks | `GET /dashboard/webhooks/export.csv` | none | `id`, `url_origin` (scheme, host and port only, `redactUrl`, the policy of the webhook audit label, #260: Slack, Discord, Teams, Mattermost and Zapier put the secret in the path), `events`, `is_active`, `api_key_id`, `created_at`, `updated_at`, `created_by_user_id` |
+| Users | `GET /dashboard/users/export.csv` | none | `id`, `email`, `name`, `role`, `disabled`, `disabled_at`, `email_verified_at`, `created_at` |
+| Invitations | `GET /dashboard/invitations/export.csv` | none (pending invitations, like the page) | `id`, `email`, `role`, `invited_by_user_id`, `invited_by_email`, `created_at`, `expires_at` |
+
+- **Metadata only.** Each export selects an explicit column list in the database: message bodies (`html`, `text_content`, `raw_message`), custom headers, attachments, the delivery state, key hashes, DKIM key material, template bodies, webhook secrets and payloads, DMARC report XML, token hashes and every credential never leave the database for an export; a webhook URL is exported as its origin only.
+- **Format.** RFC 4180: comma separated, CRLF line ends, a field containing `"`, `,`, CR or LF is quoted with its quotes doubled; a field containing `;` or a tab is quoted too, so Excel set to split on `;` (German, French, Dutch) keeps it in one cell. A timestamp that is not an instant (Postgres `infinity`) is an empty cell. UTF-8 **with a byte order mark**, so Excel opens accents and non-Latin text correctly (LibreOffice, Google Sheets and `pandas` skip it). Timestamps in ISO 8601 UTC, booleans `true` / `false`, lists joined by `; `. Written by the in-repo writer `src/pages/lib/csv.ts` (no dependency).
+- **Formula injection** (OWASP CSV injection): a text cell starting with a tab or a CR, or whose first visible character (after spaces, no-break spaces, U+200B or U+FEFF) is `=`, `+`, `-` or `@`, gets a leading `'`, which spreadsheets show as text and never evaluate. Inside a cell, a `;` or tab followed (after such spaces) by one of those characters gets a `'` before the character too, since a `;` locale starts a new cell there (`x;=cmd|...`).
+- **Streaming.** Rows are read in turn, in batches of 500, by keyset pagination on the table's order (timestamp, then id; the cursor keeps Postgres microseconds; `(ts, id)` indexes from migration `0044` serve the emails, trash, suppressions, tombstones and DMARC walks), and written to a streamed body. Bun 1.3.14 drains a streamed response as fast as it is produced, whatever the client reads, so a slow or stalled client still makes the server build and buffer the whole file: what bounds memory is the row cap (one export) and the concurrency limit (how many at once). Newest first, except users (oldest first, like the page).
+- **Row cap: 50 000 rows per export** (`exportLimits.rowCap` in `src/pages/lib/csv-export.tsx`). The headers are sent before the cap can be known, so a capped file ends with one more row whose first cell reads `Truncated: this export stops at 50000 rows. Narrow the page filters to export the rest.` (the other cells empty). A file of exactly the cap has no such row.
+- **Headers.** `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="bunmail-<table>-<UTC date>.csv"`, `Cache-Control: no-store`.
+- **Concurrency: 2 exports producing at once per process** (`EXPORT_MAX_CONCURRENT`, process memory on purpose: it protects this process's memory). A third gets `429` with `Retry-After: 30`, logged at `warn` (`CSV export refused: too many exports running`), and takes no budget. The slot is given back when the export finishes, fails (also before streaming, the 503) or is cancelled.
+- **Rate limit: 10 exports per user per 10 minutes**, whatever the table (`src/pages/lib/export-limiter.ts`, in the shared store, so with `REDIS_URL` across replicas). Over it: `429` with a short page and `Retry-After`, logged at `warn` (`CSV export refused: rate limited`).
+- **Started from the dashboard only.** A request with `Sec-Fetch-Site: cross-site` or `same-site` (a page of another site or a sibling subdomain) is refused with 403 before the slot, the budget or the audit log are touched, so another site cannot burn an admin's budget or fill the audit log; `same-origin` (the link), `none` (typed or bookmarked) and a missing header (older browsers, curl) are let through.
+- **Audit and logs.** Every export is recorded as `export.downloaded` (actor: the admin; metadata: `table`, the **names** of the filters it followed, never their values, `rows`, `truncated`), `failure` when the database failed, a cell could not be written or the client went away. `rows` and the outcome describe what the server produced, not what the client received (Bun buffers the body). An export refused for the budget or for lack of a slot is recorded too, as `failure` with `rows: 0` and `reason` `rate_limited` or `busy`. One `info` line per export (`CSV export finished`: user, table, rows, truncated, duration); a failure is logged at `error` without the driver's message.
+
 ### Brute-force protection (#109)
 
 `POST /dashboard/login` throttles failed logins per client IP using
@@ -361,6 +394,7 @@ a Redis outage it falls back to per-replica memory).
 | GET /dashboard/dmarc-reports     | DMARC aggregate reports list + domain filter (#41)                |
 | GET /dashboard/dmarc-reports/:id | DMARC report detail, per source IP (#41)                          |
 | GET /dashboard/suppressions      | Suppressions across every API key (#89)                           |
+| GET /dashboard/&lt;table&gt;/export.csv | The table as a streamed CSV download with the page's filters, for each table above (admin, rate limited, audited, #430): see [CSV exports](#csv-exports-430) |
 
 ## Pagination (#429)
 
@@ -453,7 +487,8 @@ src/pages/
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
 │   ├── inbound.plugin.tsx    ← Inbound list, trash, detail, reply
 │   ├── dmarc.plugin.tsx      ← DMARC reports
-│   └── suppressions.plugin.tsx ← Suppressions
+│   ├── suppressions.plugin.tsx ← Suppressions
+│   └── exports.plugin.tsx    ← CSV export route of every table (admin, #430)
 ├── lib/                      ← Helpers shared by the area plugins (#291)
 │   ├── session-guard.ts      ← The session guard (`resolve` putting `auth` on the context) and the `PublicDashboard` / `GuardedDashboard` types
 │   ├── session-helpers.ts    ← Issue / clear the session cookie, token-reuse revoke
@@ -464,6 +499,9 @@ src/pages/
 │   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
 │   ├── two-factor-limiter.ts ← Failed-attempt budget of every two-factor code check (#220)
 │   ├── dns-verify-throttle.ts ← DNS-verify throttle: 5 checks per minute per domain, in the shared store (#133, #185)
+│   ├── csv.ts                ← RFC 4180 CSV writer: quoting, CRLF, BOM, formula-injection escape (#430)
+│   ├── csv-export.tsx        ← Streams one export: Sec-Fetch-Site check, slot, budget, batches, row cap, audit and log line (#430)
+│   ├── export-limiter.ts     ← Export budget (10 per user per 10 minutes, shared store) and slots (2 at once per process) (#430)
 │   ├── sso.ts                ← What the SSO routes share: provider lookup, link refusal texts, the login page's SSO buttons (#224)
 │   ├── passkeys.ts           ← What the passkey routes share: relying party, options refusals, cross-origin refusal, audit reasons, finish-form schema (#223)
 │   ├── account-two-factor.ts ← What the Two-factor routes share: refusal texts, page redirect, change alerts, recovery-code reveal (#220)
@@ -501,6 +539,7 @@ src/pages/
 │   ├── unsubscribe.tsx       ← Unsubscribe confirm / done / invalid / rate-limited pages: stylesheet only, no script (#249)
 │   ├── not-found.tsx         ← Custom 404 page
 │   ├── forbidden.tsx         ← 403 page for a role or session assurance too low (#222)
+│   ├── export-limited.tsx    ← 429 page for a CSV export over the budget or without a free slot (#430)
 │   ├── send-email.tsx        ← Compose & send email form
 │   ├── emails.tsx            ← Email table with filters
 │   ├── email-detail.tsx      ← Email detail view, attachments table (#181)
@@ -530,6 +569,7 @@ src/pages/
     ├── pagination.tsx        ← "Showing X to Y of Z", rows per page, numbered pages (#429)
     ├── flash-message.tsx     ← Success/error banners
     ├── empty-state.tsx       ← Empty table placeholder
+    ├── export-csv-link.tsx   ← "Export CSV" link with the page's filters, admins and the owner only (#430)
     ├── qr-code.tsx           ← QR code as inline SVG, drawn on the server from the `uqr` module matrix (#220)
     ├── sso-logo.tsx          ← Login page SSO button logos, inline SVG chosen by the issuer's host (#224)
     └── time-display.tsx      ← <TimeDisplay> + hydration script (#104)

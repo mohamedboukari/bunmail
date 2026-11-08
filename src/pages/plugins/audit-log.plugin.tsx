@@ -6,30 +6,9 @@ import { parsePagination } from "../pagination.ts";
 import { setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import * as auditService from "../../modules/audit/services/audit.service.ts";
-import {
-  isAuditAction,
-  isAuditOutcome,
-  type AuditEventFilters,
-} from "../../modules/audit/types/audit.types.ts";
+import { isAuditAction, isAuditOutcome } from "../../modules/audit/types/audit.types.ts";
+import { parseAuditActor } from "../lib/audit.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
-
-/** An actor id as the log stores them: our own `usr_` / `key_` ids. */
-const ACTOR_ID_RE = /^[a-z]{3}_[0-9a-f]{24}$/;
-
-/**
- * Parses the actor filter (`user:<id>`, `api_key:<id>` or `system`).
- * Anything else is ignored, like the other dashboard filters: the URL is
- * edited by hand, so a bad value lists everything instead of failing.
- */
-function parseActor(raw: string | undefined): AuditEventFilters["actor"] {
-  if (raw === "system") return { type: "system" };
-  const separator = raw?.indexOf(":") ?? -1;
-  if (raw === undefined || separator < 0) return undefined;
-  const type = raw.slice(0, separator);
-  const id = raw.slice(separator + 1);
-  if ((type !== "user" && type !== "api_key") || !ACTOR_ID_RE.test(id)) return undefined;
-  return { type, id };
-}
 
 /**
  * Audit log page (#221): the owner and admins (`adminGuard`); members get
@@ -44,7 +23,7 @@ export function auditLogPages(app: GuardedDashboard) {
       const { page, limit } = parsePagination(query, 50);
       const action = isAuditAction(query.action) ? query.action : undefined;
       const outcome = isAuditOutcome(query.outcome) ? query.outcome : undefined;
-      const actor = parseActor(query.actor);
+      const actor = parseAuditActor(query.actor);
 
       try {
         const [{ data, total }, actors] = await Promise.all([

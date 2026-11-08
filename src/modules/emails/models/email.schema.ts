@@ -361,5 +361,17 @@ export const emails = pgTable(
      * operator the filter uses, and is smaller than the default class.
      */
     index("idx_emails_tags").using("gin", table.tags.op("jsonb_path_ops")),
+    /**
+     * Keyset walk of the live list, newest first (#430): the CSV export's
+     * `ORDER BY created_at DESC, id DESC` under `deleted_at IS NULL`, and
+     * the email list page's own order.
+     */
+    index("idx_emails_live_created_id")
+      .on(table.createdAt.desc().nullsFirst(), table.id.desc().nullsFirst())
+      .where(sql`deleted_at IS NULL`),
+    /** Keyset walk of the trash, most recently trashed first (#430). */
+    index("idx_emails_trash_deleted_id")
+      .on(table.deletedAt.desc().nullsFirst(), table.id.desc().nullsFirst())
+      .where(sql`deleted_at IS NOT NULL`),
   ],
 );

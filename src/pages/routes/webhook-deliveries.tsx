@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -52,6 +53,7 @@ export function WebhookDeliveriesPage({
         </a>
       </div>
 
+      <ExportCsvLink path={`${baseUrl}/export.csv`} params={{ status: statusFilter }} />
       <h1 class="text-xl font-semibold mb-1">Webhook deliveries</h1>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-6 break-all" safe>
         {webhook.url}

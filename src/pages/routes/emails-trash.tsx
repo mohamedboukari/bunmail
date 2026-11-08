@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
@@ -45,20 +46,23 @@ export function EmailsTrashPage({
 
       <div class="flex items-center justify-between mb-2">
         <h1 class="text-xl font-semibold">Trashed Emails</h1>
-        {emails.length > 0 && (
-          <form
-            method="POST"
-            action="/dashboard/emails/trash/empty"
-            data-confirm="Permanently delete every trashed email? This cannot be undone."
-          >
-            <button
-              type="submit"
-              class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+        <div class="flex items-center gap-4">
+          <ExportCsvLink path="/dashboard/emails/trash/export.csv" />
+          {emails.length > 0 && (
+            <form
+              method="POST"
+              action="/dashboard/emails/trash/empty"
+              data-confirm="Permanently delete every trashed email? This cannot be undone."
             >
-              Empty trash
-            </button>
-          </form>
-        )}
+              <button
+                type="submit"
+                class="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+              >
+                Empty trash
+              </button>
+            </form>
+          )}
+        </div>
       </div>
       <p class="text-xs text-gray-500 dark:text-gray-400 mb-6">
         Trashed emails are permanently deleted after {retentionDays} day

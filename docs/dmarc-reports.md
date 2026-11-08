@@ -121,7 +121,7 @@ Two tables under `src/modules/dmarc-reports/models/`:
 - [`dmarc_reports`](../src/modules/dmarc-reports/models/dmarc-report.schema.ts): one row per received report, with `rawXml` for forensics.
 - [`dmarc_records`](../src/modules/dmarc-reports/models/dmarc-record.schema.ts): one row per source-IP record, FK to `dmarc_reports.id` with `ON DELETE CASCADE`.
 
-Indexed on `(domain, date_end DESC)`: the dashboard's hot path is "show me the latest reports for `yourdns.example`".
+Indexed on `(domain, date_end DESC)`: the dashboard's hot path is "show me the latest reports for `yourdns.example`". And on `(date_end DESC, id DESC)` for the CSV export's keyset walk across every domain (migration `0044`, #430).
 
 ### Why no tenant scoping?
 

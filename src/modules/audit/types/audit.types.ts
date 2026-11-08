@@ -259,6 +259,24 @@ export interface AuditMetadataByAction {
   "suppression.created": { reason: string };
   "suppression.deleted": null;
   "audit_log.purged": { deleted: number; retentionDays: number };
+  /**
+   * A dashboard table downloaded as CSV (#430): which table (an
+   * `ExportTable`), the names of the page filters it followed (never their
+   * values: an email substring is personal data), how many rows it wrote
+   * and whether it stopped at the row cap. `rows` and the outcome
+   * describe what the server produced, not what the client received (Bun
+   * buffers the response). `failure` when the database failed, the client
+   * went away, or the export was refused before it started: `reason`
+   * `rate_limited` (the per-user budget) or `busy` (no free export slot),
+   * with `rows: 0`.
+   */
+  "export.downloaded": {
+    table: string;
+    filters: string[];
+    rows: number;
+    truncated: boolean;
+    reason?: "rate_limited" | "busy";
+  };
 }
 
 /** Every recorded action. */
@@ -324,6 +342,7 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "suppression.created": "Suppression added",
   "suppression.deleted": "Suppression removed",
   "audit_log.purged": "Old audit entries purged",
+  "export.downloaded": "Table exported as CSV",
 };
 
 /** Narrows a string (a stored value, a query value) to a known action. */

@@ -1,4 +1,4 @@
-import { eq, desc, and, sql, isNull } from "drizzle-orm";
+import { eq, desc, and, sql, isNull, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { emails } from "../models/email.schema.ts";
 import { describeTagProblem, parseTagFilters, type TagFilter } from "./tags.ts";
@@ -162,6 +162,23 @@ export async function listEmails(
 }
 
 /**
+ * The WHERE clause of the dashboard's unscoped email list: exclude
+ * trashed; optionally filter by status, source, (dashboard-only) the
+ * sending API key (#137) and tags (#189). Shared by `listAllEmails` and
+ * the CSV export (#430), so the export follows the page's filters exactly.
+ */
+export function allEmailsWhere(
+  filters: Omit<ListEmailsFilters, "page" | "limit">,
+): SQL | undefined {
+  const clauses = [isNull(emails.deletedAt)];
+  if (filters.status) clauses.push(eq(emails.status, filters.status));
+  if (filters.source) clauses.push(eq(emails.source, filters.source));
+  if (filters.apiKeyId) clauses.push(eq(emails.apiKeyId, filters.apiKeyId));
+  clauses.push(...tagClauses(filters.tags));
+  return and(...clauses);
+}
+
+/**
  * Lists all emails without API key scoping: used by the dashboard.
  *
  * Same as `listEmails` but doesn't filter by apiKeyId, giving a global
@@ -177,16 +194,7 @@ export async function listAllEmails(
 
   logger.debug("Listing all emails (unscoped)", { ...loggableFilters(filters), offset });
 
-  /**
-   * Build WHERE clause: exclude trashed; optionally filter by status,
-   * source, and (dashboard-only) the sending API key (#137).
-   */
-  const clauses = [isNull(emails.deletedAt)];
-  if (filters.status) clauses.push(eq(emails.status, filters.status));
-  if (filters.source) clauses.push(eq(emails.source, filters.source));
-  if (filters.apiKeyId) clauses.push(eq(emails.apiKeyId, filters.apiKeyId));
-  clauses.push(...tagClauses(filters.tags));
-  const conditions = and(...clauses);
+  const conditions = allEmailsWhere(filters);
 
   const [data, [countRow]] = await Promise.all([
     db

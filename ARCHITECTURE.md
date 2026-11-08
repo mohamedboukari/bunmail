@@ -337,6 +337,9 @@ bunmail/
 │   │   ├── trash/
 │   │   │   └── services/
 │   │   │       └── purge.service.ts      ← Periodic auto-purge of trashed rows (+ expired sessions, #216, audit log retention, #221, expired idempotency keys, #188, email events, #187)
+│   │   ├── exports/                      ← Dashboard CSV exports (#430), no REST plugin; see docs/exports.md
+│   │   │   ├── services/                 ← keyset.ts (keyset batches, source builder), mail-exports.service.ts, record-exports.service.ts, setting-exports.service.ts (one source per table: explicit metadata columns)
+│   │   │   └── types/export.types.ts     ← tables, cells, cursor, source
 │   │   ├── audit/                        ← Audit log of security-relevant actions (#221), no REST plugin
 │   │   │   ├── models/audit-event.schema.ts ← audit_events pgTable (append-only, no FKs)
 │   │   │   ├── services/                 ← audit.service.ts (record / list / purge), audit-context.service.ts (actor, IP, user agent of a request)
@@ -445,8 +448,8 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387), the CSV writer, export stream and export budget (#430)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
@@ -752,7 +755,7 @@ Off unless `TLSRPT_ENABLED=true`. After each outbound MX session, `mailer-delive
 | updated_at    | timestamp      | NOT NULL, default `now()`       |
 | deleted_at    | timestamp      | nullable (soft-delete marker)   |
 
-Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180), `(message_id)` (linking inbound replies, bounces and complaints to the email by Message-ID, #192), `idx_emails_tags` GIN on `tags` with `jsonb_path_ops` (the tag filter's containment, #189).
+Indexes: `(status, created_at)`, `(api_key_id)`, `(api_key_id, deleted_at)`, `idx_emails_due_per_key` `(api_key_id, next_attempt_at, created_at)` partial WHERE `status='queued' AND deleted_at IS NULL` (fair queue claim, #258), `(lease_until)` partial WHERE `status='sending'` (expired leases, #180), `(message_id)` (linking inbound replies, bounces and complaints to the email by Message-ID, #192), `idx_emails_tags` GIN on `tags` with `jsonb_path_ops` (the tag filter's containment, #189), `idx_emails_live_created_id` `(created_at DESC, id DESC)` partial WHERE `deleted_at IS NULL` and `idx_emails_trash_deleted_id` `(deleted_at DESC, id DESC)` partial WHERE `deleted_at IS NOT NULL` (the CSV exports' keyset walks and the dashboard lists, migration `0044`, #430).
 
 `domain_id` uses `ON DELETE SET NULL` so deleting a domain detaches its emails rather than blocking. `deleted_at` is set when an email is moved to trash; rows with `deleted_at` older than `TRASH_RETENTION_DAYS` are auto-purged by `trash/services/purge.service.ts`.
 
@@ -856,7 +859,7 @@ Post-purge audit trail. Every hard-delete of an `emails` row first writes a snap
 | purged_at      | timestamptz    | NOT NULL, default `now()`: retention starts here |
 | attachments    | jsonb          | nullable: each attachment's `filename`, `contentType`, `size` (#181), never the bytes |
 
-Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list).
+Indexes: `(message_id)` (bounce/complaint trace hot path), `(api_key_id, purged_at)` (dashboard list), `(purged_at DESC, id DESC)` (the CSV export's keyset walk, migration `0044`, #430).
 
 Retention: `TOMBSTONE_RETENTION_DAYS` (default 90): the existing 6h trash purge loop also runs `runTombstoneRetention` on the same cadence.
 
@@ -974,7 +977,7 @@ Per-API-key list of addresses we refuse to send to (#25). Send-time gate at `cre
 | complaint_verified | boolean       | NOT NULL, default `false` (migration 0043); for `complaint`: the feedback-loop report carried a passing DKIM signature of one of `FEEDBACK_LOOP_DOMAINS`; only such complaints are shared by `SUPPRESSIONS_SHARED_HARD`; never downgraded |
 | created_at        | timestamptz    | NOT NULL, default `now()`    |
 
-Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` upsert); `suppressions_shared_hard_email_idx` on `(email) WHERE expires_at IS NULL AND reason IN ('bounce', 'complaint')` (migration 0034), the cross-key lookup of `SUPPRESSIONS_SHARED_HARD` (#250): with it `true`, the gate also refuses an address any key holds an automatic permanent hard bounce (`bounce_type = 'hard'`) or verified feedback-loop complaint (`complaint_verified = true`) for, naming neither that key nor its row (`suppressionId: null`). See [docs/suppressions.md](docs/suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250).
+Indexes: `UNIQUE (api_key_id, email)` (gate hot-path + `ON CONFLICT DO UPDATE` upsert); `suppressions_shared_hard_email_idx` on `(email) WHERE expires_at IS NULL AND reason IN ('bounce', 'complaint')` (migration 0034), the cross-key lookup of `SUPPRESSIONS_SHARED_HARD` (#250): with it `true`, the gate also refuses an address any key holds an automatic permanent hard bounce (`bounce_type = 'hard'`) or verified feedback-loop complaint (`complaint_verified = true`) for, naming neither that key nor its row (`suppressionId: null`). See [docs/suppressions.md](docs/suppressions.md#shared-hard-suppressions-suppressions_shared_hard-250). Also `suppressions_created_id_idx` on `(created_at DESC, id DESC)` (the CSV export's keyset walk and the dashboard list, migration `0044`, #430).
 
 ### `smtp_submission_usage`
 
@@ -1016,7 +1019,7 @@ DMARC aggregate (`rua`) reports parsed from inbound XML attachments (#41). Opera
 | raw_xml       | text            | NOT NULL (kept verbatim for forensics)            |
 | received_at   | timestamptz     | NOT NULL, default `now()`                         |
 
-Indexes: `UNIQUE (org_email, report_id)` (dedup hot-path), `(domain, date_end DESC)` (dashboard list hot-path).
+Indexes: `UNIQUE (org_email, report_id)` (dedup hot-path), `(domain, date_end DESC)` (dashboard list hot-path), `(date_end DESC, id DESC)` (the CSV export's keyset walk, migration `0044`, #430).
 
 `dmarc_records` (one row per source IP, child of the report):
 
@@ -1316,6 +1319,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /dashboard/dmarc-reports/:id       | DMARC report detail (per-source-IP) | Member |
 | GET    | /dashboard/suppressions            | Suppressions across every API key (#89) | Member |
 | POST   | /dashboard/suppressions/:id/delete | Remove a suppression (#89) | Admin |
+| GET    | /dashboard/&lt;table&gt;/export.csv | CSV download of a table with the page's filters: emails, emails/trash, emails/tombstones, inbound, inbound/trash, suppressions, audit-log, dmarc-reports, webhooks/:id/deliveries, api-keys, domains, templates, webhooks, users, invitations; metadata columns only (a webhook URL as its origin), 50 000 rows at most, 2 at once per process, 10 per user per 10 minutes, refused when another site starts it (`Sec-Fetch-Site`), audited as `export.downloaded` (#430) | Admin |
 
 Dashboard auth is account login (#216): email and password against `user_credentials`, then a server-side session in `sessions` whose opaque token rides in the `bm_session` cookie (only its SHA-256 is stored). Sessions expire after 24 h idle and 7 days at most; the token rotates after 60 s of use, and a replaced token presented after its 30 s grace revokes every session of the user. Logout deletes the row. `POST /dashboard/login` and `/dashboard/logout` require same-origin, and login is brute-force-throttled per client IP (5 failures / 15 min → `429`, #109), see [Rate Limiting](#rate-limiting). The owner account (#215) is claimed through the one-time `/dashboard/setup` link logged on first boot; completing it stores the owner password, deletes the owner's sessions and opens a new one. Every other account arrives by invitation (#217): an admin or the owner invites an address from `/dashboard/invitations`, the accept link is emailed from `SYSTEM_MAIL_FROM` (or shown to the inviter once), and `/dashboard/invite` creates the account and signs it in. A password login also sets the long-lived `bm_device` cookie (#282, 400 days, not a credential, only its SHA-256 stored in `user_devices`); a sign-in from a browser the account has not used in 30 days emails it a "New sign-in to your BunMail account" alert from `SYSTEM_MAIL_FROM` (no links), checked in the background so it never delays the login. Two-factor authentication (#220): an account with a TOTP second factor gets a `pending` session (10 minutes, admitted nowhere) after the password, and an `mfa` session with a new token after a valid code from its authenticator app or one of its ten recovery codes; codes are single-use (the last accepted time step is stored with a compare-and-swap) and every code check has a fixed budget (5 failures per 15 minutes, always on): the login step per account and per client IP, checks inside a session per session (a stolen session cannot lock the account's sign-in, and is revoked when its budget runs out). Turning 2FA on needs the current password; a `password`-level session stops working once its account has 2FA; the account is emailed (no links) when 2FA is turned on or off, recovery codes are replaced, a reset removes it, or its login code budget runs out. `REQUIRE_2FA` (`none` by default, `owner`, `admin`) holds an account it covers on its Two-factor page until it enrols. A completed reset link or `reset-owner` link removes the account's second factor (the lost-phone path). See [docs/dashboard.md](docs/dashboard.md#auth-flow) and [docs/users.md](docs/users.md#sessions-216).
 
@@ -1386,6 +1390,8 @@ Independent fixed-window limiters, in the shared store (`src/utils/shared-store.
 **Inbound SMTP connections** (`src/modules/inbound/services/connection-limit.ts`): 10 per 60 s per IP (`SMTP_RATE_LIMIT_*`), then `421`
 
 **Dashboard DNS verify** (`src/pages/lib/dns-verify-throttle.ts`, #133): 5 DNS checks per minute per domain id (verify and the DKIM rotation's complete step)
+
+**Dashboard CSV exports** (`src/pages/lib/export-limiter.ts`, #430): 10 exports per user per 10 minutes (shared store), and 2 producing at once per process (process memory: Bun buffers a streamed response, so this bounds memory), then `429` with `Retry-After`
 
 Check and count are one atomic step (a Lua script in Redis), so a parallel burst cannot pass a limit, on one replica or several. Without `REDIS_URL` the counters live in memory: they reset on restart and are per replica (one replica only); one sweep every 5 minutes drops ended windows from every in-memory counter (`startLocalCounterSweep`). See [Several replicas](#several-replicas) below.
 
