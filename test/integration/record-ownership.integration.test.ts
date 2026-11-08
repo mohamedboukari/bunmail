@@ -596,7 +596,9 @@ describe("Account lifecycle and API keys (#219)", () => {
     expect((await keyRow(other.id)).isActive).toBe(true);
     expect((await rest("GET", "/api/v1/templates", live.rawKey)).status).toBe(401);
 
-    const html = await (await page("GET", "/dashboard/api-keys", "admin")).text();
+    const html = await (
+      await page("GET", "/dashboard/api-keys?tab=revoked", "admin")
+    ).text();
     expect(html).toContain("Disabled: creator deactivated");
 
     /** Reactivation does not re-enable the keys. */
@@ -641,7 +643,9 @@ describe("Account lifecycle and API keys (#219)", () => {
     for (const id of records) expect(after[id]).toBeNull();
     expect((await rest("GET", "/api/v1/templates", live.rawKey)).status).toBe(401);
 
-    const html = await (await page("GET", "/dashboard/api-keys", "owner")).text();
+    const html = await (
+      await page("GET", "/dashboard/api-keys?tab=revoked", "owner")
+    ).text();
     expect(html).toContain("Disabled: creator removed");
   });
 });

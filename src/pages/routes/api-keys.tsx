@@ -33,6 +33,72 @@ interface ApiKeysPageProps {
   flash?: { message: string; type: "success" | "error" };
   /** If a key was just created, show the raw key once */
   rawKey?: string;
+  /** Which tab is open: active keys (the default) or revoked and disabled ones. */
+  tab: ApiKeysTab;
+}
+
+/**
+ * The two tabs of the keys table: `active` keys, shown by default, and
+ * `revoked` ones (revoked, or disabled because their creator was
+ * deactivated or removed), rendered only when that tab is opened.
+ */
+export type ApiKeysTab = "active" | "revoked";
+
+/**
+ * The tab named by the `?tab=` query parameter. The value is
+ * attacker-controllable, so it is narrowed rather than asserted: anything
+ * but `revoked` opens the default `active` tab, never a 422.
+ */
+export function apiKeysTabOf(raw: string | undefined): ApiKeysTab {
+  return raw === "revoked" ? "revoked" : "active";
+}
+
+/** Shared classes of a tab link; the open one is underlined and darker. */
+const TAB_BASE = "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors";
+const TAB_OPEN = "border-gray-900 dark:border-gray-100 text-gray-900 dark:text-gray-100";
+const TAB_CLOSED =
+  "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100";
+
+/**
+ * The Active / Revoked tab bar. Plain links (`?tab=revoked`), so it works
+ * without JavaScript under the dashboard CSP, is bookmarkable and follows
+ * back and forward; the server renders only the open tab's keys.
+ */
+function KeyTabs({
+  tab,
+  activeCount,
+  revokedCount,
+}: {
+  tab: ApiKeysTab;
+  activeCount: number;
+  revokedCount: number;
+}) {
+  return (
+    <nav
+      class="flex gap-1 border-b border-gray-200 dark:border-gray-800 mb-4"
+      role="tablist"
+      aria-label="API keys by status"
+    >
+      <a
+        href="/dashboard/api-keys"
+        role="tab"
+        aria-selected={tab === "active" ? "true" : "false"}
+        class={`${TAB_BASE} ${tab === "active" ? TAB_OPEN : TAB_CLOSED}`}
+        safe
+      >
+        {`Active (${activeCount})`}
+      </a>
+      <a
+        href="/dashboard/api-keys?tab=revoked"
+        role="tab"
+        aria-selected={tab === "revoked" ? "true" : "false"}
+        class={`${TAB_BASE} ${tab === "revoked" ? TAB_OPEN : TAB_CLOSED}`}
+        safe
+      >
+        {`Revoked (${revokedCount})`}
+      </a>
+    </nav>
+  );
 }
 
 /** Status badge text of an inactive key, by why it is inactive (#219). */
@@ -82,7 +148,12 @@ export function ApiKeysPage({
   canManageAll,
   flash,
   rawKey,
+  tab,
 }: ApiKeysPageProps) {
+  /** Active keys by default; revoked and disabled ones only on their tab. */
+  const activeKeys = keys.filter((key) => key.isActive);
+  const revokedKeys = keys.filter((key) => !key.isActive);
+  const shownKeys = tab === "active" ? activeKeys : revokedKeys;
   return (
     <BaseLayout title="API Keys" activeNav="api-keys">
       <h1 class="text-xl font-semibold mb-2">API Keys</h1>
@@ -164,8 +235,22 @@ export function ApiKeysPage({
         </form>
       </div>
 
+      <KeyTabs
+        tab={tab}
+        activeCount={activeKeys.length}
+        revokedCount={revokedKeys.length}
+      />
+
       {keys.length === 0 ? (
         <EmptyState message="No API keys yet. Create one above to get started." />
+      ) : shownKeys.length === 0 ? (
+        <EmptyState
+          message={
+            tab === "active"
+              ? "No active API keys. Create one above to get started."
+              : "No revoked or disabled API keys."
+          }
+        />
       ) : (
         /* API keys table */
         <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
@@ -204,7 +289,7 @@ export function ApiKeysPage({
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
-              {keys.map((key) => (
+              {shownKeys.map((key) => (
                 <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                   <td class="px-4 py-3 font-medium text-gray-900 dark:text-gray-100" safe>
                     {key.name}

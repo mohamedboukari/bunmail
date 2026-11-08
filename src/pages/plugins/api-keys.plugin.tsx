@@ -2,7 +2,7 @@ import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
 import { consumeRevealSecret, stashRevealSecret } from "../reveal-store.ts";
 import { ApiKeyCreatorInactiveError } from "../../modules/api-keys/errors.ts";
-import { ApiKeysPage } from "../routes/api-keys.tsx";
+import { ApiKeysPage, apiKeysTabOf } from "../routes/api-keys.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
@@ -29,8 +29,10 @@ export function apiKeyPages(app: GuardedDashboard) {
   return (
     app
       /**
-       * GET /dashboard/api-keys
+       * GET /dashboard/api-keys[?tab=revoked]
        * API keys list with create form. Shows flash messages from query params.
+       * Active keys by default; `?tab=revoked` shows the revoked and disabled
+       * ones instead (any other value opens the default tab).
        * Any signed-in account (#219): a member sees only the keys it created
        * (scoped in the service), admins and the owner every key.
        */
@@ -65,6 +67,7 @@ export function apiKeyPages(app: GuardedDashboard) {
               canManageAll={managesAll(auth)}
               flash={flash}
               rawKey={rawKey}
+              tab={apiKeysTabOf(query.tab)}
             />
           );
         },
@@ -74,6 +77,8 @@ export function apiKeyPages(app: GuardedDashboard) {
             flash: t.Optional(t.String()),
             flashType: t.Optional(t.String()),
             reveal: t.Optional(t.String()),
+            /** Narrowed by `apiKeysTabOf`; a plain string so junk never 422s. */
+            tab: t.Optional(t.String()),
           }),
         },
       )
