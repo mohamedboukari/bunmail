@@ -66,6 +66,44 @@ describe("buildSubmissionInput: sender resolution", () => {
       }),
     ).toThrow(/Missing sender/);
   });
+
+  test.each([
+    [
+      "a second @ (checked under one domain, sent from another)",
+      "ceo@registered.example@victim.example",
+    ],
+    ["a quoted local part holding an @", '"ceo@registered.example"@victim.example'],
+    ["a space", "ceo @registered.example"],
+    ["no domain dot", "ceo@localhost"],
+    ["over 254 characters", `${"a".repeat(250)}@x.com`],
+  ])("refuses a sender address with %s, without echoing it", (_label, from) => {
+    let thrown: unknown;
+    try {
+      buildSubmissionInput({
+        fromHeader: from,
+        toHeader: ["to@y.com"],
+        ccHeader: [],
+        envelopeRecipients: ["to@y.com"],
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SubmissionRejectedError);
+    expect(thrown instanceof Error ? thrown.message : null).toBe(
+      "Invalid sender address",
+    );
+  });
+
+  test("an invalid envelope sender is refused too when there is no From header", () => {
+    expect(() =>
+      buildSubmissionInput({
+        envelopeFrom: "a@b@c.example",
+        toHeader: ["to@y.com"],
+        ccHeader: [],
+        envelopeRecipients: ["to@y.com"],
+      }),
+    ).toThrow(/Invalid sender address/);
+  });
 });
 
 describe("buildSubmissionInput: Reply-To (#169)", () => {

@@ -5,6 +5,7 @@ import {
   AttachmentTypeNotAllowedError,
   EmailSendRejectedError,
   InvalidAttachmentError,
+  InvalidFromAddressError,
   InvalidFromNameError,
   InvalidTagError,
 } from "../errors.ts";
@@ -70,7 +71,7 @@ export function serializeSendError(error: unknown): SerializedSendError | null {
    * An invalid `fromName` (#250) is a validation failure: same code and
    * `details` shape as one TypeBox reports, naming the field only.
    */
-  if (error instanceof InvalidFromNameError) {
+  if (error instanceof InvalidFromNameError || error instanceof InvalidFromAddressError) {
     return {
       status: error.status,
       body: {

@@ -23,6 +23,7 @@ import {
 } from "../../src/modules/emails/services/sender-domain.service.ts";
 import {
   EmailSendRejectedError,
+  InvalidFromAddressError,
   SenderDomainNotRegisteredError,
   SenderDomainUnverifiedError,
 } from "../../src/modules/emails/errors.ts";
@@ -169,6 +170,57 @@ describe("unregistered sender domain", () => {
       ),
     );
     expect(thrown).toBeInstanceOf(SenderDomainNotRegisteredError);
+  });
+});
+
+describe("the From address, for every ingress", () => {
+  test.each([
+    ["a second @", (domain: string) => `ceo@${domain}@victim.example`],
+    [
+      "a quoted local part holding an @",
+      (domain: string) => `"ceo@${domain}"@victim.example`,
+    ],
+  ])(
+    "%s: refused before the sender-domain check, nothing stored",
+    async (_label, fromFor) => {
+      runtime.env = "production";
+      const { id: apiKeyId } = await seed.apiKey();
+      const { id: domainId, name } = await seed.domain();
+      await setFlags(domainId, { spf: true, dkim: true, dmarc: true });
+
+      /** The SMTP submission source, where no DTO validates the address. */
+      const thrown = await rejectionOf(
+        createEmail(
+          { from: fromFor(name), to: "u@example.org", subject: "s", text: "x" },
+          apiKeyId,
+          "smtp",
+        ),
+      );
+
+      expect(thrown).toBeInstanceOf(InvalidFromAddressError);
+      expect(thrown).toMatchObject({
+        status: 422,
+        code: "VALIDATION_ERROR",
+        field: "from",
+      });
+      expect(thrown instanceof Error ? thrown.message : "").not.toContain("victim");
+      expect(await db.select().from(emails)).toHaveLength(0);
+    },
+  );
+
+  test("a plain address on the registered domain still queues", async () => {
+    runtime.env = "production";
+    const { id: apiKeyId } = await seed.apiKey();
+    const { id: domainId, name } = await seed.domain();
+    await setFlags(domainId, { spf: true, dkim: true, dmarc: true });
+
+    const result = await createEmail(
+      { from: `ceo@${name}`, to: "u@example.org", subject: "s", text: "x" },
+      apiKeyId,
+      "smtp",
+    );
+
+    expect(result.email.status).toBe("queued");
   });
 });
 

@@ -23,6 +23,7 @@ import {
 import { checkFromName, type FromNameProblem } from "../emails/services/from-name.ts";
 import { checkTags, describeTagProblem } from "../emails/services/tags.ts";
 import type { AttachmentInput } from "../emails/services/attachments.ts";
+import { isEmailAddress } from "../../utils/recipients.ts";
 
 /**
  * The header a submitting client sets the send category with (#250),
@@ -279,7 +280,8 @@ export function selectRelayHeaders(lines: readonly RawHeaderLine[]): {
  *   put everything in the envelope), the non-BCC envelope recipients become
  *   the `to` field so the send still has a visible recipient.
  *
- * Throws if there is no resolvable sender, no recipients at all, or the
+ * Throws if there is no resolvable sender, the sender is not one bare
+ * address (`isEmailAddress`), there are no recipients at all, or the
  * headers name recipients of which none was sent in `RCPT TO` (showing the
  * envelope recipients in `To` instead would expose blind recipients to each
  * other): the caller maps these to an SMTP 550.
@@ -290,6 +292,15 @@ export function buildSubmissionInput(parts: SubmissionMessageParts): SendEmailIn
     throw new SubmissionRejectedError(
       "Missing sender address (no From header or MAIL FROM)",
     );
+  }
+  /**
+   * One bare address, in the shape `createEmail` accepts (it checks again
+   * for every ingress): a header address with a second `@` or a quoted
+   * local part would be checked under one domain and sent from another.
+   * Refused here so the client gets a clear 550; the value is not echoed.
+   */
+  if (!isEmailAddress(from)) {
+    throw new SubmissionRejectedError("Invalid sender address");
   }
 
   const envelope = new Set(
