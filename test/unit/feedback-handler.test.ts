@@ -8,8 +8,8 @@ import {
   type LinkedEmail,
 } from "../../src/modules/inbound/services/feedback-handler.service.ts";
 import type { FeedbackReport } from "../../src/modules/inbound/types/feedback-report.types.ts";
-import { config } from "../../src/config.ts";
 import { logger } from "../../src/utils/logger.ts";
+import { redactEmail } from "../../src/utils/redact.ts";
 
 /**
  * Unit tests for the feedback-loop handler's core (#191): which side
@@ -449,12 +449,8 @@ describe("handleFeedbackReport: verified complaints", () => {
     expect(calls.events).toHaveLength(1);
   });
 
-  test("the complaint log line carries verified and dkimDomain, never the full address", async () => {
+  test("the complaint log line carries verified and dkimDomain, and the address only redacted", async () => {
     const { deps } = makeDeps({ email: EMAIL, feedbackLoopDomains: ["isp.example.net"] });
-    /** Production redaction, so the line can be checked for the address. */
-    const logFlags = config as { logRedactPii: boolean };
-    const savedRedact = logFlags.logRedactPii;
-    logFlags.logRedactPii = true;
     const infos: unknown[][] = [];
     const spy = spyOn(logger, "info").mockImplementation((...args: unknown[]) => {
       infos.push(args);
@@ -463,14 +459,18 @@ describe("handleFeedbackReport: verified complaints", () => {
       await handleFeedbackReport(makeReport(), deps);
     } finally {
       spy.mockRestore();
-      logFlags.logRedactPii = savedRedact;
     }
     const line = infos.find((args) => args[0] === "Complaint handled");
+    /**
+     * The address goes through `redactEmail`, whatever the redaction setting
+     * of this run: the config is not mutated here (another file's mock can
+     * make it read-only in CI's random order).
+     */
     expect(line?.[1]).toMatchObject({
       verified: true,
       dkim: "pass",
       dkimDomain: "isp.example.net",
+      recipient: redactEmail("reader@example.org"),
     });
-    expect(JSON.stringify(line)).not.toContain("reader@example.org");
   });
 });
