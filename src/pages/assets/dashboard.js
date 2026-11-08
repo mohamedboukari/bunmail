@@ -15,6 +15,7 @@
  *   data-confirm="<message>"    button or link: asks before the click goes on;
  *                               form: asks before it submits
  *   data-navigate-on-change     select: opens the URL of the chosen option
+ *   data-autosubmit             select: submits its own form on change (rows per page, #429)
  *   data-submit-once            on <body>: a submitted form's button is disabled (no double submit)
  *   data-bulk / -all / -row     bulk selection: a select-all box, row boxes, an action bar
  *   data-bulk-bar / -count      (with the count) shown while any row is checked
@@ -149,6 +150,25 @@
         (next.protocol === "http:" || next.protocol === "https:")
       ) {
         window.location.assign(next.href);
+      }
+      return;
+    }
+
+    /*
+     * A select that submits its own form on change: the pagination's
+     * "Rows per page" (#429). `requestSubmit` runs the form's submit
+     * listeners like a click would; very old browsers fall back to
+     * `submit`. The form carries its own `<noscript>` Apply button.
+     */
+    if (
+      target instanceof HTMLSelectElement &&
+      target.hasAttribute("data-autosubmit") &&
+      target.form
+    ) {
+      if (typeof target.form.requestSubmit === "function") {
+        target.form.requestSubmit();
+      } else {
+        target.form.submit();
       }
       return;
     }
