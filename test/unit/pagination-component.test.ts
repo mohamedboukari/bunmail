@@ -12,10 +12,25 @@ async function render(props: Parameters<typeof Pagination>[0]): Promise<string> 
   return await Pagination(props);
 }
 
-/** The text of the summary paragraph, tags stripped. */
+/**
+ * The text of the summary paragraph, with every `<...>` run left out (a
+ * character loop: only compared in assertions, never rendered, and a
+ * tag-stripping regex reads to CodeQL as an incomplete sanitizer).
+ */
 function summaryOf(html: string): string {
   const match = /<p[^>]*>(.*?)<\/p>/.exec(html);
-  return (match?.[1] ?? "").replace(/<[^>]+>/g, "");
+  let text = "";
+  let inTag = false;
+  for (const char of match?.[1] ?? "") {
+    if (inTag) {
+      if (char === ">") inTag = false;
+    } else if (char === "<") {
+      inTag = true;
+    } else {
+      text += char;
+    }
+  }
+  return text;
 }
 
 /** Every `href` in the markup, entities decoded the way a browser would. */
