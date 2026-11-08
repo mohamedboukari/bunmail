@@ -21,6 +21,19 @@ export interface DkimSignatureResult {
   reason: string | null;
   /** The key record has `t=y`: the domain is testing DKIM (RFC 6376 section 3.6.1). */
   testing: boolean;
+  /**
+   * The signature has an `l=` tag (body length limit, RFC 6376 section
+   * 8.2): whatever it covers, content can be appended after the signed
+   * part without breaking it. False when there is none or the tag-list
+   * does not parse.
+   */
+  hasLengthLimit: boolean;
+  /**
+   * The header field names `h=` lists, lowercased and trimmed, in order
+   * (a name signed twice appears twice); empty when there is no `h=` or
+   * the tag-list does not parse.
+   */
+  signedHeaders: string[];
 }
 
 /** Injectable for tests: the TXT lookup and the clock. */

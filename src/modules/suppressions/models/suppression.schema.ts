@@ -4,6 +4,7 @@ import {
   varchar,
   text,
   timestamp,
+  boolean,
   uniqueIndex,
   index,
 } from "drizzle-orm/pg-core";
@@ -20,8 +21,9 @@ import { emails } from "../../emails/models/email.schema.ts";
  * bounces should never gate another key's sends. Mirrors what
  * SES / SendGrid / Resend do. The one exception is opt-in: with
  * `SUPPRESSIONS_SHARED_HARD=true` (#250) the send gate also refuses an
- * address any key holds an automatic permanent hard bounce or complaint
- * for, since the sending IP and DKIM domains are shared.
+ * address any key holds an automatic permanent hard bounce or verified
+ * feedback-loop complaint for, since the sending IP and DKIM domains are
+ * shared.
  *
  * Auto-suppression on bounces is the responsibility of #24 (DSN
  * parsing); this module only provides the storage + lookup primitive
@@ -92,6 +94,18 @@ export const suppressions = pgTable(
      * should auto-expire after some retention window.
      */
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+
+    /**
+     * For `reason = 'complaint'`: whether the feedback-loop report behind
+     * it was verified, i.e. carried a passing DKIM signature whose `d=` is
+     * one of the operator's `FEEDBACK_LOOP_DOMAINS`. Only a verified
+     * complaint is shared across keys by `SUPPRESSIONS_SHARED_HARD`; an
+     * unverified one suppresses under its own key only. Never downgraded
+     * once true. False for every other reason, for manual rows, and for
+     * complaints stored before the column existed (so those stop being
+     * shared: the fail-safe side).
+     */
+    complaintVerified: boolean("complaint_verified").notNull().default(false),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

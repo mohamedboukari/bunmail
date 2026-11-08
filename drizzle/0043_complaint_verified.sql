@@ -1,0 +1,1 @@
+ALTER TABLE "suppressions" ADD COLUMN "complaint_verified" boolean DEFAULT false NOT NULL;

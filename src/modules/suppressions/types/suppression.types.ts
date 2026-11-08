@@ -78,4 +78,10 @@ export interface AddFromComplaintInput {
   email: string;
   /** The email the complaint was about. */
   emailId: string;
+  /**
+   * Whether the report was a verified feedback-loop report (a passing DKIM
+   * signature of one of `FEEDBACK_LOOP_DOMAINS`). Only a verified
+   * complaint is shared across keys by `SUPPRESSIONS_SHARED_HARD`.
+   */
+  verified: boolean;
 }

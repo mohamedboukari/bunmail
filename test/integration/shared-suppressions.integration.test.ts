@@ -3,10 +3,11 @@
  * flag on, every send gate (`createEmail` for the REST API and SMTP
  * submission, and the queue's re-check before a retry, #262) also refuses
  * an address that ANOTHER key holds an automatic permanent hard bounce or
- * complaint for. With it off (the default) suppressions stay per key.
+ * verified feedback-loop complaint for. With it off (the default)
+ * suppressions stay per key.
  *
- * Unsubscribe, manual (whatever reason the tenant gave) and temporary
- * rows never cross keys, and the refusal never names the other key or
+ * Unsubscribe, manual (whatever reason the tenant gave), unverified
+ * complaint and temporary rows never cross keys, and the refusal never names the other key or
  * its row. The last test checks the partial index serves the lookup.
  */
 import {
@@ -168,12 +169,72 @@ describe("SUPPRESSIONS_SHARED_HARD=true", () => {
     expect(queued).toEqual([]);
   });
 
-  test("a complaint under key A blocks key B", async () => {
+  test("a verified complaint under key A blocks key B", async () => {
     const k = await keys();
-    await addFromComplaint({ apiKeyId: k.keyA, email: RECIPIENT, emailId: k.emailA });
+    await addFromComplaint({
+      apiKeyId: k.keyA,
+      email: RECIPIENT,
+      emailId: k.emailA,
+      verified: true,
+    });
 
     expect(await isSuppressed(k.keyB, RECIPIENT)).toEqual({ shared: true });
     expect(await sendAsB(k)).toBeInstanceOf(SuppressedRecipientError);
+  });
+
+  test("an unverified complaint under key A blocks key A only", async () => {
+    const k = await keys();
+    await addFromComplaint({
+      apiKeyId: k.keyA,
+      email: RECIPIENT,
+      emailId: k.emailA,
+      verified: false,
+    });
+
+    expect(await isSuppressed(k.keyA, RECIPIENT)).toMatchObject({ shared: false });
+    expect(await isSuppressed(k.keyB, RECIPIENT)).toBeUndefined();
+    expect(await sendAsB(k)).toBeNull();
+  });
+
+  test("the verified flag only goes up: a later verified report upgrades it, an unverified one keeps it", async () => {
+    const k = await keys();
+    const input = { apiKeyId: k.keyA, email: RECIPIENT, emailId: k.emailA };
+    const created = await addFromComplaint({ ...input, verified: false });
+    expect(created?.complaintVerified).toBe(false);
+
+    /** Already on file: not a change (no second event), but the flag is upgraded. */
+    expect(await addFromComplaint({ ...input, verified: true })).toBeUndefined();
+    const [upgraded] = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.apiKeyId, k.keyA));
+    expect(upgraded).toMatchObject({ id: created?.id, complaintVerified: true });
+    expect(await isSuppressed(k.keyB, RECIPIENT)).toEqual({ shared: true });
+
+    expect(await addFromComplaint({ ...input, verified: false })).toBeUndefined();
+    const [kept] = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.apiKeyId, k.keyA));
+    expect(kept?.complaintVerified).toBe(true);
+  });
+
+  test("a verified complaint replacing another reason keeps the flag it brings", async () => {
+    const k = await keys();
+    await addFromUnsubscribe({
+      apiKeyId: k.keyA,
+      email: RECIPIENT,
+      emailId: k.emailA,
+      source: "one_click",
+    });
+    const replaced = await addFromComplaint({
+      apiKeyId: k.keyA,
+      email: RECIPIENT,
+      emailId: k.emailA,
+      verified: true,
+    });
+    expect(replaced).toMatchObject({ reason: "complaint", complaintVerified: true });
+    expect(await isSuppressed(k.keyB, RECIPIENT)).toEqual({ shared: true });
   });
 
   test("key B's own row wins: its id is returned as before", async () => {
@@ -316,14 +377,15 @@ describe("the shared lookup uses suppressions_shared_hard_email_idx", () => {
     const k = await keys();
     /** 4000 rows over two keys, most of them per-key reasons, then fresh statistics. */
     await db.execute(sql`
-      INSERT INTO suppressions (id, api_key_id, email, reason, bounce_type, expires_at)
+      INSERT INTO suppressions (id, api_key_id, email, reason, bounce_type, expires_at, complaint_verified)
       SELECT 'sup_seed' || g,
         CASE WHEN g % 2 = 0 THEN ${k.keyA} ELSE ${k.keyB} END,
         'user' || g || '@example.net',
         CASE g % 4 WHEN 0 THEN 'bounce' WHEN 1 THEN 'complaint'
           WHEN 2 THEN 'unsubscribe' ELSE 'manual' END,
         CASE WHEN g % 4 = 0 THEN 'hard' END,
-        CASE WHEN g % 8 = 0 THEN NOW() + interval '1 day' END
+        CASE WHEN g % 8 = 0 THEN NOW() + interval '1 day' END,
+        g % 4 = 1 AND g % 3 = 0
       FROM generate_series(1, 4000) AS g`);
     await db.execute(sql`ANALYZE suppressions`);
 

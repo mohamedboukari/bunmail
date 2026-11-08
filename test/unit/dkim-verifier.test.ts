@@ -74,6 +74,8 @@ describe("verifyDkimSignatures: details (#373)", () => {
       selector: "rsa",
       reason: null,
       testing: false,
+      hasLengthLimit: false,
+      signedHeaders: expect.arrayContaining(["from", "content-type"]),
     });
   });
 

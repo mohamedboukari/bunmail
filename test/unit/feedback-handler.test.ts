@@ -1,11 +1,15 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, spyOn } from "bun:test";
 import {
   classifyFeedbackType,
   handleFeedbackReport,
+  isVerifiedReport,
+  type DkimCheck,
   type FeedbackHandlerDeps,
   type LinkedEmail,
 } from "../../src/modules/inbound/services/feedback-handler.service.ts";
 import type { FeedbackReport } from "../../src/modules/inbound/types/feedback-report.types.ts";
+import { config } from "../../src/config.ts";
+import { logger } from "../../src/utils/logger.ts";
 
 /**
  * Unit tests for the feedback-loop handler's core (#191): which side
@@ -20,7 +24,12 @@ interface FakeTx {
 
 interface Calls {
   lookups: string[];
-  complaints: Array<{ apiKeyId: string; email: string; emailId: string }>;
+  complaints: Array<{
+    apiKeyId: string;
+    email: string;
+    emailId: string;
+    verified: boolean;
+  }>;
   unsubscribes: Array<{
     recipient: string;
     source: string;
@@ -52,6 +61,10 @@ function makeDeps(opts: {
   unsubscribeCreated?: boolean;
   /** Make the outbox insert fail (#184). */
   enqueueFails?: boolean;
+  /** The DKIM verdict on the report; default: one passing signature of isp.example.net. */
+  dkim?: DkimCheck;
+  /** `FEEDBACK_LOOP_DOMAINS`; default empty, so nothing is verified. */
+  feedbackLoopDomains?: string[];
 }): { deps: FeedbackHandlerDeps<FakeTx>; calls: Calls } {
   const calls: Calls = {
     lookups: [],
@@ -108,8 +121,15 @@ function makeDeps(opts: {
       },
       verifyDkim: async () => {
         calls.dkimChecks += 1;
-        return { result: "pass", signingDomain: "isp.example.net" };
+        return (
+          opts.dkim ?? {
+            result: "pass",
+            signingDomain: "isp.example.net",
+            passingDomains: ["isp.example.net"],
+          }
+        );
       },
+      feedbackLoopDomains: opts.feedbackLoopDomains ?? [],
     },
   };
 }
@@ -160,8 +180,14 @@ describe("handleFeedbackReport", () => {
 
     expect(result).toEqual({ outcome: "complained", emailId: "msg_1" });
     expect(calls.lookups).toEqual(["abc@mail.example.com"]);
+    /** A passing signature of a domain not listed: stored, but not verified. */
     expect(calls.complaints).toEqual([
-      { apiKeyId: "key_1", email: "reader@example.org", emailId: "msg_1" },
+      {
+        apiKeyId: "key_1",
+        email: "reader@example.org",
+        emailId: "msg_1",
+        verified: false,
+      },
     ]);
     expect(calls.events).toHaveLength(1);
     expect(calls.events[0]).toMatchObject({
@@ -334,5 +360,117 @@ describe("handleFeedbackReport: one transaction (#184)", () => {
     await handleFeedbackReport(makeReport(), deps);
     expect(calls.writes).toEqual([{ write: "enqueueEvent", txId: 1 }]);
     expect(calls.transactions).toEqual(["committed"]);
+  });
+});
+
+/** A DKIM verdict whose passing signatures are `passingDomains`. */
+function dkimOf(passingDomains: string[], result = "pass"): DkimCheck {
+  return { result, signingDomain: passingDomains[0] ?? null, passingDomains };
+}
+
+/**
+ * The verified-report rule: a complaint may be shared across API keys only
+ * when a DKIM signature passed for one of `FEEDBACK_LOOP_DOMAINS`, exactly.
+ */
+describe("isVerifiedReport", () => {
+  const LISTED = ["fbl.isp.example.net", "complaints.example.org"];
+
+  test("no signature, or none that passed: not verified", () => {
+    expect(isVerifiedReport(dkimOf([], "none"), LISTED)).toBe(false);
+    expect(isVerifiedReport(dkimOf([], "fail"), LISTED)).toBe(false);
+    expect(isVerifiedReport(dkimOf([], "temperror"), LISTED)).toBe(false);
+    /** A failing signature of a listed domain is not in `passingDomains`. */
+    expect(
+      isVerifiedReport(
+        { result: "fail", signingDomain: "fbl.isp.example.net", passingDomains: [] },
+        LISTED,
+      ),
+    ).toBe(false);
+  });
+
+  test("a passing signature of a domain not listed: not verified", () => {
+    expect(isVerifiedReport(dkimOf(["attacker.example"]), LISTED)).toBe(false);
+  });
+
+  test("a passing signature of a listed domain: verified, ASCII case and a final dot ignored", () => {
+    expect(isVerifiedReport(dkimOf(["fbl.isp.example.net"]), LISTED)).toBe(true);
+    expect(isVerifiedReport(dkimOf(["FBL.ISP.Example.NET"]), LISTED)).toBe(true);
+    expect(isVerifiedReport(dkimOf(["complaints.example.org."]), LISTED)).toBe(true);
+    expect(
+      isVerifiedReport(dkimOf(["fbl.isp.example.net"]), ["FBL.isp.example.net"]),
+    ).toBe(true);
+  });
+
+  test("exact match only: no subdomain, no parent, no look-alike suffix", () => {
+    /** A subdomain of a listed domain does not count. */
+    expect(isVerifiedReport(dkimOf(["x.fbl.isp.example.net"]), LISTED)).toBe(false);
+    /** Nor does its parent. */
+    expect(isVerifiedReport(dkimOf(["isp.example.net"]), LISTED)).toBe(false);
+    /** Nor a name that merely ends with the same characters. */
+    expect(isVerifiedReport(dkimOf(["evilfbl.isp.example.net"]), LISTED)).toBe(false);
+  });
+
+  test("several signatures: any passing one of a listed domain is enough", () => {
+    expect(
+      isVerifiedReport(dkimOf(["forwarder.example", "complaints.example.org"]), LISTED),
+    ).toBe(true);
+    expect(
+      isVerifiedReport(dkimOf(["forwarder.example", "attacker.example"]), LISTED),
+    ).toBe(false);
+  });
+
+  test("an empty allowlist verifies nothing", () => {
+    expect(isVerifiedReport(dkimOf(["fbl.isp.example.net"]), [])).toBe(false);
+  });
+});
+
+describe("handleFeedbackReport: verified complaints", () => {
+  test("a passing signature of a listed domain stores the complaint as verified", async () => {
+    const { deps, calls } = makeDeps({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+    });
+    const result = await handleFeedbackReport(makeReport(), deps);
+    expect(result.outcome).toBe("complained");
+    expect(calls.complaints[0]?.verified).toBe(true);
+    /** The webhook fires as for any complaint. */
+    expect(calls.events).toHaveLength(1);
+  });
+
+  test("an unsigned report is stored unverified, still suppressed and still fired", async () => {
+    const { deps, calls } = makeDeps({
+      email: EMAIL,
+      dkim: { result: "none", signingDomain: null, passingDomains: [] },
+      feedbackLoopDomains: ["isp.example.net"],
+    });
+    const result = await handleFeedbackReport(makeReport(), deps);
+    expect(result.outcome).toBe("complained");
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(calls.events).toHaveLength(1);
+  });
+
+  test("the complaint log line carries verified and dkimDomain, never the full address", async () => {
+    const { deps } = makeDeps({ email: EMAIL, feedbackLoopDomains: ["isp.example.net"] });
+    /** Production redaction, so the line can be checked for the address. */
+    const logFlags = config as { logRedactPii: boolean };
+    const savedRedact = logFlags.logRedactPii;
+    logFlags.logRedactPii = true;
+    const infos: unknown[][] = [];
+    const spy = spyOn(logger, "info").mockImplementation((...args: unknown[]) => {
+      infos.push(args);
+    });
+    try {
+      await handleFeedbackReport(makeReport(), deps);
+    } finally {
+      spy.mockRestore();
+      logFlags.logRedactPii = savedRedact;
+    }
+    const line = infos.find((args) => args[0] === "Complaint handled");
+    expect(line?.[1]).toMatchObject({
+      verified: true,
+      dkim: "pass",
+      dkimDomain: "isp.example.net",
+    });
+    expect(JSON.stringify(line)).not.toContain("reader@example.org");
   });
 });

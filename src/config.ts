@@ -51,6 +51,7 @@ export {
   MAX_MX_RATE_PER_MIN,
   MIN_MX_RATE_PER_MIN,
   mailHostnameProblem,
+  readFeedbackLoopDomains,
   readIpFamily,
   readMailHostname,
   readMxRatePerMin,

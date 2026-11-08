@@ -335,7 +335,7 @@ The linked email (id, subject, sent time) for the detail page.
 
 ### arf-parser.service.ts / feedback-handler.service.ts / dkim-verifier.service.ts
 
-`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `handleFeedbackReport`, `handleInboundFeedbackReport`, `verifyDkimSignatures`: see [feedback-loops.md](feedback-loops.md#service-methods).
+`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `isVerifiedReport`, `handleFeedbackReport`, `handleInboundFeedbackReport`, `verifyDkimSignatures`: see [feedback-loops.md](feedback-loops.md#service-methods).
 
 ### dnsbl.service.ts
 

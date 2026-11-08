@@ -15,15 +15,15 @@ Revoking a key (`DELETE /api/v1/api-keys/:id`) only disables it, so its suppress
 Every key sends from the same IP and signs with DKIM domains on the same server, so one key mailing a bad list damages delivery for all of them. With `SUPPRESSIONS_SHARED_HARD=true` (default `false`, strictly `true` or `false`) the send gate also refuses an address that **any** key holds one of these for:
 
 - a permanent hard bounce written by the bounce paths (`reason = 'bounce'`, `bounce_type = 'hard'`, `expires_at IS NULL`: the inline 5xx, or a DSN);
-- a permanent complaint from a feedback loop (`reason = 'complaint'`, `source_email_id` set, `expires_at IS NULL`).
+- a permanent complaint from a **verified** feedback-loop report (`reason = 'complaint'`, `complaint_verified = true`, `expires_at IS NULL`): the report carried a DKIM signature that passed for one of the operator's `FEEDBACK_LOOP_DOMAINS` (see [feedback-loops.md](feedback-loops.md#3-optional-list-the-providers-signing-domains-feedback_loop_domains)).
 
-Everything else stays per key, because it is the tenant's own decision: unsubscribes, manual entries (whatever `reason` they were given through `POST /api/v1/suppressions`: a manual row never has a `bounce_type` or a `source_email_id`, so one key cannot block another key's recipients), and every temporary row (soft bounces, entries with an expiry).
+Everything else stays per key: unsubscribes, manual entries (whatever `reason` they were given through `POST /api/v1/suppressions`: a manual row never has a `bounce_type` and is never verified, so one key cannot block another key's recipients), complaints from unverified reports (they still suppress under the key that sent the email), and every temporary row (soft bounces, entries with an expiry). A tenant knows the Message-ID of the emails it sent, so a report that merely names one proves nothing beyond that tenant's own key; only a report signed by a listed provider domain counts for everyone. With `FEEDBACK_LOOP_DOMAINS` empty (the default), no complaint is shared.
 
 The flag applies to every send gate: `POST /api/v1/emails/send` and the dashboard send (via `createEmail`), SMTP submission (`550`), and the queue's re-check before a retry (#262). The key's own row is checked first and wins: its refusal is unchanged. A shared refusal is the same `422 RECIPIENT_SUPPRESSED` (SMTP `550`) with the same message, and `suppressionId: null`: the error never names the other key or its row, and the logs do not either (`Shared suppression applied` at `info` with the requesting `apiKeyId` and the redacted address, then the usual `Send blocked by suppression list` with `shared: true` and no id or reason). Nothing is copied: lists, `GET /api/v1/suppressions` and the dashboard page are unchanged, each key still sees only its own rows, and deleting the other key's row (from the dashboard) lifts the shared block.
 
 The cross-key lookup is served by the partial index `suppressions_shared_hard_email_idx` (migration `0034`).
 
-Known limit: a complaint's `source_email_id` is set to `NULL` when its email is purged from the trash, and the row then stops being shared (it still blocks its own key).
+Upgrading: complaints stored before `complaint_verified` existed (migration `0043`) are unverified, so they stop being shared and keep blocking their own key. A later verified report about the same address and key upgrades the row.
 
 ## Module Layout
 
@@ -33,6 +33,7 @@ src/modules/suppressions/
 ├── errors.ts                       ← SuppressedRecipientError (422 RECIPIENT_SUPPRESSED)
 ├── services/
 │   ├── suppression.service.ts      ← Send gate (isSuppressed), CRUD, addFromBounce / addFromUnsubscribe / addFromComplaint
+│   ├── suppression-unscoped.service.ts ← Dashboard-only reads and deletes across every key (#89)
 │   ├── unsubscribe-token.ts        ← Per-recipient unsubscribe token: HMAC mint, parse, verify (#249)
 │   └── unsubscribe.service.ts      ← Verify a token against its email, suppress, fire email.unsubscribed (#249)
 ├── dtos/
@@ -79,6 +80,7 @@ The DB column is plain `text` for forward compatibility: a finer split (e.g. `bo
 | `diagnostic_code` | `text` | SMTP enhanced status code, e.g. `5.1.1` |
 | `source_email_id` | `varchar(36)` FK → `emails(id)` | `ON DELETE SET NULL` |
 | `expires_at` | `timestamptz` | Null = permanent |
+| `complaint_verified` | `boolean` | NOT NULL, default `false`. For `complaint`: the report was a verified feedback-loop report (only those are shared by `SUPPRESSIONS_SHARED_HARD`); never downgraded once `true`. Migration `0043` |
 | `created_at` | `timestamptz` | Default `now()` |
 
 Indexes:
@@ -114,7 +116,7 @@ Underneath these are two new service methods that mirror the unscoped pattern us
 import {
   listAllSuppressions,
   deleteSuppressionByIdUnscoped,
-} from "src/modules/suppressions/services/suppression.service.ts";
+} from "src/modules/suppressions/services/suppression-unscoped.service.ts";
 ```
 
 Both ignore `apiKeyId` and trust the dashboard session for authorisation, the same way the unscoped emails/domains/etc. variants do.
@@ -193,7 +195,7 @@ When a recipient marks an email as spam and their mailbox provider runs a feedba
 **Precedence** (`addFromComplaint`): a complaint is the strongest reason. It creates the row; turns a temporary one (a soft-bounce backoff, or a manual entry with an expiry) into a permanent complaint; and replaces any other permanent reason (`bounce`, `unsubscribe`, `manual`) with `complaint`, clearing `bounce_type` and `diagnostic_code` and setting `source_email_id`. A permanent `complaint` already on file is left exactly as it is, so a repeated report changes and fires nothing. The check and the write are one `INSERT ... ON CONFLICT DO UPDATE ... WHERE` statement, so racing reports change the row once. Nothing else can weaken a complaint afterwards, see [Precedence](#precedence).
 
 #### `addFromComplaint(input, executor = db): Promise<Suppression | undefined>`
-`{ apiKeyId, email, emailId }`, built from the linked email row. Returns the row when it was created or changed (the caller then fires `email.complained`), `undefined` when a permanent complaint was already there. Logs `Complaint suppression processed` at `info` with `emailId`, `apiKeyId`, the redacted address and `outcome`.
+`{ apiKeyId, email, emailId, verified }`, built from the linked email row and the report's DKIM check. Returns the row when it was created or changed (the caller then fires `email.complained`), `undefined` when a permanent complaint was already there. `complaint_verified` only goes up: a new row takes `verified`, a replaced row keeps `existing OR new`, and a verified report about an unverified permanent complaint upgrades its flag (no second event). Logs `Complaint suppression processed` at `info` with `emailId`, `apiKeyId`, the redacted address, `verified` and `outcome` (`suppressed`, `verified-upgrade`, `already-complained`).
 
 ## Precedence
 

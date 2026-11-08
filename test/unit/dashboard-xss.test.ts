@@ -48,6 +48,7 @@ function makeSuppression(overrides: Partial<Suppression> = {}): Suppression {
     bounceType: null,
     diagnosticCode: null,
     sourceEmailId: null,
+    complaintVerified: false,
     expiresAt: null,
     createdAt: new Date("2026-05-01T00:00:00Z"),
     ...overrides,

@@ -43,6 +43,7 @@ import {
   fieldValue,
   parseSignature,
   parseTagList,
+  splitList,
   splitMessage,
 } from "./dkim-verifier-parse.service.ts";
 import { canonicalBody, signedHeaderData } from "./dkim-verifier-canonical.service.ts";
@@ -88,9 +89,13 @@ export async function verifyDkimSignatures(
   const bodyHashes = new Map<string, string>();
   const keys = new Map<string, Promise<DkimKey | Failure>>();
 
-  const verifyOne = async (
-    field: HeaderField,
-  ): Promise<Omit<DkimSignatureResult, "signingDomain" | "selector">> => {
+  /** The verdict part of a result; the tags read from the field are added by the caller. */
+  type Verdict = Omit<
+    DkimSignatureResult,
+    "signingDomain" | "selector" | "hasLengthLimit" | "signedHeaders"
+  >;
+
+  const verifyOne = async (field: HeaderField): Promise<Verdict> => {
     const signature = parseSignature(field.raw);
     if (isFailure(signature)) return { ...signature, testing: false };
 
@@ -127,9 +132,7 @@ export async function verifyDkimSignatures(
     if (isFailure(key)) return { ...key, testing: false };
     const testing = key.flags.includes("y");
 
-    const keyMismatch = (
-      reason: string,
-    ): Omit<DkimSignatureResult, "signingDomain" | "selector"> => ({
+    const keyMismatch = (reason: string): Verdict => ({
       result: "permerror",
       reason,
       testing,
@@ -159,10 +162,14 @@ export async function verifyDkimSignatures(
     if (field.name !== "dkim-signature") continue;
     const tags = parseTagList(fieldValue(field.raw));
     const outcome = await verifyOne(field);
+    const h = tags?.get("h");
     const result: DkimSignatureResult = {
       ...outcome,
       signingDomain: tags?.get("d") ?? null,
       selector: tags?.get("s") ?? null,
+      /** From the same tag-list: what a caller needs to judge the signature's coverage. */
+      hasLengthLimit: tags?.has("l") ?? false,
+      signedHeaders: h === undefined ? [] : splitList(h),
     };
     if (result.result !== "pass") {
       logger.debug("DKIM signature did not pass", {

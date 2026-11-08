@@ -169,7 +169,7 @@ All endpoints (except `/health`, the public unsubscribe pages at `/u/:token`, th
 | GET | `/api/v1/suppressions/:id` | Get a suppression by ID |
 | DELETE | `/api/v1/suppressions/:id` | Remove (recipient becomes eligible immediately) |
 
-Sends to suppressed recipients return 422 with `code: "RECIPIENT_SUPPRESSED"` and `suppressionId` (`null` when `SUPPRESSIONS_SHARED_HARD=true` applied another key's hard bounce or complaint). See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md) for the auto-suppression flow on hard bounces.
+Sends to suppressed recipients return 422 with `code: "RECIPIENT_SUPPRESSED"` and `suppressionId` (`null` when `SUPPRESSIONS_SHARED_HARD=true` applied another key's hard bounce or verified feedback-loop complaint). See [docs/suppressions.md](docs/suppressions.md) and [docs/bounces.md](docs/bounces.md) for the auto-suppression flow on hard bounces.
 
 ### DMARC Reports
 
