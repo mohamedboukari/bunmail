@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
@@ -25,12 +26,15 @@ export function InboundPage({ emails, total, page, limit, flash }: InboundPagePr
     <BaseLayout title="Inbound Emails" activeNav="inbound">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-semibold">Inbound Emails</h1>
-        <a
-          href="/dashboard/inbound/trash"
-          class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-        >
-          Trash →
-        </a>
+        <div class="flex items-center gap-4">
+          <ExportCsvLink path="/dashboard/inbound/export.csv" />
+          <a
+            href="/dashboard/inbound/trash"
+            class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+          >
+            Trash →
+          </a>
+        </div>
       </div>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

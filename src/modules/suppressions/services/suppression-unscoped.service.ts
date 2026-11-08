@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql, type SQL } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { suppressions } from "../models/suppression.schema.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -11,6 +11,28 @@ import type { Suppression } from "../types/suppression.types.ts";
  * concern. Only the dashboard, behind its session and role guards, calls
  * these: the REST API stays key-scoped.
  */
+
+/**
+ * The WHERE clause of the dashboard's unscoped suppression list: the
+ * `email` substring (ILIKE, case-insensitive: the dashboard's "find
+ * anything with gmail.com" expectation) and the exact `apiKeyId`. Shared
+ * with the CSV export (#430), so the export follows the page's filters.
+ */
+export function allSuppressionsWhere(filters: {
+  email?: string;
+  apiKeyId?: string;
+}): SQL | undefined {
+  const conditions: SQL[] = [];
+  if (filters.email) {
+    conditions.push(
+      sql`${suppressions.email} ILIKE ${"%" + filters.email.toLowerCase() + "%"}`,
+    );
+  }
+  if (filters.apiKeyId) {
+    conditions.push(eq(suppressions.apiKeyId, filters.apiKeyId));
+  }
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
 
 /**
  * Paginated list across **all** API keys: admin-scoped view used by
@@ -38,18 +60,7 @@ export async function listAllSuppressions(filters: {
 
   logger.debug("Listing all suppressions (unscoped)", { ...filters, offset });
 
-  const conditions = [];
-  if (filters.email) {
-    /** ILIKE for case-insensitive substring search: matches the
-     *  dashboard's "find anything with gmail.com" expectation. */
-    conditions.push(
-      sql`${suppressions.email} ILIKE ${"%" + filters.email.toLowerCase() + "%"}`,
-    );
-  }
-  if (filters.apiKeyId) {
-    conditions.push(eq(suppressions.apiKeyId, filters.apiKeyId));
-  }
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = allSuppressionsWhere(filters);
 
   const [data, [countRow]] = await Promise.all([
     db

@@ -87,6 +87,7 @@ Indexes:
 - `UNIQUE (api_key_id, email)`: service uses this for `ON CONFLICT DO UPDATE`
 - `(api_key_id, email)`: composite btree, serves the gate's hot lookup
 - `suppressions_shared_hard_email_idx`: `(email) WHERE expires_at IS NULL AND reason IN ('bounce', 'complaint')`, serves the cross-key lookup of `SUPPRESSIONS_SHARED_HARD` (#250)
+- `suppressions_created_id_idx`: `(created_at DESC, id DESC)`, the CSV export's keyset walk and the dashboard list (migration `0044`, #430)
 
 ## API surface
 

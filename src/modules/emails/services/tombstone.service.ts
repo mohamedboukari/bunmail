@@ -177,21 +177,24 @@ export async function getTombstoneById(opts: {
   return row;
 }
 
+/**
+ * The WHERE clause of the dashboard's tombstone list: the optional
+ * Message-ID filter, matched with and without its angle brackets. Shared
+ * with the CSV export (#430).
+ */
+export function allTombstonesWhere(messageId: string | undefined): SQL | undefined {
+  if (!messageId) return undefined;
+  const unwrapped = messageId.replace(/^<|>$/g, "");
+  return sql`(${emailTombstones.messageId} = ${`<${unwrapped}>`} OR ${emailTombstones.messageId} = ${unwrapped})`;
+}
+
 /** Dashboard read: unscoped (admin sees all api keys). */
 export async function listAllTombstones(opts: {
   messageId?: string;
   page: number;
   limit: number;
 }): Promise<{ data: EmailTombstone[]; total: number }> {
-  const filters: SQL[] = [];
-  if (opts.messageId) {
-    const wrapped = `<${opts.messageId.replace(/^<|>$/g, "")}>`;
-    const unwrapped = opts.messageId.replace(/^<|>$/g, "");
-    filters.push(
-      sql`(${emailTombstones.messageId} = ${wrapped} OR ${emailTombstones.messageId} = ${unwrapped})`,
-    );
-  }
-  const condition = filters.length > 0 ? and(...filters) : undefined;
+  const condition = allTombstonesWhere(opts.messageId);
   const offset = (opts.page - 1) * opts.limit;
 
   const [data, totalRows] = await Promise.all([

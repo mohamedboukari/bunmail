@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -43,6 +44,7 @@ export function InvitationsPage({
 }: InvitationsPageProps) {
   return (
     <BaseLayout title="Invitations" activeNav="users">
+      <ExportCsvLink path="/dashboard/invitations/export.csv" />
       <h1 class="text-xl font-semibold mb-6">Invitations</h1>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -170,12 +171,15 @@ export function UsersPage({
     <BaseLayout title="Users" activeNav="users">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-semibold">Users</h1>
-        <a
-          href="/dashboard/invitations"
-          class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
-        >
-          Invitations
-        </a>
+        <div class="flex items-center gap-4">
+          <ExportCsvLink path="/dashboard/users/export.csv" />
+          <a
+            href="/dashboard/invitations"
+            class="px-4 py-2 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 text-sm font-medium rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors"
+          >
+            Invitations
+          </a>
+        </div>
       </div>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

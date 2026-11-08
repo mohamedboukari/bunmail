@@ -1,5 +1,6 @@
 import { Html } from "@kitajs/html";
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -43,6 +44,10 @@ export function EmailTombstonesPage({
         </a>
       </div>
 
+      <ExportCsvLink
+        path="/dashboard/emails/tombstones/export.csv"
+        params={{ messageId: messageIdFilter }}
+      />
       <h1 class="text-xl font-semibold mb-1">Tombstones</h1>
       <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">
         Post-purge audit snapshots of hard-deleted emails. Use these to trace late

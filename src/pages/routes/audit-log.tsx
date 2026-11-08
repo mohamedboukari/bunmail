@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
 import {
@@ -92,6 +93,14 @@ export function AuditLogPage({
 
   return (
     <BaseLayout title="Audit log" activeNav="audit-log">
+      <ExportCsvLink
+        path="/dashboard/audit-log/export.csv"
+        params={{
+          action: filters.action,
+          actor: filters.actor,
+          outcome: filters.outcome,
+        }}
+      />
       <h1 class="text-xl font-semibold mb-2">Audit log</h1>
       <p class="text-sm text-gray-500 dark:text-gray-400 mb-6">
         Sign-ins, account, two-factor, API key, domain, webhook and suppression changes:

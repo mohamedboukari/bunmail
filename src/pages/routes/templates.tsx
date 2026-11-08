@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -30,6 +31,7 @@ export function TemplatesPage({
 }: TemplatesPageProps) {
   return (
     <BaseLayout title="Templates" activeNav="templates">
+      <ExportCsvLink path="/dashboard/templates/export.csv" />
       <h1 class="text-xl font-semibold mb-6">Templates</h1>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

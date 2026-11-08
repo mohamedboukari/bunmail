@@ -1,4 +1,5 @@
 import { BaseLayout } from "../layouts/base.tsx";
+import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
 import { EngagementBadges } from "../components/email-tracking.tsx";
 import { Pagination } from "../components/pagination.tsx";
@@ -103,12 +104,18 @@ export function EmailsPage({
     <BaseLayout title="Emails" activeNav="emails">
       <div class="flex items-center justify-between mb-6">
         <h1 class="text-xl font-semibold">Emails</h1>
-        <a
-          href="/dashboard/emails/trash"
-          class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
-        >
-          Trash →
-        </a>
+        <div class="flex items-center gap-4">
+          <ExportCsvLink
+            path="/dashboard/emails/export.csv"
+            params={{ status, source, apiKeyId, tag }}
+          />
+          <a
+            href="/dashboard/emails/trash"
+            class="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100"
+          >
+            Trash →
+          </a>
+        </div>
       </div>
 
       {flash != null && <FlashMessage message={flash.message} type={flash.type} />}

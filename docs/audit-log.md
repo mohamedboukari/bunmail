@@ -98,6 +98,7 @@ recordAuditEvent(input, tx?)
 | `webhook.created` / `deleted` | user or api_key | webhook (label: origin only) | `events` |
 | `suppression.created` / `deleted` | api_key or user | suppression (label: the address) | `reason` |
 | `audit_log.purged` | system (`retention purge`) | audit_log | `deleted`, `retentionDays` |
+| `export.downloaded` (#430) | user (an admin or the owner) | none | `table`, `filters` (the names of the page filters it followed, never their values), `rows`, `truncated`: what the server produced, not what the client received (Bun buffers the body); `failure` when the database failed, a cell could not be written or the client went away; a refused export is `failure` with `rows: 0` and `reason` `rate_limited` (the per-user budget) or `busy` (no free export slot); a request started by another site (`Sec-Fetch-Site`) is not recorded |
 
 The human labels the page shows live in `AUDIT_ACTION_LABELS` (a `Record` over every action, so an action without a label does not compile).
 
