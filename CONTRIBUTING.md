@@ -85,7 +85,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/). The commit 
 
 ## Tests
 
-The tiers, scripts and conventions are in [docs/testing.md](docs/testing.md). One rule trips people up: Bun's `mock.module` leaks across test files, so a `mock.module` factory must provide **every** export of the module it mocks (stub each one, or spread the real module under the stubs). `bun run lint:mocks` checks this and runs in CI and on commit; CI also runs the unit and e2e tiers in random order with fixed seeds, so an order-dependent failure reproduces with `bun test test/unit --randomize --seed=<seed>`.
+The tiers, scripts and conventions are in [docs/testing.md](docs/testing.md), and so is how Bun is upgraded (the Dockerfile is the one source of its version; a bump needs full CI and a test-server check before merge). One rule trips people up: Bun's `mock.module` leaks across test files, so a `mock.module` factory must provide **every** export of the module it mocks (stub each one, or spread the real module under the stubs). `bun run lint:mocks` checks this and runs in CI and on commit; CI also runs the unit and e2e tiers in random order with fixed seeds, so an order-dependent failure reproduces with `bun test test/unit --randomize --seed=<seed>`.
 
 ## Pull Requests
 

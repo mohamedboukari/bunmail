@@ -99,7 +99,7 @@ ARCHITECTURE.md, README.md, CHANGELOG.md, SECURITY.md
 - **Mock leakage is real.** When you `mock.module()` a service file, that mock can persist into the next test file when run as a single process. Two defenses:
   1. CI runs unit and e2e as **separate** Bun processes: `bun test test/unit && bun test test/e2e`.
   2. When mocking a shared service module, include **all** of its exports as `mock(() => ...)` even if your test doesn't use them, otherwise downstream tests in the suite lose those exports.
-- Don't pin Bun to `latest` in CI: pin a specific version (e.g. `1.3.10`) so test ordering stays deterministic.
+- Don't pin Bun to `latest` in CI: pin a specific version (e.g. `1.4.4`) so test ordering stays deterministic.
 
 ## Error handling
 

@@ -1,0 +1,93 @@
+# BunMail: Bun canary early warning (#447)
+#
+# Once a week, runs the fast tiers (install, typecheck, unit, e2e) on
+# Bun's canary build, so a change in the next Bun that breaks BunMail
+# shows up before the release reaches the Dockerfile. No Postgres, no
+# integration tier. Never runs on pull requests, so it blocks nothing.
+#
+# On failure it opens one issue labelled `bun-canary`, or comments on the
+# open one, with the run link: failures never pile up as new issues.
+
+name: Bun canary
+
+on:
+  schedule:
+    # Mondays 05:23 UTC, before Dependabot's Monday run.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+# Least privilege at the top; the job adds only what it needs.
+permissions:
+  contents: read
+
+# One canary run at a time; a manual run waits for a scheduled one.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  canary:
+    name: Fast tiers on Bun canary
+    runs-on: ubuntu-latest
+    # Backstop against a hung step running to the 6h default cap.
+    timeout-minutes: 20
+    permissions:
+      contents: read # checks out the repo; nothing is written
+      issues: write # opens or comments on the `bun-canary` issue on failure
+
+    env:
+      # Same placeholders as ci.yml: config must load, nothing connects.
+      DATABASE_URL: postgresql://bunmail:bunmail@localhost:5432/bunmail_test
+      API_KEY_SEED: ci_test_key_not_real
+      MAIL_HOSTNAME: localhost
+      DKIM_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing is pushed; don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Setup Bun (canary)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: canary
+
+      - name: Bun revision
+        run: bun --revision
+
+      - name: Install dependencies
+        # A canary that cannot read the committed lockfile is a finding too.
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bunx tsc --noEmit
+
+      # Separate processes, as in ci.yml: `mock.module` leaks across files.
+      - name: Test (unit)
+        run: bun run test:unit
+
+      - name: Test (e2e)
+        run: bun run test:e2e
+
+      - name: Open or update the canary issue
+        if: failure()
+        # Values reach the shell through env vars only, never spliced into
+        # the script (zizmor template-injection).
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          revision="$(bun --revision 2>/dev/null || echo unknown)"
+          body="$(printf 'The fast tiers fail on Bun canary \x60%s\x60.\n\nRun: %s\n\nFix BunMail, or report the regression upstream, before that change reaches a Bun release and the Dockerfile.' "$revision" "$RUN_URL")"
+          gh label create bun-canary --repo "$GITHUB_REPOSITORY" --color D93F0B \
+            --description "The weekly Bun canary run fails (#447)" 2>/dev/null || true
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label bun-canary \
+            --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --label bun-canary \
+              --title "Bun canary: the test suite fails on the next Bun" --body "$body"
+          fi

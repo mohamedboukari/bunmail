@@ -330,8 +330,9 @@ export interface PinnedRequest {
  * Only `serverName` is set: Bun's fetch sends it as SNI and checks the
  * certificate's names against it during the handshake, before any byte
  * of the request is written. A custom `checkServerIdentity` is
- * deliberately NOT set: in Bun it replaces that built-in check and runs
- * only after the request has been sent.
+ * deliberately NOT set: in Bun it replaces that built-in check, and Bun
+ * 1.3.14 ran it only after the request had been sent (1.4.4 runs it
+ * before, #447; the built-in check is kept either way).
  *
  * Fails closed: the URL host setter silently keeps the previous host when
  * it rejects a value, so the result is checked to carry exactly the

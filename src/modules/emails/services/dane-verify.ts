@@ -19,15 +19,15 @@ import { isSubjectPublicKeyInfo, subjectPublicKeyInfo } from "./dane-der.ts";
  * for each usage and selector, the Full(0) records and only the strongest
  * digest present (SHA2-512 over SHA2-256) are kept.
  *
- * **DANE-TA(2) is unusable under Bun 1.3.14** ({@link PEER_CHAIN_AVAILABLE}):
- * its TLS client exposes only the server's leaf certificate, so the
- * anchor a DANE-TA record names cannot be found in the presented chain.
+ * **DANE-TA(2) is unusable for now** ({@link PEER_CHAIN_AVAILABLE}): Bun
+ * 1.3.14's TLS client exposed only the server's leaf certificate, so the
+ * anchor a DANE-TA record names could not be found in the presented chain.
  * Such records are treated as unsupported by the implementation, hence
  * unusable (RFC 7672 sections 2.2.3 and 3.1.3): a host whose records are
  * all DANE-TA gets mandatory TLS without authentication, and a host with
  * DANE-EE records beside them is authenticated by the DANE-EE ones only.
- * The DANE-TA matching below is kept and tested on explicit chains, to be
- * switched back on when the runtime exposes the chain.
+ * Bun 1.4.4 exposes the chain (#447); the DANE-TA matching below is kept
+ * and tested on explicit chains, to be switched back on in its own change.
  *
  * **DANE-EE(3)** (RFC 7672 section 3.1.1, RFC 7671 section 5.1): the leaf
  * certificate (selector 0) or its public key (selector 1) must match.
@@ -52,10 +52,11 @@ import { isSubjectPublicKeyInfo, subjectPublicKeyInfo } from "./dane-der.ts";
 
 /**
  * Whether the TLS client exposes the server's certificate chain, which
- * DANE-TA(2) matching needs. `false` under Bun 1.3.14 (no
- * `issuerCertificate` from `getPeerCertificate(true)`), so DANE-TA records
- * are unusable ({@link usableTlsa}). `test/unit/mx-transport-dane.test.ts`
- * fails once Bun exposes the chain: then set this to `true`.
+ * DANE-TA(2) matching needs. Bun 1.3.14 linked no `issuerCertificate`
+ * from `getPeerCertificate(true)`; Bun 1.4.4 does (#447), and
+ * `test/unit/mx-transport-dane.test.ts` pins that. Still `false` until
+ * DANE-TA is switched back on in its own change, so DANE-TA records are
+ * unusable ({@link usableTlsa}).
  */
 export const PEER_CHAIN_AVAILABLE = false;
 
@@ -341,10 +342,10 @@ export interface PeerCertificateSource {
  * from `getPeerCertificate(true)` (its `issuerCertificate` links), at most
  * {@link MAX_CHAIN_LENGTH} certificates; a self-signed certificate ends it.
  *
- * Bun 1.3.14 links no `issuerCertificate` (Node does), so under Bun this is
- * the leaf alone, which is why DANE-TA records are unusable there
- * ({@link PEER_CHAIN_AVAILABLE}). `test/unit/mx-transport-dane.test.ts`
- * pins this.
+ * Bun 1.3.14 linked no `issuerCertificate` (Node does), so there this was
+ * the leaf alone, which is why DANE-TA records were made unusable
+ * ({@link PEER_CHAIN_AVAILABLE}); Bun 1.4.4 links the whole presented
+ * chain. `test/unit/mx-transport-dane.test.ts` pins this.
  */
 export function peerChain(socket: PeerCertificateSource): X509Certificate[] {
   const chain: X509Certificate[] = [];
@@ -386,8 +387,9 @@ export const DANE_HANDSHAKE_INCOMPLETE =
  * option of BunMail's nodemailer patch, `patches/`): `null` lets the
  * session go on, an error ends it before EHLO, so no MAIL FROM is ever
  * sent to a server that failed DANE. First, a handshake that did not
- * really complete (no cipher negotiated, or no server certificate: Bun can
- * call back for a handshake the peer refused) fails at once, so it never
+ * really complete (no cipher negotiated, or no server certificate: Bun
+ * 1.3.14 could call back for a handshake the peer refused; 1.4.4 fails
+ * such a handshake itself, #447) fails at once, so it never
  * waits out the STARTTLS stall limit. Then, with no usable record, any
  * TLS session passes (RFC 7672 section 2.2: TLS required, authentication
  * not).

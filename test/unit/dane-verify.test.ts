@@ -114,7 +114,7 @@ describe("usableTlsa (RFC 6698 4.1, RFC 7672 3.1.3, RFC 7671 9)", () => {
     ]);
   });
 
-  test("under Bun 1.3.14 DANE-TA is unusable: only DANE-EE records remain", () => {
+  test("while PEER_CHAIN_AVAILABLE is off DANE-TA is unusable: only DANE-EE records remain", () => {
     expect(PEER_CHAIN_AVAILABLE).toBe(false);
     const ee311 = record(3, 1, 1, ee);
     const ta201 = record(2, 0, 1, ca);

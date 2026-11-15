@@ -65,7 +65,8 @@ function closeWholeSocket(socket: Socket): void {
  * terminates TLS from the first byte and hands each decrypted socket to
  * `smtp`, so every session is TLS before its first SMTP byte.
  *
- * Bun quirks, both seen with Bun 1.3.14:
+ * Bun quirks, seen with Bun 1.3.14 (rechecked on 1.4.4, #447: the first
+ * remains, the other two are fixed there, the guards stay):
  * - `handshakeTimeout` is ignored, so a client that never finishes the
  *   handshake would hold its socket forever. The handshake gets the idle
  *   limit of any session by hand, on the accepted socket (which under Bun

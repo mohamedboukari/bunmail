@@ -56,7 +56,7 @@ Migration `0044` adds a `(ts DESC, id DESC)` index (`NULLS FIRST`, the default o
 
 ## Memory
 
-Batches are read in turn, but Bun 1.3.14 drains a streamed response as fast as it is produced, whatever the client reads: a stalled client still makes the server build and buffer the whole file. What bounds memory is the row cap (50 000 rows per export) and the per-process concurrency limit (2 exports producing at once, `src/pages/lib/export-limiter.ts`). For the same reason, the audit event's `rows` and outcome describe what the server produced, not what the client received.
+Batches are read in turn. Bun 1.3.14 drained a streamed response as fast as it was produced, whatever the client read, so a stalled client made the server build and buffer the whole file; Bun 1.4.4 pulls only as the client reads (a few MB ahead, #447). The hard bound on memory stays the row cap (50 000 rows per export) and the per-process concurrency limit (2 exports producing at once, `src/pages/lib/export-limiter.ts`). For the same reason, the audit event's `rows` and outcome describe what the server produced, not what the client received.
 
 ## Tests
 

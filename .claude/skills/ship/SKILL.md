@@ -59,6 +59,7 @@ gh pr checks <PR> --watch --interval 30
 - Run the watch in the background and wait for the notification; don't poll.
 - Also check runs that aren't PR checks: `gh run list --branch <branch>`.
 - If anything is red, stop and show the failure. Don't merge.
+- A Bun bump (the Dockerfile's `FROM oven/bun:` lines, often a Dependabot PR) also needs a test-server check before merge: send, inbound, SMTP 465, DANE, `/health` (docs/testing.md, "Upgrading Bun").
 - When all green and the user has asked to merge: squash-merge (the ruleset requires a review, so this uses the user's admin bypass). Title `<subject> (#<PR>)`.
 
 ## 8. Clean up and report

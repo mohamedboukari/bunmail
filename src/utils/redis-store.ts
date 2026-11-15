@@ -46,7 +46,8 @@ import {
  *
  * TLS (`rediss://`): Bun verifies the server certificate and its host name
  * by default (checked on Bun 1.3.14 against a self-signed server: refused
- * without its CA, accepted with it, refused on a host name mismatch), so
+ * without its CA, accepted with it, refused on a host name mismatch; the
+ * refusal without its CA rechecked on 1.4.4, #447), so
  * no `tls` option is passed. A private CA is trusted with
  * `NODE_EXTRA_CA_CERTS`.
  */

@@ -91,7 +91,7 @@ describe("danePolicyOf", () => {
     expect(policyOf(invalid).policyFailure).toBe("tlsa-invalid");
   });
 
-  test("only DANE-TA records (valid, unsupported under Bun 1.3.14): no tlsa result claimed", () => {
+  test("only DANE-TA records (valid, unsupported while PEER_CHAIN_AVAILABLE is off): no tlsa result claimed", () => {
     expect(danePolicyOf(hostWith([{ ...RECORD, usage: 2, selector: 0 }]))).toBeNull();
   });
 

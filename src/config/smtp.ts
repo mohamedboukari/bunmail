@@ -67,10 +67,12 @@ interface SubmissionTlsEnv {
  * - A mode without a cert and key, a cert without a key (or the reverse),
  *   or any other mode value refuses to boot: a typo must never leave the
  *   API keys on a plaintext link.
- * - `starttls` refuses to boot under Bun: Bun cannot upgrade an accepted
- *   socket to TLS on the server side (`new tls.TLSSocket(socket, { isServer:
- *   true })` never handshakes in Bun 1.3.14), so a STARTTLS offer would
- *   never complete and clients could not authenticate at all.
+ * - `starttls` refuses to boot under Bun: Bun 1.3.14 could not upgrade an
+ *   accepted socket to TLS on the server side (`new tls.TLSSocket(socket,
+ *   { isServer: true })` never handshook), so a STARTTLS offer would never
+ *   complete and clients could not authenticate at all. Bun 1.4.4 does
+ *   complete it (checked with smtp-server, #447); allowing `starttls`
+ *   under Bun is #414.
  * - The port defaults to 465 in `implicit` mode and 587 otherwise; a set
  *   port must be a whole number from 1 to 65535.
  *

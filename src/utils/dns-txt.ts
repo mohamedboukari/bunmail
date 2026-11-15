@@ -21,7 +21,7 @@ import { logger } from "./logger.ts";
 /**
  * TXT lookups with the record boundaries right.
  *
- * Bun's `dns/promises.resolveTxt` (1.3.14, and still 1.4.3, oven-sh/bun#44692)
+ * Bun's `dns/promises.resolveTxt` (1.3.14, and still 1.4.4, oven-sh/bun#44692)
  * returns each character-string of a TXT record as a record of its own: one
  * record `"s1" "s2"` comes back as `[["s1"], ["s2"]]` where Node returns
  * `[["s1", "s2"]]`. A 2048-bit DKIM key, or an SPF record over 255
