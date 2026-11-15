@@ -20,6 +20,8 @@ interface EmailDetailPageProps {
   attachments: AttachmentMeta[];
   /** Recorded opens and clicks (#187), oldest first; empty (the default) when none. */
   events?: readonly EmailEvent[];
+  /** True when the viewer asked for remote images in the HTML preview (`?images=1`, #419). */
+  remoteImages?: boolean;
 }
 
 /**
@@ -32,6 +34,7 @@ export function EmailDetailPage({
   isTrashed,
   attachments,
   events = [],
+  remoteImages = false,
 }: EmailDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/emails/trash" : "/dashboard/emails";
   const backLabel = isTrashed ? "Back to trash" : "Back to emails";
@@ -180,7 +183,12 @@ export function EmailDetailPage({
             HTML Preview
           </h2>
           <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto">
-            <HtmlPreview html={email.html} title="Email HTML preview" />
+            <HtmlPreview
+              html={email.html}
+              pageHref={`/dashboard/emails/${encodeURIComponent(email.id)}`}
+              remoteImages={remoteImages}
+              title="Email HTML preview"
+            />
           </div>
         </div>
       )}
