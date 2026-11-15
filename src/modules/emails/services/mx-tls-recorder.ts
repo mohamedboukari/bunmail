@@ -39,12 +39,14 @@ export interface NodemailerLogger {
  *   line, written once the greeting, EHLO and any STARTTLS restart are
  *   done).
  *
- * The upgrade line alone is not proof: under Bun the TLS callback can fire
- * for a handshake the peer refused (one offering only TLS below 1.2), and
- * the session then never answers. So a transaction counts as `starttls`
- * only when the session also became ready, which needs an EHLO reply read
- * over the new TLS layer; `plaintext` when it became ready without the
- * upgrade; and `null` (unknown) when it never became ready.
+ * The upgrade line alone is not proof: under Bun 1.3.14 the TLS callback
+ * could fire for a handshake the peer refused (one offering only TLS below
+ * 1.2), and the session then never answered (1.4.4 fails such a handshake,
+ * #447). So a transaction counts as `starttls` only when the session also
+ * became ready, which needs an EHLO reply read over the new TLS layer;
+ * `plaintext` when it became ready without the upgrade; and `null`
+ * (unknown) when it never became ready. Kept on 1.4.4 (#456): it costs
+ * nothing and records TLS only once the session proved it.
  */
 export interface TlsRecorder {
   /** Pass as the transport's `logger` option. */
@@ -55,9 +57,12 @@ export interface TlsRecorder {
   result(): DeliveryTls | null;
   /**
    * Rejects when a session reported the STARTTLS upgrade but did not become
-   * ready within the stall limit: the handshake did not really complete,
-   * and nodemailer's own setup timer was already cleared by the callback.
-   * The error carries no SMTP reply, so the group is retried.
+   * ready within the stall limit. nodemailer clears its setup timer in the
+   * TLS callback, so without it a peer that completes the handshake and
+   * then never answers EHLO would hold the session (and its MX lock) for
+   * the 10-minute socket timeout; kept for that on Bun 1.4.4 (#456), where
+   * a refused handshake no longer gets this far. The error carries no SMTP
+   * reply, so the group is retried.
    */
   stalled: Promise<never>;
   /** Clears the stall timer. */

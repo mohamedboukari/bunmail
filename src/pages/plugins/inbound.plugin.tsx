@@ -1,6 +1,7 @@
 import { t } from "elysia";
 import { config } from "../../config.ts";
 import { logger } from "../../utils/logger.ts";
+import { finiteDate } from "../../utils/finite-date.ts";
 import { SendEmailPage } from "../routes/send-email.tsx";
 import { InboundPage } from "../routes/inbound.tsx";
 import { InboundTrashPage } from "../routes/inbound-trash.tsx";
@@ -324,8 +325,11 @@ export function inboundPages(app: GuardedDashboard) {
            * independently: we don't auto-derive one from the other so the
            * quote matches whatever the original message actually had.
            */
-          const receivedIso = inbound.receivedAt.toISOString();
-          const attribution = `On ${receivedIso}, ${inbound.fromAddress} wrote:`;
+          /** No date in the line for a Postgres `infinity` timestamp (#457). */
+          const receivedAt = finiteDate(inbound.receivedAt);
+          const attribution = receivedAt
+            ? `On ${receivedAt.toISOString()}, ${inbound.fromAddress} wrote:`
+            : `${inbound.fromAddress} wrote:`;
 
           /** Defensive HTML escape: the attribution components (ISO date,
            *  email address) shouldn't contain `<>&"'` in practice, but a

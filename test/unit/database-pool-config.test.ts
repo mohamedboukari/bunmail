@@ -4,8 +4,8 @@ import { readDatabasePoolMax } from "../../src/config.ts";
 /**
  * `DATABASE_POOL_MAX` (#423) sizes the app's PostgreSQL pool: unset or
  * blank keeps Bun's default of 10; anything other than a whole number
- * from 1 to 1000 refuses to boot, so a typo never silently shrinks the
- * pool back into the Bun 1.3.14 stall it exists to avoid.
+ * from 1 to 1000 refuses to boot, so a typo never silently resizes the
+ * pool or blows the connection budget.
  */
 describe("readDatabasePoolMax", () => {
   test("unset or blank: Bun's default of 10", () => {

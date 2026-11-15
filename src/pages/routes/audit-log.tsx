@@ -10,6 +10,7 @@ import {
   type AuditActorOption,
   type AuditEvent,
 } from "../../modules/audit/types/audit.types.ts";
+import { finiteDate } from "../../utils/finite-date.ts";
 
 /** The page's current filter values, as the form submits them. */
 interface AuditLogFilters {
@@ -43,9 +44,19 @@ const INPUT_CLASS =
 /** Shared classes of the table headers. */
 const TH_CLASS = "text-left px-4 py-3 font-medium text-gray-500 dark:text-gray-400";
 
-/** `2026-10-19 12:34:56 UTC`: exact and unambiguous, unlike the relative times elsewhere. */
-function utcTime(value: Date): string {
-  return `${value.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+/**
+ * `2026-10-19 12:34:56 UTC`: exact and unambiguous, unlike the relative
+ * times elsewhere. `n/a` for a Postgres `infinity` timestamp (#457).
+ */
+function UtcTime({ value }: { value: Date }) {
+  const at = finiteDate(value);
+  if (at === null) return "n/a";
+  const iso = at.toISOString();
+  return (
+    <time datetime={iso} title={iso} safe>
+      {`${iso.slice(0, 19).replace("T", " ")} UTC`}
+    </time>
+  );
 }
 
 /** The actor cell's main line. */
@@ -226,13 +237,7 @@ export function AuditLogPage({
                   return (
                     <tr class="align-top hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                       <td class="px-4 py-3 text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        <time
-                          datetime={event.occurredAt.toISOString()}
-                          title={event.occurredAt.toISOString()}
-                          safe
-                        >
-                          {utcTime(event.occurredAt)}
-                        </time>
+                        <UtcTime value={event.occurredAt} />
                       </td>
                       <td class="px-4 py-3 text-gray-900 dark:text-gray-100">
                         <span class="break-all" safe>

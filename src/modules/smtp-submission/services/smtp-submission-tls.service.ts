@@ -31,58 +31,30 @@ function newSessionId(): string {
     .padStart(16, "0");
 }
 
-/** Sockets `closeWholeSocket` already guards (under Bun, accepted and TLS are one). */
-const guardedSockets = new WeakSet<Socket>();
-
-/**
- * Makes a socket of the implicit-TLS listener close in full whenever
- * either side ends it (#351), at every stage (handshake, handoff, session):
- * - Ending our side destroys the socket once everything written has been
- *   handed to the runtime. `_final` runs only after every pending write has
- *   completed, so the last reply (a `221`, a `421`) still goes out; Bun's
- *   own `_final` would half-close the socket instead, which is the state
- *   that leaks it (see `createImplicitTlsListener`).
- * - The client's FIN or a socket error destroys it at once: no half-open
- *   session, nothing left polling a dead socket. smtp-server's own `close`
- *   listener then closes its session, so `SMTP session closed` is logged.
- */
-function closeWholeSocket(socket: Socket): void {
-  if (guardedSockets.has(socket)) return;
-  guardedSockets.add(socket);
-  socket._final = (callback) => {
-    socket.destroy();
-    callback();
-  };
-  socket.once("end", () => {
-    logger.debug("SMTP submission client hung up", { ip: socket.remoteAddress });
-    socket.destroy();
-  });
-  socket.on("error", () => socket.destroy());
-}
-
 /**
  * The implicit-TLS listener (#349): the runtime's own TLS server, which
  * terminates TLS from the first byte and hands each decrypted socket to
  * `smtp`, so every session is TLS before its first SMTP byte.
  *
  * Bun quirks, seen with Bun 1.3.14 (rechecked on 1.4.4, #447: the first
- * remains, the other two are fixed there, the guards stay):
+ * remains, the second is fixed there):
  * - `handshakeTimeout` is ignored, so a client that never finishes the
  *   handshake would hold its socket forever. The handshake gets the idle
  *   limit of any session by hand, on the accepted socket (which under Bun
  *   is the TLS socket itself; the session's own timeout replaces it).
- * - A plaintext client's failed handshake (it gets a TLS alert) can still
- *   reach the secure-connection callback. Nothing it sent is ever read as
- *   SMTP and nothing written to it reaches the wire, but it opens a
- *   session that closes at once: one `SMTP session closed` line, and one
+ * - A plaintext client's failed handshake (it gets a TLS alert) could
+ *   still reach the secure-connection callback. Nothing it sent is ever
+ *   read as SMTP and nothing written to it reaches the wire, but it opens
+ *   a session that closes at once: one `SMTP session closed` line, and one
  *   connection counted against its IP's connection limit, as any
  *   plaintext client is counted (one per TCP connection, never more).
- * - A TLS socket we end (smtp-server ends it on QUIT, a 421 or its idle
- *   timeout) and that is then paused (smtp-server unpipes its parser right
- *   after) never closes once the client's FIN arrives (#351): it sits in
- *   CLOSE_WAIT and the event loop keeps waking for it, a full CPU
- *   core on Linux. `destroy()` cannot close it after that point, so the
- *   socket must never be half-closed by us: see `closeWholeSocket`.
+ *
+ * A TLS socket smtp-server ended then paused (QUIT, a 421, its idle
+ * timeout) sat in CLOSE_WAIT under Bun 1.3.14 once the client hung up,
+ * spinning a CPU core (#351); every socket was guarded against it until
+ * Bun 1.4.4 fixed it (#456; the pinned smtp-server also resumes a socket
+ * it unpipes now). `test/unit/bun-runtime.test.ts` pins the runtime fix,
+ * `smtp-submission-tls.integration.test.ts` the listener at every stage.
  */
 export function createImplicitTlsListener(
   smtp: SMTPServer,
@@ -91,7 +63,6 @@ export function createImplicitTlsListener(
   const listener = createTlsServer(
     { ...material, handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS },
     (socket) => {
-      closeWholeSocket(socket);
       /**
        * The handshake is done: smtp-server arms its own idle timeout. The
        * handshake timeout's listener goes too, or the session's idle
@@ -103,7 +74,6 @@ export function createImplicitTlsListener(
     },
   );
   listener.on("connection", (socket: Socket) => {
-    closeWholeSocket(socket);
     socket.setTimeout(TLS_HANDSHAKE_TIMEOUT_MS, () => {
       logger.warn("SMTP submission TLS handshake timed out", {
         ip: socket.remoteAddress,

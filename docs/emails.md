@@ -823,7 +823,7 @@ Each entry records `tls`, the encryption of the session behind its latest outcom
 - the STARTTLS upgrade line of the connection (`Connection upgraded with STARTTLS`), per connection id, reset when a new connection starts;
 - the transport's `send` line, written once the greeting, EHLO and any STARTTLS restart are done.
 
-A transaction is `starttls` only when both happened: under Bun 1.3.14 the TLS callback could fire for a handshake the peer refused, after which the session never answered (Bun 1.4.4 fails such a handshake with an error instead, #447; the guard stays). Such a session (upgrade reported, never ready) fails after 60 s (`STARTTLS handshake did not complete`) instead of waiting for the 20-minute session cap. Nothing from these events is logged or stored besides the three facts. A real-server test (`test/unit/mx-transport.test.ts`, `smtp-server` under Node) pins the behaviour for STARTTLS, plaintext and a TLS 1.1-only peer.
+A transaction is `starttls` only when both happened: under Bun 1.3.14 the TLS callback could fire for a handshake the peer refused, after which the session never answered (Bun 1.4.4 fails such a handshake with an error instead, #447). Such a session (upgrade reported, never ready) fails after 60 s (`STARTTLS handshake did not complete`). The guard stays on 1.4.4 (#456): nodemailer clears its setup timer once TLS is up, so a peer that completes the handshake and then never answers EHLO would otherwise hold the session, and its MX lock, for nodemailer's 10-minute socket timeout. Nothing from these events is logged or stored besides the three facts. A real-server test (`test/unit/mx-transport.test.ts`, `smtp-server` under Node) pins the behaviour for STARTTLS, plaintext and a TLS 1.1-only peer.
 
 ### MTA-STS (#250)
 

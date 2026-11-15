@@ -14,16 +14,14 @@ const MAX_DATABASE_POOL_MAX = 1000;
  * app's pool opens. Unset or blank keeps Bun's default of 10; anything
  * other than a whole number from 1 to 1000 refuses to boot.
  *
- * Why it exists: on Bun 1.3.14, a burst of more concurrent queries than
- * the pool has connections, some of them statements a connection has not
- * prepared yet, can stall the pool: a few queries never settle (or the
- * connection desyncs and fails with `ERR_POSTGRES_UNSUPPORTED_INTEGER_SIZE`)
- * while every connection sits idle on the server. Upstream reports and
- * fixes: oven-sh/bun#32004, #33627, #34756, #35114. A pool larger than the
- * peak number of concurrent queries never queues, so it never meets the
- * bug. The integration tests set it (`test/integration/_preload.ts`) so a
- * parallel burst cannot hang; an operator can raise it the same way.
- * Exported for tests.
+ * What it is for: sizing the pool to the load (queries past it wait for
+ * a free connection) and keeping the app, times its replicas, within
+ * Postgres's `max_connections`. It was added for a Bun 1.3.14 bug (#423):
+ * a burst of more concurrent queries than the pool had connections, some
+ * of them statements a connection had not prepared yet, could stall the
+ * pool (oven-sh/bun#32004, #33627, #34756, #35114). Bun 1.4.4 fixed it
+ * (#447), so a queueing pool is safe now. The integration tests set it
+ * (`test/integration/_preload.ts`). Exported for tests.
  */
 export function readDatabasePoolMax(
   raw: string | undefined = process.env["DATABASE_POOL_MAX"],
