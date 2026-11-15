@@ -20,6 +20,9 @@ import type { CsvCell } from "../../modules/exports/types/export.types.ts";
  *   whole cell gets a leading `'`. Also, inside a cell, a `;` or a tab
  *   followed (after such spaces) by one of those characters: in a `;`
  *   locale that starts a new cell, so the character gets a `'` before it.
+ *   Same after a CR or LF inside a cell (#451): Excel in a `;` locale
+ *   does not see the quotes, so a line break there starts a new row.
+ *   The line break itself is kept, so a multi-line value stays intact.
  *   Applied before quoting, so the quote rules still hold. Only text
  *   cells are escaped: numbers, booleans and dates are written by BunMail
  *   itself, never by a user.
@@ -41,8 +44,11 @@ export const CSV_BOM = "﻿";
  */
 const FORMULA_START = /^(?:[\t\r]|[\s​]*[=+\-@])/;
 
-/** A `;` or tab separator, optional spaces, then a formula character. */
-const FORMULA_AFTER_SEPARATOR = /([;\t][  ​﻿]*)([=+\-@])/g;
+/**
+ * A `;` or tab separator, or a CR or LF line break (#451), optional
+ * spaces, then a formula character.
+ */
+const FORMULA_AFTER_SEPARATOR = /([;\t\r\n][  ​﻿]*)([=+\-@])/g;
 
 /** Characters that force a field into quotes (RFC 4180, plus the `;` locales' separator and tab). */
 const NEEDS_QUOTES = /[",\r\n;\t]/;
@@ -66,12 +72,14 @@ function cellText(cell: CsvCell): string {
 /**
  * Neutralises a text value a spreadsheet would run as a formula: a `'`
  * before the whole value when it starts like a formula, and before each
- * formula character that follows a `;` or tab separator. Anything else is
- * returned unchanged.
+ * formula character that follows a `;` or tab separator or a CR or LF
+ * line break. Anything else is returned unchanged.
  */
 export function escapeFormula(value: string): string {
+  /** Tested on the value as given: the inner `'` must not hide a formula start (`\n=1+1`). */
+  const startsLikeFormula = FORMULA_START.test(value);
   const inner = value.replace(FORMULA_AFTER_SEPARATOR, "$1'$2");
-  return FORMULA_START.test(inner) ? `'${inner}` : inner;
+  return startsLikeFormula ? `'${inner}` : inner;
 }
 
 /** One field, formula-escaped (text cells only) and quoted when it must be. */
