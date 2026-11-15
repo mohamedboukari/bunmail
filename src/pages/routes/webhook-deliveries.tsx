@@ -1,6 +1,7 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { Pagination } from "../components/pagination.tsx";
+import { withKeptLimit } from "../pagination.ts";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
@@ -59,14 +60,18 @@ export function WebhookDeliveriesPage({
         {webhook.url}
       </p>
 
-      {/* Status filter pills */}
+      {/* Status filter pills: each keeps the chosen rows-per-page size and
+          drops `page` (#435). */}
       <div class="flex flex-wrap items-center gap-2 mb-4">
         <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Status
         </span>
         {STATUS_FILTERS.map((f) => {
           const active = (f.value === "all" && !statusFilter) || f.value === statusFilter;
-          const href = f.value === "all" ? baseUrl : `${baseUrl}?status=${f.value}`;
+          const href = withKeptLimit(
+            f.value === "all" ? baseUrl : `${baseUrl}?status=${f.value}`,
+            limit,
+          );
           return (
             <a
               href={href}

@@ -103,6 +103,8 @@ Every route needs an entry in the test's `ROUTES` table (access level, a minimal
 - bun run test:integration            # 600+ tests against real Postgres
 ```
 
+On a pull request, a separate `changelog` job runs `bun run changelog:check HEAD^1` (#442): it fails when the PR changes `src/`, `drizzle/`, `Dockerfile`, `docker-compose*.yml` or `.env.example` without adding a fragment under `docs/changes/` (or changing `CHANGELOG.md`), unless the PR has the `skip-changelog` label, and on any malformed fragment. Its rules and the collector are unit-tested in `test/unit/changelog-fragments.test.ts`; see [docs/changes/README.md](changes/README.md).
+
 Total CI test time: about a minute and a half across all three tiers, almost all of it the integration tier (argon2id and real Postgres).
 
 ## Coverage

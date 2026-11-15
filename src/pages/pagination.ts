@@ -72,3 +72,52 @@ export function parsePagination(
   const limit = toPageSize(positiveInt(query.limit)) ?? defaultLimit;
   return { page, limit };
 }
+
+/**
+ * The `limit` a list page's filter controls carry (#435), or undefined when
+ * they should carry none.
+ *
+ * A filter link or form that drops `limit` sends the operator back to the
+ * page's default size, so choosing 100 rows and then a status tab would
+ * show 25 again. The chosen size is carried only when it differs from the
+ * default, which keeps the default URLs short and unchanged. A size outside
+ * PAGE_SIZES (only possible from a caller that skipped parsePagination) is
+ * never carried: the next request would fall back to the default anyway.
+ *
+ * @param limit        - The rows per page the list is showing
+ * @param defaultLimit - The page's default, as given to parsePagination
+ * @returns The size as a query value ("50", "100"), or undefined
+ */
+export function keptLimit(
+  limit: number,
+  defaultLimit: PageSize = DEFAULT_PAGE_SIZE,
+): string | undefined {
+  /** Only an allowed size is ever written back into a URL. */
+  const size = toPageSize(limit);
+  return size === undefined || size === defaultLimit ? undefined : String(size);
+}
+
+/**
+ * A filter link that keeps the chosen rows-per-page size (#435): `path`
+ * with `limit=<size>` appended when keptLimit gives one, else `path`
+ * unchanged. `path` may already hold a query string. Never adds `page`, so
+ * a filter change still starts on page 1.
+ *
+ * The appended value is one of the digit strings of PAGE_SIZES, so it
+ * needs no encoding.
+ *
+ * @param path         - The filter link without a `limit`
+ * @param limit        - The rows per page the list is showing
+ * @param defaultLimit - The page's default, as given to parsePagination
+ */
+export function withKeptLimit(
+  path: string,
+  limit: number,
+  defaultLimit: PageSize = DEFAULT_PAGE_SIZE,
+): string {
+  const value = keptLimit(limit, defaultLimit);
+  if (value === undefined) return path;
+  /** Join with `&` when the link already has a query string. */
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}limit=${value}`;
+}

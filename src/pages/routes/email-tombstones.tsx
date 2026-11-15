@@ -1,7 +1,8 @@
 import { Html } from "@kitajs/html";
 import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
-import { Pagination } from "../components/pagination.tsx";
+import { KeptLimitInput, Pagination } from "../components/pagination.tsx";
+import { withKeptLimit } from "../pagination.ts";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { RecipientSummary } from "../components/recipient-summary.tsx";
@@ -60,6 +61,8 @@ export function EmailTombstonesPage({
         action="/dashboard/emails/tombstones"
         class="flex flex-wrap items-center gap-2 mb-4"
       >
+        {/* Keeps the chosen rows-per-page size across a search (#435). */}
+        <KeptLimitInput limit={limit} />
         <input
           type="text"
           name="messageId"
@@ -75,7 +78,7 @@ export function EmailTombstonesPage({
         </button>
         {!!messageIdFilter && (
           <a
-            href="/dashboard/emails/tombstones"
+            href={withKeptLimit("/dashboard/emails/tombstones", limit)}
             class="px-3 py-2 text-sm text-gray-600 dark:text-gray-400 hover:underline"
           >
             Clear

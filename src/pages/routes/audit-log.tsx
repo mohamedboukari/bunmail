@@ -1,7 +1,8 @@
 import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
-import { Pagination } from "../components/pagination.tsx";
+import { KeptLimitInput, Pagination } from "../components/pagination.tsx";
+import { withKeptLimit, type PageSize } from "../pagination.ts";
 import {
   AUDIT_ACTION_LABELS,
   AUDIT_ACTIONS,
@@ -27,6 +28,13 @@ interface AuditLogPageProps {
   /** Users and keys seen as actors, for the actor filter. */
   actors: AuditActorOption[];
 }
+
+/**
+ * Rows per page when the URL names no allowed size: 50 here, not the
+ * dashboard-wide 25 (#429). The plugin parses `limit` with it and the
+ * filter controls compare against it, so the two never disagree (#435).
+ */
+export const AUDIT_LOG_PAGE_SIZE: PageSize = 50;
 
 /** Shared classes of the filter inputs. */
 const INPUT_CLASS =
@@ -114,6 +122,8 @@ export function AuditLogPage({
           action="/dashboard/audit-log"
           class="flex flex-wrap gap-3 items-end"
         >
+          {/* Keeps the chosen rows-per-page size across a filter change (#435). */}
+          <KeptLimitInput limit={limit} defaultLimit={AUDIT_LOG_PAGE_SIZE} />
           <div class="min-w-[220px]">
             <label
               for="action"
@@ -178,7 +188,7 @@ export function AuditLogPage({
           </button>
           {filtered && (
             <a
-              href="/dashboard/audit-log"
+              href={withKeptLimit("/dashboard/audit-log", limit, AUDIT_LOG_PAGE_SIZE)}
               class="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors whitespace-nowrap"
             >
               Clear
