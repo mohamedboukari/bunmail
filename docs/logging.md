@@ -104,7 +104,7 @@ Turn on `LOG_LEVEL=debug` (restart the app) to see internal detail while reprodu
 Every new route, background job and service entry point follows these rules (also in `CLAUDE.md`):
 
 1. **Boundary line**: the outcome of each unit of work is logged once, with its IDs and a duration where it matters. HTTP requests get theirs automatically.
-2. **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` so every line inside carries its ID.
+2. **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` so every line inside carries its ID. Never `AsyncLocalStorage.enterWith`: `run` scopes a context to its callback, so it cannot leak into later work.
 3. **Every failure path logs** at `warn` (expected, handled) or `error` (unexpected), with the IDs involved and the error code or `loggableError(error)` (`src/utils/db-error.ts`), never a database query error's raw message or object: both embed the query parameters (#448).
 4. **Detail at `debug`**: internal steps useful while investigating, not in normal operation.
 5. **No secrets, no bodies**: never log passwords, keys, tokens, hashes, cookies or message content; route emails through `redactEmail`. The redaction safety net is not a license to pass them.
