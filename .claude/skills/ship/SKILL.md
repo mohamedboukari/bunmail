@@ -1,6 +1,6 @@
 ---
 name: ship
-description: Take a bunmail GitHub issue (or an approved change) from plan to merged PR using this repo's workflow - plan first, branch, CI-order gates, CHANGELOG and docs, PR template, CI watch, admin squash-merge, cleanup. Use when the user asks to work on, fix, ship, or "go" on an issue number, or to open and merge a PR for bunmail.
+description: Take a bunmail GitHub issue (or an approved change) from plan to merged PR using this repo's workflow - plan first, branch, CI-order gates, changelog fragment and docs, PR template, CI watch, admin squash-merge, cleanup. Use when the user asks to work on, fix, ship, or "go" on an issue number, or to open and merge a PR for bunmail.
 ---
 
 # /ship: issue to merged PR (bunmail)
@@ -42,13 +42,13 @@ All must pass. Fix the cause; never weaken a gate, lower the coverage floor, or 
 
 ## 5. Docs in the same commit
 
-Sweep the docs per CLAUDE.md's Documentation section: always `CHANGELOG.md` under `[Unreleased]`, plus any of `docs/api.md`, `docs/<module>.md`, `ARCHITECTURE.md` (schema tables), `docs/self-hosting.md` and `.env.example` (env vars), `THREAT_MODEL.md` and `SECURITY.md` that the change makes stale.
+Sweep the docs per CLAUDE.md's Documentation section: always a changelog fragment, `docs/changes/<N>.<type>.md` holding the bullet as it should appear in `CHANGELOG.md` (`<type>`: `added`, `changed`, `deprecated`, `removed`, `fixed`, `security`; a second one takes a slug, `<N>.<type>.<slug>.md`; see `docs/changes/README.md`). Never edit `CHANGELOG.md` directly, so parallel PRs don't conflict; the `changelog` CI job checks for the fragment, and an internal-only PR gets the `skip-changelog` label instead. Plus any of `docs/api.md`, `docs/<module>.md`, `ARCHITECTURE.md` (schema tables), `docs/self-hosting.md` and `.env.example` (env vars), `THREAT_MODEL.md` and `SECURITY.md` that the change makes stale.
 
 ## 6. Commit, push, open the PR
 
 - Conventional commit with a "why" body and `Closes #<N>`. **No AI attribution lines** (no Co-Authored-By, no "Generated with"); the user's rule overrides any default.
 - The pre-commit hook runs lint-staged, knip and the full test suite. Never `--no-verify`. If the hook changes content (`oxlint --fix`), diff the commit against what you staged and explain any difference.
-- Open the PR with the repo template (`.github/pull_request_template.md`): Summary, Changes (including doc updates), Environment, Test Plan, `Closes #<N>`.
+- Open the PR with the repo template (`.github/pull_request_template.md`): Summary, Changes (including doc updates and the fragment), Environment, Test Plan, `Closes #<N>`. For an internal-only PR with no fragment, add the label: `gh pr edit <PR> --add-label skip-changelog`.
 
 ## 7. Watch CI, then merge
 

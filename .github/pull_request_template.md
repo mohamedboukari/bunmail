@@ -23,7 +23,7 @@
 
 ## Docs
 
-- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] Changelog fragment added: `docs/changes/<issue>.<type>.md` (see `docs/changes/README.md`; do not edit `CHANGELOG.md`), or the `skip-changelog` label for an internal-only change
 - [ ] Affected docs updated (`README.md`, `ARCHITECTURE.md`, `docs/api.md`, `docs/<module>.md`, `THREAT_MODEL.md`, `SECURITY.md`): endpoints, schema tables, module layout, webhook events, status enums
 - [ ] New or changed env vars listed in `.env.example`, `docs/self-hosting.md` and the `ARCHITECTURE.md` Deployment section, with default and bounds
 
