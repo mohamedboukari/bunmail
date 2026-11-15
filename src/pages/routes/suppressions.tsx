@@ -2,7 +2,8 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
-import { Pagination } from "../components/pagination.tsx";
+import { KeptLimitInput, Pagination } from "../components/pagination.tsx";
+import { withKeptLimit } from "../pagination.ts";
 import { TimeDisplay } from "../components/time-display.tsx";
 import type { Suppression } from "../../modules/suppressions/types/suppression.types.ts";
 import type { ApiKey } from "../../modules/api-keys/types/api-key.types.ts";
@@ -69,6 +70,8 @@ export function SuppressionsPage({
           action="/dashboard/suppressions"
           class="flex flex-wrap gap-3 items-end"
         >
+          {/* Keeps the chosen rows-per-page size across a filter change (#435). */}
+          <KeptLimitInput limit={limit} />
           <div class="flex-1 min-w-[200px]">
             <label
               for="email"
@@ -114,7 +117,7 @@ export function SuppressionsPage({
           </button>
           {!!(filters.email || filters.apiKeyId) && (
             <a
-              href="/dashboard/suppressions"
+              href={withKeptLimit("/dashboard/suppressions", limit)}
               class="px-4 py-2 text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 transition-colors whitespace-nowrap"
             >
               Clear
