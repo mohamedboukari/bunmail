@@ -14,8 +14,10 @@
  * viewer's IP, time and user agent). A "Load remote images" link reloads the
  * page with `?images=1`, which renders the preview with a policy that also
  * allows `https:` images. See {@link previewCsp}. Before that, every
- * `<link>`, `<meta>`, `<base>` and `<noscript>` element of the email is
- * removed ({@link sanitizeEmailForPreview}): a `<link rel="prerender">` or
+ * `<link>`, `<meta>`, `<base>`, `<noscript>`, `<iframe>`, `<math>` and
+ * `<svg>` element of the email is removed, and any `<link`, `<meta` or
+ * `<base` tag left after that is turned into text
+ * ({@link sanitizeEmailForPreview}): a `<link rel="prerender">` or
  * `preconnect` reaches the network whatever the CSP says.
  */
 
@@ -116,6 +118,26 @@ const SANITIZE_PREFIX = "<!DOCTYPE html><html><head></head><body>";
 const SANITIZE_SUFFIX = "</body></html>";
 
 /**
+ * Elements removed with their content: the network-reaching ones, plus the
+ * containers in which the rewriter and a browser can disagree on what is
+ * markup (see {@link sanitizeEmailForPreview}).
+ */
+const REMOVED_ELEMENTS = "link, meta, base, noscript, iframe, math, svg";
+
+/**
+ * A `<link`, `<meta` or `<base` start tag as a browser's tokenizer reads
+ * it: the tag name in any case, ended by whitespace (`\r` included, the
+ * browser turns it into `\n` first), `/`, `>` or the end of the input.
+ * Character references are never decoded in a tag name, and any other
+ * character (a NUL included) makes it a different name, so nothing else
+ * can produce one of these elements.
+ *
+ * Linear time: a fixed-length check at each `<`, no nested or adjacent
+ * quantifier, so the whole output is scanned (no size limit is needed).
+ */
+const RESIDUAL_TAG_PATTERN = /<((?:link|meta|base)(?=[\t\n\f\r />]|$))/gi;
+
+/**
  * Removes the elements of an email that reach the network or change the
  * preview's rules regardless of its CSP (#419):
  *
@@ -132,14 +154,29 @@ const SANITIZE_SUFFIX = "</body></html>";
  *   so the browser parses its content as markup, while the rewriter (like
  *   any parser with scripting on) reads it as text; a `<link>` inside it
  *   would otherwise survive.
+ * - `<math>` and `<svg>`, with their content (#454): inside foreign
+ *   content the rewriter and a browser can disagree on which elements are
+ *   raw text, so a crafted email could carry one of the elements above
+ *   past the rewriter and have the browser create it. Email clients do
+ *   not render MathML, and most do not render inline SVG either.
+ * - `<iframe>`, with its content (#454): a `srcdoc` attribute is a whole
+ *   nested document, entity-encoded, which neither pass reads. The CSP
+ *   already blocks an iframe's `src`.
+ *
+ * Then a backstop (#454): any `<link`, `<meta` or `<base` start tag still
+ * in the output (inside what the rewriter read as raw text, wherever a
+ * browser might read it as markup) has its `<` written `&lt;`, so it can
+ * only ever be text. In real raw text (a `<style>` block) that changes the
+ * text, which is harmless.
  *
  * Uses Bun's built-in `HTMLRewriter` (lol-html, a streaming spec
- * tokenizer: linear time, no tree), never a regex. The email is rewritten
- * in its final position, between `<body>` and `</body></html>`, so an
- * unterminated tag at its end (`<link rel=prerender href=... `) is
- * completed by the closing tags exactly as the browser would, and removed.
- * Removing more than the browser would see (when the two disagree on what
- * is text) only drops content, never lets a hint through.
+ * tokenizer: linear time, no tree), never a regex, for the removal. The
+ * email is rewritten in its final position, between `<body>` and
+ * `</body></html>`, so an unterminated tag at its end (`<link
+ * rel=prerender href=... `) is completed by the closing tags exactly as
+ * the browser would, and removed. Removing more than the browser would see
+ * (when the two disagree on what is text) only drops content, never lets a
+ * hint through.
  *
  * Fails safe: if the rewriter throws or its output does not start with the
  * prefix, the result is `null` and the preview shows nothing of the email.
@@ -149,7 +186,7 @@ const SANITIZE_SUFFIX = "</body></html>";
 export function sanitizeEmailForPreview(html: string): string | null {
   try {
     const rewritten = new HTMLRewriter()
-      .on("link, meta, base, noscript", {
+      .on(REMOVED_ELEMENTS, {
         element(element) {
           element.remove();
         },
@@ -161,7 +198,9 @@ export function sanitizeEmailForPreview(html: string): string | null {
       });
       return null;
     }
-    return rewritten.slice(SANITIZE_PREFIX.length);
+    return rewritten
+      .slice(SANITIZE_PREFIX.length)
+      .replace(RESIDUAL_TAG_PATTERN, "&lt;$1");
   } catch (error) {
     logger.warn("Email preview sanitizer failed: preview left empty", {
       length: html.length,

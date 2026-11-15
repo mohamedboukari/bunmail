@@ -1,12 +1,22 @@
 import { afterEach, describe, test, expect } from "bun:test";
-import { daneHostResolver } from "../../src/modules/emails/services/mailer-dane.service.ts";
+import {
+  daneHostResolver,
+  sessionTls,
+  type SessionTls,
+} from "../../src/modules/emails/services/mailer-dane.service.ts";
+import { usableTlsa } from "../../src/modules/emails/services/dane-verify.ts";
+import {
+  createTlsRecorder,
+  mxTransportOptions,
+} from "../../src/modules/emails/services/mx-transport.ts";
 import {
   deliverWithFailover,
   type MxRouteDeps,
   type SessionRunner,
 } from "../../src/modules/emails/services/mx-route.ts";
 import type { MtaStsPolicy } from "../../src/modules/emails/services/mta-sts-policy.ts";
-import type { SecureMx } from "../../src/modules/emails/types/dane.types.ts";
+import type { DaneHost, SecureMx } from "../../src/modules/emails/types/dane.types.ts";
+import type { TlsaRecord } from "../../src/utils/dns-rdata.ts";
 import {
   setTlsRptObserveDeps,
   settleTlsRptRecordings,
@@ -30,7 +40,8 @@ import {
  * failed DNSSEC lookup skips the host (and is recorded for TLS-RPT); a
  * DANE failure fails over, and with no host left the entry is retried,
  * never bounced; DANE wins over an MTA-STS enforce policy for a host with
- * TLSA records, while a host without them still follows the policy.
+ * usable TLSA records, while a host without them, or whose records are all
+ * unusable (#452), still follows the policy.
  */
 
 const fake = useFakeDns();
@@ -283,5 +294,185 @@ describe("a DANE domain's hosts, decided one by one", () => {
       receivingIp: "",
       failureReasonCode: "mx-not-in-policy",
     });
+  });
+});
+
+/** A DANE host with `records`, usable as `usableTlsa` decides with `peerChain` (#452). */
+function daneHost(records: TlsaRecord[], peerChain = false): DaneHost {
+  return {
+    mxHost: "mx1.example.org",
+    baseDomain: "mx1.example.org",
+    referenceIds: ["mx1.example.org", "example.org"],
+    records,
+    usable: usableTlsa(records, peerChain),
+  };
+}
+
+const DANE_EE: TlsaRecord = { usage: 3, selector: 1, matchingType: 1, data: DIGEST };
+const DANE_TA: TlsaRecord = { usage: 2, selector: 1, matchingType: 1, data: DIGEST };
+const PKIX_EE: TlsaRecord = { usage: 1, selector: 1, matchingType: 1, data: DIGEST };
+
+/** The transport options a session with `tls` gets, as `runMxSession` builds them. */
+function transportFor(tls: SessionTls) {
+  return mxTransportOptions({
+    address: "192.0.2.1",
+    mxHost: "mx1.example.org",
+    heloName: "bunmail.example.test",
+    logger: createTlsRecorder().logger,
+    ...tls,
+  });
+}
+
+describe("sessionTls: DANE, MTA-STS or neither, per host (#345, #452)", () => {
+  test("usable TLSA records, MTA-STS enforce: DANE takes precedence (RFC 8461 section 2)", () => {
+    const host = daneHost([DANE_EE]);
+    const tls = sessionTls(host, true);
+    expect(tls).toEqual({ dane: { host } });
+    const options = transportFor(tls);
+    expect(options.requireTLS).toBe(true);
+    expect(options.tls?.rejectUnauthorized).toBe(false);
+    expect(options.verifyTlsSocket).toBeDefined();
+  });
+
+  test("usable TLSA records, no MTA-STS enforce: DANE", () => {
+    const host = daneHost([DANE_EE]);
+    expect(sessionTls(host, false)).toEqual({ dane: { host } });
+  });
+
+  test("no usable TLSA record, MTA-STS enforce: MTA-STS verified TLS, never any certificate", () => {
+    for (const records of [[PKIX_EE], [DANE_TA]]) {
+      const tls = sessionTls(daneHost(records), true);
+      expect(tls).toEqual({ verifiedTls: {} });
+      const options = transportFor(tls);
+      expect(options.requireTLS).toBe(true);
+      expect(options.opportunisticTLS).toBe(false);
+      expect(options.tls?.rejectUnauthorized).toBe(true);
+      expect(options.tls?.servername).toBe("mx1.example.org");
+      expect(options.verifyTlsSocket).toBeUndefined();
+    }
+  });
+
+  test("no usable TLSA record, no MTA-STS enforce: TLS required, not authenticated (RFC 7672 section 2.2)", () => {
+    const host = daneHost([PKIX_EE]);
+    const tls = sessionTls(host, false);
+    expect(tls).toEqual({ dane: { host } });
+    const options = transportFor(tls);
+    expect(options.requireTLS).toBe(true);
+    expect(options.opportunisticTLS).toBe(false);
+    expect(options.tls?.rejectUnauthorized).toBe(false);
+  });
+
+  test("DANE-TA only: MTA-STS while the peer chain is hidden, DANE once it is exposed", () => {
+    expect(sessionTls(daneHost([DANE_TA], false), true)).toEqual({ verifiedTls: {} });
+    const exposed = daneHost([DANE_TA], true);
+    expect(sessionTls(exposed, true)).toEqual({ dane: { host: exposed } });
+  });
+
+  test("DANE not applicable (off, insecure MX or TLSA): MTA-STS enforce, else opportunistic", () => {
+    const verified = sessionTls(null, true);
+    expect(verified).toEqual({ verifiedTls: {} });
+    expect(transportFor(verified).tls?.rejectUnauthorized).toBe(true);
+    expect(sessionTls(null, false)).toEqual({});
+    const options = transportFor({});
+    expect(options.opportunisticTLS).toBe(true);
+    expect(options.requireTLS).toBeUndefined();
+  });
+});
+
+describe("a DANE host with no usable TLSA record under MTA-STS enforce (#452)", () => {
+  const STS: MtaStsPolicy = {
+    mode: "enforce",
+    mx: ["mx2.example.org", "mx3.example.org"],
+    maxAge: 86_400,
+  };
+
+  /** A session stub recording each host and the TLS `sessionTls` gives it under `verifiedTls`. */
+  function tlsSessions(verifiedTls: boolean): {
+    calls: Array<{ mxHost: string; tls: "dane" | "mta-sts" | "opportunistic" }>;
+    run: SessionRunner;
+  } {
+    const calls: Array<{ mxHost: string; tls: "dane" | "mta-sts" | "opportunistic" }> =
+      [];
+    const run: SessionRunner = async ({ mxHost, transactions, dane }) => {
+      const tls = sessionTls(dane, verifiedTls);
+      calls.push({
+        mxHost,
+        tls:
+          tls.dane !== undefined
+            ? "dane"
+            : tls.verifiedTls !== undefined
+              ? "mta-sts"
+              : "opportunistic",
+      });
+      return transactions.map((t) => ({ key: t.key, tls: "starttls" }));
+    };
+    return { calls, run };
+  }
+
+  test("outside the policy it is skipped, in it the session gets MTA-STS verified TLS", async () => {
+    fake.serve(
+      secureZoneHandler({
+        ...signedHost("mx1.example.org", "192.0.2.1", {
+          answers: [tlsaRecord(1, 1, 1, DIGEST)],
+        }),
+        ...signedHost("mx2.example.org", "192.0.2.2", {
+          answers: [tlsaRecord(2, 1, 1, DIGEST)],
+        }),
+      }),
+    );
+    const { calls, run } = tlsSessions(true);
+    const outcomes = await deliver(["mx1.example.org", "mx2.example.org"], run, {
+      verifiedTls: true,
+      sts: STS,
+    });
+    expect(calls).toEqual([{ mxHost: "mx2.example.org", tls: "mta-sts" }]);
+    expect(outcomes).toEqual([
+      { key: "example.org", tls: "starttls", mxHost: "mx2.example.org" },
+    ]);
+  });
+
+  test("usable records beside it keep DANE; an insecure TLSA answer is MTA-STS", async () => {
+    fake.serve(
+      secureZoneHandler({
+        ...signedHost("mx1.example.org", "192.0.2.1", {
+          answers: [tlsaRecord(3, 1, 1, DIGEST), tlsaRecord(2, 1, 1, DIGEST)],
+        }),
+        ...signedHost("mx3.example.org", "192.0.2.3", {
+          answers: [tlsaRecord(3, 1, 1, DIGEST)],
+          ad: false,
+        }),
+      }),
+    );
+    const { calls, run } = tlsSessions(true);
+    const failing: SessionRunner = async (session) => {
+      await run(session);
+      return session.transactions.map((t) => ({
+        key: t.key,
+        error: new Error("DANE: no authenticated TLS with mx1.example.org (no-match)"),
+        tls: null,
+      }));
+    };
+    await deliver(["mx1.example.org", "mx3.example.org"], failing, {
+      verifiedTls: true,
+      sts: STS,
+    });
+    /** mx1: DANE despite the policy (usable DANE-EE); mx3: insecure TLSA, so the policy. */
+    expect(calls).toEqual([
+      { mxHost: "mx1.example.org", tls: "dane" },
+      { mxHost: "mx3.example.org", tls: "mta-sts" },
+    ]);
+  });
+
+  test("without an enforce policy it stays DANE, TLS required but not authenticated", async () => {
+    fake.serve(
+      secureZoneHandler({
+        ...signedHost("mx1.example.org", "192.0.2.1", {
+          answers: [tlsaRecord(1, 1, 1, DIGEST)],
+        }),
+      }),
+    );
+    const { calls, run } = tlsSessions(false);
+    await deliver(["mx1.example.org"], run);
+    expect(calls).toEqual([{ mxHost: "mx1.example.org", tls: "dane" }]);
   });
 });
