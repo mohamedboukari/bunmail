@@ -54,10 +54,17 @@ export async function applyDomainCheck(
     if (!row) return undefined;
 
     const transition = nextDomainCheckState(row, result, now, intervalMs);
+    /**
+     * `verified_at` is written only when this check changes it (an event):
+     * an unchanged value stays as stored, so a hand-set Postgres `infinity`
+     * (#457), which drizzle cannot encode back, never breaks the check.
+     */
+    const { verifiedAt, ...flags } = transition.next;
     const [updated] = await tx
       .update(domains)
       .set({
-        ...transition.next,
+        ...flags,
+        ...(transition.event === null ? {} : { verifiedAt }),
         lastCheckedAt: now,
         nextCheckAt: transition.nextCheckAt,
         lastCheckResult: result,
