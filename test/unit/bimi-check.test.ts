@@ -170,12 +170,24 @@ describe("BimiPanel", () => {
     const html = await BimiPanel({
       domain: { id: "dom_1", name: "acme.io" },
       check: null,
+      canCheck: true,
     });
     expect(html).toContain("BIMI");
     expect(html).toContain("default._bimi.acme.io");
     expect(html).toContain("v=BIMI1; l=https://acme.io/bimi/logo.svg");
     expect(html).toContain('action="/dashboard/domains/dom_1/bimi"');
     expect(html).toContain("Not checked in the last 30 minutes.");
+  });
+
+  test("a member sees the section and the result, but no Check BIMI button", async () => {
+    const html = await BimiPanel({
+      domain: { id: "dom_1", name: "acme.io" },
+      check: null,
+      canCheck: false,
+    });
+    expect(html).toContain("default._bimi.acme.io");
+    expect(html).not.toContain("/dashboard/domains/dom_1/bimi");
+    expect(html).not.toContain("Check BIMI</button>");
   });
 
   test("hostile DNS and logo content renders escaped, the logo never", async () => {
@@ -191,7 +203,11 @@ describe("BimiPanel", () => {
         ),
       ).deps,
     });
-    const html = await BimiPanel({ domain: { id: "dom_1", name: "acme.io" }, check });
+    const html = await BimiPanel({
+      domain: { id: "dom_1", name: "acme.io" },
+      check,
+      canCheck: true,
+    });
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<svg");

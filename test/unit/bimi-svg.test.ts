@@ -155,6 +155,16 @@ describe("svgTinyPsProblems", () => {
     expect(svgTinyPsProblems("")).toEqual(["The logo is not well-formed XML"]);
   });
 
+  test("document-wide problems are capped at 20, the rest counted in one line", () => {
+    const attributes = Array.from({ length: 50 }, (_, i) => `onx${i}="1"`).join(" ");
+    const problems = svgTinyPsProblems(
+      svg({ body: `<title>Acme</title><rect ${attributes}/>` }),
+    );
+    expect(problems).toHaveLength(21);
+    expect(problems[19]).toBe("The logo has an event handler attribute (onx19=)");
+    expect(problems[20]).toBe("... and 30 more problems");
+  });
+
   test("nesting is walked without recursion, and refused past 100 levels", () => {
     const nested = (depth: number): string =>
       svg({

@@ -11,7 +11,7 @@ import type { Domain } from "../../modules/domains/types/domain.types.ts";
 
 /**
  * The domain page's BIMI section (#415): what BIMI needs, the record to
- * publish, the Check BIMI button (admins only) and the last check's
+ * publish, the Check BIMI button (shown to admins and the owner only) and the last check's
  * findings. Everything in a finding can come from the domain's DNS or its
  * logo, so it is escaped; the logo itself is never rendered.
  */
@@ -134,10 +134,13 @@ function BimiResult({ check }: { check: BimiCheck }) {
 export function BimiPanel({
   domain,
   check,
+  canCheck,
 }: {
   domain: Pick<Domain, "id" | "name">;
   /** The last check (`lastBimiCheck`), or null when none is kept. */
   check: BimiCheck | null;
+  /** True for an admin or the owner: only they may run the check. */
+  canCheck: boolean;
 }) {
   const host = bimiRecordHost(domain.name);
   const example = `v=BIMI1; l=https://${domain.name}/bimi/logo.svg; a=https://${domain.name}/bimi/vmc.pem`;
@@ -147,14 +150,16 @@ export function BimiPanel({
         <h2 class="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
           BIMI
         </h2>
-        <form method="POST" action={`/dashboard/domains/${domain.id}/bimi`}>
-          <button
-            type="submit"
-            class="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
-          >
-            Check BIMI
-          </button>
-        </form>
+        {canCheck && (
+          <form method="POST" action={`/dashboard/domains/${domain.id}/bimi`}>
+            <button
+              type="submit"
+              class="px-3 py-1.5 text-sm font-medium rounded-lg border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+            >
+              Check BIMI
+            </button>
+          </form>
+        )}
       </div>
       <p class="text-sm text-gray-500 dark:text-gray-400 mb-2">
         BIMI lets mailbox providers show your logo next to your mail. It needs a TXT

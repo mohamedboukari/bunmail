@@ -79,6 +79,19 @@ describe("parseBimiRecord", () => {
     ).toEqual(["a=ftp://acme.io/vmc.pem is not an https URL"]);
   });
 
+  test("an l= on a port other than 443 is a problem; a= is never fetched", () => {
+    expect(parseBimiRecord("v=BIMI1; l=https://acme.io:8443/logo.svg").problems).toEqual([
+      "l= names port 8443: the logo must be served on the https port (443)",
+    ]);
+    expect(parseBimiRecord("v=BIMI1; l=https://acme.io:443/logo.svg").problems).toEqual(
+      [],
+    );
+    expect(
+      parseBimiRecord("v=BIMI1; l=https://acme.io/l.svg; a=https://acme.io:8443/v.pem")
+        .problems,
+    ).toEqual([]);
+  });
+
   test("garbage is reported, never thrown", () => {
     const parsed = parseBimiRecord(
       `v=BIMI1; garbage; l=https://acme.io/a.svg; l=https://acme.io/b.svg; ${"x".repeat(500)}`,

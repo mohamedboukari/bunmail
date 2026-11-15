@@ -132,6 +132,10 @@ describe("POST /dashboard/domains/:id/bimi (#415)", () => {
     expect(res.headers.get("location")).toContain("flash=bimi_not_ready");
     const html = await (await page(`/dashboard/domains/${domain.id}`, member)).text();
     expect(html).toContain("Not ready");
+    /** The button is for admins only. */
+    expect(html).not.toContain(`/dashboard/domains/${domain.id}/bimi`);
+    const adminHtml = await (await page(`/dashboard/domains/${domain.id}`, admin)).text();
+    expect(adminHtml).toContain(`action="/dashboard/domains/${domain.id}/bimi"`);
     expect(html).toContain("No DMARC record at _dmarc.acme.io");
   });
 

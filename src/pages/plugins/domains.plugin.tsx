@@ -3,7 +3,7 @@ import { logger } from "../../utils/logger.ts";
 import { loggableError } from "../../utils/db-error.ts";
 import { DomainsPage } from "../routes/domains.tsx";
 import { DomainDetailPage } from "../routes/domain-detail.tsx";
-import { adminGuard, memberGuard } from "../guards.tsx";
+import { adminGuard, memberGuard, roleAtLeast } from "../guards.tsx";
 import { dkimRotationErrorFlash, domainAddErrorFlash } from "../flash-errors.ts";
 import {
   DkimRotationError,
@@ -524,7 +524,7 @@ export function domainPages(app: GuardedDashboard) {
        */
       .get(
         "/domains/:id",
-        async ({ params, set, query }) => {
+        async ({ params, set, query, auth }) => {
           const domain = await domainService.getDomainById(params.id);
 
           if (!domain) {
@@ -544,6 +544,7 @@ export function domainPages(app: GuardedDashboard) {
               smtpEnabled={config.smtp.enabled}
               trackingEnabled={config.tracking.enabled}
               bimi={lastBimiCheck(domain.id)}
+              canCheckBimi={roleAtLeast(auth.user.role, "admin")}
               flash={flash}
             />
           );

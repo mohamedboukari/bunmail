@@ -26,8 +26,9 @@ import { svgTinyPsProblems } from "./bimi-svg.ts";
  *   against `Content-Length` and while reading.
  *
  * The body is checked by `bimi-svg.ts` and then dropped: never stored,
- * never rendered. Findings never quote the URL's query or a fetch error's
- * message (it can embed the URL).
+ * never rendered. Findings name the failure in fixed text, never a fetch
+ * error's own message. (The record's findings do quote the `l=` and `a=`
+ * URLs, shortened: they come from public DNS.)
  */
 
 /** Largest logo read, in bytes. */

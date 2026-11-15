@@ -57,8 +57,8 @@ export function bimiRecordHost(domain: string): string {
 
 /**
  * Why a `l=` or `a=` value is not a usable URL, or null when it is: an
- * absolute `https:` URL with a host, no user name or password, and at
- * most {@link URL_MAX} characters.
+ * absolute `https:` URL with a host, no user name or password, at most
+ * {@link URL_MAX} characters, and for `l=` no port other than 443.
  */
 function urlProblem(tag: "l" | "a", value: string): string | null {
   if (value.length > URL_MAX) return `${tag}= is longer than ${URL_MAX} characters`;
@@ -72,6 +72,13 @@ function urlProblem(tag: "l" | "a", value: string): string | null {
   if (url.hostname === "") return `${tag}=${quote(value)} has no host`;
   if (url.username !== "" || url.password !== "") {
     return `${tag}= carries a user name or password`;
+  }
+  /**
+   * The logo is fetched: a port other than 443 (which `URL` drops) would
+   * let a record probe arbitrary ports of a public host.
+   */
+  if (tag === "l" && url.port !== "") {
+    return `l= names port ${url.port}: the logo must be served on the https port (443)`;
   }
   return null;
 }

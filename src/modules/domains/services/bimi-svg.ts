@@ -32,6 +32,12 @@ const FORBIDDEN_ELEMENTS: ReadonlyMap<string, string> = new Map([
   ["iframe", "an <iframe> element"],
 ]);
 
+/**
+ * Most document-wide problems listed; the rest are counted in one line, so
+ * a hostile logo cannot fill the kept result (and the page) with thousands.
+ */
+const MAX_DOCUMENT_PROBLEMS = 20;
+
 /** How far a `viewBox` may be from square: 1% of its height. */
 const SQUARE_TOLERANCE = 0.01;
 
@@ -181,7 +187,12 @@ function documentProblems(root: SvgElement): string[] {
       if (next !== null) stack.push(next);
     }
   }
-  return [...problems];
+  const listed = [...problems];
+  if (listed.length <= MAX_DOCUMENT_PROBLEMS) return listed;
+  return [
+    ...listed.slice(0, MAX_DOCUMENT_PROBLEMS),
+    `... and ${listed.length - MAX_DOCUMENT_PROBLEMS} more problems`,
+  ];
 }
 
 /**
