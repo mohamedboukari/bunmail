@@ -678,7 +678,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`
-- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; inbound and domain events still need an admin key)
+- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; each name must be an entry of `WEBHOOK_EVENT_TYPES`, as in the REST API: an unknown one, even mixed with valid ones, gets the error flash "Unknown webhook event" and an empty `events` field gets "Select at least one event", nothing stored, #437; inbound and domain events still need an admin key)
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
 - Replay a webhook delivery → `POST /dashboard/webhooks/deliveries/:deliveryId/replay`
 - Remove a suppression → `POST /dashboard/suppressions/:id/delete`
