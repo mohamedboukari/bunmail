@@ -384,7 +384,7 @@ a Redis outage it falls back to per-replica memory).
 | GET /dashboard/domains/:id       | Domain detail + DNS status + DKIM key panel (rotation, previous selector, #250) |
 | GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
 | GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview); read-only for a member on someone else's template (#219) |
-| GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form                 |
+| GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form, one event checkbox per `WEBHOOK_EVENT_TYPES` entry (#425) |
 | GET /dashboard/webhooks/:id/deliveries | Delivery history of one webhook, filter by status (#30)     |
 | GET /dashboard/webhooks/deliveries/:deliveryId | Delivery detail: payload, last response, Replay (#30) |
 | GET /dashboard/inbound           | Inbound emails list: bulk-select, per-row trash                  |
@@ -645,7 +645,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`
-- Create webhook → `POST /dashboard/webhooks`
+- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; inbound and domain events still need an admin key)
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
 - Replay a webhook delivery → `POST /dashboard/webhooks/deliveries/:deliveryId/replay`
 - Remove a suppression → `POST /dashboard/suppressions/:id/delete`

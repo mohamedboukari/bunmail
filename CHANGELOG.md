@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboard webhook form lists every event (#425).** The create form on the Webhooks page had its own hand-written event list, which missed `email.complained` and `email.received`, so dashboard users could not subscribe to them (the REST API always accepted them). The form now renders one checkbox per entry of `WEBHOOK_EVENT_TYPES`, a runtime list in `src/modules/webhooks/types/webhook.types.ts` from which the `WebhookEventType` union is derived and the REST create DTO builds its literals, so a new event can no longer be missed in either place. The REST contract and the OpenAPI schema are unchanged; `email.received` and the domain events still need an admin key. Docs: `docs/webhooks.md`, `docs/dashboard.md`.
+
 ## [0.12.0] - 2026-11-08
 
 > **Theme: security fixes, single sign-on, observability and transport security on top of 0.11.0.** Two advisories are fixed (`GHSA-wmgc-vwq2-88j5`: a `From` address with two `@` signs passed the sender-domain check over SMTP submission; `GHSA-9hfc-26m5-v6cj`: with `SUPPRESSIONS_SHARED_HARD`, a forged complaint could suppress an address for every API key). New and off by default: OpenID Connect single sign-on, Prometheus metrics and OpenTelemetry tracing, optional Redis for several replicas, outbound DANE and TLS-RPT, open and click tracking. The dashboard gains CSV exports (admins only), rows per page and API key tabs. BunMail now signs DKIM and evaluates SPF itself (mailauth removed) and reads multi-string TXT records correctly.

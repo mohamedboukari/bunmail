@@ -11,22 +11,27 @@ export interface CreateWebhookInput {
 }
 
 /**
- * All webhook event types BunMail can fire. When adding a new value here,
- * also extend the literal union in `dtos/create-webhook.dto.ts`: the DTO
- * uses hardcoded literals (TypeBox can't introspect a TypeScript union),
- * so the two locations have to be kept in sync manually.
+ * Every webhook event type BunMail can fire, as a runtime list: the single
+ * source of truth (#425). The `WebhookEventType` union is derived from it,
+ * the REST create DTO (`dtos/create-webhook.dto.ts`) builds its literals
+ * from it, and the dashboard's create form renders one checkbox per entry,
+ * so adding a value here is all it takes to expose a new event everywhere.
  */
-export type WebhookEventType =
-  | "email.queued"
-  | "email.sent"
-  | "email.failed"
-  | "email.bounced"
-  | "email.complained"
-  | "email.received"
-  | "email.unsubscribed"
+export const WEBHOOK_EVENT_TYPES = [
+  "email.queued",
+  "email.sent",
+  "email.failed",
+  "email.bounced",
+  "email.complained",
+  "email.received",
+  "email.unsubscribed",
   /** A recorded open of a tracked email (#187), with `first` and `machine`. */
-  | "email.opened"
+  "email.opened",
   /** A recorded click of a tracked email (#187), with the URL and link position. */
-  | "email.clicked"
-  | "domain.verified"
-  | "domain.verification_failed";
+  "email.clicked",
+  "domain.verified",
+  "domain.verification_failed",
+] as const;
+
+/** One webhook event type BunMail can fire, derived from `WEBHOOK_EVENT_TYPES`. */
+export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];

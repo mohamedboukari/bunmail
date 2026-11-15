@@ -42,7 +42,7 @@ src/modules/webhooks/
 │   ├── webhook.serialization.ts     ← Strips signing secret from responses
 │   └── webhook-delivery.serialization.ts ← Delivery list and detail responses (#30)
 └── types/
-    └── webhook.types.ts             ← Webhook, CreateWebhookInput, WebhookEventType
+    └── webhook.types.ts             ← Webhook, CreateWebhookInput, WEBHOOK_EVENT_TYPES, WebhookEventType
 ```
 
 ## Database Schema
@@ -98,6 +98,8 @@ Indexes:
 | `email.clicked` | A recorded click of a tracked email (#187), with the URL (without query string and fragment) and the link position. Every recorded click (60 s dedupe per link, cap of 50 per email), with `first` and `machine`. |
 | `domain.verification_failed` | A verified domain flipped to failing: two DNS checks in a row (by the re-verification loop or Verify) found a record missing or wrong (#250). `verifiedAt` is cleared in the same transaction. A failed lookup (SERVFAIL, timeout) never counts. Fires once per flip. Admin keys only. See [domains.md](domains.md#failure-rule-250). |
 | `domain.verified` | A domain that was not verified (new, or flipped to failing) passed every check (#250). Admin keys only. |
+
+The list lives once, as `WEBHOOK_EVENT_TYPES` in `types/webhook.types.ts` (#425): the `WebhookEventType` union is derived from it, the REST create DTO builds its literals from it, and the dashboard's create form renders one checkbox per entry. A new event is added there and shows up in all three.
 
 ### Who receives an event
 
