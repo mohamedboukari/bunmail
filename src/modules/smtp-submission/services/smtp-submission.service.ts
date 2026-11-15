@@ -8,6 +8,7 @@ import { submissionDataHandler } from "./smtp-submission-data.service.ts";
 import { submissionSessionHandlers } from "./smtp-submission-handlers.service.ts";
 import { resetSubmissionLimits } from "./submission-limits.ts";
 import {
+  boundPort,
   describeListenError,
   isListenError,
 } from "../../inbound/services/smtp-listen.ts";
@@ -27,8 +28,8 @@ import {
  */
 
 /**
- * The server's public surface: `start`, `stop` and the message size cap
- * (#387). The rest lives in one file per concern, beside this one:
+ * The server's public surface: `start`, `stop`, `listeningPort` (#443) and
+ * the message size cap (#387). The rest lives in one file per concern, beside this one:
  *
  *   - `smtp-submission-session.service.ts`: per-connection stats, log context, spans, SMTP errors
  *   - `smtp-submission-tls.service.ts`: the implicit-TLS listener (#349, #351)
@@ -65,6 +66,12 @@ let server: SMTPServer | null = null;
 /** The TLS listener in front of `server` in implicit mode (#349), or null. */
 let tlsListener: TlsServer | null = null;
 
+/**
+ * Resolves with the bound port once the running server listens (#443), or
+ * null when stopped. Read through `listeningPort()`.
+ */
+let listening: Promise<number> | null = null;
+
 /* ─── Server lifecycle ─── */
 
 /**
@@ -83,7 +90,10 @@ let tlsListener: TlsServer | null = null;
  */
 export function start(portOverride?: number): void {
   const { tls, connectionRateLimit } = config.smtpSubmission;
-  /** `portOverride` lets integration tests bind an isolated port. */
+  /**
+   * `portOverride` lets integration tests bind their own port: `0` picks a
+   * free one, read back through `listeningPort()` (#443).
+   */
   const port = portOverride ?? config.smtpSubmission.port;
 
   /**
@@ -183,21 +193,53 @@ export function start(portOverride?: number): void {
   };
   smtp.on("error", onServerError);
 
+  /** Settles `listening` from the listen callback below. */
+  let resolveListening: (bound: number) => void = () => undefined;
+  listening = new Promise<number>((resolve) => {
+    resolveListening = resolve;
+  });
+
+  /**
+   * The socket that accepts connections: the TLS listener in implicit mode,
+   * smtp-server's own `net.Server` otherwise.
+   */
+  const acceptor =
+    implicit && tlsOptions ? createImplicitTlsListener(smtp, tlsOptions) : null;
+
   const onListening = (): void => {
-    logger.info("SMTP submission server started", { port, tls: tls.mode });
+    /**
+     * The port actually bound: the configured one in production, the OS's
+     * pick when a test passes `0` (#443).
+     */
+    const bound = boundPort(acceptor ?? smtp.server, port);
+    logger.info("SMTP submission server started", { port: bound, tls: tls.mode });
+    resolveListening(bound);
   };
 
-  if (implicit && tlsOptions) {
-    tlsListener = createImplicitTlsListener(smtp, tlsOptions);
-    tlsListener.on("error", onServerError);
-    tlsListener.listen(port, onListening);
+  if (acceptor) {
+    tlsListener = acceptor;
+    acceptor.on("error", onServerError);
+    acceptor.listen(port, onListening);
   } else {
     smtp.listen(port, onListening);
   }
 }
 
+/**
+ * The port the running server is bound to, once it listens (#443). Lets the
+ * integration tests start it on port `0` (a free port the OS picks) and
+ * point their client at the real one. Rejects when the server is stopped.
+ */
+export function listeningPort(): Promise<number> {
+  if (listening === null) {
+    return Promise.reject(new Error("[smtp-submission] the server is not started"));
+  }
+  return listening;
+}
+
 /** Stops the SMTP submission server gracefully (called on shutdown). */
 export function stop(): void {
+  listening = null;
   if (tlsListener) {
     tlsListener.close();
     tlsListener = null;

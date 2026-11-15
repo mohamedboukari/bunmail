@@ -23,9 +23,13 @@ import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp
 import { config } from "../../src/config.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port for the implicit-TLS server (avoids the privileged 465). */
-const TEST_PORT = 12465;
+/**
+ * The implicit-TLS server's port (never the privileged 465): it binds 0
+ * and the OS picks a free one (#443).
+ */
+let submissionPort = 0;
 
 const CLIENT = new URL("../fixtures/smtp-submission-client.mjs", import.meta.url)
   .pathname;
@@ -95,7 +99,7 @@ async function runClient(
 ): Promise<ClientResult> {
   const node = Bun.which("node");
   if (node === null) throw new Error("these tests need `node` on PATH");
-  const proc = Bun.spawn([node, CLIENT, mode, String(TEST_PORT)], {
+  const proc = Bun.spawn([node, CLIENT, mode, String(submissionPort)], {
     stdout: "pipe",
     stderr: "inherit",
     env: {
@@ -131,7 +135,7 @@ let infoSpy: Mock<typeof logger.info>;
 let stderrLines: string[] = [];
 const savedTls = { ...config.smtpSubmission.tls };
 
-beforeAll(() => {
+beforeAll(async () => {
   infoSpy = spyOn(logger, "info");
   /** smtp-server prints its default-certificate warning on stderr. */
   const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
@@ -144,10 +148,14 @@ beforeAll(() => {
     keyPath: `${TLS_DIR}mx1.example.test.key.pem`,
   });
   try {
-    smtpSubmission.start(TEST_PORT);
+    smtpSubmission.start(0);
   } finally {
     errorSpy.mockRestore();
   }
+  submissionPort = await boundTestPort(
+    smtpSubmission.listeningPort(),
+    "SMTP submission (TLS)",
+  );
 });
 
 afterAll(() => {
@@ -176,7 +184,7 @@ describe("SMTP submission: implicit TLS (#349)", () => {
   test("the start line reports implicit TLS and its port", async () => {
     const started = await waitForStart();
     expect(fieldOf(started, "tls")).toBe("implicit");
-    expect(fieldOf(started, "port")).toBe(TEST_PORT);
+    expect(fieldOf(started, "port")).toBe(submissionPort);
   });
 
   test("smtp-server is told the TLS is done upstream (no default-certificate warning)", () => {
@@ -275,12 +283,13 @@ const LINGERING_STATES = new Map([
 /**
  * The server's sockets on the test port that are still open for a client
  * (the listener aside). Linux: the kernel's TCP tables, by local port (the
- * Node clients use ephemeral ports, never this one). macOS: `lsof` on this
- * process, where a socket the runtime never released also shows as CLOSED.
+ * Node clients get other ephemeral ports, never the one the listener holds).
+ * macOS: `lsof` on this process, where a socket the runtime never released
+ * also shows as CLOSED.
  */
 function lingeringSockets(): string[] {
   if (process.platform === "linux") {
-    const local = `:${TEST_PORT.toString(16).toUpperCase().padStart(4, "0")}`;
+    const local = `:${submissionPort.toString(16).toUpperCase().padStart(4, "0")}`;
     const states: string[] = [];
     for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
       let rows: string[];
@@ -306,7 +315,7 @@ function lingeringSockets(): string[] {
     "-a",
     "-p",
     String(process.pid),
-    `-iTCP:${TEST_PORT}`,
+    `-iTCP:${submissionPort}`,
   ]).stdout.toString();
   return out
     .split("\n")

@@ -38,6 +38,8 @@ bun run dev
 | `bun run lint`        | Run oxlint (type-aware)             |
 | `bun run lint:fix`    | Run oxlint with auto-fix            |
 | `bun run lint:mocks`  | Check every `mock.module` is complete |
+| `bun run changelog:check origin/main` | Check the committed branch carries its changelog fragment (the CI `changelog` job) |
+| `bun run changelog:collect [X.Y.Z]` | Move `docs/changes/` fragments into `CHANGELOG.md` (releases) |
 | `bun run db:push`     | Push schema to dev DB               |
 | `bun run db:generate` | Generate migration files            |
 | `bun run db:migrate`  | Run migrations                      |
@@ -90,15 +92,16 @@ The tiers, scripts and conventions are in [docs/testing.md](docs/testing.md). On
 1. Fork the repo and create a branch from `main`
 2. Make your changes following the conventions above
 3. Add/update tests for new functionality
-4. Run `bun test && bunx tsc --noEmit && bun run lint`
-5. Open a PR with a clear description of what and why
+4. Add a changelog fragment instead of editing `CHANGELOG.md`: `docs/changes/<issue>.<type>.md`, holding your entry's bullet exactly as it should appear in the changelog (see [docs/changes/README.md](docs/changes/README.md)). CI fails a PR that changes `src/`, `drizzle/`, `Dockerfile`, `docker-compose*.yml` or `.env.example` without one, unless a maintainer sets the `skip-changelog` label for an internal-only change.
+5. Run `bun test && bunx tsc --noEmit && bun run lint`
+6. Open a PR with a clear description of what and why
 
 ## Claude Code tooling (optional)
 
 The repo ships project config for [Claude Code](https://claude.com/claude-code). None of it is needed to build or test BunMail.
 
-- **`/ship`** (`.claude/skills/ship/`): takes an issue from plan to merged PR using this repo's workflow (plan and approval first, gates in CI order, docs and CHANGELOG, PR template, CI watch).
-- **`/release`** (`.claude/skills/release/`): the release flow (CHANGELOG prep commit, `bun run release`, then verifying the GitHub Release and the GHCR image attestation).
+- **`/ship`** (`.claude/skills/ship/`): takes an issue from plan to merged PR using this repo's workflow (plan and approval first, gates in CI order, docs and the changelog fragment, PR template, CI watch).
+- **`/release`** (`.claude/skills/release/`): the release flow (CHANGELOG prep commit with `bun run changelog:collect X.Y.Z`, `bun run release`, then verifying the GitHub Release and the GHCR image attestation).
 - **No-em-dash hook** (`.claude/hooks/no-em-dash.ts`, wired in `.claude/settings.json`): enforces the CLAUDE.md rule on files Claude writes, and on lines added to the working tree when a turn ends.
 - **Permission allowlist** (`.claude/settings.json`): pre-approves read-only and test commands only (type-check, lint, tests, `git`/`gh` reads, graphify queries). Nothing that pushes, merges or deletes.
 - **Context7 MCP** (`.mcp.json`): up-to-date docs for Elysia, Drizzle and Bun via `https://mcp.context7.com/mcp`. It receives library-name queries, never your code. Claude Code asks you to approve it on first use.

@@ -17,13 +17,15 @@ import {
 import { UnauthorizedSenderError } from "../../src/modules/api-keys/errors.ts";
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
 import { truncateAll, db, emails } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-const TEST_PORT = 12589;
+/** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+let submissionPort = 0;
 
 function transport(pass: string) {
   return createTransport({
     host: "127.0.0.1",
-    port: TEST_PORT,
+    port: submissionPort,
     secure: false,
     ignoreTLS: true,
     auth: { user: "apikey", pass },
@@ -31,7 +33,10 @@ function transport(pass: string) {
   });
 }
 
-beforeAll(() => smtpSubmission.start(TEST_PORT));
+beforeAll(async () => {
+  smtpSubmission.start(0);
+  submissionPort = await boundTestPort(smtpSubmission.listeningPort(), "SMTP submission");
+});
 afterAll(() => smtpSubmission.stop());
 beforeEach(async () => {
   await truncateAll();
