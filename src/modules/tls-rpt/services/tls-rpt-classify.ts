@@ -3,6 +3,7 @@ import type { DeliveryTls } from "../../emails/models/email.schema.ts";
 import { mxMatchesPattern, type MtaStsDiscovery } from "../../emails/services/mta-sts.ts";
 import type { DaneHost } from "../../emails/types/dane.types.ts";
 import type {
+  TlsRptDomain,
   TlsRptFailureType,
   TlsRptObservation,
   TlsRptPolicy,
@@ -40,6 +41,10 @@ import type {
  *   verify up to its anchor (`certificate-not-trusted`), names the wrong
  *   host (`certificate-host-mismatch`) or has expired. `dane-required` is
  *   not used: BunMail has no mandatory-DANE setting (RFC 7672 section 6).
+ *   A host with no usable record under an MTA-STS enforce policy gets
+ *   MTA-STS verified TLS (#452): its session is reported under the `sts`
+ *   policy with that verification's outcome, and under the host's `tlsa`
+ *   policy as `tlsa-invalid` (#473, {@link sessionPolicies}).
  *
  * A session that failed before TLS mattered (refused connection, timeout,
  * an SMTP reply) is not reported: RFC 8460 section 4.3 leaves transient
@@ -121,6 +126,34 @@ export function danePolicyOf(host: DaneHost): TlsRptPolicy {
     mode: null,
     policyFailure: host.usable.length === 0 ? "tlsa-invalid" : null,
   };
+}
+
+/**
+ * The policies one MX session is recorded under for a domain whose
+ * attempt is recorded under `target` (#345, #473), from the host's DANE
+ * records (`null`: DANE did not apply to it) and whether the domain's
+ * MTA-STS enforce policy secured the session because none of those
+ * records is usable (`stsSecured`, #452):
+ *
+ * - no DANE for the host: `target`, the domain's MTA-STS (or no) policy;
+ * - DANE applied (usable records, or none usable and no enforce policy):
+ *   the host's `tlsa` policy only, DANE taking precedence;
+ * - no usable record and the enforce policy secured the session: the
+ *   `sts` policy `target`, which the session's TLS outcome (success, or
+ *   the certificate failure of the MTA-STS verification) belongs to, and
+ *   the host's `tlsa` policy with `tlsa-invalid`, since its RRset was
+ *   evaluated and none of its records was found valid (RFC 8460 section
+ *   4.3.2.1). RFC 8460 section 4 allows both policies for one domain and
+ *   MX, with overlapping counts.
+ */
+export function sessionPolicies(
+  target: TlsRptDomain,
+  dane: DaneHost | null,
+  stsSecured: boolean,
+): TlsRptDomain[] {
+  if (dane === null) return [target];
+  const tlsa = { domain: target.domain, policy: danePolicyOf(dane) };
+  return stsSecured ? [target, tlsa] : [tlsa];
 }
 
 /**
