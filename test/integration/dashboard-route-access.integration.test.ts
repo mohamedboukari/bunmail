@@ -232,6 +232,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /dashboard/domains/:id/tracking-revoke": { access: "admin" },
   /** The domain's MTA-STS mode (#472). */
   "POST /dashboard/domains/:id/mta-sts": { access: "admin", body: { mode: "none" } },
+  /** The BIMI check (#415): fetches a URL from the domain's DNS, so admins only. */
+  "POST /dashboard/domains/:id/bimi": { access: "admin" },
 
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },

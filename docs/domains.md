@@ -26,6 +26,10 @@ src/modules/domains/
 │   ├── mta-sts-served-policy.ts    ← The served MTA-STS policy text, its id, the TXT value, Host parsing (#472, pure)
 │   ├── mta-sts-hosts.service.ts    ← Which domains get a policy: one query, cached 30 s (#472)
 │   ├── mta-sts-check.service.ts    ← The MTA-STS check of Verify: TXT id and a sender-style fetch (#472)
+│   ├── bimi-check.service.ts       ← BIMI readiness check and the last result per domain (#415)
+│   ├── bimi-record.ts              ← BIMI record lookup and parse, DMARC prerequisite (#415)
+│   ├── bimi-logo.ts                ← SSRF-guarded logo fetch, 32 KB cap, no redirects (#415)
+│   ├── bimi-svg.ts                 ← SVG Tiny PS rules of the logo (#415)
 │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
 │   ├── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
 │   ├── spf-evaluator.ts            ← SPF `checkHost()`, RFC 7208 strict: lookups, limits, deadline (#373)
@@ -41,6 +45,7 @@ src/modules/domains/
 └── types/
     ├── domain.types.ts             ← Domain type, CreateDomainInput, DomainSettingsChanges (#187)
     ├── domain-check.types.ts       ← Check outcome (`pass`, `fail`, `unknown`) and result (#250)
+    ├── bimi.types.ts               ← BIMI check, record, findings (#415)
     └── spf.types.ts                ← SPF result, DNS resolver, `checkHost()` input and options (#373)
 ```
 
@@ -214,6 +219,25 @@ The tests run the OpenSPF RFC 7208 suite (`test/fixtures/spf/rfc7208-tests.yml`,
 
 There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 
+## BIMI (#415)
+
+BIMI lets mailbox providers show a brand logo next to a domain's mail. BunMail sends nothing differently for it: the domain page has a **Check BIMI** button (shown to admins and the owner only) that says whether the domain is BIMI-ready. There is no API endpoint, and nothing is checked on page load, by Verify or by the re-verification loop; BIMI never affects `verified_at` or a send.
+
+The check (`checkBimi`) has four parts:
+
+1. **Record.** The TXT record at `default._bimi.<domain>` (through `src/utils/dns-txt.ts`), else at the organizational domain (the DMARC heuristic above), within one 5 s budget. Records are the joined strings starting `v=BIMI1` (any case); exactly one must exist. Tags: `l=` the logo URL, `a=` the certificate URL, both one absolute `https:` URL without a user name or password, at most 2048 characters, and `l=` on no port other than 443 (the logo is fetched, so a record cannot probe other ports); tag names case-insensitive, unknown tags (such as `avp=`) ignored, a repeated tag or a part without `=` makes the record malformed. An empty `l=` (and an empty or absent `a=`) is a **declination**. No `l=` at all is malformed unless `a=` names a certificate (the logo then comes from the certificate and is not checked).
+2. **DMARC prerequisite.** A fresh `checkDmarc` (which also refreshes the DMARC panel, as Verify does): one valid record, `p=quarantine` or `p=reject`, `pct=100`, and `sp=` not `none` when set. An inherited record needs its own `p=` to enforce too.
+3. **Logo.** The `l=` URL is fetched through the webhook SSRF guard (`resolvePublicWebhookTarget` and `buildPinnedRequest`, #128): `https:` only, refused when the host resolves to any private, loopback, link-local, CGNAT, multicast or reserved address, the request sent to the checked address with the host name as SNI and certificate name, the certificate verified; no redirects (a 3xx is a failure), no connection reuse, no decompression (a compressed logo is refused), one 10 s timeout over the lookup, the request and the body, and a 32 KB cap (the BIMI SVG profile's limit), checked against `Content-Length` and while reading. A `Content-Type` other than `image/svg+xml` is a warning. The body is then checked against SVG Tiny PS (`bimi-svg.ts`) and dropped: never stored, never rendered.
+   - Parsed like DMARC reports (#129): a `<!DOCTYPE` is refused before parsing, the XML must validate, `fast-xml-parser` runs with `processEntities: false` and refuses nesting past 100 elements, and the tree is walked without recursion.
+   - Rules, each reported: the root is `<svg>` with `version="1.2"` and `baseProfile="tiny-ps"`, no `x=` or `y=`, a `viewBox` of four numbers that is square (within 1%), and a non-empty `<title>` child; nowhere a `<script>`, `<foreignObject>`, `<image>`, `<a>`, animation (`<animate*>`, `<set>`), `<audio>`, `<video>` or `<iframe>`, an `on*` event attribute, an `href` or `xlink:href` that is not a `#fragment`, or CSS (`style=`, `<style>`) with `@import` or a `url()` that is not a `#fragment`. At most 20 of these document-wide problems are listed, then one "... and N more problems" line, so a hostile logo cannot fill the kept result.
+4. **Certificate.** `a=` is reported as present (and https, by the record rules) or absent. BunMail does not fetch it or validate its chain; Gmail and Apple Mail show the logo only with a Verified Mark Certificate (VMC) or Common Mark Certificate (CMC), which they validate themselves.
+
+The verdict is `ready` (valid record, DMARC enforces, logo passes), `not-ready` (anything failed), `declined`, `missing` or `error` (a lookup or the logo fetch failed for a temporary reason: DNS, the connection, a timeout, a 5xx, and nothing failed for good). Each finding is `{ area, severity, text }` (`record`, `dmarc`, `logo`, `certificate`; `pass`, `fail`, `warn`, `info`). Findings quote DNS values shortened to 80 characters, never the fetch error's own message.
+
+**Where the result lives.** Nothing is stored in the database: the domains schema has no natural place for it, and it goes stale with the logo. `rememberBimiCheck` keeps the last check per domain id in process memory for 30 minutes (at most 1,000 domains, the oldest evicted), and the page shows it after the redirect. With several replicas the page shows it only when the replica that ran the check serves the page; otherwise it says "Not checked", and the banner still gives the verdict.
+
+**ARC is out of scope.** ARC (RFC 8617) seals mail that an intermediary forwards or modifies. BunMail does not forward or modify the mail it receives, so there is nothing to seal; the ARC part of #415 stays open until it does.
+
 ## Service Methods
 
 ### domain.service.ts
@@ -324,6 +348,13 @@ Pure. `servedMtaStsPolicy(mode, settings?)` builds the policy (`{ mode, mx, maxA
 - `getDomainsDnsStatus(names, concurrency = 8)`: the same for a list, in order, with at most `DNS_STATUS_CONCURRENCY` (8) domains looked up at once (a small worker pool), so listing a large install with a cold cache stays bounded. Used by `GET /api/v1/domains`.
 - `rememberDmarcCheck(name, check)`: stores a fresh check (used by `verifyDomain`).
 - `mailFlowFeatures(mx, smtpEnabled)`: the four mail flows with `active` and a one-line explanation.
+
+### bimi-check.service.ts (#415)
+
+- `checkBimi(domain, overrides?): Promise<BimiCheck>`: the BIMI check described in [BIMI](#bimi-415). Never rejects. Logs one `info` line (`BIMI check`: the domain, the verdict, each part's outcome, never a URL or TXT value), and a `warn` when the record lookup or the logo fetch failed for a temporary reason. `overrides` replaces the TXT lookup, the logo fetch or the clock (tests).
+- `rememberBimiCheck(domainId, check, now?)` / `lastBimiCheck(domainId, now?)`: the last check per domain, in memory for 30 minutes.
+
+`bimi-record.ts` holds `lookupBimiRecord()`, `parseBimiRecord()`, `bimiRecordHost()` and `dmarcPrerequisite()`; `bimi-logo.ts` holds `fetchBimiLogo()`, `checkBimiLogo()` and `setBimiLogoDeps(override | null)` (the fetch seam for tests); `bimi-svg.ts` holds `svgTinyPsProblems(svg)`.
 
 ### required-dns-records.ts
 

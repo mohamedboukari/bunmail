@@ -19,6 +19,8 @@ import { DkimKeyPanel } from "./domain-detail-dkim.tsx";
 import { MailFlowPanel } from "./domain-detail-mail-flow.tsx";
 import { TrackingPanel } from "./domain-detail-tracking.tsx";
 import { MtaStsPanel } from "./domain-detail-mta-sts.tsx";
+import { BimiPanel } from "./domain-detail-bimi.tsx";
+import type { BimiCheck } from "../../modules/domains/types/bimi.types.ts";
 
 interface DomainDetailPageProps {
   domain: Domain;
@@ -32,12 +34,17 @@ interface DomainDetailPageProps {
   trackingEnabled: boolean;
   /** `SMTP_ENABLED` with `SMTP_TLS_CERT` (#472): the MTA-STS panel warns without it. */
   inboundStarttls: boolean;
+  /** The last BIMI check still kept (#415), or null (the default). */
+  bimi?: BimiCheck | null;
+  /** True for an admin or the owner: shows the Check BIMI button (#415). */
+  canCheckBimi?: boolean;
   flash?: { message: string; type: "success" | "error" };
 }
 
 /**
  * Domain detail page: shows DNS verification status, the DMARC policy,
- * the DNS records to publish, where the MX points, and a verify button.
+ * the DNS records to publish, where the MX points, a verify button, and
+ * the BIMI section (#415).
  */
 export function DomainDetailPage({
   domain,
@@ -46,6 +53,8 @@ export function DomainDetailPage({
   smtpEnabled,
   trackingEnabled,
   inboundStarttls,
+  bimi = null,
+  canCheckBimi = false,
   flash,
 }: DomainDetailPageProps) {
   return (
@@ -148,6 +157,9 @@ export function DomainDetailPage({
 
       {/* Inbound MTA-STS policy (#472) */}
       <MtaStsPanel domain={domain} inboundStarttls={inboundStarttls} />
+
+      {/* BIMI readiness (#415) */}
+      <BimiPanel domain={domain} check={bimi} canCheck={canCheckBimi} />
 
       {/* Inbound notifications (#106) */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">
