@@ -16,6 +16,7 @@
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 import { redactEmail } from "../../../utils/redact.ts";
+import { UnsendableEmailError } from "../errors.ts";
 import { recipientOrder } from "../../bounces/services/return-path.ts";
 import { composeMessageBody } from "./message-body.ts";
 import type { BodyTracking } from "../../tracking/services/body-tracking.ts";
@@ -281,8 +282,8 @@ export async function sendMail(options: {
   if (Object.keys(state).length === 0) {
     /** No groups at all (no valid recipients after parsing). Treat as
      *  programmer error: the caller shouldn't have reached this code
-     *  path. The queue's full-failure path catches the throw. */
-    throw new Error("No valid recipients after parsing to/cc/bcc");
+     *  path. The queue fails the email at once on this error (#474). */
+    throw new UnsendableEmailError("No valid recipients after parsing to/cc/bcc");
   }
 
   logger.info("Sending email via SMTP", {
