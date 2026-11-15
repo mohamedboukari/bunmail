@@ -25,15 +25,16 @@ import { resetSubmissionLimits } from "../../src/modules/smtp-submission/service
 import { config } from "../../src/config.ts";
 import { emailAttachments } from "../../src/modules/emails/models/email-attachment.schema.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port for the test server (avoids the privileged 587 default). */
-const TEST_PORT = 12587;
+/** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+let submissionPort = 0;
 
 /** Builds a Nodemailer transport pointed at the test submission server. */
 function transport(pass: string, user = "apikey") {
   return createTransport({
     host: "127.0.0.1",
-    port: TEST_PORT,
+    port: submissionPort,
     secure: false,
     /** Force plaintext AUTH: don't attempt STARTTLS against the test server. */
     ignoreTLS: true,
@@ -52,8 +53,9 @@ async function failureOf(send: Promise<unknown>): Promise<string> {
   throw new Error("expected the submission to be rejected");
 }
 
-beforeAll(() => {
-  smtpSubmission.start(TEST_PORT);
+beforeAll(async () => {
+  smtpSubmission.start(0);
+  submissionPort = await boundTestPort(smtpSubmission.listeningPort(), "SMTP submission");
 });
 
 afterAll(() => {
@@ -121,7 +123,7 @@ describe("SMTP submission: authentication", () => {
     /** A pooled transport keeps one authenticated SMTP session open. */
     const session = createTransport({
       host: "127.0.0.1",
-      port: TEST_PORT,
+      port: submissionPort,
       secure: false,
       ignoreTLS: true,
       auth: { user: "apikey", pass: rawKey },

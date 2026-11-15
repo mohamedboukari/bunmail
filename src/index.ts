@@ -68,7 +68,8 @@ logger.info("BunMail server started", {
   version: appVersion,
   bun: Bun.version,
   env: config.env,
-  port: config.server.port,
+  /** The bound port: PORT, or the OS's pick when a test sets PORT=0 (#443). */
+  port: app.server?.port ?? config.server.port,
   host: config.server.host,
 });
 

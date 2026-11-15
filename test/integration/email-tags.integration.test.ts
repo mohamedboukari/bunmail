@@ -35,6 +35,7 @@ import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 import { readJson } from "../read-json.ts";
 
 /** Mirrors the validation branches of the global onError. */
@@ -383,11 +384,15 @@ describe("GET /api/v1/emails?tag=", () => {
 });
 
 describe("SMTP submission X-BunMail-Tag", () => {
-  /** Isolated port, distinct from the other SMTP test files'. */
-  const TEST_PORT = 12615;
+  /** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+  let submissionPort = 0;
 
-  beforeAll(() => {
-    smtpSubmission.start(TEST_PORT);
+  beforeAll(async () => {
+    smtpSubmission.start(0);
+    submissionPort = await boundTestPort(
+      smtpSubmission.listeningPort(),
+      "SMTP submission",
+    );
   });
 
   afterAll(() => {
@@ -397,7 +402,7 @@ describe("SMTP submission X-BunMail-Tag", () => {
   function client(rawKey: string): ReturnType<typeof createTransport> {
     return createTransport({
       host: "127.0.0.1",
-      port: TEST_PORT,
+      port: submissionPort,
       secure: false,
       ignoreTLS: true,
       auth: { user: "apikey", pass: rawKey },

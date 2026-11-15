@@ -49,6 +49,7 @@ import { runTrashPurge } from "../../src/modules/trash/services/purge.service.ts
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
 import type { DeliveryGroup } from "../../src/modules/emails/models/email.schema.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 import { readJson } from "../read-json.ts";
 
 /** Mirrors the VALIDATION, attachment and `EmailSendRejectedError` branches of the global onError. */
@@ -664,13 +665,14 @@ describe("attachment metadata reads never load the bytes", () => {
 });
 
 describe("SMTP submission with attachments", () => {
-  const PORT = 12589;
+  /** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+  let submissionPort = 0;
 
   /** A transport to the test submission server. */
   function transport(pass: string) {
     return createTransport({
       host: "127.0.0.1",
-      port: PORT,
+      port: submissionPort,
       secure: false,
       ignoreTLS: true,
       auth: { user: "apikey", pass },
@@ -687,8 +689,12 @@ describe("SMTP submission with attachments", () => {
     throw new Error("expected the submission to be rejected");
   }
 
-  beforeAll(() => {
-    smtpSubmission.start(PORT);
+  beforeAll(async () => {
+    smtpSubmission.start(0);
+    submissionPort = await boundTestPort(
+      smtpSubmission.listeningPort(),
+      "SMTP submission",
+    );
   });
 
   afterAll(() => {

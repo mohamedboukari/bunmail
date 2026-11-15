@@ -13,14 +13,16 @@ import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp
 import * as usage from "../../src/modules/smtp-submission/services/usage.service.ts";
 import { config } from "../../src/config.ts";
 import { truncateAll, seed, db } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 import { smtpSubmissionUsage } from "../../src/modules/smtp-submission/models/smtp-submission-usage.schema.ts";
 
-const TEST_PORT = 12588;
+/** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+let submissionPort = 0;
 
 function transport(pass: string) {
   return createTransport({
     host: "127.0.0.1",
-    port: TEST_PORT,
+    port: submissionPort,
     secure: false,
     ignoreTLS: true,
     auth: { user: "apikey", pass },
@@ -42,8 +44,9 @@ async function failureOf(send: Promise<unknown>): Promise<string> {
   throw new Error("expected the submission to be rejected");
 }
 
-beforeAll(() => {
-  smtpSubmission.start(TEST_PORT);
+beforeAll(async () => {
+  smtpSubmission.start(0);
+  submissionPort = await boundTestPort(smtpSubmission.listeningPort(), "SMTP submission");
 });
 
 afterAll(() => {

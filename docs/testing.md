@@ -59,6 +59,16 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 3. Each test file calls `await truncateAll()` in `beforeEach`. Tables are wiped in dependency order (`suppressions, emails, webhooks, templates, domains, api_keys`) with `CASCADE` and `RESTART IDENTITY`.
 4. Tests execute the real service functions against the real DB. No mocking unless we're stubbing **outbound HTTP** (the webhook-dispatch test stubs `globalThis.fetch`).
 
+### Test listeners bind port 0, so parallel runs are safe (#443)
+
+Every listener a test starts (the inbound and submission SMTP servers, `Bun.serve` fakes, the MX fixture, the spawned app) binds **port `0`**: the OS picks a free port from its ephemeral range (macOS 49152 to 65535, Linux 32768 to 60999 by default) and the test reads the real port back, then points its client or config at it. No port is fixed, so two integration runs on one machine (two pre-commit hooks, or two agents each with its own database) never collide with `EADDRINUSE`. Point each run at its own database: a shared one still clashes, since every file truncates it. The throwaway databases `migrate-lock.integration.test.ts` creates are named after the run's own database (`<db>_ml_1`, `<db>_ml_ok`, `<db>_ml_fail`; lowercase, digits and underscores, at most 63 characters, checked), so two runs never drop each other's either.
+
+- **node:net / smtp-server**: `server.address().port` once listening. **`Bun.serve` / `Bun.listen`**: `server.port`.
+- **BunMail's SMTP servers**: `smtpSubmission.start(0)`, or `config.smtp.port = 0` then `smtpReceiver.start()`, and read the port with `await boundTestPort(service.listeningPort(), label)`. `listeningPort()` resolves with the bound port once the server listens (in production it equals the configured port; the start log line reports it too).
+- **The spawned app**: `PORT=0`; the `BunMail server started` line carries the bound port (`test/integration/request-size-limit.integration.test.ts` reads it from stdout).
+- **Never a port under 10000.** `boundTestPort` ([test/listen-port.ts](../test/listen-port.ts)) throws when a listener ends up below `MIN_TEST_PORT` (10000): never a system or well-known port, nor the low ports local services use (3000, 5432, 8080). An OS ephemeral range always starts above it.
+- **The guard**: [test/unit/test-listener-ports.test.ts](../test/unit/test-listener-ports.test.ts) fails on a hard-coded port: a listener on a literal port anywhere under `test/` (`.listen(N`, `Bun.serve({ port: N })`, `.start(N)`), and in the integration and e2e suites, helpers and fixtures any port-named constant, field or env var set to a literal other than 0 (`const TEST_PORT = 12587`, `{ port: 12591 }`, `PORT: "4000"`). A number that is not a listener port goes on its `ALLOWED` list with the reason.
+
 ### Authorization matrix (#228)
 
 `test/integration/authz-matrix.integration.test.ts` mounts exactly the API plugins production mounts (`apiPlugins` in `src/modules/api-plugins.ts`), with the real auth, admin and rate-limit middleware, and checks every route:

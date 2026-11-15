@@ -1,5 +1,7 @@
 import { describe, test, expect } from "bun:test";
+import { createServer } from "node:net";
 import {
+  boundPort,
   describeListenError,
   isListenError,
 } from "../../src/modules/inbound/services/smtp-listen.ts";
@@ -48,5 +50,34 @@ describe("describeListenError (#167)", () => {
       "Inbound SMTP can't listen on port 25 (EINVAL).",
     );
     expect(describeListenError("Inbound SMTP", 25)).toContain("(unknown error)");
+  });
+});
+
+describe("boundPort (#443)", () => {
+  test("reads the port the OS picked for port 0", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    try {
+      const port = boundPort(server, 0);
+      expect(port).toBeGreaterThan(0);
+      const address = server.address();
+      expect(typeof address === "object" && address !== null ? address.port : -1).toBe(
+        port,
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  test("returns the bound port, which is the configured one in production", () => {
+    const listening = {
+      address: () => ({ address: "::", family: "IPv6", port: 2525 }),
+    };
+    expect(boundPort(listening, 2525)).toBe(2525);
+  });
+
+  test("falls back to the requested port without a TCP address", () => {
+    expect(boundPort({ address: () => null }, 587)).toBe(587);
+    expect(boundPort({ address: () => "/tmp/smtp.sock" }, 587)).toBe(587);
   });
 });
