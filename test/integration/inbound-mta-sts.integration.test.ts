@@ -31,9 +31,9 @@ import type { UserRole } from "../../src/modules/users/types/user.types.ts";
 import { checkSenderDomain } from "../../src/modules/emails/services/sender-domain.service.ts";
 import { verifyDomain } from "../../src/modules/domains/services/dns-verification.service.ts";
 import { getDomainById } from "../../src/modules/domains/services/domain.service.ts";
-import { setMtaStsDeps } from "../../src/modules/emails/services/mta-sts.ts";
 import { config } from "../../src/config.ts";
 import { truncateAll, seed, db, domains } from "./_helpers.ts";
+import { installHermeticMtaSts } from "./_dns-stub.ts";
 import { readJson } from "../read-json.ts";
 import { flashOfResponse } from "../flash-of.ts";
 
@@ -273,7 +273,7 @@ describe("the inline check of a send", () => {
   beforeEach(() => {
     policyHostLookups = 0;
     /** Every policy fetch starts with this lookup of `mta-sts.<domain>`. */
-    setMtaStsDeps({
+    installHermeticMtaSts({
       lookup: () => {
         policyHostLookups++;
         return Promise.reject(Object.assign(new Error("stub"), { code: "ENOTFOUND" }));
@@ -283,7 +283,7 @@ describe("the inline check of a send", () => {
   });
 
   afterEach(() => {
-    setMtaStsDeps(null);
+    installHermeticMtaSts();
     expect(Reflect.set(config.mail, "requireVerifiedDomain", originalRequire)).toBe(true);
   });
 

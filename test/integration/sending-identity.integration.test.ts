@@ -9,9 +9,11 @@ import {
   logReverseDnsAtBoot,
   peekReverseDnsStatus,
   resolveSendingIps,
+  setSendingIpDeps,
   type ReverseDnsDeps,
 } from "../../src/modules/domains/services/sending-ips.service.ts";
 import { config } from "../../src/config.ts";
+import { installHermeticSendingIps } from "./_dns-stub.ts";
 
 const hostname = config.mail.hostname.toLowerCase();
 
@@ -53,6 +55,20 @@ describe("resolveSendingIps", () => {
   test("no records: an empty list, not an error", async () => {
     if (config.mail.publicIps.length > 0) return;
     expect((await resolveSendingIps(dns({}))).ips).toEqual([]);
+  });
+
+  test("without resolvers it uses the seam's (#482): the run-wide stub has no address", async () => {
+    if (config.mail.publicIps.length > 0) return;
+    expect((await resolveSendingIps()).ips).toEqual([]);
+    setSendingIpDeps(dns({ a: { [hostname]: ["203.0.113.20"] } }));
+    try {
+      expect(await resolveSendingIps()).toEqual({
+        ips: ["203.0.113.20"],
+        source: "MAIL_HOSTNAME",
+      });
+    } finally {
+      installHermeticSendingIps();
+    }
   });
 });
 
