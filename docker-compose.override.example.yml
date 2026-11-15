@@ -23,16 +23,22 @@ services:
   # ── Production examples (uncomment what this host needs) ──
   # app:
   #   ports:
-  #     # Inbound SMTP (SMTP_ENABLED=true, SMTP_PORT=25 in .env; docs/inbound.md)
+  #     # Inbound SMTP (SMTP_ENABLED=true, SMTP_PORT=25 in .env; docs/inbound.md),
+  #     # with STARTTLS if SMTP_TLS_CERT / _KEY are set (Bun 1.4.4 or later, #414)
   #     - "${SMTP_PORT:-25}:${SMTP_PORT:-25}"
   #     # SMTP submission over implicit TLS on 465 (SMTP_SUBMISSION_ENABLED=true
   #     # and SMTP_SUBMISSION_TLS_CERT / _KEY in .env; docs/smtp-submission.md)
   #     - "${SMTP_SUBMISSION_PORT:-465}:${SMTP_SUBMISSION_PORT:-465}"
+  #     # ...or STARTTLS on 587 (SMTP_SUBMISSION_TLS_MODE=starttls, #414): the
+  #     # server then listens on 587, so use this line instead of the one above
+  #     # (or set SMTP_SUBMISSION_PORT=587 in .env, which the line above reads)
+  #     - "${SMTP_SUBMISSION_PORT:-587}:${SMTP_SUBMISSION_PORT:-587}"
   #     # ...or plaintext submission for apps on this host only
   #     # (SMTP_SUBMISSION_ALLOW_INSECURE=true): loopback, never public
   #     - "127.0.0.1:2587:${SMTP_SUBMISSION_PORT:-587}"
   #   volumes:
-  #     # TLS certificate and key for submission, readable by uid 1000 (#167)
+  #     # TLS certificates and keys for submission and inbound STARTTLS,
+  #     # readable by uid 1000 (#167, #414)
   #     - /etc/bunmail/tls:/etc/bunmail/tls:ro
   #   # A local recursive resolver on the docker0 bridge, so DNSBL lookups
   #   # (Spamhaus) do not go through a public resolver that refuses them.

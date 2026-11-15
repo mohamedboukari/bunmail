@@ -1,4 +1,12 @@
-import { optionalBoundedInt, optionalEnv, optionalStrictBoolean } from "./env.ts";
+import {
+  optionalBoundedInt,
+  optionalEnv,
+  optionalStrictBoolean,
+  runningBunVersion,
+  runtimeHasSocketFeatures,
+  SOCKET_FEATURES_MIN_BUN,
+  socketFeatureError,
+} from "./env.ts";
 
 /**
  * Default and bounds of `ATTACHMENTS_MAX_TOTAL_MB` (#181), in MB of
@@ -34,8 +42,8 @@ export function readAttachmentsMaxTotalMb(
 /**
  * How the SMTP submission server offers TLS (#349). `implicit`: TLS from
  * the first byte (port 465). `starttls`: plaintext, upgraded by the
- * STARTTLS command (Node only, see {@link readSubmissionTls}). `none`: no
- * certificate, plaintext only.
+ * STARTTLS command (Node, or Bun 1.4.4 and later, see
+ * {@link readSubmissionTls}). `none`: no certificate, plaintext only.
  */
 export type SubmissionTlsMode = "implicit" | "starttls" | "none";
 
@@ -67,12 +75,12 @@ interface SubmissionTlsEnv {
  * - A mode without a cert and key, a cert without a key (or the reverse),
  *   or any other mode value refuses to boot: a typo must never leave the
  *   API keys on a plaintext link.
- * - `starttls` refuses to boot under Bun: Bun 1.3.14 could not upgrade an
- *   accepted socket to TLS on the server side (`new tls.TLSSocket(socket,
- *   { isServer: true })` never handshook), so a STARTTLS offer would never
- *   complete and clients could not authenticate at all. Bun 1.4.4 does
- *   complete it (checked with smtp-server, #447); allowing `starttls`
- *   under Bun is #414.
+ * - `starttls` refuses to boot under a Bun older than 1.4.4 (#414): Bun
+ *   1.3.14 cannot upgrade an accepted socket to TLS on the server side
+ *   (`new tls.TLSSocket(socket, { isServer: true })` never handshakes), so
+ *   a STARTTLS offer would never complete and clients could not
+ *   authenticate at all. `bunVersion` is the running Bun (`null` under
+ *   Node), injectable for tests.
  * - The port defaults to 465 in `implicit` mode and 587 otherwise; a set
  *   port must be a whole number from 1 to 65535.
  *
@@ -85,7 +93,7 @@ export function readSubmissionTls(
     keyPath: process.env["SMTP_SUBMISSION_TLS_KEY"],
     port: process.env["SMTP_SUBMISSION_PORT"],
   },
-  onBun: boolean = typeof Bun !== "undefined",
+  bunVersion: string | null = runningBunVersion(),
 ): SubmissionTlsSettings {
   const certPath = raw.certPath?.trim() ?? "";
   const keyPath = raw.keyPath?.trim() ?? "";
@@ -115,13 +123,17 @@ export function readSubmissionTls(
     );
   }
 
-  if (mode === "starttls" && onBun) {
+  if (
+    mode === "starttls" &&
+    bunVersion !== null &&
+    !runtimeHasSocketFeatures(bunVersion)
+  ) {
     throw new Error(
-      "[config] SMTP_SUBMISSION_TLS_MODE=starttls is not supported on Bun:\n" +
-        "  Bun cannot upgrade a connection to TLS on the server side, so a STARTTLS\n" +
-        "  handshake would never complete.\n" +
+      `[config] SMTP_SUBMISSION_TLS_MODE=starttls needs Bun ${SOCKET_FEATURES_MIN_BUN} or later, running ${bunVersion}:\n` +
+        "  this Bun cannot upgrade a connection to TLS on the server side, so a\n" +
+        "  STARTTLS handshake would never complete.\n" +
         "  → Use implicit TLS: leave SMTP_SUBMISSION_TLS_MODE unset (or set it to\n" +
-        '    "implicit") and point clients at port 465 with "SSL/TLS".',
+        '    "implicit") and point clients at port 465 with "SSL/TLS", or upgrade Bun.',
     );
   }
 
@@ -138,6 +150,53 @@ export function readSubmissionTls(
     keyPath: hasCertificate ? keyPath : "",
     port,
   };
+}
+
+/**
+ * The inbound receiver's STARTTLS settings (#414): `null` without a
+ * certificate (STARTTLS not offered, as before), else the PEM paths.
+ */
+export type InboundTls = { certPath: string; keyPath: string } | null;
+
+/**
+ * Reads `SMTP_TLS_CERT` and `SMTP_TLS_KEY` (#414), the certificate the
+ * inbound receiver (port 25) offers STARTTLS with.
+ *
+ * - Both unset or blank: `null`, STARTTLS stays off (the default, so an
+ *   existing deployment is unchanged).
+ * - One without the other refuses to boot: a typo must not silently leave
+ *   inbound mail on plaintext.
+ * - Set under a Bun older than 1.4.4 refuses to boot: that Bun cannot
+ *   finish a server-side STARTTLS handshake, so every sender that tried it
+ *   would stall until its timeout. `bunVersion` is the running Bun (`null`
+ *   under Node), injectable for tests.
+ *
+ * The files are read when the receiver starts. Exported for tests.
+ */
+export function readInboundTls(
+  raw: { certPath: string | undefined; keyPath: string | undefined } = {
+    certPath: process.env["SMTP_TLS_CERT"],
+    keyPath: process.env["SMTP_TLS_KEY"],
+  },
+  bunVersion: string | null = runningBunVersion(),
+): InboundTls {
+  const certPath = raw.certPath?.trim() ?? "";
+  const keyPath = raw.keyPath?.trim() ?? "";
+  if ((certPath === "") !== (keyPath === "")) {
+    throw new Error(
+      "[config] SMTP_TLS_CERT and SMTP_TLS_KEY must be set together:\n" +
+        "  one without the other would leave inbound SMTP without STARTTLS.",
+    );
+  }
+  if (certPath === "") return null;
+  if (bunVersion !== null && !runtimeHasSocketFeatures(bunVersion)) {
+    throw socketFeatureError(
+      "SMTP_TLS_CERT",
+      "this Bun cannot upgrade a connection to TLS on the server side, so STARTTLS would never complete.",
+      bunVersion,
+    );
+  }
+  return { certPath, keyPath };
 }
 
 /**
@@ -336,6 +395,14 @@ export function buildSmtpConfig() {
     /** Set to "true" to enable the inbound SMTP server */
     enabled: optionalEnv("SMTP_ENABLED", "false") === "true",
 
+    /**
+     * STARTTLS on the inbound receiver (#414): the certificate and key
+     * paths from `SMTP_TLS_CERT` / `SMTP_TLS_KEY`, or `null` (the default)
+     * for no STARTTLS. Opportunistic: offered, never required, as port 25
+     * must accept mail from senders without TLS. See `readInboundTls`.
+     */
+    tls: readInboundTls(),
+
     /** Spam protection layers: all enabled by default when SMTP is on */
     spamProtection: {
       /** Check connecting IPs against a DNSBL (e.g. Spamhaus ZEN) */
@@ -389,7 +456,8 @@ export function buildSmtpSubmissionConfig(submissionTls: SubmissionTlsSettings) 
     /**
      * TLS (#349). With a cert and key the mode defaults to `implicit`: TLS
      * from the first byte, terminated by the runtime's own TLS server.
-     * `starttls` exists for Node only (Bun refuses it at boot). Without a
+     * `starttls` needs Node or Bun 1.4.4 and later (#414; an older Bun
+     * refuses it at boot). Without a
      * cert the mode is `none`, and plaintext AUTH needs
      * `SMTP_SUBMISSION_ALLOW_INSECURE=true` (#133). Paths are read from
      * disk at server start. See `readSubmissionTls`.

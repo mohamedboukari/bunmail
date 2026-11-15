@@ -1,4 +1,5 @@
 import { isIP } from "net";
+import { parseIpv6 } from "../utils/ssrf-guard.ts";
 import { parseDomainName } from "../modules/domains/services/domain-name.ts";
 import { readAppEnv, type AppEnv } from "./app.ts";
 import { ownerEmailProblem } from "./auth.ts";
@@ -7,6 +8,9 @@ import {
   optionalEnv,
   optionalPositiveInt,
   optionalStrictBoolean,
+  runningBunVersion,
+  runtimeHasSocketFeatures,
+  socketFeatureError,
 } from "./env.ts";
 
 /**
@@ -31,6 +35,183 @@ export function readPublicIps(
     }
   }
   return [...new Set(entries)];
+}
+
+/**
+ * The local addresses outbound SMTP binds its connections to
+ * (`MAIL_SOURCE_IP`, #414): at most one per family, `null` for the
+ * system's choice.
+ */
+export interface SourceIps {
+  v4: string | null;
+  v6: string | null;
+}
+
+/** An IPv4 address as its four octets (the caller checked `isIP`). */
+function ipv4Octets(ip: string): number[] {
+  return ip.split(".").map(Number);
+}
+
+/**
+ * Why `ip` cannot be an outbound source address (`MAIL_SOURCE_IP`, #414),
+ * or `null` if it can. Refused: the unspecified address, loopback,
+ * link-local (and any address with a zone id, which only link-local scopes
+ * need), multicast, the IPv4 broadcast and reserved range, and IPv6
+ * addresses that carry an IPv4 one (IPv4-mapped `::ffff:a.b.c.d`,
+ * IPv4-compatible `::a.b.c.d`): a socket of the other family can never
+ * bind them. Private ranges stay allowed (1:1 NAT). Pure, for tests.
+ */
+export function sourceIpProblem(ip: string): string | null {
+  const family = isIP(ip);
+  if (family === 0) return "not an IP address";
+  if (ip.includes("%")) return "scoped to an interface (a zone id: link-local only)";
+  if (family === 4) {
+    const [a = 0, b = 0] = ipv4Octets(ip);
+    if (a === 0) return 'the unspecified or "this host" range (0.0.0.0/8)';
+    if (a === 127) return "loopback";
+    if (a === 169 && b === 254) return "link-local";
+    if (a >= 224 && a <= 239) return "multicast";
+    if (a >= 240) return "the broadcast or reserved range (240.0.0.0/4)";
+    return null;
+  }
+  const groups = parseIpv6(ip);
+  if (groups === null) return "not an IP address";
+  const g = (i: number): number => groups[i] ?? 0;
+  const zeroUpTo = (end: number): boolean => groups.slice(0, end).every((x) => x === 0);
+  if (groups.every((x) => x === 0)) return "the unspecified address";
+  if (zeroUpTo(7) && g(7) === 1) return "loopback";
+  if ((g(0) & 0xffc0) === 0xfe80) return "link-local";
+  if ((g(0) & 0xff00) === 0xff00) return "multicast";
+  if (zeroUpTo(5) && g(5) === 0xffff)
+    return "an IPv4-mapped address (use the IPv4 address)";
+  if (zeroUpTo(6)) return "an IPv4-compatible address (deprecated; use the IPv4 address)";
+  return null;
+}
+
+/** Two IP addresses are the same address (IPv6 compared by value, not text). */
+function sameIp(a: string, b: string): boolean {
+  if (isIP(a) !== isIP(b)) return false;
+  if (isIP(a) === 4) return a === b;
+  const x = parseIpv6(a);
+  const y = parseIpv6(b);
+  return x !== null && y !== null && x.every((group, i) => group === y[i]);
+}
+
+/** One boot warning about `MAIL_SOURCE_IP` (#414): its message and fields. */
+export interface SourceIpWarning {
+  message: string;
+  fields: Record<string, unknown>;
+}
+
+/**
+ * Boot warnings about `MAIL_SOURCE_IP` (#414), never fatal (the address can
+ * appear later, a NAT can map it):
+ *
+ * - an entry that is on none of this host's interfaces (`localAddresses`,
+ *   from `os.networkInterfaces()`): every connection would fail with
+ *   `EADDRNOTAVAIL` (in Docker, the container needs host networking or a
+ *   macvlan network to have the address);
+ * - with `MAIL_PUBLIC_IP` set, an entry not among its addresses of that
+ *   family: SPF guidance and the reverse DNS check describe another
+ *   address than the one mail leaves from (expected behind a 1:1 NAT).
+ *
+ * Pure: the caller passes the interface addresses. Exported for tests.
+ */
+export function sourceIpWarnings(
+  sourceIps: SourceIps,
+  publicIps: readonly string[],
+  localAddresses: readonly string[],
+): SourceIpWarning[] {
+  const warnings: SourceIpWarning[] = [];
+  for (const ip of [sourceIps.v4, sourceIps.v6]) {
+    if (ip === null) continue;
+    if (!localAddresses.some((local) => sameIp(local.split("%")[0] ?? "", ip))) {
+      warnings.push({
+        message: "MAIL_SOURCE_IP is not an address of this host: outbound SMTP will fail",
+        fields: {
+          sourceIp: ip,
+          hint: "assign it to an interface (in Docker: network_mode: host or a macvlan network), or unset MAIL_SOURCE_IP",
+        },
+      });
+    }
+    const family = isIP(ip);
+    const sameFamily = publicIps.filter((pub) => isIP(pub) === family);
+    if (sameFamily.length > 0 && !sameFamily.some((pub) => sameIp(pub, ip))) {
+      warnings.push({
+        message: "MAIL_SOURCE_IP differs from MAIL_PUBLIC_IP",
+        fields: {
+          sourceIp: ip,
+          publicIps: sameFamily,
+          hint: "fine behind a 1:1 NAT that maps it to MAIL_PUBLIC_IP; otherwise set MAIL_PUBLIC_IP to the address mail leaves from, so SPF and reverse DNS checks match",
+        },
+      });
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Reads `MAIL_SOURCE_IP` (#414): the local address outbound SMTP connects
+ * from, for a host with several addresses whose mail must leave from one
+ * (the one its PTR, SPF and reputation belong to). One IPv4 address, one
+ * IPv6 address, or one of each separated by a comma. A connection to an
+ * IPv4 MX binds the IPv4 entry, one to an IPv6 MX the IPv6 entry; a family
+ * without an entry keeps the system's choice.
+ *
+ * - Unset or blank: no binding, the system picks (the default).
+ * - Anything that is not an IP address, an address no mail can leave from
+ *   (see {@link sourceIpProblem}), or two entries of one family refuses to
+ *   boot. Private addresses are allowed: behind a 1:1 NAT (a cloud VM's
+ *   secondary address with its own public IP) they are the right choice.
+ * - Set under a Bun older than 1.4.4 refuses to boot: that Bun ignores
+ *   `localAddress`, so mail would silently leave from another address.
+ *   `bunVersion` is the running Bun (`null` under Node), for tests.
+ *
+ * The address must be assigned to this host (a container needs host
+ * networking or a macvlan for that), or every connection fails with
+ * `EADDRNOTAVAIL`, which is retried like any connection failure.
+ * Exported for tests.
+ */
+export function readSourceIps(
+  raw: string | undefined = process.env["MAIL_SOURCE_IP"],
+  bunVersion: string | null = runningBunVersion(),
+): SourceIps {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const ips: SourceIps = { v4: null, v6: null };
+  for (const entry of entries) {
+    const family = isIP(entry);
+    if (family === 0) {
+      throw new Error(
+        `[config] MAIL_SOURCE_IP must be one IPv4 and/or one IPv6 address, separated by a comma, got "${entry}"`,
+      );
+    }
+    const problem = sourceIpProblem(entry);
+    if (problem !== null) {
+      throw new Error(
+        `[config] MAIL_SOURCE_IP must be a unicast address mail can leave from, but "${entry}" is ${problem}`,
+      );
+    }
+    const slot = family === 4 ? "v4" : "v6";
+    if (ips[slot] !== null) {
+      throw new Error(
+        `[config] MAIL_SOURCE_IP takes at most one IPv${family} address, got "${ips[slot]}" and "${entry}"`,
+      );
+    }
+    ips[slot] = entry;
+  }
+  if ((ips.v4 !== null || ips.v6 !== null) && bunVersion !== null) {
+    if (!runtimeHasSocketFeatures(bunVersion)) {
+      throw socketFeatureError(
+        "MAIL_SOURCE_IP",
+        "this Bun ignores the local address of an outgoing connection, so mail would leave from another address.",
+        bunVersion,
+      );
+    }
+  }
+  return ips;
 }
 
 /** Address families outbound SMTP may prefer (`MAIL_IP_FAMILY`, #250). */
@@ -252,6 +433,13 @@ export function buildMailConfig() {
 
     /** Address family outbound SMTP prefers (`MAIL_IP_FAMILY`, #250): 4 or 6. */
     ipFamily: readIpFamily(),
+
+    /**
+     * Local addresses outbound SMTP connects from (`MAIL_SOURCE_IP`,
+     * #414), one per family; `null` entries leave the choice to the
+     * system (the default). See `readSourceIps`.
+     */
+    sourceIps: readSourceIps(),
 
     /**
      * How long a temporarily failing email keeps being retried, in hours

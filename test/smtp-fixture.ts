@@ -1,6 +1,6 @@
 /**
  * Starts `test/fixtures/smtp-tls-server.mjs`, a real receiving MX, under
- * Node (#250): Bun cannot upgrade an accepted socket to TLS, so it cannot
+ * Node (#250): Bun 1.3.14 cannot upgrade an accepted socket to TLS, so it cannot
  * serve STARTTLS. The client side, the code under test, runs under Bun.
  */
 

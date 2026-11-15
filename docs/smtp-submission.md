@@ -11,7 +11,7 @@ BunMail runs (up to) two independent SMTP listeners. They are **not** the same t
 | | **Submission** (this module) | **Inbound** ([docs/inbound.md](inbound.md)) |
 |---|---|---|
 | Direction | Apps send **out** through BunMail | BunMail **receives** mail for your domains |
-| Default port | `465` with a TLS cert (implicit TLS), `587` without | `25` (prod) / `2525` (dev) |
+| Default port | `465` with a TLS cert (implicit TLS), `587` without or in `starttls` mode | `25` (prod) / `2525` (dev) |
 | `AUTH` | **Required** (API key) | Disabled |
 | Recipient domains | **Any** (it's a relay for authenticated clients) | Only registered domains (open-relay guard) |
 | What it does | Parses the message → `createEmail` → outbound queue → DKIM → direct-to-MX | Parses → stores in `inbound_emails` (+ bounce/DMARC branching) |
@@ -26,8 +26,8 @@ Point the app's SMTP settings at BunMail:
 | Setting | Value |
 |---|---|
 | **Host** | your BunMail host (e.g. `mail.yourdomain.com`, or `localhost` on the same box) |
-| **Port** | `465` with a cert, `587` without (or your `SMTP_SUBMISSION_PORT`) |
-| **Encryption** | **SSL/TLS** (implicit TLS, nodemailer `secure: true`) if you configured a cert (below); otherwise none / plaintext. Not STARTTLS: it is not available on Bun (#349) |
+| **Port** | `465` with a cert, `587` without one or in `starttls` mode (or your `SMTP_SUBMISSION_PORT`) |
+| **Encryption** | **SSL/TLS** (implicit TLS, nodemailer `secure: true`) if you configured a cert (below); **STARTTLS** on `587` with `SMTP_SUBMISSION_TLS_MODE=starttls` (Bun 1.4.4 or later, #414); otherwise none / plaintext |
 | **Username** | anything: `apikey` is conventional (mirrors SendGrid) |
 | **Password** | a BunMail API key, `bm_live_…` |
 | **From** | an address on a domain **registered** in BunMail, with its DKIM record published and verified (see below) |
@@ -63,11 +63,11 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | Env Variable | Default | Description |
 |---|---|---|
 | `SMTP_SUBMISSION_ENABLED` | `false` | Start the submission server. |
-| `SMTP_SUBMISSION_PORT` | `465` with a cert, `587` without | Listen port, a whole number from 1 to 65535 (anything else refuses to boot). |
+| `SMTP_SUBMISSION_PORT` | `465` with a cert, `587` without or in `starttls` mode | Listen port, a whole number from 1 to 65535 (anything else refuses to boot). |
 | `SMTP_SUBMISSION_DAILY_QUOTA` | `0` | Per-API-key messages accepted per UTC day; over-quota → SMTP `452`. `0` = unlimited. See [Quotas](#per-key-daily-quotas-123). |
 | `SMTP_SUBMISSION_TLS_CERT` | _(empty)_ | PEM cert path. Set with the key for TLS (#349). One without the other refuses to boot. |
 | `SMTP_SUBMISSION_TLS_KEY` | _(empty)_ | PEM private-key path. |
-| `SMTP_SUBMISSION_TLS_MODE` | `implicit` with a cert | `implicit` (TLS from the first byte) or `starttls`. `starttls` refuses to boot on Bun, a mode without a cert refuses to boot, and so does any other value. See [TLS modes](#tls-modes-349). |
+| `SMTP_SUBMISSION_TLS_MODE` | `implicit` with a cert | `implicit` (TLS from the first byte) or `starttls`. `starttls` needs Bun 1.4.4 or later and refuses to boot on an older Bun (#414); a mode without a cert refuses to boot, and so does any other value. See [TLS modes](#tls-modes-349). |
 | `SMTP_SUBMISSION_ALLOW_INSECURE` | `false` | Allow AUTH over plaintext (no TLS). The password is a full-privilege key, so this exposes it to link sniffers. With neither TLS nor this flag the server **refuses to start**. Set `true` only on a trusted network. Ignored with a cert: AUTH is then only accepted over TLS. |
 | `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` | `true` | Per-IP connection rate limiting: `true` or `false`, anything else refuses to boot. |
 | `SMTP_SUBMISSION_RATE_LIMIT_MAX` | `30` | Max connections per IP per window: 1 to 100000, anything else refuses to boot. |
@@ -81,12 +81,14 @@ The submitted message is parsed and mapped to the same fields the REST send API 
 | Mode | When | Port (unless `SMTP_SUBMISSION_PORT`) | Client setting |
 |---|---|---|---|
 | `implicit` | a cert and key are set (the default then) | `465` | **SSL/TLS** (nodemailer `secure: true`) |
-| `starttls` | `SMTP_SUBMISSION_TLS_MODE=starttls`, **Node only** | `587` | STARTTLS (nodemailer `secure: false, requireTLS: true`) |
+| `starttls` | `SMTP_SUBMISSION_TLS_MODE=starttls`, **Bun 1.4.4 or later** (or Node), #414 | `587` | STARTTLS (nodemailer `secure: false, requireTLS: true`) |
 | `none` | no cert; needs `SMTP_SUBMISSION_ALLOW_INSECURE=true` | `587` | none / plaintext |
 
-The start line says which one runs: `SMTP submission server started` with `tls: "implicit" | "starttls" | "none"` and the `port`. Each `SMTP submission client authenticated` line carries `secure` (whether the session is TLS).
+The start line says which one runs: `SMTP submission server started` with `tls: "implicit" | "starttls" | "none"` and the `port`. Each `SMTP submission client authenticated` line and each `SMTP session closed` line carries `secure` (whether the session is TLS).
 
-**Why not STARTTLS.** STARTTLS turns an accepted plaintext connection into a TLS one on the server side. Under Bun 1.3.14 that never worked: `new tls.TLSSocket(socket, { isServer: true })` on an accepted socket never ran the handshake (the client saw a timeout or an unexpected EOF), and Bun's own `socket.upgradeTLS()` refused server-side upgrades. smtp-server's own implicit TLS does the same upgrade, so it failed under Bun too. So `starttls` refuses to boot under Bun rather than advertise a STARTTLS that cannot complete; it only exists for running on Node. Bun 1.4.4 completes the upgrade (smtp-server's STARTTLS delivers, #447); allowing `starttls` under Bun is tracked in #414.
+**STARTTLS needs Bun 1.4.4 (#414).** STARTTLS turns an accepted plaintext connection into a TLS one on the server side. Under Bun 1.3.14 that never worked: `new tls.TLSSocket(socket, { isServer: true })` on an accepted socket never ran the handshake (the client saw a timeout or an unexpected EOF), and Bun's own `socket.upgradeTLS()` refused server-side upgrades. Bun fixed both upstream (oven-sh/bun#31155, first released in 1.4.0); BunMail verified 1.4.4, where smtp-server's STARTTLS completes with `openssl s_client -starttls smtp` and nodemailer clients, and a client hanging up at any stage after the upgrade leaves no socket behind (macOS and the `oven/bun:1.4.4` Linux image). So `starttls` refuses to boot under a Bun older than 1.4.4, rather than advertise a STARTTLS that cannot complete. In `starttls` mode smtp-server upgrades the connection itself: AUTH before STARTTLS gets `538 Must issue a STARTTLS command first`, everything said before the handshake is forgotten (RFC 3207), and a client's TLS error (a failed handshake, or a broken record later) is logged once at `warn` as `SMTP submission TLS error`, with the IP, the TLS error code and `starttls: true` (the same line with `starttls: false` reports a broken record on an implicit-TLS session, after the TLS listener's own handshake). `test/integration/smtp-submission-starttls.integration.test.ts` pins this (it skips on an older Bun). Implicit TLS stays the default with a cert.
+
+**STARTTLS protects the key only if the client requires it.** The plaintext EHLO already advertises `AUTH PLAIN LOGIN` (smtp-server has no option to hide AUTH before TLS), so a client set to "STARTTLS if available", or nodemailer without `requireTLS: true`, can send its `AUTH` command, and with it the API key, in plaintext before the server answers `538`. An attacker on the path can also strip the STARTTLS offer, and such a client then authenticates in the clear. Configure every client to require STARTTLS, and off trusted networks prefer implicit TLS on 465, where nothing is ever sent in plaintext.
 
 **How implicit TLS works.** Bun's own TLS server (`tls.createServer`, which handshakes fine) listens on the port and terminates TLS from the first byte. Each decrypted connection is handed to smtp-server (`SMTPServer#connect`), which runs with `secure: true, secured: true` ("TLS done upstream"): every session is TLS before its first SMTP byte, STARTTLS is not offered, AUTH is allowed, and the per-IP limits see the real client address. `connect` is public and typed in smtp-server since 3.20 (its own TypeScript types), and `smtp-server` is pinned to an exact version in `package.json`: `test/integration/smtp-submission-tls.integration.test.ts` fails if an upgrade breaks the handover. A client that has not finished its handshake after 60 s is disconnected (Bun ignores `handshakeTimeout`, so the limit is set on the socket by hand) and logged at `warn` (`SMTP submission TLS handshake timed out`), and a failed handshake is logged at `warn` (`SMTP submission TLS handshake failed`, with the IP and the error code).
 
@@ -94,7 +96,7 @@ The start line says which one runs: `SMTP submission server started` with `tls: 
 
 **A Bun quirk on failed handshakes.** A plaintext client that connects to the implicit-TLS port gets a TLS alert, but Bun can still report the connection as established. Nothing the client sent is read as SMTP and nothing written to it reaches the wire, but it opens a session that closes at once: one `SMTP session closed` line with `messages: 0`, and one connection counted against its IP's connection limit (`SMTP_SUBMISSION_RATE_LIMIT_*`). That is the same count any plaintext client gets (one per TCP connection, never more), so it cannot use the limit up faster, and the count only affects that client's own IP.
 
-**Inbound STARTTLS on port 25 (#345) hits the same limitation.** The inbound receiver offers no STARTTLS today (`disabledCommands`), and adding it is what #345 tracks: MX-to-MX mail uses TLS on port 25 only through STARTTLS, which cannot complete under Bun for the same reason. Terminating TLS in Bun first only works for implicit TLS, which port 25 does not use, so this approach does not carry over there.
+**Inbound STARTTLS on port 25** uses the same upgrade, so it needs Bun 1.4.4 as well: see [inbound.md](inbound.md#starttls-414) (`SMTP_TLS_CERT` / `SMTP_TLS_KEY`, #414).
 
 ### TLS / security posture
 
@@ -147,12 +149,13 @@ These expose SMTP settings in their config/env. Set:
 
 ```
 SMTP host      = mail.yourdomain.com   (or the BunMail container hostname)
-SMTP port      = 465   (587 without a cert)
+SMTP port      = 465   (587 without a cert, or in starttls mode)
 SMTP username  = apikey
 SMTP password  = bm_live_...
 SMTP from      = notifications@yourdomain.com   (registered, DKIM record verified)
-Encryption     = SSL/TLS (implicit TLS) if you configured a cert, none on a trusted
-                 private network. Not STARTTLS: it is not available on Bun.
+Encryption     = SSL/TLS (implicit TLS) if you configured a cert, STARTTLS on 587
+                 with SMTP_SUBMISSION_TLS_MODE=starttls (Bun 1.4.4 or later), none
+                 on a trusted private network.
 ```
 
 ## Per-key daily quotas (#123)
