@@ -34,6 +34,13 @@ export interface FeedbackReport {
   originalMessageId: string | null;
   /** Domain of the report's own `From` address, lowercased: who sent the report. */
   reporterDomain: string | null;
+  /**
+   * The report's own `From` address, lowercased, only when the report has
+   * exactly one `From` field holding exactly one address; `null` otherwise.
+   * Compared with `FEEDBACK_LOOP_SENDERS` to decide whether a complaint is
+   * verified.
+   */
+  reporterAddress: string | null;
 }
 
 /** What a feedback type asks BunMail to do (#191). */

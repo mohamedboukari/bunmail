@@ -191,12 +191,19 @@ export function receiverDataHandler({
                  * unparseable), the report is acknowledged, never stored as
                  * inbound mail and never notified: it is machine mail about
                  * our sending, and it can carry a copy of a customer's
-                 * message.
+                 * message. The envelope sender goes with it (`null` for
+                 * `MAIL FROM:<>`): a verified complaint needs a listed one.
                  */
                 if (isFeedbackReport(rawMessage)) {
+                  const envelope = session.envelope.mailFrom;
+                  const envelopeFrom =
+                    envelope && typeof envelope === "object" && envelope.address !== ""
+                      ? envelope.address.toLowerCase()
+                      : null;
                   const feedback = await handleInboundFeedbackReport(
                     rawMessage,
                     rawBytes,
+                    envelopeFrom,
                   );
                   logger.debug("Feedback branch handled inbound message", {
                     outcome: feedback.outcome,
