@@ -348,7 +348,7 @@ const CASES: Case[] = [
     emailStatus: "sent",
     run: async (ctx) => {
       const raw = arf(ctx);
-      const result = await handleInboundFeedbackReport(raw, Buffer.from(raw));
+      const result = await handleInboundFeedbackReport(raw, Buffer.from(raw), null);
       expect(result.outcome).toBe("complained");
     },
     throwsOnFailure: true,

@@ -63,6 +63,7 @@ src/modules/inbound/
 │   ├── connection-limit.ts          ← per-IP connection rate limit in the shared store (#185)
 │   ├── arf-parser.service.ts        ← Pure ARF feedback-report parser (#191)
 │   ├── feedback-handler.service.ts  ← Feedback report → complaint / opt-out suppression + webhook (#191)
+│   ├── feedback-verification.service.ts ← Whether a complaint is verified (configured sender, aligned signer), pure
 │   ├── dkim-verifier.service.ts     ← DKIM signature verification for feedback reports (#373); split by concern into the three below (#387)
 │   ├── dkim-verifier-parse.service.ts ← message split, tag-lists, the signature's tags
 │   ├── dkim-verifier-canonical.service.ts ← canonicalization, the signed header data (also used by the outbound DKIM signer, #345)
@@ -340,9 +341,9 @@ The reply headers for a dashboard reply, recovering the ids from `raw_message` o
 #### `getRepliedEmail(inbound)`
 The linked email (id, subject, sent time) for the detail page.
 
-### arf-parser.service.ts / feedback-handler.service.ts / dkim-verifier.service.ts
+### arf-parser.service.ts / feedback-handler.service.ts / feedback-verification.service.ts / dkim-verifier.service.ts
 
-`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `isVerifiedReport`, `handleFeedbackReport`, `handleInboundFeedbackReport`, `verifyDkimSignatures`: see [feedback-loops.md](feedback-loops.md#service-methods).
+`isFeedbackReport`, `parseFeedbackReport`, `classifyFeedbackType`, `verifyFeedbackReport`, `handleFeedbackReport`, `handleInboundFeedbackReport`, `verifyDkimSignatures`: see [feedback-loops.md](feedback-loops.md#service-methods).
 
 ### dnsbl.service.ts
 

@@ -82,7 +82,7 @@ export type SuppressionMatch =
  * Only rows the automatic paths wrote count, never a tenant's own
  * decision: a hard bounce carries `bounce_type = 'hard'` (a manual row
  * never has a bounce type), and a complaint counts only when its report
- * was **verified** (`complaint_verified`, see `isVerifiedReport`): the
+ * was **verified** (`complaint_verified`, see `verifyFeedbackReport`): the
  * tenant that sent an email knows its Message-ID, so an unverified report
  * proves nothing beyond its own key, and a manual row is never verified.
  * Unsubscribe, manual, unverified-complaint and temporary rows never count.
