@@ -6,7 +6,7 @@ import { spanSafeMessage, withSpan } from "../../../utils/tracing.ts";
 import { withMxLock } from "../../../utils/mx-throttle.ts";
 import { providerBucket } from "./provider-bucket.ts";
 import { mxRateBudget, type RateBudget } from "./rate-budget.ts";
-import { runMxSession, type MxSessionOutcome } from "./mx-transport.ts";
+import { runMxSession, sourceAddressFor, type MxSessionOutcome } from "./mx-transport.ts";
 import { deliverWithFailover, type MxAdmit, type RoutedOutcome } from "./mx-route.ts";
 import {
   buildTransactionMails,
@@ -237,12 +237,14 @@ async function deliverToMxHosts(
             "network.peer.address": session.address,
             "bunmail.mx.transaction_count": session.transactions.length,
             "bunmail.mx.dane_mode": daneMode(dane, tls),
+            ...localAddressAttribute(session.address),
           },
         },
         async (span) => {
           const outcomes = await runMxSession({
             ...session,
             heloName: config.mail.hostname,
+            sourceIps: config.mail.sourceIps,
             ...tls,
           });
           recordDeliverySpan(span, outcomes);
@@ -271,6 +273,12 @@ async function deliverToMxHosts(
       );
     },
   });
+}
+
+/** The session's bound source address (`MAIL_SOURCE_IP`, #414), for its span; none unbound. */
+function localAddressAttribute(address: string): { "network.local.address"?: string } {
+  const local = sourceAddressFor(address, config.mail.sourceIps);
+  return local === undefined ? {} : { "network.local.address": local };
 }
 
 /**

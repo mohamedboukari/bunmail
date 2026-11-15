@@ -3,8 +3,9 @@ import { readSubmissionTls, type SubmissionTlsSettings } from "../../src/config.
 
 /**
  * `SMTP_SUBMISSION_TLS_MODE` (#349): implicit TLS by default with a cert,
- * 465 as its default port, strict values, and `starttls` refused under
- * Bun, which cannot complete a server-side STARTTLS handshake.
+ * 465 as its default port, strict values, and `starttls` refused under a
+ * Bun older than 1.4.4, which cannot complete a server-side STARTTLS
+ * handshake (#414).
  */
 describe("readSubmissionTls", () => {
   const CERT = "/etc/bunmail/tls/cert.pem";
@@ -12,7 +13,7 @@ describe("readSubmissionTls", () => {
 
   const read = (
     raw: { mode?: string; certPath?: string; keyPath?: string; port?: string },
-    onBun = true,
+    bunVersion: string | null = "1.3.14",
   ): SubmissionTlsSettings =>
     readSubmissionTls(
       {
@@ -21,7 +22,7 @@ describe("readSubmissionTls", () => {
         keyPath: raw.keyPath,
         port: raw.port,
       },
-      onBun,
+      bunVersion,
     );
 
   test("no cert: mode none on 587", () => {
@@ -61,20 +62,30 @@ describe("readSubmissionTls", () => {
     },
   );
 
-  test("starttls is refused under Bun, pointing at implicit TLS on 465", () => {
-    expect(() => read({ mode: "starttls", certPath: CERT, keyPath: KEY }, true)).toThrow(
-      /SMTP_SUBMISSION_TLS_MODE=starttls is not supported on Bun[\s\S]*port 465/,
-    );
-  });
+  test.each(["1.3.14", "1.4.3"])(
+    "starttls is refused under Bun %s, pointing at implicit TLS on 465",
+    (version) => {
+      expect(() =>
+        read({ mode: "starttls", certPath: CERT, keyPath: KEY }, version),
+      ).toThrow(
+        new RegExp(
+          `SMTP_SUBMISSION_TLS_MODE=starttls needs Bun 1\\.4\\.4 or later, running ${version.replace(/\./g, "\\.")}[\\s\\S]*port 465`,
+        ),
+      );
+    },
+  );
 
-  test("starttls is allowed under Node, on 587", () => {
-    expect(read({ mode: "starttls", certPath: CERT, keyPath: KEY }, false)).toMatchObject(
-      {
+  test.each([null, "1.4.4", "1.5.0"])(
+    "starttls is allowed under %p, on 587 (#414)",
+    (version) => {
+      expect(
+        read({ mode: "starttls", certPath: CERT, keyPath: KEY }, version),
+      ).toMatchObject({
         mode: "starttls",
         port: 587,
-      },
-    );
-  });
+      });
+    },
+  );
 
   test.each(["IMPLICIT", "tls", "ssl", "none", "STARTTLS", "true", "465"])(
     "refuses the mode %p",
@@ -86,7 +97,7 @@ describe("readSubmissionTls", () => {
   );
 
   test.each(["implicit", "starttls"])("refuses the mode %p without a cert", (mode) => {
-    expect(() => read({ mode }, false)).toThrow(/needs a certificate/);
+    expect(() => read({ mode }, null)).toThrow(/needs a certificate/);
   });
 
   test("refuses a cert without a key, and a key without a cert", () => {

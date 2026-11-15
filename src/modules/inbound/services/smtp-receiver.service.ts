@@ -10,18 +10,27 @@
  *
  * Importers keep using this module.
  */
+import { readFileSync } from "fs";
 import { SMTPServer } from "smtp-server";
 export { storeInboundEmail } from "./smtp-receiver-store.service.ts";
 import { inboundNotifyDeps, type InboundNotifyDeps } from "./inbound-notify.service.ts";
 import { selfTestDnsbl } from "./dnsbl.service.ts";
 import { receiverSessionHandlers } from "./smtp-receiver-handlers.service.ts";
-import { boundPort, describeListenError, isListenError } from "./smtp-listen.ts";
+import {
+  boundPort,
+  describeListenError,
+  isListenError,
+  tlsSocketError,
+} from "./smtp-listen.ts";
 import { MAX_MESSAGE_BYTES, receiverDataHandler } from "./smtp-receiver-data.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
 
 /** Reference to the running SMTP server instance */
 let server: SMTPServer | null = null;
+
+/** Client TLS errors already logged; smtp-server can emit one twice (#414). */
+const reportedTlsErrors = new WeakSet<Error>();
 
 /** Interval handle for the inbound notification budget cleanup */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
@@ -47,20 +56,50 @@ let listening: Promise<number> | null = null;
  */
 
 /**
+ * Reads the STARTTLS certificate and key (#414). A bad path fails the
+ * start loudly rather than silently running without STARTTLS.
+ */
+function readTlsMaterial(tls: { certPath: string; keyPath: string }): {
+  key: Buffer;
+  cert: Buffer;
+} {
+  try {
+    return { cert: readFileSync(tls.certPath), key: readFileSync(tls.keyPath) };
+  } catch (error) {
+    throw new Error(
+      `[smtp] Failed to read the inbound TLS cert/key from ` +
+        `SMTP_TLS_CERT="${tls.certPath}" / SMTP_TLS_KEY="${tls.keyPath}"`,
+      { cause: error },
+    );
+  }
+}
+
+/**
  * Starts the receiver. `notifyDeps` are the inbound notification
  * dependencies (mailer, clock, throttle), injectable for tests.
+ *
+ * With `SMTP_TLS_CERT` / `SMTP_TLS_KEY` set (#414), STARTTLS is offered
+ * (RFC 3207): opportunistic, never required, as an MX must take mail from
+ * senders without TLS. smtp-server upgrades the connection itself and
+ * forgets everything said before the handshake (EHLO, the transaction),
+ * and discards plaintext pipelined after `STARTTLS`. This needs Bun 1.4.4
+ * or later; the config refuses to boot with a cert on an older Bun.
  */
 export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void {
   const port = config.smtp.port;
-  const { spamProtection } = config.smtp;
+  const { spamProtection, tls } = config.smtp;
 
   /** Does the DNSBL zone answer through this resolver? One line at boot, never fatal. */
   if (spamProtection.dnsblEnabled) void selfTestDnsbl(spamProtection.dnsblZone);
 
+  const tlsMaterial = tls === null ? null : readTlsMaterial(tls);
+
   const smtp = new SMTPServer({
     secure: false,
+    /** The certificate STARTTLS presents; without one STARTTLS is disabled below. */
+    ...tlsMaterial,
     authOptional: true,
-    disabledCommands: ["STARTTLS", "AUTH"],
+    disabledCommands: tlsMaterial === null ? ["STARTTLS", "AUTH"] : ["AUTH"],
 
     /**
      * Maximum message size (bytes). The SMTP server advertises this via
@@ -87,7 +126,10 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
      * a test sets the port to `0` (#443).
      */
     const bound = boundPort(smtp.server, port);
-    logger.info("Inbound SMTP server started", { port: bound });
+    logger.info("Inbound SMTP server started", {
+      port: bound,
+      starttls: tlsMaterial !== null,
+    });
     resolveListening(bound);
 
     /** Log which protection layers are active */
@@ -112,6 +154,23 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
         code: err.code,
       });
       process.exit(1);
+    }
+    /**
+     * A client's TLS error (#414: a failed STARTTLS handshake, or a broken
+     * record later) is expected on a public port: one `warn` per error
+     * (smtp-server can report the same one twice), with the client's IP,
+     * the TLS error code and whether it was a STARTTLS connection.
+     */
+    const tlsError = tlsSocketError(err);
+    if (tlsError !== null) {
+      if (reportedTlsErrors.has(err)) return;
+      reportedTlsErrors.add(err);
+      logger.warn("Inbound SMTP TLS error", {
+        ip: tlsError.ip,
+        code: tlsError.code,
+        starttls: tlsError.starttls,
+      });
+      return;
     }
     logger.error("SMTP server error", {
       error: err instanceof Error ? err.message : String(err),

@@ -1,5 +1,8 @@
 /**
- * Startup bind failures for BunMail's SMTP servers (#167).
+ * Shared helpers of BunMail's SMTP servers: their startup bind failures
+ * (#167), the port they are bound to (#443) and their TLS errors (#414).
+ *
+ * Startup bind failures (#167):
  *
  * Both SMTP servers (inbound receiver and submission) report a failure to
  * bind their port through the same `error` event as runtime errors. Logged
@@ -69,4 +72,47 @@ export interface BoundAddressSource {
 export function boundPort(server: BoundAddressSource, requested: number): number {
   const address = server.address();
   return typeof address === "object" && address !== null ? address.port : requested;
+}
+
+/** What a client's TLS error carries for its log line (#414). */
+export interface TlsSocketError {
+  /** The client's address, as smtp-server records it on the error. */
+  ip: string | null;
+  /** The TLS error code (`ERR_SSL_WRONG_VERSION_NUMBER`, ...). */
+  code: string;
+  /**
+   * Whether the error came from a connection smtp-server upgraded with
+   * STARTTLS (it adds `meta.protocol: "smtp"` there), as opposed to a
+   * socket whose TLS ended upstream (the submission server's implicit TLS).
+   */
+  starttls: boolean;
+}
+
+/** Error codes of a TLS failure (Node and Bun, and smtp-server's own). */
+const TLS_ERROR_CODE_RE = /^(ERR_SSL_|ERR_TLS_|TLSError$)/;
+
+/**
+ * The details of a server `error` event that is a client's TLS error
+ * (#414), or `null` for any other error. A client that sends plaintext
+ * after `STARTTLS`, offers no protocol or cipher in common, or sends a
+ * broken TLS record later in the session is an expected failure on a
+ * public port, so callers log it at `warn`, not as a server error.
+ *
+ * It does not say whether the handshake had completed: under Bun 1.4.4 a
+ * failed STARTTLS handshake and a bad record after a completed one reach
+ * here alike (smtp-server's `meta.stage` is `connect` for both, and Bun
+ * reports a protocol version even for the failed handshake), so the log
+ * line stays neutral.
+ *
+ * @param err - Whatever the server's `error` event emitted
+ */
+export function tlsSocketError(err: unknown): TlsSocketError | null {
+  if (!(err instanceof Error)) return null;
+  const code: unknown = Reflect.get(err, "code");
+  if (typeof code !== "string" || !TLS_ERROR_CODE_RE.test(code)) return null;
+  const ip: unknown = Reflect.get(err, "remoteAddress");
+  const meta: unknown = Reflect.get(err, "meta");
+  const starttls =
+    typeof meta === "object" && meta !== null && Reflect.get(meta, "protocol") === "smtp";
+  return { ip: typeof ip === "string" ? ip : null, code, starttls };
 }

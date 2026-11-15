@@ -1,6 +1,6 @@
 /**
  * A real `smtp-server` receiving MX for the outbound TLS tests (#250), run
- * under Node by `test/unit/mx-transport.test.ts`: Bun cannot upgrade an
+ * under Node by `test/unit/mx-transport.test.ts`: Bun 1.3.14 cannot upgrade an
  * accepted socket to TLS on the server side, so STARTTLS needs Node here.
  * The client side (nodemailer, the code under test) still runs under Bun.
  *

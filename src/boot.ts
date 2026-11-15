@@ -2,10 +2,12 @@
  * Boot steps of `src/index.ts` that run before the HTTP server listens
  * (#387, split from `src/index.ts`): the running version, the DKIM key
  * decryption check, the stored domain name check (#406), the owner
- * bootstrap and the warnings about settings that do nothing.
+ * bootstrap and the warnings about settings that do nothing (or, like a
+ * `MAIL_SOURCE_IP` this host does not have, cannot work).
  * `src/index.ts` calls them in order.
  */
-import { config, daneResolverIsLocal } from "./config.ts";
+import { networkInterfaces } from "os";
+import { config, daneResolverIsLocal, sourceIpWarnings } from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
@@ -238,6 +240,22 @@ export function warnIgnoredSettings(): void {
       port: resolver.port,
       hint: "the AD bit of a remote resolver is not trustworthy over plain DNS (RFC 7672 section 2.1.1); run a local validating resolver (the compose dane profile)",
     });
+  }
+
+  /**
+   * `MAIL_SOURCE_IP` (#414) on none of this host's interfaces, or not the
+   * `MAIL_PUBLIC_IP` of its family: warn once each, never refuse (the
+   * address can be added later, a 1:1 NAT can map it).
+   */
+  const localAddresses = Object.values(networkInterfaces()).flatMap((entries) =>
+    (entries ?? []).map((entry) => entry.address),
+  );
+  for (const warning of sourceIpWarnings(
+    config.mail.sourceIps,
+    config.mail.publicIps,
+    localAddresses,
+  )) {
+    logger.warn(warning.message, warning.fields);
   }
 
   for (const skipped of config.sso.skipped) {
