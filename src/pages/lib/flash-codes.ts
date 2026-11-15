@@ -146,6 +146,16 @@ export const FLASH_MESSAGES = {
     "This domain's tracking links cannot be revoked again: its tracking epoch is at its highest value. Delete and re-add the domain to start over.",
   ),
   tracking_revoke_failed: failure("Failed to revoke the tracking links"),
+  /* Inbound MTA-STS policy (#472). */
+  domain_mta_sts_saved: success(
+    "MTA-STS mode saved. Publish the _mta-sts TXT record shown below (its id changes with the policy), then verify.",
+  ),
+  domain_mta_sts_saved_no_tls: failure(
+    "MTA-STS set to enforce, but this server offers no inbound STARTTLS (SMTP_ENABLED and SMTP_TLS_CERT): if the policy's MX hosts are this server, senders that honour it cannot deliver. Use testing until STARTTLS works.",
+  ),
+  domain_mta_sts_off: success(
+    "MTA-STS turned off: the policy is no longer served. Remove the _mta-sts TXT record.",
+  ),
 
   /* ─── Domains: DKIM key rotation (#250) ─── */
   dkim_rotation_started: success(

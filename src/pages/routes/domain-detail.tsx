@@ -18,6 +18,7 @@ import {
 import { DkimKeyPanel } from "./domain-detail-dkim.tsx";
 import { MailFlowPanel } from "./domain-detail-mail-flow.tsx";
 import { TrackingPanel } from "./domain-detail-tracking.tsx";
+import { MtaStsPanel } from "./domain-detail-mta-sts.tsx";
 
 interface DomainDetailPageProps {
   domain: Domain;
@@ -29,6 +30,8 @@ interface DomainDetailPageProps {
   smtpEnabled: boolean;
   /** `TRACKING_ENABLED` (#187): the tracking panel says when it keeps everything off. */
   trackingEnabled: boolean;
+  /** `SMTP_ENABLED` with `SMTP_TLS_CERT` (#472): the MTA-STS panel warns without it. */
+  inboundStarttls: boolean;
   flash?: { message: string; type: "success" | "error" };
 }
 
@@ -42,6 +45,7 @@ export function DomainDetailPage({
   dns,
   smtpEnabled,
   trackingEnabled,
+  inboundStarttls,
   flash,
 }: DomainDetailPageProps) {
   return (
@@ -141,6 +145,9 @@ export function DomainDetailPage({
       <DkimKeyPanel domain={domain} />
 
       <MailFlowPanel mx={dns.mx} smtpEnabled={smtpEnabled} />
+
+      {/* Inbound MTA-STS policy (#472) */}
+      <MtaStsPanel domain={domain} inboundStarttls={inboundStarttls} />
 
       {/* Inbound notifications (#106) */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">

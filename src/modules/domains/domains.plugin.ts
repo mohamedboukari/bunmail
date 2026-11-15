@@ -166,10 +166,10 @@ export const domainsPlugin = new Elysia({
   /**
    * PATCH /api/v1/domains/:id
    *
-   * Edits the domain's `List-Unsubscribe` overrides (#243) and its open
-   * and click tracking opt-in (#187). Omitted fields stay as they are;
-   * `null` clears an unsubscribe override. Admin keys only, like every
-   * domain route.
+   * Edits the domain's `List-Unsubscribe` overrides (#243), its open and
+   * click tracking opt-in (#187) and its MTA-STS mode (#472). Omitted
+   * fields stay as they are; `null` clears an unsubscribe override.
+   * Admin keys only, like every domain route.
    */
   .patch(
     "/:id",
@@ -203,7 +203,7 @@ export const domainsPlugin = new Elysia({
         tags: ["Domains"],
         summary: "Update domain settings",
         description:
-          "Sets or clears the List-Unsubscribe mailbox and the RFC 8058 one-click HTTPS URL, and turns open and click tracking on or off for mail from this domain (trackOpens, trackClicks; also needs TRACKING_ENABLED=true). Omitted fields are unchanged. A tracking change applies to mail created afterwards.",
+          "Sets or clears the List-Unsubscribe mailbox and the RFC 8058 one-click HTTPS URL, turns open and click tracking on or off for mail from this domain (trackOpens, trackClicks; also needs TRACKING_ENABLED=true), and sets the MTA-STS policy served for it (mtaStsMode: none, testing or enforce, #472). Omitted fields are unchanged. A tracking change applies to mail created afterwards.",
         security: [{ bearerAuth: [] }],
       },
     },
@@ -273,7 +273,7 @@ export const domainsPlugin = new Elysia({
         tags: ["Domains"],
         summary: "Verify domain DNS",
         description:
-          "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status.",
+          "Triggers DNS verification (SPF, DKIM, DMARC) for a domain and returns the updated status. For a domain whose mtaStsMode is not none, also checks the _mta-sts TXT record and fetches the served policy (checks.mtaSts, #472); that check never affects verification.",
         security: [{ bearerAuth: [] }],
       },
     },

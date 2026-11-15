@@ -7,6 +7,8 @@ import { dkimRecordHost, dkimRecordsMatchKey } from "./dkim-keys.ts";
 import { rememberDmarcCheck, resolveDomainTxt } from "./domain-dns-status.service.ts";
 import { applyDomainCheck } from "./domain-check.service.ts";
 import { checkHost } from "./spf-evaluator.ts";
+import { checkMtaSts } from "./mta-sts-check.service.ts";
+import { fetchMtaStsPolicy, type MtaStsPolicy } from "../../emails/services/mta-sts.ts";
 import type { DnsCheckOutcome, DomainCheckResult } from "../types/domain-check.types.ts";
 
 export interface VerificationResult {
@@ -35,6 +37,12 @@ export interface VerifyOptions {
   source?: "manual" | "scheduled";
   /** The check time (tests). */
   now?: Date;
+  /**
+   * Skips the MTA-STS check (#472) and keeps the stored one: set by the
+   * inline check of a send, where its policy fetch (up to 10 s) would hold
+   * up the send. Verify and the re-verification loop run it.
+   */
+  skipMtaSts?: boolean;
 }
 
 /** DNS and SPF evaluation, injectable for tests (#247). */
@@ -43,6 +51,16 @@ export interface VerificationDeps {
   /** RFC 7208 result (`pass`, `fail`, `softfail`, ...) of `domain` for mail sent from `ip`. */
   evaluateSpf: (domain: string, ip: string) => Promise<string>;
   sendingIps: () => Promise<SendingIps>;
+  /**
+   * Fetches a domain's MTA-STS policy as a sender does (#472), for the
+   * MTA-STS check; the real fetch when omitted.
+   */
+  fetchMtaStsPolicy?: (domain: string) => Promise<MtaStsPolicy>;
+}
+
+/** The real policy fetch, with the MX private-address rule. */
+function fetchOwnMtaStsPolicy(domain: string): Promise<MtaStsPolicy> {
+  return fetchMtaStsPolicy(domain, { allowPrivate: config.mail.allowPrivateMx });
 }
 
 /**
@@ -231,20 +249,36 @@ async function verifyDMARC(
 
 /**
  * Runs the SPF, DKIM and DMARC checks of a domain (#250) without storing
- * anything. Never rejects on a DNS error: that check is `unknown`.
+ * anything, and the MTA-STS check (#472) when its mode is not `none`,
+ * unless `options.skipMtaSts`: the domain's stored MTA-STS outcome is then
+ * carried over unchanged. Never rejects on a DNS error: that check is
+ * `unknown`.
  */
 export async function runDnsChecks(
-  domain: Pick<Domain, "name" | "dkimSelector" | "dkimPublicKey">,
+  domain: Pick<Domain, "name" | "dkimSelector" | "dkimPublicKey"> &
+    Partial<Pick<Domain, "mtaStsMode" | "verifiedAt" | "lastCheckResult">>,
   deps: VerificationDeps = defaultDeps,
   options: VerifyOptions = {},
 ): Promise<DomainCheckResult> {
   const now = options.now ?? new Date();
-  const [spf, dkim, dmarc] = await Promise.all([
+  const [spf, dkim, dmarc, mtaSts] = await Promise.all([
     verifySPF(domain.name, deps),
     verifyDKIM(domain.name, domain.dkimSelector, domain.dkimPublicKey, deps),
     verifyDMARC(domain.name, deps, options.source),
+    options.skipMtaSts === true
+      ? Promise.resolve(domain.lastCheckResult?.mtaSts ?? null)
+      : checkMtaSts(domain, {
+          resolveTxt: deps.resolveTxt,
+          fetchPolicy: deps.fetchMtaStsPolicy ?? fetchOwnMtaStsPolicy,
+        }),
   ]);
-  return { spf, dkim, dmarc, checkedAt: now.toISOString() };
+  return {
+    spf,
+    dkim,
+    dmarc,
+    ...(mtaSts === null ? {} : { mtaSts: outcome(mtaSts.status, mtaSts.reason) }),
+    checkedAt: now.toISOString(),
+  };
 }
 
 /**
@@ -281,6 +315,7 @@ export async function verifyDomain(
     spf: checks.spf.status,
     dkim: checks.dkim.status,
     dmarc: checks.dmarc.status,
+    mtaSts: checks.mtaSts?.status,
   };
   if (scheduled) logger.debug("DNS verification result", summary);
   else logger.info("DNS verification result", summary);

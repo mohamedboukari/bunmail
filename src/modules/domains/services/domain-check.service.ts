@@ -6,6 +6,7 @@ import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.t
 import { domains } from "../models/domain.schema.ts";
 import type { Domain } from "../types/domain.types.ts";
 import type { DomainCheckResult } from "../types/domain-check.types.ts";
+import { forgetMtaStsHosts } from "./mta-sts-hosts.service.ts";
 import {
   nextDomainCheckState,
   type DomainCheckTransition,
@@ -97,6 +98,8 @@ export async function applyDomainCheck(
     return { domain: updated, transition };
   });
 
+  /** A flip changes whether the domain's MTA-STS policy is served (#472). */
+  if (applied !== undefined && applied.transition.event !== null) forgetMtaStsHosts();
   if (applied?.transition.event === "failed") {
     logger.warn("Domain verification failed: verifiedAt cleared", {
       domainId,

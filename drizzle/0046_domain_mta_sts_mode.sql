@@ -1,0 +1,2 @@
+ALTER TABLE "domains" ADD COLUMN "mta_sts_mode" varchar(10) DEFAULT 'none' NOT NULL;--> statement-breakpoint
+ALTER TABLE "domains" ADD CONSTRAINT "domains_mta_sts_mode_check" CHECK ("domains"."mta_sts_mode" IN ('none', 'testing', 'enforce'));

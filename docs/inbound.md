@@ -116,6 +116,8 @@ Table: `inbound_emails`
 | `SMTP_ENABLED` | `false` | Set to `true` to start the SMTP server     |
 | `SMTP_PORT`    | `2525`  | Port for the inbound SMTP server           |
 | `SMTP_TLS_CERT` / `SMTP_TLS_KEY` | _(empty)_ | PEM certificate and key paths: set both to offer STARTTLS (#414, needs Bun 1.4.4 or later). See [STARTTLS](#starttls-414). |
+| `MTA_STS_MX` | `MAIL_HOSTNAME` | The `mx` host names of the served MTA-STS policy, a comma list (#472). See [MTA-STS policy](#mta-sts-policy-472). |
+| `MTA_STS_MAX_AGE` | _(per mode)_ | The policy's `max_age` in seconds, 86400 to 31557600; unset, one day for `testing` and one week for `enforce` (#472). |
 
 In production, set `SMTP_PORT=25` and configure your domain's MX record to point to your server.
 
@@ -129,7 +131,20 @@ Off by default: without `SMTP_TLS_CERT` / `SMTP_TLS_KEY` the receiver does not o
 - **Logs:** the start line carries `starttls: true | false`, and each `SMTP session closed` line `secure` (whether the session ran over TLS). A sender's TLS error (a failed handshake: plaintext after `STARTTLS`, no protocol or cipher in common; or a broken TLS record later in the session) is logged once at `warn` as `Inbound SMTP TLS error`, with its `ip`, the TLS error `code` and `starttls: true`; the receiver keeps serving everyone else, and after a failed handshake the sender usually retries without TLS. The line does not say whether the handshake had completed: under Bun 1.4.4 both cases reach BunMail alike (smtp-server's `meta.stage` is `connect` for both).
 - **Tested:** `test/integration/inbound-starttls.integration.test.ts` delivers over STARTTLS and in plaintext, checks the failed-handshake log, and hangs up at every stage after the upgrade (no socket left in `CLOSE_WAIT`, no CPU spin, #351); the STARTTLS tests skip on a Bun older than 1.4.4.
 
-Not done yet: serving an MTA-STS policy for your domains (so senders require TLS to BunMail) and receiving TLS reports (`_smtp._tls` `rua`) are follow-ups; both only make sense now that inbound STARTTLS exists.
+Opportunistic STARTTLS can be stripped by an attacker on the path; an [MTA-STS policy](#mta-sts-policy-472) lets senders require it. Receiving TLS reports (`_smtp._tls` `rua`) is still a follow-up.
+
+### MTA-STS policy (#472)
+
+MTA-STS (RFC 8461) lets a receiving domain tell senders to deliver only over TLS, with a certificate valid for the MX host, so stripping STARTTLS or presenting a forged certificate makes delivery fail instead of falling back to plaintext. BunMail serves the policy for the domains you opt in; it is **off by default**.
+
+- **Opt-in per domain:** an admin picks the mode on the domain's dashboard page (`POST /dashboard/domains/:id/mta-sts`) or with `PATCH /api/v1/domains/:id` and `mtaStsMode`: `none` (default, nothing served), `testing` (senders still deliver when TLS fails and report it) or `enforce`. Audited as `domain.updated` (`fields: ["mtaStsMode"]`).
+- **Served** at `GET /.well-known/mta-sts.txt` when the request's `Host` is `mta-sts.<domain>` for a **verified** domain whose mode is not `none`: `200`, `Content-Type: text/plain`, `Cache-Control: max-age=` the policy's `max_age` capped at 3600 (senders cache the policy for its own `max_age` regardless; the cap only keeps an HTTP cache or CDN from serving a stale copy for more than an hour after a change), no cookie, no auth. Every other request (an unknown host, an unverified domain, mode `none`, a non-policy host) gets one identical `404`, so the route reveals nothing beyond the policies it serves. The served domains are read in one query and cached in process for 30 s (a change made in this process applies at once, another replica within 30 s), so a request never costs a query of its own; a database failure with nothing cached answers `503`.
+- **The policy:** `version: STSv1`, the mode, one `mx:` line per `MTA_STS_MX` host (default `MAIL_HOSTNAME`) and `max_age` (`MTA_STS_MAX_AGE`, 86400 to 31557600 seconds; unset, one day for `testing` and one week for `enforce`), CRLF line endings. Its `id` is the first 32 hex digits of the text's SHA-256, so it changes whenever the policy does (mode, MX list, max_age) with nothing stored.
+- **DNS:** publish `_mta-sts.<domain>` TXT `v=STSv1; id=<id>` (shown on the domain page and in `dnsRecords`; update it after every policy change, since senders refetch only when the id changes), and point `mta-sts.<domain>` at your reverse proxy, which serves TLS for that name and passes the `Host` header ([self-hosting.md](self-hosting.md#mta-sts-policy-hosts-472)).
+- **Before `enforce`:** inbound STARTTLS must be on (`SMTP_ENABLED`, `SMTP_TLS_CERT`) with a certificate valid for every `MTA_STS_MX` host, or senders that honour the policy (Gmail, Microsoft) stop delivering. The domain page and the save banner warn when inbound STARTTLS is off; the mode is saved anyway, since the MX hosts may be another server.
+- **Verify** also checks MTA-STS for a domain whose mode is not `none` (`checks.mtaSts`, `lastCheckResult.mtaSts`): the TXT record must carry the current id, and fetching `https://mta-sts.<domain>/.well-known/mta-sts.txt` the way a sender does (verified certificate, no redirects, strict parse) must return the same policy. That fetch goes out through the public DNS and your proxy, so it also proves the certificate and the `Host` forwarding. It is its own status: it never fails or flips the domain's verification. The first Verify of a new domain reports the fetch as failed, since the policy is served only once the domain is verified: verify again.
+- **Turning it off:** `none` stops serving at once, but senders keep a cached policy until its `max_age` runs out. Go back to `testing` for at least one `max_age` before `none`, so a cached `enforce` policy never blocks mail after you stop maintaining it.
+- **Not done:** receiving TLS-RPT reports for your domains (a `_smtp._tls` `rua` pointing at BunMail) is a follow-up; publish one pointing at a mailbox you read if you want them now.
 
 ### First-boot checklist (Docker Compose)
 

@@ -37,6 +37,7 @@ describe("serializeDomain", () => {
     trackOpens: false,
     trackClicks: false,
     trackingEpoch: 0,
+    mtaStsMode: "none" as const,
     createdAt: new Date("2024-01-01"),
     updatedAt: new Date("2024-01-01"),
     createdByUserId: null,

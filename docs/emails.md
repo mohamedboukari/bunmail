@@ -827,7 +827,7 @@ A transaction is `starttls` only when both happened: under Bun 1.3.14 the TLS ca
 
 ### MTA-STS (#250)
 
-A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaSts`); inbound MTA-STS is not implemented. For an MX host with usable TLSA records, DANE takes precedence (see [DANE](#dane-345), Precedence). With `TLSRPT_ENABLED=true`, how each session went under the policy is also reported to the domain, see [TLS reporting](#tls-reporting-345).
+A recipient domain can publish an MTA-STS policy (RFC 8461) naming the MX hosts that may receive its mail and requiring verified TLS to them. The mailer honours it on outbound mail (`mta-sts.ts`, `discoverMtaSts`); serving a policy for BunMail's own domains is separate (inbound, #472, see [inbound.md](inbound.md#mta-sts-policy-472)). For an MX host with usable TLSA records, DANE takes precedence (see [DANE](#dane-345), Precedence). With `TLSRPT_ENABLED=true`, how each session went under the policy is also reported to the domain, see [TLS reporting](#tls-reporting-345).
 
 **Discovery**, for each pending recipient domain on every attempt, in parallel with its MX resolution:
 

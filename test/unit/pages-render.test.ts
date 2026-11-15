@@ -109,6 +109,7 @@ const domain = {
   trackOpens: false,
   trackClicks: false,
   trackingEpoch: 0,
+  mtaStsMode: "none" as const,
   createdAt: now,
   updatedAt: now,
   createdByUserId: null,
@@ -254,6 +255,7 @@ describe("Dashboard page render smoke tests", () => {
       },
       smtpEnabled: false,
       trackingEnabled: false,
+      inboundStarttls: false,
     };
     const html = await DomainDetailPage({ domain, ...dnsProps });
     expect(html).toContain("example.com");
