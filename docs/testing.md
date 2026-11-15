@@ -54,10 +54,18 @@ This script reads `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env`, connects to
 
 ### What the tier does at runtime
 
-1. **`test/integration/_preload.ts`** runs first (via the `--preload` flag in the `test:integration` script). It overrides `process.env.DATABASE_URL` to point at `bunmail_test` **before** any service module loads, so the application's `db` singleton (`src/db/index.ts`) connects to the test DB.
+1. **`test/integration/_preload.ts`** runs first (via the `--preload` flag in the `test:integration` script). It overrides `process.env.DATABASE_URL` to point at `bunmail_test` **before** any service module loads, so the application's `db` singleton (`src/db/index.ts`) connects to the test DB. It also sets `DATABASE_POOL_MAX=32` (see [Parallel bursts and the pool size](#parallel-bursts-and-the-pool-size-423)).
 2. **`test/integration/_helpers.ts`** exposes `truncateAll()` and seed factories (`seed.apiKey`, `seed.domain`, `seed.email`, `seed.suppression`, `seed.webhook`, `seed.template`, `seed.owner`, plus `seed.user` and `seed.session` for dashboard accounts and sessions, #216).
 3. Each test file calls `await truncateAll()` in `beforeEach`. Tables are wiped in dependency order (`suppressions, emails, webhooks, templates, domains, api_keys`) with `CASCADE` and `RESTART IDENTITY`.
 4. Tests execute the real service functions against the real DB. No mocking unless we're stubbing **outbound HTTP** (the webhook-dispatch test stubs `globalThis.fetch`).
+
+### Parallel bursts and the pool size (#423)
+
+A test that fires requests or queries in parallel (`Promise.all` of HTTP calls, racing service calls) must stay under the pool size, or it can hang on Bun 1.3.14. When more queries run at once than the pool has connections, and some are statements a connection has not prepared yet, Bun's pool can leave a few queries pending forever (or desync a connection, `ERR_POSTGRES_UNSUPPORTED_INTEGER_SIZE`) while Postgres shows every connection idle (oven-sh/bun#32004, #33627). The symptom is a test that passes alone in well under a second and times out at exactly its timeout in the full run, with some requests of the burst never logging a line. Raising the timeout does not help.
+
+The preload sets `DATABASE_POOL_MAX=32` for the whole tier, so a burst never queues in the pool. Count the peak before adding a wider one: requests in flight times the queries each runs in parallel (the ownership transfer burst is 15 requests reading two accounts each, so 30). Above 32, raise the preload's value; do not shrink the burst until it stops testing what it tests.
+
+Mind the connection budget: Bun never closes an idle connection, so a run holds up to `DATABASE_POOL_MAX` connections of the server's `max_connections` (100 by default) until it ends. CI has a Postgres per job. Locally, several runs on one server (one per worktree and scratch database) add up: three runs at 32 already take 96, and the next connection fails with `sorry, too many clients already` (SQLSTATE 53300). Run fewer at once, or raise the server's limit (`postgres -c max_connections=200`).
 
 ### Authorization matrix (#228)
 
