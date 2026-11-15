@@ -199,7 +199,7 @@ Email responses carry `tracking: { opens, clicks }` (the stored decision), `firs
 - **Value:** no CR, LF, NUL or other control character (tab is allowed), at most 998 characters.
 - **At most 20 headers**, at most **8 KB** of names plus values in total.
 - **Case-insensitive:** `X-Foo` and `x-foo` together are a duplicate and refused.
-- **Reserved** (any case): `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, and names starting with `Content-`, `ARC-` or `X-BunMail-`. Use the dedicated fields (`from`, `cc`, `replyTo`, ...) and the domain's unsubscribe settings instead.
+- **Reserved** (any case): `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, `Errors-To`, `Disposition-Notification-To`, `Return-Receipt-To`, and names starting with `Content-`, `ARC-`, `X-BunMail-` or `Resent-` (#422). Use the dedicated fields (`from`, `cc`, `replyTo`, ...) and the domain's unsubscribe settings instead.
 
 A name or value with bad syntax, or more than 20 headers, fails validation (`422 VALIDATION_ERROR`); a reserved name, a duplicate or more than 8 KB is `422 INVALID_CUSTOM_HEADER`. Either way nothing is queued, and the error names the header (when its name is valid) but never echoes the value. Nodemailer may normalize a name's case on the wire (`X-Correlation-Id` is sent as `X-Correlation-ID`).
 

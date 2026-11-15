@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import { WEBHOOK_EVENT_TYPES } from "../types/webhook.types.ts";
 
 /** Validation schema for POST /api/v1/webhooks. */
 export const createWebhookDto = t.Object({
@@ -6,24 +7,13 @@ export const createWebhookDto = t.Object({
   url: t.String({ format: "uri" }),
 
   /**
-   * Event types to subscribe to. Must mirror the `WebhookEventType` union
-   * in `types/webhook.types.ts`: TypeBox literals can't be derived from
-   * a TypeScript type, so the two are kept in sync manually.
+   * Event types to subscribe to: one literal per entry of
+   * `WEBHOOK_EVENT_TYPES` (#425), so the accepted set can never drift from
+   * the events BunMail fires. The schema is the same union of string
+   * literals the hand-written list produced, so the REST contract and the
+   * OpenAPI document are unchanged.
    */
-  events: t.Array(
-    t.Union([
-      t.Literal("email.queued"),
-      t.Literal("email.sent"),
-      t.Literal("email.failed"),
-      t.Literal("email.bounced"),
-      t.Literal("email.complained"),
-      t.Literal("email.received"),
-      t.Literal("email.unsubscribed"),
-      t.Literal("email.opened"),
-      t.Literal("email.clicked"),
-      t.Literal("domain.verified"),
-      t.Literal("domain.verification_failed"),
-    ]),
-    { minItems: 1 },
-  ),
+  events: t.Array(t.Union(WEBHOOK_EVENT_TYPES.map((event) => t.Literal(event))), {
+    minItems: 1,
+  }),
 });

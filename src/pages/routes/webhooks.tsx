@@ -4,7 +4,10 @@ import { FlashMessage } from "../components/flash-message.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { CreatedBy, type CreatorNames } from "../components/created-by.tsx";
-import type { Webhook } from "../../modules/webhooks/types/webhook.types.ts";
+import {
+  WEBHOOK_EVENT_TYPES,
+  type Webhook,
+} from "../../modules/webhooks/types/webhook.types.ts";
 
 /**
  * Props for the webhooks list page.
@@ -16,18 +19,6 @@ interface WebhooksPageProps {
   /** Display names of accounts, for the "Created by" column (#219). */
   creators: CreatorNames;
 }
-
-const WEBHOOK_EVENTS = [
-  "email.queued",
-  "email.sent",
-  "email.failed",
-  "email.bounced",
-  "email.unsubscribed",
-  "email.opened",
-  "email.clicked",
-  "domain.verified",
-  "domain.verification_failed",
-] as const;
 
 /**
  * Webhooks page: shows a create form and table of all webhooks.
@@ -81,7 +72,12 @@ export function WebhooksPage({ webhooks, flash, secret, creators }: WebhooksPage
               Events
             </span>
             <div class="flex flex-wrap gap-3">
-              {WEBHOOK_EVENTS.map((event) => (
+              {/*
+               * One checkbox per event BunMail fires, straight from the
+               * module's single list (#425): a hand-written copy here once
+               * missed email.complained and email.received.
+               */}
+              {WEBHOOK_EVENT_TYPES.map((event) => (
                 <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                   <input
                     type="checkbox"

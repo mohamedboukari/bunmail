@@ -46,6 +46,11 @@ const FORBIDDEN_VALUE_CHARS = /[\x00-\x08\x0a-\x1f\x7f-\x9f\u2028\u2029]/;
  * sender, add hidden recipients, forge authentication results or replace
  * the unsubscribe headers. `In-Reply-To` and `References` (threading)
  * are deliberately not here.
+ *
+ * `Errors-To`, `Disposition-Notification-To` and `Return-Receipt-To`
+ * (#422) route bounces or read receipts to an address of the caller's
+ * choosing, outside the allowed-senders check (#126), so a restricted key
+ * could have receipts sent to any third party.
  */
 const RESERVED_HEADER_NAMES: ReadonlySet<string> = new Set([
   "from",
@@ -69,10 +74,25 @@ const RESERVED_HEADER_NAMES: ReadonlySet<string> = new Set([
   "feedback-id",
   "precedence",
   "auto-submitted",
+  "errors-to",
+  "disposition-notification-to",
+  "return-receipt-to",
 ]);
 
-/** Reserved name prefixes, lowercase: MIME structure, ARC, BunMail's own. */
-const RESERVED_HEADER_PREFIXES: readonly string[] = ["content-", "arc-", "x-bunmail-"];
+/**
+ * Reserved name prefixes, lowercase: MIME structure, ARC, BunMail's own,
+ * and the `Resent-*` trace family (#422: `Resent-From`, `Resent-Sender`,
+ * `Resent-To`, `Resent-Cc`, `Resent-Bcc`, `Resent-Date`,
+ * `Resent-Message-ID`, `Resent-Reply-To`, ...). A `Resent-From` would let
+ * a key restricted by `allowed_senders` (#126) name another identity that
+ * mail clients may display, even though DMARC ignores it.
+ */
+const RESERVED_HEADER_PREFIXES: readonly string[] = [
+  "content-",
+  "arc-",
+  "x-bunmail-",
+  "resent-",
+];
 
 /** Why a custom header was refused. */
 export type CustomHeaderProblem =

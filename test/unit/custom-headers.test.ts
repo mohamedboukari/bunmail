@@ -150,6 +150,10 @@ describe("validateCustomHeaders: reserved names", () => {
     "Feedback-ID",
     "Precedence",
     "Auto-Submitted",
+    /** #422: bounce and read-receipt routing. */
+    "Errors-To",
+    "Disposition-Notification-To",
+    "Return-Receipt-To",
   ];
 
   /** Each name in three spellings: as listed, lowercase, alternating case. */
@@ -185,12 +189,41 @@ describe("validateCustomHeaders: reserved names", () => {
     });
   }
 
-  test.each(["In-Reply-To", "References", "X-Foo", "X-BunMailer", "Contents", "Archive"])(
-    "%p is not reserved",
-    (name) => {
-      expect(isReservedHeaderName(name)).toBe(false);
-    },
-  );
+  /** #422: the whole `Resent-*` family, through the prefix, in every spelling. */
+  for (const name of [
+    "Resent-From",
+    "Resent-Sender",
+    "Resent-To",
+    "Resent-Cc",
+    "Resent-Bcc",
+    "Resent-Date",
+    "Resent-Message-ID",
+    "Resent-Reply-To",
+    "Resent-Anything",
+  ]) {
+    for (const spelling of spellings(name)) {
+      test(`rejects Resent-* ${spelling}`, () => {
+        expectRefused({ [spelling]: "v" }, "reserved");
+        expect(isReservedHeaderName(spelling)).toBe(true);
+      });
+    }
+  }
+
+  test.each([
+    "In-Reply-To",
+    "References",
+    "X-Foo",
+    "X-BunMailer",
+    "Contents",
+    "Archive",
+    /** #422 lookalikes: only the exact names and the `Resent-` prefix are reserved. */
+    "Resent",
+    "X-Resent-From",
+    "X-Errors-To",
+    "Disposition-Notification-Options",
+  ])("%p is not reserved", (name) => {
+    expect(isReservedHeaderName(name)).toBe(false);
+  });
 });
 
 describe("validateCustomHeaders: duplicates and caps", () => {
