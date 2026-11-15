@@ -12,6 +12,7 @@ import * as trashPurge from "./modules/trash/services/purge.service.ts";
 import * as webhookDeliveryWorker from "./modules/webhooks/services/webhook-delivery-worker.service.ts";
 import * as domainReverify from "./modules/domains/services/domain-reverify.service.ts";
 import * as sendingIpDnsbl from "./modules/domains/services/sending-ip-dnsbl.service.ts";
+import * as daneResolverCheck from "./modules/emails/services/dane-resolver-check.service.ts";
 import * as tlsRptJob from "./modules/tls-rpt/services/tls-rpt-job.service.ts";
 import { stopRateLimitCleanup } from "./middleware/rate-limit.ts";
 import { stopLoginRateLimitCleanup } from "./middleware/login-rate-limit.ts";
@@ -89,6 +90,7 @@ export function registerShutdownHandlers(app: ReturnType<typeof startApp>): void
     webhookDeliveryWorker.stop();
     domainReverify.stop();
     sendingIpDnsbl.stop();
+    daneResolverCheck.stop();
     tlsRptJob.stop();
     stopRateLimitCleanup();
     stopLoginRateLimitCleanup();

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **BunMail checks `DANE_RESOLVER` itself (#426).** With `DANE_ENABLED=true`, a wrong, unreachable or non-validating resolver used to show only as per-send `warn` lines while mail to every domain waited. A self-check now asks the resolver a DNSSEC-signed name (`org` A, an authenticated denial that needs the chain from the root validated) and a deliberately broken one (`dnssec-failed.org` A) through the same lookup code DANE uses, about 30 s after boot, then daily (hourly while it fails). It logs `error` when the resolver does not answer or cannot resolve the signed name, `warn` when the signed name comes back without the AD bit or the broken name resolves, and `info` when it passes; one line per run under `job: "dane-resolver-check"`. The boot never waits for it or fails on it (the resolver may start after BunMail). Nothing changes with DANE off. Docs: `docs/emails.md`, `docs/self-hosting.md`, `docs/logging.md`, `ARCHITECTURE.md`.
+
 ### Fixed
 
 - **The dashboard webhook form lists every event (#425).** The create form on the Webhooks page had its own hand-written event list, which missed `email.complained` and `email.received`, so dashboard users could not subscribe to them (the REST API always accepted them). The form now renders one checkbox per entry of `WEBHOOK_EVENT_TYPES`, a runtime list in `src/modules/webhooks/types/webhook.types.ts` from which the `WebhookEventType` union is derived and the REST create DTO builds its literals, so a new event can no longer be missed in either place. The REST contract and the OpenAPI schema are unchanged; `email.received` and the domain events still need an admin key. Docs: `docs/webhooks.md`, `docs/dashboard.md`.

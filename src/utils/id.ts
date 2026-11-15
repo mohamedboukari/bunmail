@@ -23,6 +23,7 @@ type IdPrefix =
   | "att" // attachment of an outbound email (#181)
   | "drv" // one run of the domain DNS re-verification loop (#250)
   | "dbl" // one run of the DNSBL self-check of the sending IPs (#250)
+  | "drc" // one run of the DANE_RESOLVER self-check (#426)
   | "trp" // TLS-RPT report: one policy domain and UTC day (#345)
   | "trr" // TLS-RPT result counter of a report (#345)
   | "trj" // one run of the TLS-RPT report job (#345)
