@@ -15,7 +15,7 @@ import {
 } from "../../modules/users/services/two-factor-policy.service.ts";
 import { redirect } from "./responses.ts";
 import { errorMessage } from "./error-message.ts";
-import { isSameOrigin } from "./same-origin.ts";
+import { expectedOriginLabel, isSameOrigin } from "./same-origin.ts";
 import {
   SESSION_STORE_DOWN,
   clearSession,
@@ -163,6 +163,8 @@ export function withSessionGuard(app: PublicDashboard) {
       logger.warn("Dashboard POST rejected: cross-origin (possible CSRF)", {
         path,
         origin: request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+        /** What it was compared with (#420): an origin only, never a secret. */
+        expected: expectedOriginLabel(),
       });
       return status(403, "Forbidden: cross-origin request rejected");
     }

@@ -376,7 +376,11 @@ async function tokenFor(role: UserRole): Promise<string> {
   return (await seed.session({ userId: id })).token;
 }
 
-/** A same-origin dashboard form post. */
+/**
+ * A same-origin dashboard form post. Every test runs with the https
+ * `APP_BASE_URL`, so the browser's origin is that one (#420), while the
+ * request URL is the container's, as behind a reverse proxy.
+ */
 function postForm(
   path: string,
   token: string,
@@ -387,7 +391,7 @@ function postForm(
       method: "POST",
       headers: {
         cookie: `bm_session=${token}`,
-        origin: "http://localhost",
+        origin: HTTPS_BASE,
         "content-type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams(body).toString(),
