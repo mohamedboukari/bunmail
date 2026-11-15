@@ -13,8 +13,12 @@ import {
   type MessageParts,
   type SignedMessage,
 } from "./mailer-message.service.ts";
-import { verifiedTlsOptions } from "./mailer-mta-sts.service.ts";
-import { daneHostResolver, type DanePlan } from "./mailer-dane.service.ts";
+import {
+  daneHostResolver,
+  sessionTls,
+  type DanePlan,
+  type SessionTls,
+} from "./mailer-dane.service.ts";
 import type { DaneHost } from "../types/dane.types.ts";
 import { danePolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
 import { observeMxSession } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
@@ -88,9 +92,11 @@ export interface DeliveryLimits {
  * before the next host is tried, and takes its rate tokens there
  * ({@link admitFor}). An enforced MTA-STS plan (#250) requires verified TLS
  * on every session. A DANE plan (#345) resolves each host through DANE
- * first: a host with TLSA records gets a DANE session, which takes
+ * first: a host with usable TLSA records gets a DANE session, which takes
  * precedence over MTA-STS, and its TLS-RPT outcome goes under its `tlsa`
- * policy.
+ * policy; a host whose records are all unusable gets the MTA-STS verified
+ * TLS of an enforce policy (#452), else a DANE session that requires TLS
+ * without authenticating it ({@link sessionTls}).
  *
  * `signed` is the message as `sendMail` signed it once (#345): its bytes go
  * to every transaction unchanged.
@@ -217,8 +223,10 @@ async function deliverToMxHosts(
             ipFamily: config.mail.ipFamily,
           }),
         }),
-    runSession: ({ dane, ...session }) =>
-      withSpan(
+    runSession: ({ dane, ...session }) => {
+      /** DANE when it can validate, else MTA-STS enforce (RFC 8461 section 2, #452). */
+      const tls = sessionTls(dane, plan.verifiedTls);
+      return withSpan(
         "mx.session",
         {
           kind: SpanKind.CLIENT,
@@ -228,22 +236,17 @@ async function deliverToMxHosts(
             /** The MX's own IP address, which the session connected to. */
             "network.peer.address": session.address,
             "bunmail.mx.transaction_count": session.transactions.length,
-            "bunmail.mx.dane_mode": daneMode(dane),
+            "bunmail.mx.dane_mode": daneMode(dane, tls),
           },
         },
         async (span) => {
           const outcomes = await runMxSession({
             ...session,
             heloName: config.mail.hostname,
-            /** DANE takes precedence over MTA-STS for this host (RFC 8461 section 2). */
-            ...(dane !== null
-              ? { dane: { host: dane } }
-              : plan.verifiedTls
-                ? { verifiedTls: verifiedTlsOptions() }
-                : {}),
+            ...tls,
           });
           recordDeliverySpan(span, outcomes);
-          if (dane !== null) logDaneFailures(plan, dane, outcomes);
+          if (tls.dane !== undefined) logDaneFailures(plan, tls.dane.host, outcomes);
           /**
            * TLS-RPT (#345): recorded in the background, never awaited, each
            * domain from its own transactions' outcomes only; a DANE
@@ -265,13 +268,19 @@ async function deliverToMxHosts(
           );
           return outcomes;
         },
-      ),
+      );
+    },
   });
 }
 
-/** How a session is secured under DANE, for its span (#345). */
-function daneMode(dane: DaneHost | null): string {
+/**
+ * How a session is secured under DANE, for its span (#345): `mta-sts` when
+ * the host's TLSA records are all unusable and MTA-STS verified TLS
+ * applies instead (#452).
+ */
+function daneMode(dane: DaneHost | null, tls: SessionTls): string {
   if (dane === null) return "none";
+  if (tls.dane === undefined) return "mta-sts";
   return dane.usable.length > 0 ? "authenticated" : "encrypted-only";
 }
 

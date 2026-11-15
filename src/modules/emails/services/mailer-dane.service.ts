@@ -1,15 +1,18 @@
 import { config } from "../../../config.ts";
 import type { DnsServer } from "../../../utils/dns-transport.ts";
+import { logger } from "../../../utils/logger.ts";
 import {
   observeDaneLookupFailure,
   observeUnconnectedAttempt,
 } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
 import type { TlsRptDomain } from "../../tls-rpt/types/tls-rpt.types.ts";
-import type { SecureMx } from "../types/dane.types.ts";
+import type { DaneHost, SecureMx } from "../types/dane.types.ts";
 import { decideDaneHost, resolveDaneRoute, type DaneRoute } from "./dane.ts";
+import { verifiedTlsOptions } from "./mailer-mta-sts.service.ts";
 import { resolveMxAddresses } from "./mx-address.ts";
 import { resolveMxRoute, type HostResolver } from "./mx-route.ts";
 import { matchingMxHosts, type ActiveMtaStsPolicy } from "./mta-sts.ts";
+import type { DaneTls, VerifiedTls } from "./mx-transport.ts";
 
 /**
  * The mailer's side of DANE (RFC 7672, #345): which route lookup a domain
@@ -25,10 +28,18 @@ import { matchingMxHosts, type ActiveMtaStsPolicy } from "./mta-sts.ts";
  * decided when delivery reaches it, in MX preference order (RFC 7672
  * section 2.2.1: preference before security):
  *
- * - DANE applies (secure TLSA records): the session requires TLS checked
- *   against them. DANE takes precedence over MTA-STS for that host (RFC
- *   8461 section 2: MTA-STS never overrides a failing DANE validation), so
- *   the MTA-STS policy plays no part in it.
+ * - DANE applies (secure TLSA records) and at least one record is usable:
+ *   the session requires TLS checked against them. DANE takes precedence
+ *   over MTA-STS for that host (RFC 8461 section 2: MTA-STS never
+ *   overrides a failing DANE validation), so the MTA-STS policy plays no
+ *   part in it.
+ * - DANE applies but no record is usable (#452): no DANE validation can
+ *   happen, so RFC 8461 section 2 gives DANE no precedence. In enforce
+ *   mode the host is handled as MTA-STS says, like a host DANE does not
+ *   apply to (below): outside the policy it is skipped, in it the session
+ *   gets verified TLS. Otherwise TLS is required but not authenticated
+ *   (RFC 7672 section 2.2: publishing the records commits the host to
+ *   TLS).
  * - DANE does not apply: the host is handled as MTA-STS says. In enforce
  *   mode a host outside the policy is skipped (recorded for TLS-RPT as
  *   `mx-not-in-policy`, as when no host matches without DANE) and a
@@ -96,14 +107,24 @@ export function daneHostResolver(args: {
       throw new Error(`DANE: MX host ${mxHost} not usable: ${decision.reason}`);
     }
     const policy = args.dane.stsPolicy;
+    /** DANE applies, but none of its records is usable and the policy is enforced (#452). */
+    const unusableUnderSts =
+      decision.kind === "dane" && mtaStsGoverns(decision.host, args.verifiedTls);
     if (
-      decision.kind === "none" &&
+      (decision.kind === "none" || unusableUnderSts) &&
       args.verifiedTls &&
       policy !== null &&
       matchingMxHosts([mxHost], policy.policy).length === 0
     ) {
       for (const target of args.reportTargets) observeUnconnectedAttempt(target);
       throw new Error(`MTA-STS: MX host ${mxHost} is not in the enforce-mode policy`);
+    }
+    if (unusableUnderSts) {
+      logger.debug("DANE: no usable TLSA record, MTA-STS verified TLS applies", {
+        domain: args.dane.secureMx.nextHop,
+        mxHost,
+        baseDomain: decision.host.baseDomain,
+      });
     }
     const addresses = await resolveMxAddresses(mxHost, {
       allowPrivate: args.allowPrivate,
@@ -112,4 +133,38 @@ export function daneHostResolver(args: {
     });
     return { addresses, dane: decision.kind === "dane" ? decision.host : null };
   };
+}
+
+/**
+ * Whether MTA-STS, not DANE, secures a session to `host` (#452): none of
+ * its TLSA records is usable, so no DANE validation can happen (RFC 8461
+ * section 2 lets DANE take precedence only when it does), and the domain's
+ * MTA-STS policy is in enforce mode (`verifiedTls`).
+ */
+function mtaStsGoverns(host: DaneHost, verifiedTls: boolean): boolean {
+  return host.usable.length === 0 && verifiedTls;
+}
+
+/** The TLS of one MX session (#345, #452): DANE, MTA-STS verified TLS, or neither (opportunistic). */
+export interface SessionTls {
+  dane?: DaneTls;
+  verifiedTls?: VerifiedTls;
+}
+
+/**
+ * The TLS of a session to an MX host (#345, #452). `dane`: the host's
+ * TLSA records when DANE applies to it (the host resolver's answer), else
+ * `null`. `verifiedTls`: the domain's MTA-STS policy is in enforce mode.
+ *
+ * | DANE for the host     | MTA-STS enforce | Session                               |
+ * | --------------------- | --------------- | ------------------------------------- |
+ * | usable TLSA records   | either          | DANE (authenticated)                  |
+ * | no usable TLSA record | yes             | MTA-STS verified TLS                  |
+ * | no usable TLSA record | no              | DANE: TLS required, not authenticated |
+ * | none (off, insecure)  | yes             | MTA-STS verified TLS                  |
+ * | none (off, insecure)  | no              | opportunistic TLS                     |
+ */
+export function sessionTls(dane: DaneHost | null, verifiedTls: boolean): SessionTls {
+  if (dane !== null && !mtaStsGoverns(dane, verifiedTls)) return { dane: { host: dane } };
+  return verifiedTls ? { verifiedTls: verifiedTlsOptions() } : {};
 }
