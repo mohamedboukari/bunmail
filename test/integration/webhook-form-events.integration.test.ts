@@ -16,6 +16,7 @@ import { eq } from "drizzle-orm";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { WEBHOOK_EVENT_TYPES } from "../../src/modules/webhooks/types/webhook.types.ts";
 import { truncateAll, seed, db, webhooks } from "./_helpers.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 const dashboard = new Elysia().use(pagesPlugin);
 
@@ -56,9 +57,9 @@ async function webhookCount(): Promise<number> {
   return (await db.select({ id: webhooks.id }).from(webhooks)).length;
 }
 
-/** The decoded redirect target of a form POST. */
+/** The banner message a form POST's redirect leads to (#421: resolved from its code). */
 function locationOf(response: Response): string {
-  return decodeURIComponent(response.headers.get("location") ?? "");
+  return flashOfResponse(response)?.message ?? "";
 }
 
 /** A signed-in owner's session token: the owner may create webhooks. */
@@ -92,7 +93,7 @@ describe("dashboard webhook create form (#425)", () => {
 
     const response = await postForm(token, WEBHOOK_EVENT_TYPES);
     expect(response.status).toBe(302);
-    expect(locationOf(response)).not.toContain("flashType=error");
+    expect(flashOfResponse(response)?.type).toBe("success");
     expect(await storedEvents()).toEqual([...WEBHOOK_EVENT_TYPES]);
   });
 
@@ -110,7 +111,7 @@ describe("dashboard webhook create form (#425)", () => {
     await seed.apiKey({ name: "regular key" });
 
     const response = await postForm(token, ["email.received"]);
-    expect(locationOf(response)).toContain("flashType=error");
+    expect(flashOfResponse(response)?.type).toBe("error");
     expect(await storedEvents()).toBeUndefined();
   });
 });
@@ -122,11 +123,14 @@ describe("dashboard webhook create form validates events (#437)", () => {
 
     const response = await postForm(token, ["email.viewed"]);
     expect(response.status).toBe(302);
-    const location = locationOf(response);
-    expect(location).toContain("flashType=error");
-    expect(location).toContain("Unknown webhook event");
-    /** The flash travels in the URL: it never quotes the submitted name. */
-    expect(location).not.toContain("email.viewed");
+    expect(flashOfResponse(response)).toEqual({
+      message: "Unknown webhook event",
+      type: "error",
+    });
+    /** The URL carries a code only (#421): it never quotes the submitted name. */
+    expect(response.headers.get("location")).toBe(
+      "/dashboard/webhooks?flash=webhook_unknown_event",
+    );
     expect(await webhookCount()).toBe(0);
   });
 
@@ -139,9 +143,8 @@ describe("dashboard webhook create form validates events (#437)", () => {
       "nope<script>",
       "email.bounced",
     ]);
-    const location = locationOf(response);
-    expect(location).toContain("Unknown webhook event");
-    expect(location).not.toContain("nope");
+    expect(locationOf(response)).toBe("Unknown webhook event");
+    expect(response.headers.get("location")).not.toContain("nope");
     expect(await webhookCount()).toBe(0);
   });
 
@@ -160,9 +163,10 @@ describe("dashboard webhook create form validates events (#437)", () => {
 
     /** A crafted empty `events` field: it used to store a webhook with no events. */
     const response = await postForm(token, [""]);
-    const location = locationOf(response);
-    expect(location).toContain("flashType=error");
-    expect(location).toContain("Select at least one event");
+    expect(flashOfResponse(response)).toEqual({
+      message: "Select at least one event",
+      type: "error",
+    });
     expect(await webhookCount()).toBe(0);
   });
 
@@ -180,7 +184,7 @@ describe("dashboard webhook create form validates events (#437)", () => {
     await seed.apiKey({ name: "regular key" });
 
     const response = await postForm(token, ["email.sent", "domain.verified"]);
-    expect(locationOf(response)).toContain("flashType=error");
+    expect(flashOfResponse(response)?.type).toBe("error");
     expect(await webhookCount()).toBe(0);
   });
 });

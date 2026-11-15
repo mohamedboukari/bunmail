@@ -15,16 +15,17 @@ import {
 } from "../../src/modules/suppressions/services/suppression.service.ts";
 import { mintReturnPath } from "../../src/modules/bounces/services/return-path.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port, distinct from the other SMTP test files. */
-const INBOUND_PORT = 12596;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 const RECIPIENT = "reader@example.org";
 
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
 const savedNotify = config.inboundNotify.enabled;
 
-beforeAll(() => {
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+beforeAll(async () => {
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
@@ -32,6 +33,7 @@ beforeAll(() => {
   });
   Object.assign(config.inboundNotify, { enabled: false });
   smtpReceiver.start();
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -151,7 +153,7 @@ function returnPath(): string {
 async function deliver(raw: string, to = "fbl@example.com"): Promise<void> {
   const transport = createTransport({
     host: "127.0.0.1",
-    port: INBOUND_PORT,
+    port: inboundPort,
     secure: false,
     ignoreTLS: true,
   });

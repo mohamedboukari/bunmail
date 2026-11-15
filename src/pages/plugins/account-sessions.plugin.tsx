@@ -4,12 +4,13 @@ import { AccountSessionsPage } from "../routes/account-sessions.tsx";
 import { memberGuard } from "../guards.tsx";
 import * as sessionService from "../../modules/users/services/session.service.ts";
 import { clearSession } from "../lib/session-helpers.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { clientIp } from "../lib/client-ip.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { dashboardAudit } from "../lib/audit.ts";
+import { FLASH_QUERY, flashUrl, toFlash, type Flash } from "../lib/flash.ts";
 
 /* ─── Active sessions helpers (#281) ─── */
 
@@ -17,15 +18,8 @@ import { dashboardAudit } from "../lib/audit.ts";
 const SESSIONS_PAGE = "/dashboard/account/sessions";
 
 /** Redirects to the sessions page with a flash banner. */
-function toSessionsPage(
-  set: Context["set"],
-  message: string,
-  type: "success" | "error",
-): string {
-  return redirect(
-    set,
-    `${SESSIONS_PAGE}?flash=${encodeURIComponent(message)}&flashType=${type}`,
-  );
+function toSessionsPage(set: Context["set"], flash: Flash): string {
+  return redirect(set, flashUrl(SESSIONS_PAGE, flash));
 }
 
 /**
@@ -50,7 +44,7 @@ export function accountSessionPages(app: GuardedDashboard) {
               <AccountSessionsPage
                 sessions={sessions}
                 currentSessionId={auth.session.id}
-                flash={toFlash(query.flash, query.flashType)}
+                flash={toFlash(query.flash, query.flashN)}
               />
             );
           } catch (error: unknown) {
@@ -72,8 +66,7 @@ export function accountSessionPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -109,9 +102,8 @@ export function accountSessionPages(app: GuardedDashboard) {
             return toSessionsPage(
               set,
               revoked === 0
-                ? "No other device was signed in."
-                : `Signed out ${revoked} other ${revoked === 1 ? "device" : "devices"}.`,
-              "success",
+                ? "sessions_no_other"
+                : { code: "sessions_revoked_others", n: revoked },
             );
           } catch (error: unknown) {
             logger.error("Revoking other sessions failed", {
@@ -120,11 +112,7 @@ export function accountSessionPages(app: GuardedDashboard) {
               ip,
               error: errorMessage(error),
             });
-            return toSessionsPage(
-              set,
-              "Failed to sign out the other devices: nothing was changed.",
-              "error",
-            );
+            return toSessionsPage(set, "sessions_revoke_others_failed");
           }
         },
         { beforeHandle: memberGuard },
@@ -183,7 +171,7 @@ export function accountSessionPages(app: GuardedDashboard) {
               clearSession(set);
               return redirect(set, "/dashboard/login");
             }
-            return toSessionsPage(set, "Signed out that device.", "success");
+            return toSessionsPage(set, "session_revoked");
           } catch (error: unknown) {
             logger.error("Session revoke failed", {
               userId,
@@ -192,11 +180,7 @@ export function accountSessionPages(app: GuardedDashboard) {
               ip,
               error: errorMessage(error),
             });
-            return toSessionsPage(
-              set,
-              "Failed to sign out the device: nothing was changed.",
-              "error",
-            );
+            return toSessionsPage(set, "session_revoke_failed");
           }
         },
         {

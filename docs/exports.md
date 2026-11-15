@@ -60,8 +60,8 @@ Batches are read in turn. Bun 1.3.14 drained a streamed response as fast as it w
 
 ## Tests
 
-- `test/unit/csv-writer.test.ts`: the writer (quoting, CRLF, BOM, formula escape, also after invisible prefixes and `;` separators, invalid dates, unicode), `listCell`, the file name.
-- `test/integration/csv-export-tables.integration.test.ts`: per table, the exact header row, the seeded rows, and none of the planted secrets or bodies; cell contents (Slack and Discord webhook URLs reduced to their origin); every page filter.
+- `test/unit/csv-writer.test.ts`: the writer (quoting, CRLF, BOM, formula escape, also after invisible prefixes, `;` separators and line breaks inside a cell, invalid dates, unicode), `listCell`, the file name.
+- `test/integration/csv-export-tables.integration.test.ts`: per table, the exact header row, the seeded rows, and none of the planted secrets or bodies; cell contents (Slack and Discord webhook URLs reduced to their origin, a formula after a line break in an inbound subject neutralised); every page filter.
 - `test/integration/csv-export-limits.integration.test.ts`: the concurrency limit and its slot release (finished, cancelled, 503, a failed first batch), `Sec-Fetch-Site`, a Postgres `infinity` timestamp.
 - `test/integration/csv-export-indexes.integration.test.ts`: each keyset query is served by its `0044` index, in order, with no Sort node.
 - `test/integration/csv-export-stream.integration.test.ts`: headers and BOM, batches (one chunk per batch, microsecond ties), the row cap, the audit event and log line, a failure mid-stream, the rate limit (and its audited refusal), access and the link.

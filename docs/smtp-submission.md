@@ -202,6 +202,9 @@ The server's public surface; the code sits in the `smtp-submission-*.service.ts`
 #### `start(portOverride?: number): void`
 Starts the submission server on `SMTP_SUBMISSION_PORT` (or `portOverride`, used by tests), in the TLS mode of `config.smtpSubmission.tls.mode` (#349): in `implicit` mode behind a Bun TLS listener that hands each decrypted connection to smtp-server. Requires AUTH; authenticates the password against the API-keys table via `findByHash`. Refuses to start without TLS unless `SMTP_SUBMISSION_ALLOW_INSECURE=true` (#133).
 
+#### `listeningPort(): Promise<number>`
+The port the running server is bound to, once it listens (#443): the configured port in production, the OS's pick when a test passes `portOverride` `0`. Rejects when the server is stopped. The start log line reports the same port.
+
 #### `stop(): void`
 Gracefully shuts the server down (called from the app's shutdown handler).
 

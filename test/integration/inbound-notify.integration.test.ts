@@ -24,9 +24,10 @@ import { inboundEmails } from "../../src/modules/inbound/models/inbound-email.sc
 import { config } from "../../src/config.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, domains } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port, distinct from the other SMTP test files. */
-const INBOUND_PORT = 12599;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 
 const DOMAIN = "inbox.example.com";
 const NOTIFY_TO = "owner@elsewhere.example.org";
@@ -67,8 +68,8 @@ const deps: InboundNotifyDeps = {
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
 const savedNotify = { ...config.inboundNotify };
 
-beforeAll(() => {
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+beforeAll(async () => {
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
@@ -76,6 +77,7 @@ beforeAll(() => {
   });
   Object.assign(config.inboundNotify, { enabled: true, preview: false });
   smtpReceiver.start(deps);
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -112,7 +114,7 @@ Click http://phish.example/reset or www.phish.example now.
 async function deliver(raw: string, to: string, from = "mallory@sender.example.net") {
   const transport = createTransport({
     host: "127.0.0.1",
-    port: INBOUND_PORT,
+    port: inboundPort,
     secure: false,
     ignoreTLS: true,
   });

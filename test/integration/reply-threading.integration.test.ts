@@ -17,22 +17,24 @@ import { Elysia } from "elysia";
 import { desc, eq } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import { db, emails, seed, truncateAll } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 import { inboundEmails } from "../../src/modules/inbound/models/inbound-email.schema.ts";
 import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.service.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
-/** Isolated port, distinct from the other SMTP test files. */
-const INBOUND_PORT = 12598;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 
 const dashboard = new Elysia().wrap(withRequestContext).use(pagesPlugin);
 
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
 const savedNotify = config.inboundNotify.enabled;
 
-beforeAll(() => {
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+beforeAll(async () => {
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
@@ -40,6 +42,7 @@ beforeAll(() => {
   });
   Object.assign(config.inboundNotify, { enabled: false });
   smtpReceiver.start();
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -64,7 +67,7 @@ beforeEach(async () => {
 async function deliverRaw(to: string, headers: string[], body = "hello"): Promise<void> {
   const transport = createTransport({
     host: "127.0.0.1",
-    port: INBOUND_PORT,
+    port: inboundPort,
     secure: false,
     ignoreTLS: true,
   });
@@ -129,9 +132,7 @@ async function reply(
     ...extra,
   });
   expect(response.status).toBe(302);
-  expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-    "Email queued for delivery",
-  );
+  expect(flashOfResponse(response)?.message).toContain("Email queued for delivery");
   const [row] = await db.select().from(emails).orderBy(desc(emails.createdAt)).limit(1);
   if (!row) throw new Error("no email queued");
   return row;

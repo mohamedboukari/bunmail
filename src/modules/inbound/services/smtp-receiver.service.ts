@@ -1,6 +1,6 @@
 /**
- * The inbound SMTP receiver's public surface: `start`, `stop` and
- * `storeInboundEmail` (#387). The rest lives in one file per concern,
+ * The inbound SMTP receiver's public surface: `start`, `stop`,
+ * `listeningPort` (#443) and `storeInboundEmail` (#387). The rest lives in one file per concern,
  * beside this one:
  *
  *   - `smtp-receiver-session.service.ts`: per-connection stats, log context, spans, SMTP errors
@@ -15,7 +15,7 @@ export { storeInboundEmail } from "./smtp-receiver-store.service.ts";
 import { inboundNotifyDeps, type InboundNotifyDeps } from "./inbound-notify.service.ts";
 import { selfTestDnsbl } from "./dnsbl.service.ts";
 import { receiverSessionHandlers } from "./smtp-receiver-handlers.service.ts";
-import { describeListenError, isListenError } from "./smtp-listen.ts";
+import { boundPort, describeListenError, isListenError } from "./smtp-listen.ts";
 import { MAX_MESSAGE_BYTES, receiverDataHandler } from "./smtp-receiver-data.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
@@ -25,6 +25,12 @@ let server: SMTPServer | null = null;
 
 /** Interval handle for the inbound notification budget cleanup */
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Resolves with the bound port once the running server listens (#443), or
+ * null when stopped. Read through `listeningPort()`.
+ */
+let listening: Promise<number> | null = null;
 
 /**
  * Starts the inbound SMTP server.
@@ -51,7 +57,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
   /** Does the DNSBL zone answer through this resolver? One line at boot, never fatal. */
   if (spamProtection.dnsblEnabled) void selfTestDnsbl(spamProtection.dnsblZone);
 
-  server = new SMTPServer({
+  const smtp = new SMTPServer({
     secure: false,
     authOptional: true,
     disabledCommands: ["STARTTLS", "AUTH"],
@@ -67,9 +73,22 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
     ...receiverSessionHandlers({ spamProtection }),
     ...receiverDataHandler({ notifyDeps }),
   });
+  server = smtp;
 
-  server.listen(port, () => {
-    logger.info("Inbound SMTP server started", { port });
+  /** Settles `listening` from the listen callback below. */
+  let resolveListening: (bound: number) => void = () => undefined;
+  listening = new Promise<number>((resolve) => {
+    resolveListening = resolve;
+  });
+
+  smtp.listen(port, () => {
+    /**
+     * The port actually bound: SMTP_PORT in production, the OS's pick when
+     * a test sets the port to `0` (#443).
+     */
+    const bound = boundPort(smtp.server, port);
+    logger.info("Inbound SMTP server started", { port: bound });
+    resolveListening(bound);
 
     /** Log which protection layers are active */
     logger.info("SMTP spam protection", {
@@ -81,7 +100,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
     });
   });
 
-  server.on("error", (err) => {
+  smtp.on("error", (err) => {
     /**
      * Fail fast if the port can't be bound (#167). Logging and carrying on
      * left the HTTP side (and its health check) up while no mail could
@@ -113,10 +132,23 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
 }
 
 /**
+ * The port the running receiver is bound to, once it listens (#443). Lets
+ * the integration tests set `config.smtp.port` to `0` (a free port the OS
+ * picks) and point their client at the real one. Rejects when stopped.
+ */
+export function listeningPort(): Promise<number> {
+  if (listening === null) {
+    return Promise.reject(new Error("[smtp-receiver] the server is not started"));
+  }
+  return listening;
+}
+
+/**
  * Stops the inbound SMTP server gracefully.
  * Called during application shutdown (SIGINT / SIGTERM).
  */
 export function stop(): void {
+  listening = null;
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;

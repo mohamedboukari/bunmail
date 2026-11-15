@@ -58,6 +58,7 @@ import type {
   IssuePasswordResetResult,
   UserRole,
 } from "../../src/modules/users/types/user.types.ts";
+import { flashOfLocation } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -407,7 +408,7 @@ describe("issue rules (crafted HTTP)", () => {
     });
     expect(response.status).toBe(302);
     const location = response.headers.get("location") ?? "";
-    expect(decodeURIComponent(location)).toContain("Reactivate the account");
+    expect(flashOfLocation(location)?.message).toContain("Reactivate the account");
     expect(location).not.toContain("reveal=");
     expect(await tokenRows()).toBe(0);
   });

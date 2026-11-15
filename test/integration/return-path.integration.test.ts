@@ -22,9 +22,10 @@ import { runQueueCycle } from "../../src/modules/emails/services/queue.service.t
 import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
 import { config } from "../../src/config.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port, distinct from the other SMTP test files. */
-const INBOUND_PORT = 12597;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 
 /** The email's recipients, in return-path index order (to, cc, bcc). */
 const ALICE = "alice@example.org";
@@ -34,8 +35,8 @@ const CAROL = "carol@example.org";
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
 const savedNotify = config.inboundNotify.enabled;
 
-beforeAll(() => {
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+beforeAll(async () => {
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
@@ -43,6 +44,7 @@ beforeAll(() => {
   });
   Object.assign(config.inboundNotify, { enabled: false });
   smtpReceiver.start();
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -117,7 +119,7 @@ Original-Message-ID: <${messageId}>
 async function deliver(raw: string, to: string): Promise<void> {
   const transport = createTransport({
     host: "127.0.0.1",
-    port: INBOUND_PORT,
+    port: inboundPort,
     secure: false,
     ignoreTLS: true,
   });
@@ -348,7 +350,7 @@ Message-ID: <${messageId}>
     const subject = uniqueSubject();
     const transport = createTransport({
       host: "127.0.0.1",
-      port: INBOUND_PORT,
+      port: inboundPort,
       secure: false,
       ignoreTLS: true,
     });
@@ -379,7 +381,7 @@ describe("the other reserved mailboxes still work", () => {
     const token = mintUnsubscribeToken({ emailId: single.id, recipient: ALICE }) ?? "";
     const transport = createTransport({
       host: "127.0.0.1",
-      port: INBOUND_PORT,
+      port: inboundPort,
       secure: false,
       ignoreTLS: true,
     });

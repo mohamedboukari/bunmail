@@ -16,6 +16,7 @@ import {
   useDashboardMocks,
   withRequestContext,
 } from "./dashboard-setup.ts";
+import { flashOfLocation, flashOfResponse } from "../flash-of.ts";
 
 /** Dashboard E2E: pages behind a session. Setup, fakes and helpers: `dashboard-setup.ts` (#291). */
 useDashboardMocks();
@@ -315,12 +316,11 @@ describe("Dashboard E2E: pages behind a session", () => {
       );
       expect(response.status).toBe(302);
       const location = response.headers.get("location") ?? "";
-      expect(location).toStartWith("/dashboard/domains?flash=");
-      expect(location).toContain("flashType=error");
-      const flash = new URL(location, "http://localhost").searchParams.get("flash");
-      expect(flash).toContain("must be a host name such as example.com");
-      /** The submitted value is not echoed into the redirect URL. */
-      expect(flash).not.toContain("https://");
+      /** A code only (#421): the submitted value is not echoed into the redirect URL. */
+      expect(location).toBe("/dashboard/domains?flash=domain_invalid_name");
+      const flash = flashOfLocation(location);
+      expect(flash?.message).toContain("must be a host name such as example.com");
+      expect(flash?.type).toBe("error");
     });
 
     test("rejects a cross-origin POST with 403 (CSRF guard, #133)", async () => {
@@ -397,7 +397,7 @@ describe("Dashboard E2E: pages behind a session", () => {
         to: "user@example.org",
         subject: "hi",
       });
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+      expect(flashOfResponse(response)?.message).toContain(
         "Selected API key is not available",
       );
       const actors = listApiKeys.mock.calls.map((call) => call[0]);
@@ -454,9 +454,7 @@ describe("Dashboard E2E: pages behind a session", () => {
       const member = seedSession({ userId: "usr_member", role: "member" });
       const response = await post("/dashboard/templates/tpl_gone/delete", member, {});
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-        "Template not found",
-      );
+      expect(flashOfResponse(response)?.message).toBe("Template not found");
     });
   });
 

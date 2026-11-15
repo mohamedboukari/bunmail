@@ -100,6 +100,48 @@ describe("csvField: formula injection past invisible prefixes and in ';' locales
   });
 });
 
+describe("csvField: formula injection after a line break inside a cell (#451)", () => {
+  test("a HYPERLINK after an LF gets a quote before the '=', the LF is kept", () => {
+    const subject = 'Hi\n=HYPERLINK("http://evil.example","x");';
+    expect(escapeFormula(subject)).toBe('Hi\n\'=HYPERLINK("http://evil.example","x");');
+    expect(csvField(subject)).toBe(`"Hi\n'=HYPERLINK(""http://evil.example"",""x"");"`);
+  });
+
+  test.each([
+    ["a\r\n+cmd", "a\r\n'+cmd", "CRLF then '+'"],
+    ["a\r@SUM(1)", "a\r'@SUM(1)", "CR then '@'"],
+    ["a\n-1+1", "a\n'-1+1", "LF then '-'"],
+    ["a\n  =1", "a\n  '=1", "LF then spaces"],
+    ["a\n ​﻿=1", "a\n ​﻿'=1", "LF then invisible spaces"],
+  ])("%p is neutralised (%s)", (value, escaped) => {
+    expect(escapeFormula(value)).toBe(escaped);
+  });
+
+  test("every line break followed by a formula character is neutralised", () => {
+    expect(escapeFormula("a\n=1\n\n+2\r\n\r\n@3")).toBe("a\n'=1\n\n'+2\r\n\r\n'@3");
+    expect(escapeFormula("a;\n=1")).toBe("a;\n'=1");
+  });
+
+  test("a leading line break before a formula still escapes the whole cell", () => {
+    expect(escapeFormula("\n=1+1")).toBe("'\n'=1+1");
+    expect(escapeFormula("\r=1+1")).toBe("'\r'=1+1");
+  });
+
+  test("a plain multi-line value is only quoted", () => {
+    expect(escapeFormula("line one\nline two\r\nline three")).toBe(
+      "line one\nline two\r\nline three",
+    );
+    expect(csvField("Dear team,\r\nthanks, a=b\n user@example.com")).toBe(
+      '"Dear team,\r\nthanks, a=b\n user@example.com"',
+    );
+  });
+
+  test("no line break is ever followed by a bare formula character", () => {
+    const field = csvField("x\n=a\r+b\r\n-c\n @d");
+    expect(field).not.toMatch(/[\r\n][  ​﻿]*[=+\-@]/);
+  });
+});
+
 describe("csvField: dates that are not instants", () => {
   test("an invalid date (Postgres infinity) is an empty field, not a throw", () => {
     expect(csvField(new Date("infinity"))).toBe("");

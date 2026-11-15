@@ -41,6 +41,7 @@ import { randomBytes } from "crypto";
 import { truncateAll, seed, db, domains } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
 import { installHermeticDomainDns } from "./_dns-stub.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** Mirrors the VALIDATION, selector and rotation branches of the global onError. */
 const api = new Elysia()
@@ -587,8 +588,10 @@ describe("DKIM rotation from the dashboard (#250)", () => {
 
     const start = await dash("POST", `/dashboard/domains/${id}/dkim/rotate`, admin.token);
     expect(start.status).toBe(302);
-    expect(start.headers.get("location")).toContain(`/dashboard/domains/${id}?flash=`);
-    expect(start.headers.get("location")).toContain("flashType=success");
+    expect(start.headers.get("location")).toBe(
+      `/dashboard/domains/${id}?flash=dkim_rotation_started`,
+    );
+    expect(flashOfResponse(start)?.type).toBe("success");
     const pending = await row(id);
     expect(pending.dkimPendingSelector).toBe(today());
 
@@ -606,7 +609,7 @@ describe("DKIM rotation from the dashboard (#250)", () => {
       `/dashboard/domains/${id}/dkim/rotate/complete`,
       admin.token,
     );
-    expect(early.headers.get("location")).toContain("flashType=error");
+    expect(flashOfResponse(early)?.type).toBe("error");
     expect((await row(id)).dkimSelector).toBe("bunmail");
 
     publish(
@@ -618,7 +621,7 @@ describe("DKIM rotation from the dashboard (#250)", () => {
       `/dashboard/domains/${id}/dkim/rotate/complete`,
       admin.token,
     );
-    expect(done.headers.get("location")).toContain("flashType=success");
+    expect(flashOfResponse(done)?.type).toBe("success");
     expect((await row(id)).dkimSelector).toBe(today());
 
     const after = await (
@@ -633,7 +636,7 @@ describe("DKIM rotation from the dashboard (#250)", () => {
       `/dashboard/domains/${id}/dkim/rotate/cancel`,
       admin.token,
     );
-    expect(cancel.headers.get("location")).toContain("flashType=success");
+    expect(flashOfResponse(cancel)?.type).toBe("success");
     expect((await row(id)).dkimPendingSelector).toBeNull();
 
     const events = await db
@@ -685,7 +688,7 @@ describe("DKIM rotation from the dashboard (#250)", () => {
       name: "acme.io",
       dkimSelector: "s2026",
     });
-    expect(ok.headers.get("location")).not.toContain("flashType=error");
+    expect(flashOfResponse(ok)?.type).toBe("success");
     const [created] = await db.select().from(domains);
     expect(created?.dkimSelector).toBe("s2026");
 
@@ -693,17 +696,15 @@ describe("DKIM rotation from the dashboard (#250)", () => {
       name: "other.io",
       dkimSelector: "Not_Valid",
     });
-    expect(bad.headers.get("location")).toContain("flashType=error");
-    expect(decodeURIComponent(bad.headers.get("location") ?? "")).toContain(
-      "lowercase DNS label",
-    );
+    expect(flashOfResponse(bad)?.type).toBe("error");
+    expect(flashOfResponse(bad)?.message).toContain("lowercase DNS label");
     expect(await db.select().from(domains)).toHaveLength(1);
 
     const empty = await dash("POST", "/dashboard/domains", admin.token, {
       name: "third.io",
       dkimSelector: "",
     });
-    expect(empty.headers.get("location")).not.toContain("flashType=error");
+    expect(flashOfResponse(empty)?.type).toBe("success");
     const [third] = await db.select().from(domains).where(eq(domains.name, "third.io"));
     expect(third?.dkimSelector).toBe("bunmail");
   });
