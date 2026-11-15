@@ -2,9 +2,11 @@
  * Feedback-loop complaints and the shared send gate (`SUPPRESSIONS_SHARED_HARD`),
  * on the real inbound SMTP receiver and a real Postgres. A complaint is
  * shared with the other API keys only when its report is **verified**: a
- * DKIM signature that passes for one of `FEEDBACK_LOOP_DOMAINS`. Any other
- * report still suppresses under the sending key and fires its webhook,
- * but never blocks another key.
+ * DKIM signature that passes for one of `FEEDBACK_LOOP_DOMAINS`, on a
+ * report from one of `FEEDBACK_LOOP_SENDERS` whose domain that signature
+ * belongs to (and a listed or empty envelope sender). Any other report
+ * still suppresses under the sending key and fires its webhook, but never
+ * blocks another key.
  *
  * The unsigned report goes through the SMTP receiver; the signed ones go
  * through the same entry point the receiver calls
@@ -19,17 +21,26 @@ import {
   afterAll,
   beforeEach,
   afterEach,
+  spyOn,
 } from "bun:test";
 import { and, eq } from "drizzle-orm";
 import { createTransport } from "nodemailer";
 import { config } from "../../src/config.ts";
+import { logger } from "../../src/utils/logger.ts";
+import { redactEmail } from "../../src/utils/redact.ts";
 import { createEmail } from "../../src/modules/emails/services/email.service.ts";
 import { handleInboundFeedbackReport } from "../../src/modules/inbound/services/feedback-handler.service.ts";
 import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.service.ts";
 import { isSuppressed } from "../../src/modules/suppressions/services/suppression.service.ts";
 import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.ts";
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
-import { arfReport, arfResolveTxt, signArf } from "../signed-arf.ts";
+import {
+  ARF_FROM,
+  arfReport,
+  arfResolveTxt,
+  signArf,
+  signArfWith,
+} from "../signed-arf.ts";
 import { truncateAll, seed, db, suppressions } from "./_helpers.ts";
 import { boundTestPort } from "../listen-port.ts";
 
@@ -44,6 +55,7 @@ const PROVIDER = "fbl.isp.example.net";
 const flags = config.suppressions as {
   sharedHard: boolean;
   feedbackLoopDomains: string[];
+  feedbackLoopSenders: string[];
 };
 const savedFlags = { ...config.suppressions };
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
@@ -78,6 +90,7 @@ beforeEach(async () => {
   await truncateAll();
   flags.sharedHard = true;
   flags.feedbackLoopDomains = [PROVIDER];
+  flags.feedbackLoopSenders = [ARF_FROM];
   keyA = (await seed.apiKey({ name: "tenant-a" })).id;
   keyB = (await seed.apiKey({ name: "tenant-b" })).id;
   hookA = (
@@ -103,7 +116,11 @@ beforeEach(async () => {
 afterEach(() => {
   flags.sharedHard = savedFlags.sharedHard;
   flags.feedbackLoopDomains = [...savedFlags.feedbackLoopDomains];
+  flags.feedbackLoopSenders = [...savedFlags.feedbackLoopSenders];
 });
+
+/** The envelope sender `deliver` uses. */
+const ENVELOPE_FROM = "feedback@isp.example.net";
 
 /** Delivers a raw message to the receiver; resolves once it was accepted. */
 async function deliver(raw: string): Promise<void> {
@@ -115,7 +132,7 @@ async function deliver(raw: string): Promise<void> {
   });
   try {
     await transport.sendMail({
-      envelope: { from: "feedback@isp.example.net", to: "fbl@example.com" },
+      envelope: { from: ENVELOPE_FROM, to: "fbl@example.com" },
       raw,
     });
   } finally {
@@ -123,17 +140,28 @@ async function deliver(raw: string): Promise<void> {
   }
 }
 
-/** Runs a signed report through the receiver's entry point, keys published for `domains`. */
-async function handleSigned(signed: Buffer, domains: readonly string[]): Promise<string> {
-  const result = await handleInboundFeedbackReport(signed.toString("latin1"), signed, {
-    resolveTxt: arfResolveTxt(domains),
-  });
+/**
+ * Runs a signed report through the receiver's entry point, keys published
+ * for `domains`, with `envelopeFrom` as the SMTP envelope sender (`null`:
+ * the null reverse-path `<>`).
+ */
+async function handleSigned(
+  signed: Buffer,
+  domains: readonly string[],
+  envelopeFrom: string | null = null,
+): Promise<string> {
+  const result = await handleInboundFeedbackReport(
+    signed.toString("latin1"),
+    signed,
+    envelopeFrom,
+    { resolveTxt: arfResolveTxt(domains) },
+  );
   return result.outcome;
 }
 
-/** The report a tenant could write about its own email to the target. */
-function reportAboutA(): string {
-  return arfReport({ originalMessageId: messageIdA, rcptTo: TARGET });
+/** The report a tenant could write about its own email to the target, from `from`. */
+function reportAboutA(from?: string): string {
+  return arfReport({ originalMessageId: messageIdA, rcptTo: TARGET, from });
 }
 
 async function rowOf(key: string) {
@@ -255,5 +283,254 @@ describe("a verified report is shared", () => {
     expect(await rowOf(keyA)).toMatchObject({ complaintVerified: true });
     expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
     expect(await sendAsB()).toBeNull();
+  });
+});
+
+/**
+ * A verified complaint must also come from a configured feedback-loop
+ * sender, signed by that sender's domain.
+ */
+describe("the feedback-loop sender", () => {
+  test("signed by a listed domain but from an unlisted sender: not shared", async () => {
+    const outcome = await handleSigned(
+      signArf(reportAboutA("someone@fbl.isp.example.net"), PROVIDER),
+      [PROVIDER],
+    );
+
+    expect(outcome).toBe("complained");
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: false });
+    expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
+    expect(await sendAsB()).toBeNull();
+  });
+
+  test("the same report from the listed sender, with a listed envelope sender: shared", async () => {
+    await handleSigned(signArf(reportAboutA(), PROVIDER), [PROVIDER], ARF_FROM);
+
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: true });
+    expect(await sendAsB()).toBeInstanceOf(SuppressedRecipientError);
+  });
+
+  test("a listed sender on a domain the listed signature does not cover: not shared", async () => {
+    flags.feedbackLoopSenders = [ARF_FROM, "feedback@other.example.org"];
+    await handleSigned(signArf(reportAboutA("feedback@other.example.org"), PROVIDER), [
+      PROVIDER,
+    ]);
+
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: false });
+    expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
+  });
+
+  test("an envelope sender that is not listed: not shared", async () => {
+    await handleSigned(
+      signArf(reportAboutA(), PROVIDER),
+      [PROVIDER],
+      "bounces@elsewhere.example",
+    );
+
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: false });
+    expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
+  });
+
+  test("with FEEDBACK_LOOP_SENDERS empty, nothing is verified, even the provider's own report", async () => {
+    flags.feedbackLoopSenders = [];
+    const outcome = await handleSigned(signArf(reportAboutA(), PROVIDER), [PROVIDER]);
+
+    expect(outcome).toBe("complained");
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: false });
+    expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
+    expect(await sendAsB()).toBeNull();
+  });
+
+  test("the SMTP receiver hands the envelope sender to the handler", async () => {
+    const info = spyOn(logger, "info");
+    try {
+      await deliver(reportAboutA());
+      const line = info.mock.calls.find((call) =>
+        call[0].startsWith("Complaint not verified"),
+      );
+      expect(line?.[1]).toMatchObject({
+        emailId: emailA,
+        envelopeFrom: redactEmail(ENVELOPE_FROM),
+      });
+    } finally {
+      info.mockRestore();
+    }
+  });
+});
+
+/**
+ * The `From` and `Content-Type` a verified complaint relies on must be the
+ * ones a signature covers: a report from another address at the trusted
+ * signer, with header fields added after signing, is never shared.
+ */
+describe("header fields the signature does not cover are not trusted", () => {
+  /** Another address at the trusted signer: not a listed sender. */
+  const OTHER = "user@fbl.isp.example.net";
+  const OTHER_FROM_LINE = `\r\nFrom: "Feedback Loop" <${OTHER}>`;
+  const PLAIN_HEADERS = [
+    "from",
+    "to",
+    "subject",
+    "date",
+    "message-id",
+    "mime-version",
+    "content-type",
+  ];
+
+  /** `signed` with its `From` line replaced by `lines`. */
+  function withFromLines(signed: Buffer, lines: string): Buffer {
+    const text = signed.toString("latin1");
+    expect(text).toContain(OTHER_FROM_LINE);
+    return Buffer.from(text.replace(OTHER_FROM_LINE, lines), "latin1");
+  }
+
+  /** Runs `bytes` with an empty envelope sender and checks nothing reached key B. */
+  async function expectNotShared(bytes: Buffer): Promise<void> {
+    const outcome = await handleSigned(bytes, [PROVIDER], null);
+    expect(outcome).toBe("complained");
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: false });
+    expect(await isSuppressed(keyB, TARGET)).toBeUndefined();
+    expect(await sendAsB()).toBeNull();
+  }
+
+  test("only the signed From instance counts", async () => {
+    const signed = signArfWith(reportAboutA(OTHER), PROVIDER, { headers: PLAIN_HEADERS });
+    await expectNotShared(
+      withFromLines(
+        signed,
+        `\r\nFrom: ${ARF_FROM}\r\nFrom${" ".repeat(80)}: "Feedback Loop" <${OTHER}>`,
+      ),
+    );
+  });
+
+  test("an unsigned From and Content-Type ahead of many other fields are refused", async () => {
+    const signed = signArfWith(reportAboutA(OTHER), PROVIDER, { headers: PLAIN_HEADERS });
+    const filler = Array.from({ length: 200 }, (_, i) => `X-Filler-${i}: a`).join("\r\n");
+    await expectNotShared(
+      Buffer.concat([
+        Buffer.from(
+          'Content-Type: multipart/report; report-type=feedback-report; boundary="arf_bnd"\r\n' +
+            `From: ${ARF_FROM}\r\n${filler}\r\n`,
+          "latin1",
+        ),
+        signed,
+      ]),
+    );
+  });
+
+  test("a From hidden from one reader is refused", async () => {
+    const signed = signArfWith(reportAboutA(OTHER), PROVIDER, { headers: PLAIN_HEADERS });
+    await expectNotShared(
+      withFromLines(signed, `\r\nFrom\x0b: ${ARF_FROM}${OTHER_FROM_LINE}`),
+    );
+  });
+
+  test("an unsigned From is refused with an over-signing signer too", async () => {
+    const signed = signArf(reportAboutA(OTHER), PROVIDER);
+    await expectNotShared(
+      withFromLines(
+        signed,
+        `\r\nFrom\x0b: ${ARF_FROM}\r\nFrom${" ".repeat(80)}: "Feedback Loop" <${OTHER}>`,
+      ),
+    );
+  });
+
+  test("the listed sender's own report, unmodified, is still shared", async () => {
+    await handleSigned(
+      signArfWith(reportAboutA(), PROVIDER, { headers: PLAIN_HEADERS }),
+      [PROVIDER],
+    );
+    expect(await rowOf(keyA)).toMatchObject({ complaintVerified: true });
+    expect(await sendAsB()).toBeInstanceOf(SuppressedRecipientError);
+  });
+});
+
+/**
+ * A relaxed DKIM signature still verifies after whitespace changes in the
+ * body, so the email a report links to must not depend on them.
+ */
+describe("a body a relaxed signature cannot tell apart links to the same email", () => {
+  const OTHER_RECIPIENT = "other-reader@example.org";
+
+  /** A listed sender's report with no Original-Message-ID about key A's email, whose body names `bodyMessageId`. */
+  function reportWithBody(bodyMessageId: string): string {
+    return [
+      `From: ${ARF_FROM}`,
+      "To: fbl@example.com",
+      "Subject: complaint",
+      "Date: Mon, 19 Oct 2026 10:05:00 +0000",
+      `Message-ID: <${crypto.randomUUID()}@fbl.isp.example.net>`,
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/report; report-type=feedback-report; boundary="arf_bnd"',
+      "",
+      "--arf_bnd",
+      "Content-Type: text/plain",
+      "",
+      "abuse report",
+      "",
+      "--arf_bnd",
+      "Content-Type: message/feedback-report",
+      "",
+      "Feedback-Type: abuse",
+      "Version: 1",
+      "",
+      "--arf_bnd",
+      "Content-Type: message/rfc822",
+      "",
+      "From: hello@example.com",
+      `To: ${TARGET}`,
+      "Subject: hi",
+      `Message-ID: <${messageIdA}>`,
+      "Content-Type: text/plain",
+      "",
+      `Message-ID: <${bodyMessageId}>`,
+      "",
+      "hello",
+      "",
+      "--arf_bnd--",
+      "",
+    ].join("\r\n");
+  }
+
+  test("a whitespace-only line still ends a header section: the complaint stays on the reported email", async () => {
+    /** Another email of key A, to another address. */
+    const otherId = `${crypto.randomUUID().replaceAll("-", "")}@mail.example.com`;
+    await seed.email({
+      apiKeyId: keyA,
+      fromAddress: "hello@example.com",
+      toAddress: OTHER_RECIPIENT,
+      status: "sent",
+      messageId: `<${otherId}>`,
+    });
+    const signed = signArfWith(reportWithBody(otherId), PROVIDER, {
+      headers: [
+        "from",
+        "to",
+        "subject",
+        "date",
+        "message-id",
+        "mime-version",
+        "content-type",
+      ],
+    }).toString("latin1");
+    const edited = signed.replace(
+      "Content-Type: message/rfc822\r\n\r\n",
+      "Content-Type: message/rfc822\r\n \r\n",
+    );
+    expect(edited).not.toBe(signed);
+
+    const outcome = await handleSigned(Buffer.from(edited, "latin1"), [PROVIDER]);
+
+    expect(outcome).toBe("complained");
+    expect(await rowOf(keyA)).toMatchObject({
+      sourceEmailId: emailA,
+      complaintVerified: true,
+    });
+    const otherRows = await db
+      .select()
+      .from(suppressions)
+      .where(eq(suppressions.email, OTHER_RECIPIENT));
+    expect(otherRows).toEqual([]);
+    expect(await isSuppressed(keyB, OTHER_RECIPIENT)).toBeUndefined();
   });
 });

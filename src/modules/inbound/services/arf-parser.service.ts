@@ -25,6 +25,7 @@
  */
 
 import { isEmailAddress } from "../../../utils/recipients.ts";
+import { lowerAscii, trimFws } from "./dkim-verifier-parse.service.ts";
 import type { FeedbackReport } from "../types/feedback-report.types.ts";
 
 /** How much of any header section is read. */
@@ -73,21 +74,57 @@ interface ContentType {
 }
 
 /**
- * Splits `text` at the blank line ending its header section. Only the first
- * {@link MAX_HEADER_BYTES} are searched; a section running past that is cut
- * there (and the body is then empty). Text starting with a line break has
- * no headers at all.
+ * How a blank line is recognised. `strict` (an empty line) for the
+ * message's own header section, the way the DKIM verifier ends it: there a
+ * line of spaces continues the field above. `relaxed` (empty or only SP
+ * and HTAB) everywhere inside the body, where relaxed DKIM body
+ * canonicalization treats the two as the same line, so they must split the
+ * same way.
  */
-function splitHeaderSection(text: string): { headers: string; body: string } {
-  if (text.startsWith("\n")) return { headers: "", body: text.slice(1) };
-  if (text.startsWith("\r\n")) return { headers: "", body: text.slice(2) };
+const BLANK_LINE = {
+  strict: { start: /^\r?\n/, between: /\r?\n\r?\n/ },
+  relaxed: { start: /^[ \t]*\r?\n/, between: /\r?\n[ \t]*\r?\n/ },
+} as const;
+
+/**
+ * Splits `text` at the blank line ending its header section (see
+ * {@link BLANK_LINE}). Only the first {@link MAX_HEADER_BYTES} are
+ * searched; a section running past that is cut there (and the body is
+ * then empty). Text starting with a blank line has no headers at all.
+ */
+function splitHeaderSection(
+  text: string,
+  blankLine: keyof typeof BLANK_LINE = "relaxed",
+): { headers: string; body: string } {
+  const rule = BLANK_LINE[blankLine];
   const window = text.slice(0, MAX_HEADER_BYTES);
-  const end = /\r?\n\r?\n/.exec(window);
+  const leading = rule.start.exec(window);
+  if (leading) return { headers: "", body: text.slice(leading[0].length) };
+  const end = rule.between.exec(window);
   if (!end) return { headers: window, body: "" };
   return {
     headers: text.slice(0, end.index),
     body: text.slice(end.index + end[0].length),
   };
+}
+
+/**
+ * The body as relaxed DKIM body canonicalization sees it (RFC 6376 section
+ * 3.4.4), with every line end made LF (so the size caps applied later fall
+ * in the same place whatever the input's line ends): every run of SP and HTAB made one SP, a space at
+ * the end of a line dropped, and the empty lines at the end dropped. Two
+ * bodies a relaxed signature cannot tell apart become the same text, so
+ * whatever parts and fields are read from one are read from the other.
+ * Linear: runs are collapsed first, so the second pass looks at one space.
+ */
+function relaxedBody(body: string): string {
+  const collapsed = body
+    .replace(/\r?\n/g, "\n")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ (?=\n)/g, "");
+  let end = collapsed.length;
+  while (end > 0 && " \r\n".includes(collapsed[end - 1]!)) end -= 1;
+  return collapsed.slice(0, end);
 }
 
 /**
@@ -99,6 +136,8 @@ function splitHeaderSection(text: string): { headers: string; body: string } {
 function parseFields(section: string): HeaderField[] {
   const fields: HeaderField[] = [];
   for (const line of section.split(/\r?\n/)) {
+    /** A line of only SP and HTAB is a blank line, like an empty one: skipped. */
+    if (/^[ \t]*$/.test(line)) continue;
     if (line.startsWith(" ") || line.startsWith("\t")) {
       const last = fields.at(-1);
       if (last && last.value.length < MAX_FIELD_LENGTH) {
@@ -168,7 +207,7 @@ function topContentType(raw: string): {
   fields: HeaderField[];
   body: string;
 } {
-  const { headers, body } = splitHeaderSection(raw);
+  const { headers, body } = splitHeaderSection(raw, "strict");
   const fields = parseFields(headers);
   return {
     contentType: parseContentType(firstField(fields, "content-type")),
@@ -244,6 +283,53 @@ function cleanAddress(value: string | null): string | null {
 }
 
 /**
+ * The one address of a `From` field value, or `null` when the value is not
+ * plainly one mailbox. Accepted: a bare address without quotes, or a
+ * leading display name (plain, or one quoted string) and the address in
+ * angle brackets, which is how feedback-loop senders write it. Refused
+ * rather than tokenized (RFC 5322 comments nest): a value of
+ * {@link MAX_FIELD_LENGTH} characters or more (it may have been cut), a
+ * backslash anywhere, a quote anywhere but around the leading display
+ * name, a `(` or `)` outside it (a comment), a list or group (`,`, `;`,
+ * `:`), anything after the closing bracket, and an address with anything
+ * but printable ASCII.
+ * The address is lowercased in ASCII only, so no other character folds
+ * into a listed one. Linear: no pattern backtracks.
+ *
+ * Shared with the DKIM side (`feedback-verification.service.ts`), which
+ * reads the `From` field the signature covers.
+ */
+export function mailboxAddress(value: string): string | null {
+  /** A backslash anywhere: an escaped quote would change where a quoted name ends. */
+  if (value.length >= MAX_FIELD_LENGTH || value.includes("\\")) return null;
+  const trimmed = trimFws(value);
+  /**
+   * `Name <address>`: the name is one quoted string (anything but `"`
+   * inside) or plain text without quotes, brackets, `@`, comments or list
+   * separators, and nothing follows the closing bracket. Otherwise the
+   * whole value is the address. Linear: the alternatives cannot overlap.
+   */
+  const angle = /^(?:"[^"]*"[ \t]*|[^"<>@(),;:]*)<([^<>"]+)>$/.exec(trimmed);
+  if (trimmed.includes("<") && !angle) return null;
+  const candidate = angle ? angle[1]! : trimmed;
+  if (!/^[\x21-\x7e]+$/.test(candidate) || /["(),;:<>]/.test(candidate)) return null;
+  const address = lowerAscii(candidate);
+  return isEmailAddress(address) ? address : null;
+}
+
+/**
+ * The one mailbox of a report's `From` as this parser reads it, or `null`:
+ * when the header section has no `From` field or more than one, or the
+ * value is not plainly one mailbox ({@link mailboxAddress}). Logged only:
+ * whether a complaint is verified depends on the `From` field the DKIM
+ * signature covers, read by the verifier's own header split.
+ */
+function singleMailbox(fields: HeaderField[]): string | null {
+  const from = fields.filter((field) => field.name === "from");
+  return from.length === 1 ? mailboxAddress(from[0]!.value) : null;
+}
+
+/**
  * The Message-ID in a field value, without angle brackets: the first
  * `<...>` token, else the bare value when it has no space or bracket.
  * `null` when there is none or it is longer than any id BunMail stores.
@@ -279,13 +365,18 @@ export function isFeedbackReport(raw: string): boolean {
 export function parseFeedbackReport(raw: string): FeedbackReport | null {
   const top = topContentType(raw);
   if (!isFeedbackContentType(top.contentType)) return null;
-  const boundary = top.contentType.params.get("boundary");
-  if (!boundary || boundary.length > MAX_BOUNDARY_LENGTH) return null;
+  /**
+   * The body and the boundary in their relaxed-canonical form: a relaxed
+   * signature lets whitespace runs, trailing whitespace and trailing empty
+   * lines change, so the parts are found in a form those edits cannot move.
+   */
+  const boundary = relaxedBody(top.contentType.params.get("boundary") ?? "");
+  if (boundary === "" || boundary.length > MAX_BOUNDARY_LENGTH) return null;
 
   let feedback: HeaderField[] | null = null;
   let embeddedMessageId: string | null = null;
 
-  for (const part of splitParts(top.body, boundary)) {
+  for (const part of splitParts(relaxedBody(top.body), boundary)) {
     const { headers, body } = splitHeaderSection(part);
     const partFields = parseFields(headers);
     const partType = parseContentType(firstField(partFields, "content-type")).type;
@@ -331,5 +422,6 @@ export function parseFeedbackReport(raw: string): FeedbackReport | null {
     originalMessageId:
       cleanMessageId(firstField(feedback, "original-message-id")) ?? embeddedMessageId,
     reporterDomain: cleanAddress(firstField(top.fields, "from"))?.split("@")[1] ?? null,
+    reporterAddress: singleMailbox(top.fields),
   };
 }

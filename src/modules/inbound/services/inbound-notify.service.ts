@@ -1,6 +1,7 @@
 import { randomBytes } from "crypto";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { sendMail } from "../../emails/services/mailer.service.ts";
 import {
@@ -337,7 +338,7 @@ export async function notifyInboundReceived(
   } catch (err) {
     logger.error("Inbound notification handler error", {
       inboundId: input.inboundId,
-      error: err instanceof Error ? err.message : String(err),
+      error: loggableError(err),
     });
   }
 }
@@ -455,10 +456,17 @@ async function sendDomainNotification(
       });
     }
   } catch (err) {
+    /**
+     * Expected, handled: a DKIM key that cannot sign (#345, the signer has
+     * logged why) or a notify address without a valid recipient. Logged at
+     * `warn` with the error's class, and its message through
+     * `loggableError` (#458).
+     */
     logger.warn("Inbound notification failed to send", {
       inboundId: input.inboundId,
       domain: domain.name,
-      error: err instanceof Error ? err.message : String(err),
+      errorName: err instanceof Error ? err.name : typeof err,
+      error: loggableError(err),
     });
   }
 }

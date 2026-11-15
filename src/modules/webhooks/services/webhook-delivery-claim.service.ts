@@ -4,6 +4,7 @@ import { webhookDeliveries } from "../models/webhook-delivery.schema.ts";
 import { webhooks } from "../models/webhook.schema.ts";
 import { apiKeys } from "../../api-keys/models/api-key.schema.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { config } from "../../../config.ts";
 import { MAX_DELIVERY_ATTEMPTS } from "./webhook-delivery-schedule.service.ts";
@@ -249,7 +250,7 @@ function readWebhookSecret(stored: string, webhookId: string): string | null {
   } catch (error: unknown) {
     logger.error("Failed to decrypt webhook signing secret: delivery not sent", {
       webhookId,
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
     return null;
   }

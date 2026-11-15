@@ -73,7 +73,7 @@ The `path` of the request line never contains the query string (owner setup link
 - **Query parameters.** Any logged string containing a drizzle query error keeps its SQL and loses its bound values (`\nparams: [REDACTED]`), as a safety net for call sites that log `error.message` (#260).
 - **The seed API key.** `src/db/seed.ts` prints the new key to the terminal directly, never through the logger (#260).
 - **The one documented exception:** the owner setup link (#215), logged once per minted link so the operator can claim the account. It is single use and expires after 24 hours.
-- Drizzle query errors on the account paths and in the dashboard's failure lines are logged with the Postgres SQLSTATE only, never with the query parameters (#448).
+- Drizzle query errors on the account paths, in the dashboard's failure lines (#448) and in the background services (the email queue, the webhook worker, the SMTP listeners, inbound notifications, the purge and self-check jobs, #458) are logged with the Postgres SQLSTATE only, never with the query parameters. A send that fails on a database error stores the same text in `emails.last_error` and the `email.failed` payload.
 
 ## Tracing an incident
 

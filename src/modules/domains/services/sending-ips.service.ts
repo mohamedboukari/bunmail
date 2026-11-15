@@ -2,6 +2,7 @@ import { resolve4, resolve6, reverse } from "dns/promises";
 import { isIPv6 } from "net";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 
 /**
  * The public IP addresses this server sends mail from (#247, #248): what
@@ -149,7 +150,7 @@ async function refreshReverseDnsStatus(
     };
   } catch (error: unknown) {
     logger.warn("Reverse DNS status refresh failed", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   }
   return latestStatus;
@@ -201,7 +202,7 @@ export async function logReverseDnsAtBoot(deps?: ReverseDnsDeps): Promise<void> 
     }
   } catch (error: unknown) {
     logger.warn("Reverse DNS check could not run", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   }
 }

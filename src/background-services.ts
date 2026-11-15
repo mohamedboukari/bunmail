@@ -8,6 +8,7 @@
  */
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
+import { loggableError } from "./utils/db-error.ts";
 import * as queueService from "./modules/emails/services/queue.service.ts";
 import * as smtpReceiver from "./modules/inbound/services/smtp-receiver.service.ts";
 import * as smtpSubmission from "./modules/smtp-submission/services/smtp-submission.service.ts";
@@ -28,7 +29,7 @@ export function startBackgroundServices(): void {
    */
   queueService.start().catch((error: unknown) => {
     logger.error("Failed to start email queue processor", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   });
 
