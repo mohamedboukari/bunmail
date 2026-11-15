@@ -391,7 +391,8 @@ describe("verifyDomain: persistence (#250)", () => {
     expect(update.spfVerified).toBe(true);
     expect(update.dkimVerified).toBe(false);
     expect(update.dmarcVerified).toBe(true);
-    expect(update.verifiedAt).toBeNull();
+    /** Unchanged (still unverified): not written back (#457). */
+    expect("verifiedAt" in update).toBe(false);
     expect(update.consecutiveFailures).toBe(1);
     expect(update.lastCheckedAt).toBeInstanceOf(Date);
     expect(executed).toBe(0);

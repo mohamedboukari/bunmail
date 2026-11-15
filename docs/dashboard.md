@@ -624,6 +624,13 @@ The full absolute timestamp is always available via the `title` tooltip.
 The component intentionally exposes no date-only format: the dashboard
 never shows a bare date; every rendered value carries date and time.
 
+A value that is not an instant, a hand-set Postgres `infinity` or
+`-infinity` (Bun 1.4 decodes it as the number `Infinity`), shows the
+fallback like `null` does (#457). Code that formats, measures or copies a
+timestamp read from the database outside `TimeDisplay` passes it through
+`finiteDate` (`src/utils/finite-date.ts`) first; the API serializes such a
+value as `null`.
+
 When adding a new dashboard route that displays a timestamp:
 
 ```tsx
