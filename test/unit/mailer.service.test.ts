@@ -6,11 +6,13 @@ import {
   beforeEach,
   beforeAll,
   afterAll,
+  afterEach,
   spyOn,
 } from "bun:test";
 import { generateKeyPairSync } from "crypto";
 import MailComposer from "nodemailer/lib/mail-composer";
 import type { DeliveryGroup } from "../../src/modules/emails/models/email.schema.ts";
+import type { Domain } from "../../src/modules/domains/types/domain.types.ts";
 import { parseServer, type DnsServer } from "../../src/utils/dns-transport.ts";
 import {
   aRecord,
@@ -198,6 +200,12 @@ const { logger } = await import("../../src/utils/logger.ts");
 const { parseReturnPath, recipientOrder, returnPathMacMatches } =
   await import("../../src/modules/bounces/services/return-path.ts");
 const { setMtaStsDeps } = await import("../../src/modules/emails/services/mta-sts.ts");
+const domainService =
+  await import("../../src/modules/domains/services/domain.service.ts");
+const { notifyInboundReceived } =
+  await import("../../src/modules/inbound/services/inbound-notify.service.ts");
+const { NotifyThrottle } =
+  await import("../../src/modules/inbound/services/notify-throttle.ts");
 const { verifyDkimSignatures } =
   await import("../../src/modules/inbound/services/dkim-verifier.service.ts");
 
@@ -1837,5 +1845,140 @@ describe("sendMail: trace spans (#363)", () => {
     ]) {
       expect(shipped).not.toContain(text);
     }
+  });
+});
+
+/**
+ * No message content in the logs (#481): the send line carried the
+ * subject, and the inbound notification's subject is `New email for
+ * <address>`, so the recipient reached the logs even with
+ * `LOG_REDACT_PII=true`. The logger is spied, not mocked: the assertions
+ * read the raw arguments of every call, so they check the call sites,
+ * not the logger's own redaction.
+ */
+describe("sendMail: no message content in the logs (#481)", () => {
+  /** In the subject, body, attachment name and a header value of a send. */
+  const TOKEN = "zq7-content-token";
+  const SUBJECT_ADDRESS = "subject.only@example.net";
+
+  let spies: ReturnType<typeof spyOn<typeof logger, "info">>[] = [];
+
+  beforeEach(() => {
+    spies = (["debug", "info", "warn", "error"] as const).map((level) =>
+      spyOn(logger, level).mockImplementation(() => undefined),
+    );
+  });
+
+  afterEach(() => {
+    for (const spy of spies) spy.mockRestore();
+    spies = [];
+  });
+
+  /** Every call the logger received, as one string. */
+  function everythingLogged(): string {
+    return JSON.stringify(spies.map((spy) => spy.mock.calls));
+  }
+
+  test("the send line logs the subject's length, never the subject, body, file name or header value", async () => {
+    const subject = `New email for ${SUBJECT_ADDRESS} ${TOKEN}`;
+    await sendMail({
+      from: "hello@example.com",
+      to: "user@example.org",
+      subject,
+      html: `<p>${TOKEN} html</p>`,
+      text: `${TOKEN} text`,
+      messageId: MID,
+      dkim: DKIM,
+      headers: { "X-Correlation-Id": TOKEN },
+      attachments: [
+        {
+          filename: `${TOKEN}.pdf`,
+          content: Buffer.from("x"),
+          contentType: "application/pdf",
+          contentId: null,
+        },
+      ],
+    });
+
+    expect(captured).toHaveLength(1);
+    const sending = spies[1]!.mock.calls.find(
+      ([message]) => message === "Sending email via SMTP",
+    );
+    expect(sending?.[1]).toMatchObject({
+      subjectLength: subject.length,
+      attachmentCount: 1,
+      messageId: MID,
+    });
+    expect(sending?.[1]).not.toHaveProperty("subject");
+    const logged = everythingLogged();
+    expect(logged).not.toContain(SUBJECT_ADDRESS);
+    expect(logged).not.toContain(TOKEN);
+  });
+
+  test("an inbound notification never logs the recipient address its subject names", async () => {
+    const recipient = "zebra.inbox@example.com";
+    const domain: Domain = {
+      id: "dom_481",
+      name: "example.com",
+      dkimPrivateKey: null,
+      dkimPublicKey: null,
+      dkimSelector: "bunmail",
+      dkimPendingSelector: null,
+      dkimPendingPrivateKey: null,
+      dkimPendingPublicKey: null,
+      dkimPendingCreatedAt: null,
+      dkimPreviousSelector: null,
+      dkimPreviousPublicKey: null,
+      dkimRotatedAt: null,
+      spfVerified: true,
+      dkimVerified: true,
+      dmarcVerified: true,
+      verifiedAt: new Date(),
+      lastCheckedAt: null,
+      nextCheckAt: null,
+      consecutiveFailures: 0,
+      lastCheckResult: null,
+      unsubscribeEmail: null,
+      unsubscribeUrl: null,
+      notifyEmail: "owner@example.org",
+      trackOpens: false,
+      trackClicks: false,
+      trackingEpoch: 0,
+      mtaStsMode: "none",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      createdByUserId: null,
+    };
+    const exists = spyOn(domainService, "domainExistsByName").mockResolvedValue(false);
+    const byName = spyOn(domainService, "getDomainByName").mockResolvedValue(domain);
+    try {
+      await notifyInboundReceived(
+        {
+          inboundId: "inb_481",
+          from: "sender@elsewhere.example.net",
+          recipients: [recipient],
+          subject: `Original ${TOKEN}`,
+          text: `Body ${TOKEN}`,
+          headerLines: [],
+          returnPath: "sender@elsewhere.example.net",
+          sizeBytes: 100,
+        },
+        { send: sendMail, now: () => Date.now(), throttle: new NotifyThrottle() },
+      );
+    } finally {
+      exists.mockRestore();
+      byName.mockRestore();
+    }
+
+    /** The notification went out, its subject naming the recipient. */
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.mailOptions.subject).toBe(`New email for ${recipient}`);
+    expect(
+      spies[1]!.mock.calls.some(([message]) => message === "Inbound notification sent"),
+    ).toBe(true);
+    const logged = everythingLogged();
+    expect(logged).not.toContain(recipient);
+    expect(logged).not.toContain("New email for");
+    expect(logged).not.toContain(TOKEN);
   });
 });

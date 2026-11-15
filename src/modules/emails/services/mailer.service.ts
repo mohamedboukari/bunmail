@@ -290,7 +290,11 @@ export async function sendMail(options: {
     from: redactEmail(options.from),
     groupCount: Object.keys(state).length,
     pendingCount: Object.values(state).filter((g) => g.status === "retry").length,
-    subject: options.subject,
+    /**
+     * Length only: a subject is message content, and some carry an address,
+     * such as the inbound notification's `New email for <address>` (#481).
+     */
+    subjectLength: options.subject.length,
     dkim: options.dkim ? options.dkim.domainName : "none",
     messageId: options.messageId,
     /** Count only: filenames may carry personal data (#181). */
