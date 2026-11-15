@@ -517,6 +517,7 @@ src/pages/
 │   ├── sso-login.plugin.tsx  ← SSO sign-in start and the callback: sign-in or link (public, #224)
 │   ├── sso.plugin.tsx        ← The Sign-in methods page: link, unlink (#224)
 │   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), DKIM key rotation (#250), detail
+│   ├── domains-mta-sts.plugin.tsx ← The domain's MTA-STS mode (#472), registered first by `domains.plugin.tsx`
 │   ├── domains-bimi.plugin.tsx ← The domain page's Check BIMI (#415), composed by domains.plugin.tsx
 │   ├── templates.plugin.tsx  ← Templates
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
@@ -587,6 +588,7 @@ src/pages/
 │   ├── domain-detail-dns.tsx ← Failing banner, verification cards, DMARC panel, records table
 │   ├── domain-detail-dkim.tsx ← DKIM key and rotation panel (#250)
 │   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel (#250)
+│   ├── domain-detail-mta-sts.tsx ← Inbound MTA-STS mode panel (#472)
 │   ├── domain-detail-bimi.tsx ← BIMI section: requirements, record to publish, Check BIMI, findings (#415)
 │   ├── templates.tsx         ← Templates list + create
 │   ├── template-detail.tsx   ← Template edit form
@@ -699,6 +701,7 @@ A new flash: add its code (lower snake case, never reused for another meaning) t
 - Cancel the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/cancel` (admin, #250; confirmation; a form cannot send `DELETE`, the REST route is `DELETE /api/v1/domains/:id/dkim/rotate`)
 - Set or clear the inbound notification address → `POST /dashboard/domains/:id/notify-email` (#106)
 - Set or clear the List-Unsubscribe overrides → `POST /dashboard/domains/:id/unsubscribe` (#243)
+- Set the domain's MTA-STS mode → `POST /dashboard/domains/:id/mta-sts` (admin, #472; form field `mode`: `none`, `testing` or `enforce`; audited as `domain.updated`; the banner warns when enforce is set while this server offers no inbound STARTTLS. The **MTA-STS (Inbound TLS)** panel on the domain page shows the `_mta-sts` TXT record with the current policy id, the policy, the `mta-sts.<domain>` host setup and the last Verify check; see [inbound.md](inbound.md#mta-sts-policy-472))
 - Check BIMI → `POST /dashboard/domains/:id/bimi` (admin, #415; the **Check BIMI** button in the domain page's BIMI section, shown to admins and the owner only; members see the section and the last result): looks up the `default._bimi` record and DMARC and fetches the logo through the SSRF guard (see [domains.md](domains.md#bimi-415)), keeps the result in memory for 30 minutes for the page, and redirects with one flash per verdict (`bimi_ready`, `bimi_not_ready`, `bimi_missing`, `bimi_declined`, `bimi_check_failed`). Shares the Verify throttle (`bimi_throttled`). Read-only: not audited. Nothing is checked on page load
 - Revoke the domain's click tracking links → `POST /dashboard/domains/:id/tracking-revoke` (admin, #424; the **Revoke tracking links** button on the domain page asks for confirmation; bumps the domain's tracking epoch, so every click link sent from it so far answers the invalid-link `404`; success flash, audited as `domain.tracking_links_revoked`; see [tracking.md](tracking.md#revoking-click-links-424))
 - Create template → `POST /dashboard/templates`

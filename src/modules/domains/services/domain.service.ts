@@ -17,6 +17,7 @@ import {
 } from "../errors.ts";
 import { normalizeDomainName, parseDomainName } from "./domain-name.ts";
 import { forgetTrackingEpoch } from "../../tracking/services/tracking-epoch.service.ts";
+import { forgetMtaStsHosts } from "./mta-sts-hosts.service.ts";
 import {
   DEFAULT_DKIM_SELECTOR,
   dkimRecordValue,
@@ -302,11 +303,13 @@ export async function updateDomainNotifyEmail(
 }
 
 /**
- * Updates a domain's settings: the `List-Unsubscribe` overrides (#243)
- * and the open and click tracking opt-in (#187). Only the fields present
- * in `changes` are written; `null` clears an unsubscribe override. A
- * tracking change applies to mail created from then on: queued mail keeps
- * the decision stored on it.
+ * Updates a domain's settings: the `List-Unsubscribe` overrides (#243),
+ * the open and click tracking opt-in (#187) and the MTA-STS mode (#472).
+ * Only the fields present in `changes` are written; `null` clears an
+ * unsubscribe override. A tracking change applies to mail created from
+ * then on: queued mail keeps the decision stored on it. An MTA-STS mode
+ * change is served at once in this process (other replicas within
+ * `MTA_STS_HOSTS_TTL_MS`).
  *
  * @param id - The domain ID to update
  * @param changes - The fields to write
@@ -322,6 +325,7 @@ export async function updateDomainSettings(
     /** Booleans only: the unsubscribe values are never logged. */
     trackOpens: changes.trackOpens,
     trackClicks: changes.trackClicks,
+    mtaStsMode: changes.mtaStsMode,
   });
 
   const [domain] = await db
@@ -334,6 +338,7 @@ export async function updateDomainSettings(
     logger.warn("Domain not found for settings update", { id });
     return undefined;
   }
+  if (changes.mtaStsMode !== undefined) forgetMtaStsHosts();
 
   return domain;
 }
@@ -359,6 +364,7 @@ export async function deleteDomain(id: string): Promise<Domain | undefined> {
   }
 
   forgetTrackingEpoch(domain.id);
+  forgetMtaStsHosts();
   logger.info("Domain deleted", { id: domain.id, name: domain.name });
 
   return domain;

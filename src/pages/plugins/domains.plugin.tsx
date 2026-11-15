@@ -32,6 +32,7 @@ import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { config } from "../../config.ts";
 import { domainBimiPages } from "./domains-bimi.plugin.tsx";
+import { domainMtaStsPages } from "./domains-mta-sts.plugin.tsx";
 
 /** The domain page with a flash banner (#421: a code, never text). */
 function domainFlashUrl(id: string, flash: Flash): string {
@@ -76,12 +77,14 @@ async function dkimRotationStep(
 
 /**
  * Domain pages (#291): list, add, delete, DNS verify, DKIM rotation,
- * settings, tracking link revocation (#424), detail, and the BIMI check
- * (#415, `domains-bimi.plugin.tsx`, registered first on this instance).
+ * settings, tracking link revocation (#424), the MTA-STS mode (#472,
+ * `domains-mta-sts.plugin.tsx`), detail, and the BIMI check (#415,
+ * `domains-bimi.plugin.tsx`). Both groups are registered first, in that
+ * order, on this same instance (#387).
  */
 export function domainPages(app: GuardedDashboard) {
   return (
-    domainBimiPages(app)
+    domainBimiPages(domainMtaStsPages(app))
       /**
        * GET /dashboard/domains
        * Domains list with add form. Shows flash messages from query params.
@@ -543,6 +546,7 @@ export function domainPages(app: GuardedDashboard) {
               dns={dns}
               smtpEnabled={config.smtp.enabled}
               trackingEnabled={config.tracking.enabled}
+              inboundStarttls={config.smtp.enabled && config.smtp.tls !== null}
               bimi={lastBimiCheck(domain.id)}
               canCheckBimi={roleAtLeast(auth.user.role, "admin")}
               flash={flash}

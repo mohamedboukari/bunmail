@@ -323,6 +323,13 @@
       "when": 1794748255690,
       "tag": "0045_domain_tracking_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794767368038,
+      "tag": "0046_domain_mta_sts_mode",
+      "breakpoints": true
     }
   ]
 }

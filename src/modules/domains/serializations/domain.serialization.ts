@@ -7,7 +7,12 @@ import {
   dkimRecordValue,
 } from "../services/dkim-keys.ts";
 import { getRequiredDnsRecords } from "../services/required-dns-records.ts";
-import type { DmarcCheck, Domain, RequiredDnsRecord } from "../types/domain.types.ts";
+import type {
+  DmarcCheck,
+  Domain,
+  DomainMtaStsMode,
+  RequiredDnsRecord,
+} from "../types/domain.types.ts";
 import type { DomainCheckResult } from "../types/domain-check.types.ts";
 
 /** A DKIM key rotation in progress (#250): the record to publish before completing it. */
@@ -74,6 +79,13 @@ export interface SerializedDomain {
    * `POST /api/v1/domains/:id/tracking-revocation`, 0 until then.
    */
   trackingEpoch: number;
+  /**
+   * The MTA-STS policy served for the domain (#472): `none`, `testing` or
+   * `enforce`. Served only while the domain is verified; the `_mta-sts`
+   * TXT record and the `mta-sts` host are in `dnsRecords`, the last check
+   * in `lastCheckResult.mtaSts`.
+   */
+  mtaStsMode: DomainMtaStsMode;
   /** The DNS records to publish for this domain (#250). */
   dnsRecords: RequiredDnsRecord[];
   /** The current DMARC check (#250); null when not looked up (create, update, delete). */
@@ -113,6 +125,7 @@ export function serializeDomain(
     trackOpens: domain.trackOpens,
     trackClicks: domain.trackClicks,
     trackingEpoch: domain.trackingEpoch,
+    mtaStsMode: domain.mtaStsMode,
     dnsRecords: getRequiredDnsRecords(domain),
     dmarc: dns?.dmarc ?? null,
     mx: dns?.mx ?? null,

@@ -1,4 +1,6 @@
+import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   pgTable,
@@ -9,7 +11,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { jsonb } from "../../../db/jsonb.ts";
 import { users } from "../../users/models/user.schema.ts";
+import { literals } from "../../users/types/user.types.ts";
 import type { DomainCheckResult } from "../types/domain-check.types.ts";
+import { DOMAIN_MTA_STS_MODES, type DomainMtaStsMode } from "../types/domain.types.ts";
 
 /**
  * Domains table: tracks sender domains and their email authentication status.
@@ -158,6 +162,19 @@ export const domains = pgTable(
      */
     trackingEpoch: integer("tracking_epoch").notNull().default(0),
 
+    /**
+     * Inbound MTA-STS (#472), set by an admin: `none` (the default) serves
+     * no policy; `testing` or `enforce` serves one with that mode at
+     * `https://mta-sts.<name>/.well-known/mta-sts.txt` while the domain is
+     * verified. The policy's `mx` lines and `max_age` come from config
+     * (`MTA_STS_MX`, `MTA_STS_MAX_AGE`), and its `id` is a hash of the
+     * policy text, so nothing else is stored.
+     */
+    mtaStsMode: varchar("mta_sts_mode", { length: 10 })
+      .$type<DomainMtaStsMode>()
+      .notNull()
+      .default("none"),
+
     /** When this domain was added */
     createdAt: timestamp("created_at").notNull().defaultNow(),
 
@@ -179,5 +196,9 @@ export const domains = pgTable(
     index("domains_created_by_user_id_idx").on(table.createdByUserId),
     /** The re-verification loop claims due domains by it (#250). */
     index("domains_next_check_at_idx").on(table.nextCheckAt),
+    check(
+      "domains_mta_sts_mode_check",
+      sql`${table.mtaStsMode} IN (${literals(DOMAIN_MTA_STS_MODES)})`,
+    ),
   ],
 );

@@ -86,7 +86,7 @@ bunmail/
 │   ├── background-services.ts            ← Starts the queue, both SMTP listeners, purge, webhook worker, re-verification, DNSBL self-check, DANE resolver check, memory sweeps
 │   ├── process-lifecycle.ts              ← Crash logger (registered first) and the SIGINT/SIGTERM graceful shutdown (registered last)
 │   ├── config.ts                         ← Assembles `config` from config/ and re-exports its readers
-│   ├── config/                           ← Env readers with validation and the `config` section builders, one file per area (env, app, mail, auth, sso, smtp, retention, observability, storage, tls-rpt, dane)
+│   ├── config/                           ← Env readers with validation and the `config` section builders, one file per area (env, app, mail, auth, sso, smtp, retention, observability, storage, tls-rpt, dane, tracking, mta-sts)
 │   ├── db/
 │   │   ├── index.ts                      ← Drizzle DB connection
 │   │   ├── schema.ts                     ← Re-exports all model schemas
@@ -212,6 +212,7 @@ bunmail/
 │   │   │       └── api-key.types.ts
 │   │   ├── domains/
 │   │   │   ├── domains.plugin.ts         ← CRUD + verify + DKIM rotation routes
+│   │   │   ├── mta-sts.plugin.ts         ← Public GET /.well-known/mta-sts.txt, keyed by Host (#472)
 │   │   │   ├── errors.ts                 ← Already registered, invalid domain name (#406), invalid DKIM selector, rotation refused (#250)
 │   │   │   ├── services/
 │   │   │   │   ├── domain.service.ts     ← CRUD + DKIM key generation
@@ -227,6 +228,9 @@ bunmail/
 │   │   │   │   ├── dmarc-check.service.ts ← One DMARC record, org-domain fallback, strict tags (#250)
 │   │   │   │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status per domain (#250)
 │   │   │   │   ├── required-dns-records.ts ← The DNS records to publish (`dnsRecords`, #250)
+│   │   │   │   ├── mta-sts-served-policy.ts ← Inbound MTA-STS policy text, id, TXT value, Host parsing (#472)
+│   │   │   │   ├── mta-sts-hosts.service.ts ← Which domains get a policy: one query, cached 30 s (#472)
+│   │   │   │   ├── mta-sts-check.service.ts ← Verify's MTA-STS check: TXT id + sender-style fetch (#472)
 │   │   │   │   ├── bimi-check.service.ts ← BIMI readiness check, last result per domain in memory (#415)
 │   │   │   │   ├── bimi-record.ts        ← BIMI record lookup and parse, DMARC prerequisite (#415)
 │   │   │   │   ├── bimi-logo.ts          ← SSRF-guarded logo fetch: https, pinned, no redirects, 32 KB (#415)
@@ -456,7 +460,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387), and domains of `domains-bimi` (#415)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387), and domains of `domains-mta-sts` (#472) and `domains-bimi` (#415)
 │       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect, flash codes (#421), record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387), the CSV writer, export stream and export budget (#430)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
@@ -502,6 +506,7 @@ bunmail/
 │       │   ├── domain-detail-dns.tsx     ← Failing banner, verification cards, DMARC panel, records table
 │       │   ├── domain-detail-dkim.tsx    ← DKIM key and rotation panel
 │       │   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel
+│       │   ├── domain-detail-mta-sts.tsx ← Inbound MTA-STS mode panel (#472)
 │       │   ├── domain-detail-bimi.tsx    ← BIMI section: what it needs, record to publish, Check BIMI, findings (#415)
 │       │   ├── templates.tsx             ← Templates list + create
 │       │   ├── template-detail.tsx       ← Template edit form
@@ -825,6 +830,7 @@ Indexes: `uq_email_attachments_email_position` unique `(email_id, position)` (al
 | track_opens       | boolean        | NOT NULL, default `false`; open tracking opt-in, set by admins (#187) |
 | track_clicks      | boolean        | NOT NULL, default `false`; click tracking opt-in, set by admins (#187) |
 | tracking_epoch    | integer        | NOT NULL, default `0`; covered by every click token's MAC, bumped by an admin to revoke the domain's click links already sent (#424) |
+| mta_sts_mode      | varchar(10)    | NOT NULL, default `'none'`, CHECK `none` / `testing` / `enforce`; the MTA-STS policy served for the domain while verified, set by admins (#472) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -832,7 +838,7 @@ Indexes: `uq_email_attachments_email_position` unique `(email_id, position)` (al
 | last_checked_at   | timestamptz    | nullable; when the DNS checks last ran (#250) |
 | next_check_at     | timestamptz    | nullable, indexed; when the re-verification loop checks it next, NULL = due (#250) |
 | consecutive_failures | integer     | NOT NULL, default `0`; checks in a row with a definitive failure (#250) |
-| last_check_result | jsonb          | nullable; per check `{ status: pass/fail/unknown, reason }` (#250) |
+| last_check_result | jsonb          | nullable; per check `{ status: pass/fail/unknown, reason }` (#250); `mtaSts` too while the MTA-STS mode is not `none`, never part of verification (#472) |
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
 | created_by_user_id | varchar(36) | nullable, FK → users.id `ON DELETE SET NULL`, indexed: the user it belongs to (#219); NULL = the owner |
@@ -1151,7 +1157,7 @@ tlsrpt_reports ──1:N──▶ tlsrpt_results  (CASCADE on parent delete, #34
 | GET    | /api/v1/domains               | List domains          | Yes  |
 | GET    | /api/v1/domains/:id           | Get domain details    | Yes  |
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records    | Yes  |
-| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings and the tracking opt-in (#187) | Yes |
+| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings, the tracking opt-in (#187) and the MTA-STS mode (#472) | Yes |
 | DELETE | /api/v1/domains/:id           | Remove domain         | Yes  |
 | POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) | Yes |
 | POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) | Yes |
@@ -1365,6 +1371,14 @@ Not under `/api/v1` and outside the auth middleware: the token (an HMAC from a k
 
 **Flow.** `createEmail` decides and stores `track_opens` / `track_clicks`. On each attempt the queue builds the email's tracking (`trackingForEmail`) while `TRACKING_ENABLED` is on, and `composeMessageBody` derives the text alternative from the original HTML, then rewrites the links and adds the pixel; DKIM signs the final body, and the deterministic tokens keep it identical on retries (click tokens carry the domain's current tracking epoch). A pixel fetch or click verifies the token without the database (a click then checks its domain's epoch, cached 30 s per process, #424), answers, then records the event (dedupe 60 s and caps of 20 opens and 50 clicks per email, checked in process first, then 100 a second and 4 at once per process, with a 2 s lock timeout) and sets `first_opened_at` / `first_clicked_at` in one transaction under a lock on the email row. See [docs/tracking.md](docs/tracking.md).
 
+### MTA-STS policy (public, #472)
+
+| Method | Path       | Description | Auth |
+|--------|------------|-------------|------|
+| GET    | /.well-known/mta-sts.txt | The RFC 8461 policy of the domain the `Host` names (`mta-sts.<domain>`), when it is verified and its `mta_sts_mode` is `testing` or `enforce`: `text/plain`, `Cache-Control: max-age=` the `max_age` capped at 3600. Anything else: one identical `404` | None |
+
+Off by default (every domain starts at `none`). The served domains come from one query cached 30 s per process (dropped at once on a mode change, a delete or a verification flip in this process), so no request costs a query of its own. TLS for `mta-sts.<domain>` is the reverse proxy's. See [docs/inbound.md](docs/inbound.md#mta-sts-policy-472).
+
 ---
 
 ## Authentication
@@ -1502,7 +1516,7 @@ Beyond the HTTP server, the app can start two independent, opt-in SMTP listeners
 
 | Listener | Toggle / port env | Purpose |
 |---|---|---|
-| **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (default `2525`; use `25` in production) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). Opportunistic STARTTLS with `SMTP_TLS_CERT` / `SMTP_TLS_KEY` (unset by default: no STARTTLS; needs Bun 1.4.4 or later, refused at boot on an older Bun, #414). Spam protection: `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` connections per `60` seconds). See [docs/inbound.md](docs/inbound.md). |
+| **Inbound receiver** | `SMTP_ENABLED` / `SMTP_PORT` (default `2525`; use `25` in production) | Receives MX mail for your domains → `inbound_emails` (AUTH disabled; validates recipient domains). Opportunistic STARTTLS with `SMTP_TLS_CERT` / `SMTP_TLS_KEY` (unset by default: no STARTTLS; needs Bun 1.4.4 or later, refused at boot on an older Bun, #414). MTA-STS policy for domains an admin opts in (#472): `MTA_STS_MX` (the policy's `mx` hosts, a comma list, default `MAIL_HOSTNAME`) and `MTA_STS_MAX_AGE` (86400 to 31557600 seconds; unset, one day for `testing`, one week for `enforce`); malformed values refuse to boot. Spam protection: `SMTP_DNSBL_ENABLED` (`true`), `SMTP_DNSBL_ZONE` (`zen.spamhaus.org`), `SMTP_RECIPIENT_VALIDATION` (`true`), `SMTP_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` connections per `60` seconds). See [docs/inbound.md](docs/inbound.md). |
 | **Submission server** (#120) | `SMTP_SUBMISSION_ENABLED` / `SMTP_SUBMISSION_PORT` (`465` with a TLS cert, `587` without) | Lets apps send *through* BunMail over SMTP (AUTH required = API key; relays to any recipient via `createEmail`). TLS via `SMTP_SUBMISSION_TLS_CERT`/`_KEY`: implicit TLS from the first byte, terminated by Bun's TLS server (`SMTP_SUBMISSION_TLS_MODE`, default `implicit`, #349; `starttls` offers STARTTLS on `587` and needs Bun 1.4.4 or later, refused at boot on an older Bun, which cannot upgrade a connection server-side, #414), or `SMTP_SUBMISSION_ALLOW_INSECURE=true` for plaintext AUTH on a trusted network (default `false`: with neither TLS nor this flag the server refuses to start); per-IP connection and failed-AUTH throttles via `SMTP_SUBMISSION_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `30` per `60` seconds) and `SMTP_SUBMISSION_AUTH_RATE_LIMIT_ENABLED` / `_MAX` / `_WINDOW` (`true`, `10` failures per `900` seconds); `SMTP_SUBMISSION_DAILY_QUOTA` per key per UTC day (`0`: unlimited). See [docs/smtp-submission.md](docs/smtp-submission.md). |
 
 Both are started from [src/background-services.ts](src/background-services.ts) after the queue processor and stopped in the graceful shutdown handler ([src/process-lifecycle.ts](src/process-lifecycle.ts)).

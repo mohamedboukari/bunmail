@@ -25,6 +25,12 @@ export interface DomainCheckResult {
   spf: DnsCheckOutcome;
   dkim: DnsCheckOutcome;
   dmarc: DnsCheckOutcome;
+  /**
+   * The MTA-STS check (#472): the `_mta-sts` record and the served policy.
+   * Absent while the domain's mode is `none`. Its own status: it never
+   * counts towards the domain's verification.
+   */
+  mtaSts?: DnsCheckOutcome;
   /** When the checks ran, ISO 8601. */
   checkedAt: string;
 }

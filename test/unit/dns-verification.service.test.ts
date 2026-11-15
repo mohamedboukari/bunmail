@@ -116,6 +116,7 @@ const baseDomain = {
   trackOpens: false,
   trackClicks: false,
   trackingEpoch: 0,
+  mtaStsMode: "none" as const,
   createdAt: new Date(),
   updatedAt: new Date(),
   createdByUserId: null,

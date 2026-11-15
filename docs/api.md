@@ -11,7 +11,7 @@ BunMail exposes an auto-generated OpenAPI 3.0 spec:
 
 ## Authentication
 
-All endpoints (except `/health`, the public unsubscribe pages, `/u/:token`, and `/metrics`, which takes its own `METRICS_TOKEN`) require a Bearer token in the `Authorization` header:
+All endpoints (except `/health`, the public unsubscribe pages, `/u/:token`, the tracking endpoints `/t/...`, the MTA-STS policy `/.well-known/mta-sts.txt`, and `/metrics`, which takes its own `METRICS_TOKEN`) require a Bearer token in the `Authorization` header:
 
 ```
 Authorization: Bearer bm_live_<your-api-key>
@@ -95,6 +95,23 @@ The open pixel: always the same 43-byte transparent GIF (`image/gif`) for a vali
 The click redirect: `302` with `Location` set to exactly the `http(s)` URL BunMail signed for that email and link (its canonical form). Links already sent keep redirecting with the kill switch off, the email untracked or purged (nothing is then recorded). An invalid token: `404` with a neutral HTML page that never shows a URL. There is no open redirect: only URLs signed for that email are ever redirected to.
 
 Recording happens after the response, at most once per email, type and link per 60 seconds, at most 20 opens and 50 clicks per email. Invalid tokens only are rate limited: over 30 a minute from one client IP, `429` with `Retry-After`; valid requests are always served.
+
+---
+
+### MTA-STS policy (#472)
+
+#### `GET /.well-known/mta-sts.txt`
+
+The MTA-STS policy (RFC 8461) of the domain the request's `Host` names, as `mta-sts.<domain>`: served only when that domain is verified and its `mtaStsMode` is `testing` or `enforce`. No auth, no cookie. `200`, `Content-Type: text/plain; charset=utf-8`, `Cache-Control: max-age=<max_age, at most 3600>` (senders still cache the policy for its own `max_age`; an HTTP cache never serves a stale copy for more than an hour after a change):
+
+```
+version: STSv1
+mode: enforce
+mx: mail.example.com
+max_age: 604800
+```
+
+(CRLF line endings; one `mx` line per `MTA_STS_MX` host.) Any other request gets the same `404` (`Not found`), whether the host is unknown, the domain unverified or its mode `none`; `503` with `Retry-After` when the served domains cannot be read. The reverse proxy serves TLS for `mta-sts.<domain>` and must pass the `Host` header. See [inbound.md](inbound.md#mta-sts-policy-472).
 
 ---
 
@@ -487,6 +504,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "trackOpens": false,
     "trackClicks": false,
     "trackingEpoch": 0,
+    "mtaStsMode": "none",
     "dnsRecords": [
       {
         "type": "TXT",
@@ -535,6 +553,7 @@ Every domain response also carries (#250):
 - `lastCheckedAt` and `lastCheckResult`: when the DNS checks last ran (by verify or the daily re-verification loop) and what each found: `{ spf, dkim, dmarc, checkedAt }`, each `{ status, reason }` with `status` `pass`, `fail` (record missing or wrong) or `unknown` (the lookup failed; it changes nothing). Both `null` before the first check. See [docs/domains.md](domains.md#scheduled-re-verification-250).
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
 - `trackingEpoch` (#424): the tracking epoch of the domain's click links, `0` until the first [revocation](#post-apiv1domainsidtracking-revocation), then bumped by each one.
+- `mtaStsMode` (#472): `none`, `testing` or `enforce`, the MTA-STS policy BunMail serves for the domain at `https://mta-sts.<domain>/.well-known/mta-sts.txt` while it is verified. Set with `PATCH`. While it is not `none`, `dnsRecords` also lists the `_mta-sts.<domain>` TXT record (`v=STSv1; id=<id>`, the id changes with the policy) and the `mta-sts.<domain>` host (`CNAME`), and `lastCheckResult` carries `mtaSts`. See [docs/inbound.md](inbound.md#mta-sts-policy-472).
 
 `dmarc` and `mx` come from live DNS on `GET` (list and single) and on verify, cached for an hour (five minutes after an error). Each domain's DMARC and MX lookups run in parallel under one 5 s deadline, after which a status is `error`; a DNS failure never fails the request. The list looks up at most 8 domains at once. Create (`POST`), update (`PATCH`) and `DELETE` never wait on DNS: they return `dmarc` and `mx` as `null` (not checked yet), so a new domain shows `null` until the next `GET` or verify. The example above is a `GET` response.
 
@@ -596,11 +615,13 @@ Trigger DNS verification for SPF, DKIM, and DMARC records. The result is stored 
 
 `dmarc` is true only when exactly one `v=DMARC1` record with a valid `p=` applies, at `_dmarc.<domain>` or inherited from the organizational domain; `p=none` passes (#250). `dmarcReason` says why. The domain's `dmarc` field carries the parsed record.
 
+For a domain whose `mtaStsMode` is not `none` (#472), `checks` also has `mtaSts` (`{ status, reason }`): `pass` when `_mta-sts.<domain>` announces the current policy id and fetching `https://mta-sts.<domain>/.well-known/mta-sts.txt` as a sender does (verified certificate, no redirects) returns BunMail's policy; `fail` otherwise; `unknown` when the TXT lookup failed. It never affects `spf`, `dkim`, `dmarc` or `verifiedAt`. The policy is served only while the domain is verified, so the first verify of a new domain reports the fetch as failed.
+
 ---
 
 #### `PATCH /api/v1/domains/:id`
 
-Edit the domain's `List-Unsubscribe` overrides (#243) and its open and click tracking opt-in (#187). Omitted fields stay unchanged; `null` clears an unsubscribe override (back to `unsubscribe@<name>`, or no one-click URL). Recorded in the audit log as `domain.updated` with the field names.
+Edit the domain's `List-Unsubscribe` overrides (#243), its open and click tracking opt-in (#187) and its MTA-STS mode (#472). Omitted fields stay unchanged; `null` clears an unsubscribe override (back to `unsubscribe@<name>`, or no one-click URL). Recorded in the audit log as `domain.updated` with the field names.
 
 | Field              | Type           | Required | Description |
 |--------------------|----------------|----------|-------------|
@@ -608,6 +629,7 @@ Edit the domain's `List-Unsubscribe` overrides (#243) and its open and click tra
 | `unsubscribeUrl`   | string \| null | No       | One-click endpoint, `https://` only |
 | `trackOpens`       | boolean        | No       | Open tracking opt-in (#187); `true` or `false` only. Applies to mail created afterwards: queued mail keeps its stored decision |
 | `trackClicks`      | boolean        | No       | Click tracking opt-in (#187), like `trackOpens` |
+| `mtaStsMode`       | string         | No       | `none`, `testing` or `enforce` (#472): the MTA-STS policy served for the domain while it is verified. Anything else is a `422`. Served (or withdrawn) at once on this replica, within 30 s on others |
 
 Returns the updated domain, or `404` if it doesn't exist.
 

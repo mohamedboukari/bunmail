@@ -10,7 +10,7 @@ import type { BimiStatus } from "../../modules/domains/types/bimi.types.ts";
 import { flashUrl } from "../lib/flash.ts";
 import type { FlashCode } from "../lib/flash-codes.ts";
 import { isDnsVerifyThrottled } from "../lib/dns-verify-throttle.ts";
-import type { GuardedDashboard } from "../lib/session-guard.ts";
+import type { domainMtaStsPages } from "./domains-mta-sts.plugin.tsx";
 
 /** The banner of each BIMI verdict (#421: a code, never text). */
 const BIMI_FLASH: Record<BimiStatus, FlashCode> = {
@@ -23,10 +23,10 @@ const BIMI_FLASH: Record<BimiStatus, FlashCode> = {
 
 /**
  * The domain page's BIMI check (#415). A separate group from
- * `domains.plugin.tsx`, which composes it, so neither file grows past the
- * split size.
+ * `domains.plugin.tsx`, which composes it after the MTA-STS group (#472)
+ * on the same instance (#387), so neither file grows past the split size.
  */
-export function domainBimiPages(app: GuardedDashboard) {
+export function domainBimiPages(app: ReturnType<typeof domainMtaStsPages>) {
   return app.post(
     /**
      * POST /dashboard/domains/:id/bimi

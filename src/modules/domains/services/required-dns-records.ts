@@ -3,6 +3,11 @@ import { config } from "../../../config.ts";
 import type { Domain, RequiredDnsRecord } from "../types/domain.types.ts";
 import { dkimRecordHost, dkimRecordValue } from "./dkim-keys.ts";
 import {
+  mtaStsTxtValue,
+  servedMtaStsPolicy,
+  type MtaStsPolicySettings,
+} from "./mta-sts-served-policy.ts";
+import {
   getDkimDnsRecord,
   spfAuthorizationTerm,
   suggestedSpfRecord,
@@ -11,8 +16,10 @@ import {
 /**
  * The DNS records an operator publishes for a domain (#250), shown on the
  * domain page and returned as `dnsRecords` by the domains API: SPF, DKIM,
- * DMARC, the A and PTR records of `MAIL_HOSTNAME`, and an optional MX.
- * Pure: the server settings are passed in (read from `config` by default).
+ * DMARC, the A and PTR records of `MAIL_HOSTNAME`, an optional MX, and,
+ * for a domain with an MTA-STS mode other than `none` (#472), the
+ * `_mta-sts` TXT record and the `mta-sts` host. Pure: the server settings
+ * are passed in (read from `config` by default).
  */
 
 /** Longest character-string in a TXT record (RFC 1035 3.3). */
@@ -24,6 +31,10 @@ export interface DnsRecordSettings {
   mailHostname: string;
   /** `MAIL_PUBLIC_IP`, possibly empty. */
   publicIps: string[];
+  /** The served MTA-STS policy's settings (#472); `config.mtaSts` when omitted. */
+  mtaSts?: MtaStsPolicySettings;
+  /** `APP_BASE_URL`, the `mta-sts` host's target (#472); `config.appBaseUrl` when omitted. */
+  appBaseUrl?: string;
 }
 
 /**
@@ -49,7 +60,7 @@ function dmarcReportAddress(domain: string): string {
  */
 export function getRequiredDnsRecords(
   domain: Pick<Domain, "name" | "dkimSelector" | "dkimPublicKey"> &
-    Partial<Pick<Domain, "dkimPendingSelector" | "dkimPendingPublicKey">>,
+    Partial<Pick<Domain, "dkimPendingSelector" | "dkimPendingPublicKey" | "mtaStsMode">>,
   settings: DnsRecordSettings = {
     mailHostname: config.mail.hostname,
     publicIps: config.mail.publicIps,
@@ -145,7 +156,51 @@ export function getRequiredDnsRecords(
     note: "Only to receive bounces, DMARC reports and inbound mail here (SMTP_ENABLED=true). Sending works without it. Leave an MX that serves mailboxes (Google Workspace, Microsoft 365) as it is: replacing it moves this domain's mail to BunMail.",
   });
 
+  records.push(...mtaStsDnsRecords(domain, settings));
+
   return records;
+}
+
+/** The host name of `APP_BASE_URL`, or `null` when it is unset or not a URL. */
+function baseUrlHost(appBaseUrl: string): string | null {
+  if (!URL.canParse(appBaseUrl)) return null;
+  const host = new URL(appBaseUrl).hostname;
+  return host === "" ? null : host;
+}
+
+/**
+ * The records MTA-STS needs (#472), empty while the domain's mode is
+ * `none`: the `_mta-sts` TXT record carrying the current policy `id`, and
+ * the `mta-sts` host, pointed at the reverse proxy in front of BunMail
+ * (the `APP_BASE_URL` host when it is set). Both optional: mail flows
+ * without them, senders just cannot require TLS.
+ */
+export function mtaStsDnsRecords(
+  domain: Pick<Domain, "name"> & Partial<Pick<Domain, "mtaStsMode">>,
+  settings: Pick<DnsRecordSettings, "mtaSts" | "appBaseUrl"> = {},
+): RequiredDnsRecord[] {
+  const mode = domain.mtaStsMode ?? "none";
+  if (mode === "none") return [];
+  const policy = servedMtaStsPolicy(mode, settings.mtaSts ?? config.mtaSts);
+  const proxyHost = baseUrlHost(settings.appBaseUrl ?? config.appBaseUrl);
+  return [
+    {
+      type: "TXT",
+      host: `_mta-sts.${domain.name}`,
+      value: mtaStsTxtValue(policy),
+      purpose: "MTA-STS: announces the policy, and its id, to senders",
+      optional: true,
+      note: "The id changes whenever the policy does (the mode, MTA_STS_MX or MTA_STS_MAX_AGE): update this record each time, since senders fetch the policy again only when the id changes. Publish exactly one record starting v=STSv1.",
+    },
+    {
+      type: "CNAME",
+      host: `mta-sts.${domain.name}`,
+      value: proxyHost ?? "your reverse proxy's host name",
+      purpose: "MTA-STS: the policy host, served by BunMail behind your reverse proxy",
+      optional: true,
+      note: `Senders fetch https://mta-sts.${domain.name}/.well-known/mta-sts.txt: your reverse proxy needs a certificate valid for mta-sts.${domain.name} and must pass the original Host header to BunMail. An A or AAAA record to the proxy works too.`,
+    },
+  ];
 }
 
 /**

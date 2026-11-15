@@ -94,6 +94,7 @@ import { exportPages } from "./plugins/exports.plugin.tsx";
  * - POST /dashboard/domains/:id/dkim/rotate          → start a DKIM key rotation (admin, #250)
  * - POST /dashboard/domains/:id/dkim/rotate/complete → switch to the pending key once published (admin, #250)
  * - POST /dashboard/domains/:id/dkim/rotate/cancel   → drop the pending key (admin, #250)
+ * - POST /dashboard/domains/:id/mta-sts              → set the MTA-STS mode (admin, #472)
  * - GET  /dashboard/<table>/export.csv → the table as a streamed CSV download, with the page's
  *                                    filters: emails, emails/trash, emails/tombstones, inbound,
  *                                    inbound/trash, suppressions, audit-log, dmarc-reports,
