@@ -1,7 +1,7 @@
 /**
  * Scheduled DNS re-verification of domains (#250) against a real Postgres,
- * with DNS driven per test through `setDomainDnsDeps` (the hermetic stub of
- * `_dns-stub.ts` is put back afterwards) and SPF evaluation injected.
+ * with DNS driven per test through the hermetic stub of `_dns-stub.ts`
+ * (its TXT answers replaced, put back afterwards) and SPF evaluation injected.
  *
  * Covers the claim (exclusive across concurrent claims, skips locked rows
  * instead of waiting), the schedule, the failure rule (one failure counts,
@@ -15,10 +15,7 @@ import { Elysia } from "elysia";
 import { eq, sql } from "drizzle-orm";
 import { config } from "../../src/config.ts";
 import { domainsPlugin } from "../../src/modules/domains/domains.plugin.ts";
-import {
-  resolveDomainTxt,
-  setDomainDnsDeps,
-} from "../../src/modules/domains/services/domain-dns-status.service.ts";
+import { resolveDomainTxt } from "../../src/modules/domains/services/domain-dns-status.service.ts";
 import {
   verifyDomain,
   type VerificationDeps,
@@ -136,7 +133,8 @@ beforeEach(async () => {
   txt = {};
   txtErrors = {};
   spfResult = "pass";
-  setDomainDnsDeps({
+  /** Only the TXT answers: MX stays on the stub, never on real DNS (#482). */
+  installHermeticDomainDns({
     resolveTxt: (name) => {
       const code = txtErrors[name];
       if (code) {

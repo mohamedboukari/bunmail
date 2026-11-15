@@ -520,7 +520,7 @@ describe("DKIM key rotation over REST (#250)", () => {
 
 describe("the publish check (#250)", () => {
   test("a lookup failure is reported as temporary, not as a missing record", async () => {
-    setDomainDnsDeps({
+    installHermeticDomainDns({
       resolveTxt: () =>
         Promise.reject(Object.assign(new Error("dns"), { code: "ESERVFAIL" })),
     });

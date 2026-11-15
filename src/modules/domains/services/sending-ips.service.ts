@@ -25,7 +25,25 @@ export interface SendingIpDeps {
   resolve6: (hostname: string) => Promise<string[]>;
 }
 
-const defaultDeps: SendingIpDeps = { resolve4, resolve6 };
+/** DNS lookups for the reverse check, injectable for tests. */
+export interface ReverseDnsDeps extends SendingIpDeps {
+  reverse: (ip: string) => Promise<string[]>;
+}
+
+const realReverseDeps: ReverseDnsDeps = { resolve4, resolve6, reverse };
+
+/** The lookups a caller gets when it passes none: the real ones unless a test replaced them. */
+let defaultReverseDeps: ReverseDnsDeps = realReverseDeps;
+
+/**
+ * Replaces the default lookups of {@link resolveSendingIps} and the reverse
+ * DNS check (tests, so the dashboard and Verify never reach real DNS for
+ * `MAIL_HOSTNAME`, #482), or restores the real ones with `null`.
+ */
+export function setSendingIpDeps(override: Partial<ReverseDnsDeps> | null): void {
+  defaultReverseDeps =
+    override === null ? realReverseDeps : { ...realReverseDeps, ...override };
+}
 
 /** Records of one family, or none when the lookup fails (no such record, DNS down). */
 async function recordsOf(
@@ -40,7 +58,7 @@ async function recordsOf(
 }
 
 export async function resolveSendingIps(
-  deps: SendingIpDeps = defaultDeps,
+  deps: SendingIpDeps = defaultReverseDeps,
 ): Promise<SendingIps> {
   if (config.mail.publicIps.length > 0) {
     return { ips: config.mail.publicIps, source: "MAIL_PUBLIC_IP" };
@@ -67,13 +85,6 @@ export interface ReverseDnsCheck {
   ptr: string[];
   reason: string;
 }
-
-/** DNS lookups for the reverse check, injectable for tests. */
-export interface ReverseDnsDeps extends SendingIpDeps {
-  reverse: (ip: string) => Promise<string[]>;
-}
-
-const defaultReverseDeps: ReverseDnsDeps = { resolve4, resolve6, reverse };
 
 /** Lowercase, without the trailing dot of a fully qualified name. */
 function normalizeHostname(name: string): string {
