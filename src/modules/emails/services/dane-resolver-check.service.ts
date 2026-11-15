@@ -55,6 +55,7 @@ import type { DnsTxtErrorCode } from "../../../utils/dns-wire.ts";
 import { generateId } from "../../../utils/id.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 
 /** A DNSSEC-signed name with no A record: its A answer is an authenticated denial. */
 export const SIGNED_PROBE_NAME = "org";
@@ -206,7 +207,7 @@ export function runDaneResolverCheck(
         /** `lookupSecure` never throws; this guards the scheduler against a bug. */
         logger.error("DANE resolver check crashed", {
           errorName: error instanceof Error ? error.name : typeof error,
-          error: error instanceof Error ? error.message : String(error),
+          error: loggableError(error),
         });
         return null;
       }

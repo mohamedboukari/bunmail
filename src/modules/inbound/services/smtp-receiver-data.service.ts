@@ -20,6 +20,7 @@ import { handleInboundFeedbackReport } from "./feedback-handler.service.ts";
 import { threadingColumnsFor } from "./reply-threading.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { tokenFromUnsubscribeAddress } from "../../suppressions/services/unsubscribe-token.ts";
 import { unsubscribe } from "../../suppressions/services/unsubscribe.service.ts";
@@ -353,7 +354,7 @@ export function receiverDataHandler({
                   ).catch((err) => {
                     logger.error("Inbound notification dispatch failed", {
                       id,
-                      error: err instanceof Error ? err.message : String(err),
+                      error: loggableError(err),
                     });
                   });
                 }
@@ -361,7 +362,7 @@ export function receiverDataHandler({
                 done();
               } catch (error) {
                 logger.error("Failed to process inbound email", {
-                  error: error instanceof Error ? error.message : String(error),
+                  error: loggableError(error),
                 });
                 done(smtpError("Failed to process message", 451, "temporary"));
               }

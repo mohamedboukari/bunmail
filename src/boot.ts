@@ -9,6 +9,7 @@
 import { networkInterfaces } from "os";
 import { config, daneResolverIsLocal, sourceIpWarnings } from "./config.ts";
 import { logger } from "./utils/logger.ts";
+import { loggableError } from "./utils/db-error.ts";
 import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
@@ -99,9 +100,8 @@ export async function warnNonCanonicalDomainNames(): Promise<void> {
       );
     }
   } catch (error: unknown) {
-    /** The query binds no values, and the logger strips any a drizzle error carries. */
     logger.error("Stored domain name check failed; the boot goes on", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   }
 }
@@ -172,7 +172,7 @@ export async function runOwnerBootstrap(): Promise<void> {
     }
   } catch (error: unknown) {
     logger.error("Owner bootstrap failed; run `bun run src/db/reset-owner.ts` to retry", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   }
 }

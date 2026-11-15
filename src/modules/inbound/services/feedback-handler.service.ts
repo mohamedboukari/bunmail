@@ -485,7 +485,7 @@ export async function verifyReportDkim(
     };
   } catch (error) {
     logger.warn("Feedback report DKIM check failed", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
     return { result: "temperror", signingDomain: null, passingDomains: [] };
   } finally {

@@ -258,8 +258,15 @@ export async function sendClaimedEmail(
      * failures, which return as `failed`/`retry` groups in state.
      * So this catch is a one-shot terminal: mark `failed`, no retry.
      * The status and `email.failed` commit together (#184).
+     *
+     * A database error lands here too (the domain lookup, the suppression
+     * re-check, the attachments load), and its message embeds the query
+     * parameters (a recipient, the sender). The stored `last_error`, the
+     * `email.failed` payload and the log line all carry `loggableError`'s
+     * text (#458): the SQLSTATE for a database error, the fixed message of
+     * an input error.
      */
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage = loggableError(error);
     await db.transaction((tx) =>
       releaseRowWithEvents(
         tx,

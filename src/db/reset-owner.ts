@@ -24,6 +24,7 @@ import { config } from "../config.ts";
 import { issueOwnerSetupLink } from "../modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "../modules/users/services/owner-setup-policy.service.ts";
 import { logger } from "../utils/logger.ts";
+import { loggableError } from "../utils/db-error.ts";
 import { redactEmail } from "../utils/redact.ts";
 
 async function resetOwner(): Promise<void> {
@@ -61,7 +62,7 @@ async function resetOwner(): Promise<void> {
 
 resetOwner().catch((error: unknown) => {
   logger.error("Owner reset failed", {
-    error: error instanceof Error ? error.message : String(error),
+    error: loggableError(error),
   });
   process.exit(1);
 });

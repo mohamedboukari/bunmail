@@ -24,6 +24,7 @@ import { domains } from "../modules/domains/models/domain.schema.ts";
 import { decryptSecret, encryptSecret, isEncryptedSecret } from "../utils/crypto.ts";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
+import { loggableError } from "../utils/db-error.ts";
 
 export async function encryptDomainKeys(): Promise<{
   encrypted: number;
@@ -72,7 +73,7 @@ export async function encryptDomainKeys(): Promise<{
       logger.error("Failed to encrypt DKIM private key", {
         domainId: row.id,
         name: row.name,
-        error: err instanceof Error ? err.message : String(err),
+        error: loggableError(err),
       });
     }
   }

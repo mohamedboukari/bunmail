@@ -7,6 +7,7 @@ import { simpleParser } from "mailparser";
 import type { AddressObject } from "mailparser";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { createEmail } from "../../emails/services/email.service.ts";
 import { splitToList } from "../../emails/services/recipient-limits.ts";
@@ -295,10 +296,7 @@ export function submissionDataHandler({
                 await recorded.catch((usageError: unknown) => {
                   logger.warn("SMTP submission usage not recorded", {
                     apiKeyId,
-                    error:
-                      usageError instanceof Error
-                        ? usageError.message
-                        : String(usageError),
+                    error: loggableError(usageError),
                   });
                 });
                 if (error instanceof SuppressedRecipientError) {
@@ -350,13 +348,14 @@ export function submissionDataHandler({
                 }
                 /**
                  * Anything else is unexpected (a database error, a bug): logged
-                 * in full (the logger strips query parameters), answered with a
+                 * through `loggableError` (a database error's message embeds
+                 * the sender, recipients and subject, #458), answered with a
                  * fixed 451 so the client retries later and no internal text
                  * reaches it.
                  */
                 logger.error("SMTP submission failed unexpectedly", {
                   apiKeyId,
-                  error: error instanceof Error ? error.message : String(error),
+                  error: loggableError(error),
                 });
                 callback(
                   smtpError(
