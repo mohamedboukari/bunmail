@@ -141,6 +141,12 @@ describe("REST send with custom headers", () => {
     "LIST-UNSUBSCRIBE",
     "Content-Type",
     "X-BunMail-Id",
+    /** #422 */
+    "Resent-From",
+    "resent-sender",
+    "Errors-To",
+    "DISPOSITION-NOTIFICATION-TO",
+    "Return-Receipt-To",
   ])("reserved %p gets 422 INVALID_CUSTOM_HEADER and nothing is queued", async (name) => {
     const { rawKey } = await seed.apiKey();
     const { status, body } = await send(rawKey, { [name]: "evil@example.com" });

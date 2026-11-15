@@ -359,7 +359,7 @@ When an email is created, the sender's domain (from `from` address) is looked up
 | Count | At most 20 headers |
 | Total size | At most 8 KB (8192 bytes, UTF-8) of names plus values |
 | Duplicates | Names compare case-insensitively; a second spelling of the same name is refused |
-| Reserved (any case) | `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, and any name starting with `Content-`, `ARC-` or `X-BunMail-` |
+| Reserved (any case) | `From`, `Sender`, `To`, `Cc`, `Bcc`, `Reply-To`, `Subject`, `Date`, `Message-ID`, `Return-Path`, `Received`, `DKIM-Signature`, `Authentication-Results`, `Received-SPF`, `MIME-Version`, `List-Unsubscribe`, `List-Unsubscribe-Post`, `List-Id`, `Feedback-ID`, `Precedence`, `Auto-Submitted`, `Errors-To`, `Disposition-Notification-To`, `Return-Receipt-To` (#422), and any name starting with `Content-`, `ARC-`, `X-BunMail-` or `Resent-` (#422) |
 
 - **Refusal:** name/value syntax and the count are checked by the DTO first (`422 VALIDATION_ERROR`); reserved names, duplicates and the total size by `createEmail` (`422 INVALID_CUSTOM_HEADER`, SMTP `550`). Nothing is queued. The message names the header when its name is valid, never the value.
 - **Storage:** `emails.headers` (jsonb object, the caller's spelling of each name). Returned as `headers` on email responses (`null` when none). Retries resend the same set.
