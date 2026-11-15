@@ -14,6 +14,8 @@ interface InboundDetailPageProps {
   isTrashed: boolean;
   /** The email of ours this message replies to (#192), when linked. */
   repliedTo?: RepliedEmail;
+  /** True when the viewer asked for remote images in the HTML preview (`?images=1`, #419). */
+  remoteImages?: boolean;
 }
 
 /**
@@ -24,6 +26,7 @@ export function InboundDetailPage({
   email,
   isTrashed,
   repliedTo,
+  remoteImages = false,
 }: InboundDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/inbound/trash" : "/dashboard/inbound";
   const backLabel = isTrashed ? "Back to trash" : "Back to inbound";
@@ -150,7 +153,12 @@ export function InboundDetailPage({
             HTML Content
           </h2>
           <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 overflow-auto">
-            <HtmlPreview html={email.html} title="Inbound email HTML preview" />
+            <HtmlPreview
+              html={email.html}
+              pageHref={`/dashboard/inbound/${encodeURIComponent(email.id)}`}
+              remoteImages={remoteImages}
+              title="Inbound email HTML preview"
+            />
           </div>
         </div>
       )}

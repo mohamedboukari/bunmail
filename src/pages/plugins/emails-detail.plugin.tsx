@@ -23,7 +23,7 @@ export function emailDetailPages(app: ReturnType<typeof emailTrashPages>) {
        */
       .get(
         "/emails/:id",
-        async ({ params, set }) => {
+        async ({ params, query, set }) => {
           const live = await emailService.getEmailByIdUnscoped(params.id);
           const email =
             live ?? (await emailService.getTrashedEmailByIdUnscoped(params.id));
@@ -45,6 +45,7 @@ export function emailDetailPages(app: ReturnType<typeof emailTrashPages>) {
               isTrashed={live === undefined}
               attachments={attachments ?? []}
               events={events?.data ?? []}
+              remoteImages={query.images === "1"}
             />
           );
         },
@@ -52,6 +53,10 @@ export function emailDetailPages(app: ReturnType<typeof emailTrashPages>) {
           beforeHandle: memberGuard,
           params: t.Object({
             id: t.String(),
+          }),
+          /** `?images=1` loads remote images in the HTML preview (#419); anything else keeps them blocked. */
+          query: t.Object({
+            images: t.Optional(t.String()),
           }),
         },
       )
