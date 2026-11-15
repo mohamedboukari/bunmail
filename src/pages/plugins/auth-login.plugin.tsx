@@ -34,7 +34,7 @@ import {
 } from "../lib/session-helpers.ts";
 import { redirect } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
-import { isSameOrigin } from "../lib/same-origin.ts";
+import { expectedOriginLabel, isSameOrigin } from "../lib/same-origin.ts";
 import type { PublicDashboard } from "../lib/session-guard.ts";
 import type { WindowTicket } from "../../utils/shared-store.ts";
 import { ssoSignInButtons } from "../lib/sso.ts";
@@ -179,6 +179,8 @@ export function authLoginPages(app: PublicDashboard) {
               ip,
               origin:
                 request.headers.get("origin") ?? request.headers.get("referer") ?? null,
+              /** What it was compared with (#420): an origin only, never a secret. */
+              expected: expectedOriginLabel(),
             });
             set.status = 403;
             return "Forbidden: cross-origin request rejected";

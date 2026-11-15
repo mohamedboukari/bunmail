@@ -19,9 +19,11 @@ import { Elysia } from "elysia";
  *   `script-src 'self'` blocks any injected script. `style-src` keeps
  *   `'unsafe-inline'` because the email preview is a `srcdoc` iframe,
  *   which inherits this policy, and email HTML relies on inline styles;
- *   `img-src https:` keeps remote images in previews working as before
- *   (plain `http:` images, remote fonts and remote stylesheets inside a
- *   previewed email no longer load).
+ *   `img-src https:` lets a preview show remote images once the viewer
+ *   asks for them (`?images=1`, #419): by default the preview document
+ *   declares its own, stricter CSP that blocks them, and a policy inside
+ *   the iframe can only tighten this one (plain `http:` images, remote
+ *   fonts and remote stylesheets inside a previewed email never load).
  * - {@link BASELINE_CSP} everywhere else, which cannot break anything:
  *   no plugins, no `<base>` rewriting, forms only to this origin, no
  *   framing by other sites. The OpenAPI reference at `/api/docs` (Scalar,

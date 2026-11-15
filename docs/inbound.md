@@ -2,6 +2,8 @@
 
 Receives emails via a built-in SMTP server and stores them in the database.
 
+The inbound detail page (`/dashboard/inbound/:id`) shows the HTML in a sandboxed preview with remote images blocked until the viewer clicks **Load remote images**, and resource hints (`<link rel="prerender">`, `preconnect`) and the email's own `<meta>` tags removed (#419), so opening a message does not tell its sender it was read. See [dashboard.md](dashboard.md#email-previews-419).
+
 ## Replying from the dashboard (#86)
 
 Inbound email detail pages have a **Reply** button that opens the compose form with a reply skeleton pre-populated:
