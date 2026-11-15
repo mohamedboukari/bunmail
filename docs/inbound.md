@@ -283,6 +283,11 @@ The receiver's public surface; the code sits in the `smtp-receiver-*.service.ts`
 Starts the SMTP server on the configured port. `notifyDeps` (mailer, clock,
 notification throttle) default to the production ones; tests inject their own.
 
+#### `listeningPort(): Promise<number>`
+The port the running server is bound to, once it listens (#443): `SMTP_PORT`
+in production, the OS's pick when a test sets the port to `0`. Rejects when
+the server is stopped. The start log line reports the same port.
+
 #### `stop(): void`
 Gracefully shuts down the SMTP server.
 

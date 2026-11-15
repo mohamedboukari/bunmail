@@ -31,9 +31,10 @@ import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.
 import { webhookDeliveries } from "../../src/modules/webhooks/models/webhook-delivery.schema.ts";
 import { arfReport, arfResolveTxt, signArf } from "../signed-arf.ts";
 import { truncateAll, seed, db, suppressions } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated port, distinct from the other SMTP test files. */
-const INBOUND_PORT = 12641;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 const TARGET = "target@example.org";
 
 /** The feedback-loop signer the operator trusts in these tests. */
@@ -48,8 +49,8 @@ const savedFlags = { ...config.suppressions };
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
 const savedNotify = config.inboundNotify.enabled;
 
-beforeAll(() => {
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+beforeAll(async () => {
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
@@ -57,6 +58,7 @@ beforeAll(() => {
   });
   Object.assign(config.inboundNotify, { enabled: false });
   smtpReceiver.start();
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -107,7 +109,7 @@ afterEach(() => {
 async function deliver(raw: string): Promise<void> {
   const transport = createTransport({
     host: "127.0.0.1",
-    port: INBOUND_PORT,
+    port: inboundPort,
     secure: false,
     ignoreTLS: true,
   });

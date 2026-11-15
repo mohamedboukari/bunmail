@@ -14,6 +14,7 @@ import {
   DEFAULT_ATTACHMENTS_MAX_TOTAL_MB,
   maxRequestBodyBytesFor,
 } from "../../src/config.ts";
+import { boundTestPort } from "../listen-port.ts";
 
 /**
  * The limit the spawned app runs with: the default attachment budget
@@ -21,31 +22,69 @@ import {
  */
 const LIMIT = maxRequestBodyBytesFor(DEFAULT_ATTACHMENTS_MAX_TOTAL_MB * BYTES_PER_MB);
 
-const PORT = 20_000 + Math.floor(Math.random() * 20_000);
-const BASE = `http://127.0.0.1:${PORT}`;
+/**
+ * The spawned app's base URL. It runs with PORT=0, so the OS picks a free
+ * port (#443), read back from its start line.
+ */
+let base = "";
 
 let app: ReturnType<typeof Bun.spawn> | undefined;
 let appLog = "";
 
+/**
+ * Reads the spawned app's stdout until its start line ("BunMail server
+ * started") reports the port it bound, then keeps draining the pipe in the
+ * background so the app never blocks on a full buffer.
+ *
+ * @param stdout - The app's piped stdout
+ * @returns The bound port
+ * @throws When the app exits before it reports one
+ */
+async function readBoundPort(stdout: ReadableStream<Uint8Array>): Promise<number> {
+  const reader = stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  for (;;) {
+    const chunk = await reader.read();
+    if (chunk.done) throw new Error("the app exited before it reported its port");
+    buffered += decoder.decode(chunk.value, { stream: true });
+    /** The start line carries its fields as JSON, in either log format. */
+    const port = /BunMail server started[^\n]*"port":(\d+)/.exec(buffered)?.[1];
+    if (port !== undefined) {
+      void (async (): Promise<void> => {
+        for (;;) {
+          if ((await reader.read()).done) return;
+        }
+      })().catch(() => undefined);
+      return Number(port);
+    }
+  }
+}
+
 beforeAll(async () => {
-  app = Bun.spawn(
+  const proc = Bun.spawn(
     [process.execPath, join(import.meta.dir, "..", "..", "src", "index.ts")],
     {
       env: {
         ...process.env,
-        PORT: String(PORT),
+        /** 0: the OS picks a free port, so parallel runs never collide (#443). */
+        PORT: "0",
         HOST: "127.0.0.1",
         SMTP_ENABLED: "false",
         SMTP_SUBMISSION_ENABLED: "false",
         ATTACHMENTS_MAX_TOTAL_MB: "",
+        /** The start line, which carries the bound port, is logged at info. */
+        LOG_LEVEL: "info",
       },
-      stdout: "ignore",
+      stdout: "pipe",
       stderr: "ignore",
     },
   );
+  app = proc;
+  base = `http://127.0.0.1:${await boundTestPort(readBoundPort(proc.stdout), "the app's HTTP server")}`;
   /** Wait for the server to answer. */
   for (let i = 0; i < 100; i++) {
-    const ok = await fetch(`${BASE}/health`).then(
+    const ok = await fetch(`${base}/health`).then(
       (r) => r.ok,
       () => false,
     );
@@ -70,7 +109,7 @@ function validSend(htmlBytes: number): string {
 }
 
 function post(body: string): Promise<Response> {
-  return fetch(`${BASE}/api/v1/emails/send`, {
+  return fetch(`${base}/api/v1/emails/send`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body,

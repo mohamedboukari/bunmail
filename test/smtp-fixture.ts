@@ -4,6 +4,8 @@
  * serve STARTTLS. The client side, the code under test, runs under Bun.
  */
 
+import { boundTestPort } from "./listen-port.ts";
+
 const FIXTURE = new URL("fixtures/smtp-tls-server.mjs", import.meta.url).pathname;
 
 /** What the fixture server does, see the fixture's header. */
@@ -104,7 +106,8 @@ export async function startFixtureServer(
     }
   })();
   return {
-    port: await port,
+    /** The fixture binds port 0; its reported port must be an ephemeral one (#443). */
+    port: await boundTestPort(port, `the SMTP fixture server (${mode})`),
     messages: () => messages,
     connections: () => connections,
     closed: () => closed,
