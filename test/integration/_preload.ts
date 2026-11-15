@@ -33,18 +33,18 @@
 process.env["SMTP_SUBMISSION_ALLOW_INSECURE"] = "true";
 
 /**
- * A pool larger than any test's peak of concurrent queries (#423). On Bun
- * 1.3.14 a burst of more concurrent queries than the pool has connections
- * can stall the pool: a few queries never settle while every connection is
- * idle on the server (oven-sh/bun#32004, #33627). The ownership transfer
- * burst sends 15 requests at once, each reading two accounts in parallel:
- * up to 30 queries in flight, past the default pool of 10, and it hung for
- * its whole 30 s timeout now and then. With 32 connections the pool never
- * queues, so it never meets the bug. Set unconditionally, before `config`
- * loads, so a smaller value in a developer's `.env` cannot bring the hang
- * back. Not more than needed: Bun never closes an idle connection, so a run
- * holds up to 32 of Postgres's `max_connections` (100 by default) for its
- * whole length, and several runs often share one local server.
+ * A pool larger than any test's peak of concurrent queries (#423). It was
+ * added for a Bun 1.3.14 bug: a burst of more concurrent queries than the
+ * pool had connections could stall the pool (oven-sh/bun#32004, #33627),
+ * and the ownership transfer burst (15 requests at once, each reading two
+ * accounts in parallel: up to 30 queries in flight) hung now and then on
+ * the default pool of 10. Bun 1.4.4 fixed the stall (#447); 32 stays so
+ * the parallel bursts run as wide as they were written, without queueing.
+ * Set unconditionally, before `config` loads, so every run gets the same
+ * pool whatever a developer's `.env` says. Not more than needed: Bun never
+ * closes an idle connection, so a run holds up to 32 of Postgres's
+ * `max_connections` (100 by default) for its whole length, and several
+ * runs often share one local server.
  */
 process.env["DATABASE_POOL_MAX"] = "32";
 

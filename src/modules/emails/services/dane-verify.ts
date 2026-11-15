@@ -550,7 +550,9 @@ export const DANE_HANDSHAKE_INCOMPLETE =
  * really complete (no cipher negotiated, or no server certificate: Bun
  * 1.3.14 could call back for a handshake the peer refused; 1.4.4 fails
  * such a handshake itself, #447) fails at once, so it never
- * waits out the STARTTLS stall limit. Then, with no usable record, any
+ * waits out the STARTTLS stall limit. Kept on 1.4.4 (#456): two field
+ * reads, and with a runtime regression a host with no usable record would
+ * otherwise pass with no cipher. Then, with no usable record, any
  * TLS session passes (RFC 7672 section 2.2: TLS required, authentication
  * not).
  *

@@ -26,12 +26,17 @@
  *
  *   <TimeDisplay value={email.createdAt} />                  // relative + absolute hover
  *   <TimeDisplay value={key.lastUsedAt} fallback="Never" />  // null-safe
+ *
+ * A Postgres `infinity` / `-infinity` timestamp (a hand-edited row) is not
+ * an instant and shows the fallback too (#457, see `finiteDate`).
  */
 
+import { finiteDate } from "../../utils/finite-date.ts";
+
 interface TimeDisplayProps {
-  /** Timestamp to render. Null/undefined → fallback string. */
+  /** Timestamp to render. Null/undefined (or not a finite instant) → fallback string. */
   value: Date | null | undefined;
-  /** Text to show when value is null/undefined. Defaults to `n/a`. */
+  /** Text to show when there is no instant to render. Defaults to `n/a`. */
   fallback?: string;
   /** Optional Tailwind classes piped to the `<time>` element. */
   class?: string;
@@ -42,8 +47,9 @@ export function TimeDisplay({
   fallback = "n/a",
   class: className,
 }: TimeDisplayProps) {
-  if (!value) return fallback;
-  const iso = value.toISOString();
+  const at = finiteDate(value);
+  if (at === null) return fallback;
+  const iso = at.toISOString();
   /** Pre-hydration fallback: full UTC date + time, unambiguous. */
   const utcFallback = `${iso.slice(0, 16).replace("T", " ")} UTC`;
   return (

@@ -30,8 +30,9 @@ import {
  *
  * `wrap` is Elysia's own extension point for this (its OpenTelemetry plugin
  * uses it). The obvious alternative, `AsyncLocalStorage.enterWith` in an
- * `onRequest` hook, segfaulted Bun 1.3.14 (1.4.4 no longer crashes, #447,
- * but `run` keeps each context scoped to its callback); wrapping
+ * `onRequest` hook, is ruled out: `run` keeps each context scoped to its
+ * callback (see `log-context.ts`; `enterWith` also segfaulted Bun 1.3.14,
+ * fixed in 1.4.4, #447); wrapping
  * `Bun.serve`'s fetch instead would lose `server.requestIP`, which the
  * login limiter needs.
  */

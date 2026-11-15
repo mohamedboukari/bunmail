@@ -34,6 +34,7 @@ import {
   type EmailTombstone,
 } from "../models/email-tombstone.schema.ts";
 import { logger } from "../../../utils/logger.ts";
+import { finiteDate } from "../../../utils/finite-date.ts";
 import { attachmentStorage, listAttachmentMeta } from "./attachment-storage.ts";
 
 /**
@@ -88,8 +89,9 @@ export async function deleteEmailsWithTombstones(
         toAddress: r.toAddress,
         subject: r.subject,
         status: r.status,
-        sentAt: r.sentAt,
-        deletedAt: r.deletedAt,
+        /** A Postgres `infinity` timestamp (#457) cannot be written back: no date. */
+        sentAt: finiteDate(r.sentAt),
+        deletedAt: finiteDate(r.deletedAt),
         attachments:
           attachments.get(r.id)?.map((a) => ({
             filename: a.filename,
