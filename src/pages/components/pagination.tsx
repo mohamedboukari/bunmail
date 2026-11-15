@@ -1,4 +1,9 @@
-import { PAGE_SIZES } from "../pagination.ts";
+import {
+  DEFAULT_PAGE_SIZE,
+  keptLimit,
+  PAGE_SIZES,
+  type PageSize,
+} from "../pagination.ts";
 
 /**
  * Props for the pagination component.
@@ -19,6 +24,29 @@ interface PaginationProps {
    * ignored: the component sets those itself.
    */
   extraParams?: string;
+}
+
+/** Props for the hidden `limit` input of a filter form. */
+interface KeptLimitInputProps {
+  /** The rows per page the list is showing */
+  limit: number;
+  /** The page's default size, as given to `parsePagination` (25 unless set) */
+  defaultLimit?: PageSize;
+}
+
+/**
+ * A hidden `limit` input for a list page's GET filter form (#435), so
+ * applying a filter keeps the chosen rows-per-page size. Renders nothing
+ * at the page's default (see `keptLimit`). The form carries no `page`, so
+ * a filter change still starts on page 1.
+ */
+export function KeptLimitInput({
+  limit,
+  defaultLimit = DEFAULT_PAGE_SIZE,
+}: KeptLimitInputProps): JSX.Element {
+  /** The size to carry, or undefined at the default. */
+  const value = keptLimit(limit, defaultLimit);
+  return value === undefined ? <></> : <input type="hidden" name="limit" value={value} />;
 }
 
 /** One slot in the numbered page list: a page number or a gap. */

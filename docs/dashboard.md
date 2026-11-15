@@ -415,6 +415,7 @@ Every list page (emails, inbound, both trash pages, tombstones, suppressions, au
 - **Right:** a **Rows per page** select (25, 50, 100), then the numbered pages: the first, the last, the current page and its neighbours, with an ellipsis for each gap (`1 … 4 5 6 … 14`; a gap of one page shows that page). Previous / next arrows are disabled on the first / last page; the controls carry `aria-label`s and the current page `aria-current="page"`.
 - **Query params:** `?page=` and `?limit=`, parsed leniently by `parsePagination` (`src/pages/pagination.ts`): `limit` must be 25, 50 or 100, anything else (an old `limit=20` bookmark, junk, a huge value) falls back to the page's default, never a 422. The default is 25 rows (it was 20), 50 on the audit log. `page` is capped at 1,000,000.
 - **Filters are kept:** every page link carries the list's other query params (status, source, API key, tag, email, domain, message ID, action, actor, outcome). The select sits in a GET form that carries them as hidden inputs and no `page`, so a new size starts again on page 1. The form submits itself on change through `data-autosubmit` (`dashboard.js`, no inline script); without JavaScript a `<noscript>` **Apply** button submits it.
+- **The size is kept (#435):** the other way round, every filter control of a list page carries the chosen `limit` when it is not that page's default (25, or 50 on the audit log), so changing a filter keeps 50 or 100 rows. Filter links (the emails status tabs and Source / API-key options, the DMARC domain links, the webhook delivery status pills, the Clear links) get `limit=` through `withKeptLimit` (`src/pages/pagination.ts`; `emailsUrl()` adds it itself); GET filter forms (emails tag, suppressions, audit log, tombstones search) get a hidden input from `KeptLimitInput` (`components/pagination.tsx`). At the default nothing is added, so default URLs are unchanged, and neither ever carries `page`: a filter change starts again on page 1. The inbound and trash pages have no filters.
 
 ## Security headers (#255)
 
@@ -678,7 +679,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`
-- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; inbound and domain events still need an admin key)
+- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; each name must be an entry of `WEBHOOK_EVENT_TYPES`, as in the REST API: an unknown one, even mixed with valid ones, gets the error flash "Unknown webhook event" and an empty `events` field gets "Select at least one event", nothing stored, #437; inbound and domain events still need an admin key)
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
 - Replay a webhook delivery → `POST /dashboard/webhooks/deliveries/:deliveryId/replay`
 - Remove a suppression → `POST /dashboard/suppressions/:id/delete`

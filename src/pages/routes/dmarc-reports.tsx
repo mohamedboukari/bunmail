@@ -2,6 +2,7 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { EmptyState } from "../components/empty-state.tsx";
 import { Pagination } from "../components/pagination.tsx";
+import { withKeptLimit } from "../pagination.ts";
 import { TimeDisplay } from "../components/time-display.tsx";
 import type { DmarcReport } from "../../modules/dmarc-reports/types/dmarc-report.types.ts";
 
@@ -45,14 +46,15 @@ export function DmarcReportsPage({
         domain.
       </p>
 
-      {/* Domain filter: links rather than a form so server stays stateless */}
+      {/* Domain filter: links rather than a form so server stays stateless.
+          Each link keeps the chosen rows-per-page size and drops `page` (#435). */}
       {domains.length > 1 && (
         <div class="flex flex-wrap items-center gap-2 mb-4">
           <span class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
             Domain
           </span>
           <a
-            href="/dashboard/dmarc-reports"
+            href={withKeptLimit("/dashboard/dmarc-reports", limit)}
             class={`px-3 py-1 rounded text-sm ${
               !domainFilter
                 ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"
@@ -64,7 +66,10 @@ export function DmarcReportsPage({
           {domains.map((d) => (
             <a
               safe
-              href={`/dashboard/dmarc-reports?domain=${encodeURIComponent(d)}`}
+              href={withKeptLimit(
+                `/dashboard/dmarc-reports?domain=${encodeURIComponent(d)}`,
+                limit,
+              )}
               class={`px-3 py-1 rounded text-sm ${
                 domainFilter === d
                   ? "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900"

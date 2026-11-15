@@ -4,6 +4,10 @@
  * one checkbox per `WEBHOOK_EVENT_TYPES` entry), including
  * `email.complained` and `email.received`, which the old hand-written list
  * missed. The admin-only rule for inbound and domain events is unchanged.
+ *
+ * The same POST validates `events` against that list (#437), as the REST
+ * DTO does: an unknown name, alone or mixed with valid ones, and an empty
+ * selection get an error flash, and nothing is stored.
  */
 
 import { describe, test, expect, beforeEach } from "bun:test";
@@ -45,6 +49,11 @@ async function storedEvents(): Promise<unknown> {
     .from(webhooks)
     .where(eq(webhooks.url, HOOK_URL));
   return hook?.events;
+}
+
+/** How many webhooks exist: a refused form must leave this at zero. */
+async function webhookCount(): Promise<number> {
+  return (await db.select({ id: webhooks.id }).from(webhooks)).length;
 }
 
 /** The decoded redirect target of a form POST. */
@@ -103,5 +112,75 @@ describe("dashboard webhook create form (#425)", () => {
     const response = await postForm(token, ["email.received"]);
     expect(locationOf(response)).toContain("flashType=error");
     expect(await storedEvents()).toBeUndefined();
+  });
+});
+
+describe("dashboard webhook create form validates events (#437)", () => {
+  test("an unknown event is refused and nothing is stored", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "admin key", isAdmin: true });
+
+    const response = await postForm(token, ["email.viewed"]);
+    expect(response.status).toBe(302);
+    const location = locationOf(response);
+    expect(location).toContain("flashType=error");
+    expect(location).toContain("Unknown webhook event");
+    /** The flash travels in the URL: it never quotes the submitted name. */
+    expect(location).not.toContain("email.viewed");
+    expect(await webhookCount()).toBe(0);
+  });
+
+  test("valid events mixed with an unknown one are refused as a whole", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "admin key", isAdmin: true });
+
+    const response = await postForm(token, [
+      "email.sent",
+      "nope<script>",
+      "email.bounced",
+    ]);
+    const location = locationOf(response);
+    expect(location).toContain("Unknown webhook event");
+    expect(location).not.toContain("nope");
+    expect(await webhookCount()).toBe(0);
+  });
+
+  test("a name differing only in case is unknown", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "admin key", isAdmin: true });
+
+    const response = await postForm(token, ["Email.Sent"]);
+    expect(locationOf(response)).toContain("Unknown webhook event");
+    expect(await webhookCount()).toBe(0);
+  });
+
+  test("an empty selection is refused, as the REST API requires one event", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "admin key", isAdmin: true });
+
+    /** A crafted empty `events` field: it used to store a webhook with no events. */
+    const response = await postForm(token, [""]);
+    const location = locationOf(response);
+    expect(location).toContain("flashType=error");
+    expect(location).toContain("Select at least one event");
+    expect(await webhookCount()).toBe(0);
+  });
+
+  test("valid events are still stored", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "regular key" });
+
+    const response = await postForm(token, ["email.sent", "email.bounced"]);
+    expect(locationOf(response)).toContain("Webhook created");
+    expect(await storedEvents()).toEqual(["email.sent", "email.bounced"]);
+  });
+
+  test("valid events with an admin-only one on a regular key are still refused", async () => {
+    const token = await ownerToken();
+    await seed.apiKey({ name: "regular key" });
+
+    const response = await postForm(token, ["email.sent", "domain.verified"]);
+    expect(locationOf(response)).toContain("flashType=error");
+    expect(await webhookCount()).toBe(0);
   });
 });
