@@ -24,10 +24,12 @@ import type { sendMail } from "../../src/modules/emails/services/mailer.service.
 import { getLogContext, type LogContext } from "../../src/utils/log-context.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
-/** Isolated ports, distinct from the other SMTP test files. */
-const TEST_PORT = 12590;
-const INBOUND_PORT = 12591;
+/** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+let submissionPort = 0;
+/** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
+let inboundPort = 0;
 
 /** Inbound settings this file overrides, restored after the run. */
 const savedSmtp = { ...config.smtp, spamProtection: { ...config.smtp.spamProtection } };
@@ -41,17 +43,19 @@ interface Captured {
 let captured: Captured[] = [];
 const spies: Array<{ mockRestore: () => void }> = [];
 
-beforeAll(() => {
-  smtpSubmission.start(TEST_PORT);
+beforeAll(async () => {
+  smtpSubmission.start(0);
+  submissionPort = await boundTestPort(smtpSubmission.listeningPort(), "SMTP submission");
   /** Inbound receiver on a free port, without network checks (DNSBL) or a seeded domain. */
   /** `config` is typed read-only; the runtime object is plain, so tests override it in place. */
-  Object.assign(config.smtp, { port: INBOUND_PORT });
+  Object.assign(config.smtp, { port: 0 });
   Object.assign(config.smtp.spamProtection, {
     dnsblEnabled: false,
     rateLimitEnabled: false,
     recipientValidationEnabled: false,
   });
   smtpReceiver.start();
+  inboundPort = await boundTestPort(smtpReceiver.listeningPort(), "Inbound SMTP");
 });
 
 afterAll(() => {
@@ -115,7 +119,7 @@ describe("SMTP submission", () => {
     const { rawKey } = await seed.apiKey();
     const transport = createTransport({
       host: "127.0.0.1",
-      port: TEST_PORT,
+      port: submissionPort,
       secure: false,
       ignoreTLS: true,
       auth: { user: "apikey", pass: rawKey },
@@ -159,7 +163,7 @@ describe("inbound SMTP", () => {
     const subject = `inbound context ${crypto.randomUUID()}`;
     const transport = createTransport({
       host: "127.0.0.1",
-      port: INBOUND_PORT,
+      port: inboundPort,
       secure: false,
       ignoreTLS: true,
     });

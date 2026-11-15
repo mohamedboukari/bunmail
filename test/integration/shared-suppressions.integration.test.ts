@@ -38,11 +38,12 @@ import { SuppressedRecipientError } from "../../src/modules/suppressions/errors.
 import * as smtpSubmission from "../../src/modules/smtp-submission/services/smtp-submission.service.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, emails, suppressions } from "./_helpers.ts";
+import { boundTestPort } from "../listen-port.ts";
 
 const RECIPIENT = "shared@example.org";
 
-/** Isolated port for the submission server of the SMTP test. */
-const TEST_PORT = 12611;
+/** The submission server's port: it binds 0 and the OS picks a free one (#443). */
+let submissionPort = 0;
 
 /** Runtime handles on the flags (config is read at import time). */
 const flags = config.suppressions as { sharedHard: boolean };
@@ -332,8 +333,12 @@ describe("SUPPRESSIONS_SHARED_HARD=true", () => {
   });
 
   describe("SMTP submission", () => {
-    beforeAll(() => {
-      smtpSubmission.start(TEST_PORT);
+    beforeAll(async () => {
+      smtpSubmission.start(0);
+      submissionPort = await boundTestPort(
+        smtpSubmission.listeningPort(),
+        "SMTP submission",
+      );
     });
 
     afterAll(() => {
@@ -345,7 +350,7 @@ describe("SUPPRESSIONS_SHARED_HARD=true", () => {
       await hardBounceUnderA(k);
       const transport = createTransport({
         host: "127.0.0.1",
-        port: TEST_PORT,
+        port: submissionPort,
         secure: false,
         ignoreTLS: true,
         auth: { user: "apikey", pass: k.rawB },

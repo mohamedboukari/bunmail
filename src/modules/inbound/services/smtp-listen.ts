@@ -11,6 +11,8 @@
  * no process.exit) so it unit-tests without mocks.
  */
 
+import type { AddressInfo } from "net";
+
 /** A Node/Bun socket error raised by `listen()` (EACCES, EADDRINUSE, ...). */
 export type ListenError = Error & { syscall: "listen"; code?: string };
 
@@ -44,4 +46,27 @@ export function describeListenError(server: string, port: number, code?: string)
     return `${server} can't listen on port ${port} (EADDRINUSE): another process is already using it.`;
   }
   return `${server} can't listen on port ${port} (${code ?? "unknown error"}).`;
+}
+
+/** Anything that reports its bound address like a `net.Server` (or `tls.Server`). */
+export interface BoundAddressSource {
+  address(): AddressInfo | string | null;
+}
+
+/**
+ * The TCP port a listening server is actually bound to (#443).
+ *
+ * Equal to the requested port whenever that is a real port, as in
+ * production. With port `0` the OS picks a free port, and this reads it
+ * back, so the tests can bind `0` and run side by side without colliding.
+ *
+ * @param server    - The listening server (its `address()` is read)
+ * @param requested - The port passed to `listen()`, returned when the
+ *                    server reports no TCP address (a pipe path, or not
+ *                    listening yet)
+ * @returns The bound port
+ */
+export function boundPort(server: BoundAddressSource, requested: number): number {
+  const address = server.address();
+  return typeof address === "object" && address !== null ? address.port : requested;
 }
