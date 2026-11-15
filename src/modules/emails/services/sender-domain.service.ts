@@ -46,8 +46,12 @@ export interface SenderDomainDeps {
 const sharedCache: RecheckCache = { unverifiedUntil: new Map(), inFlight: new Map() };
 
 const defaultDeps: SenderDomainDeps = {
-  /** Looked up per call, not captured, so a test spy on the module applies. */
-  verify: (domain) => verifyDomain(domain),
+  /**
+   * Looked up per call, not captured, so a test spy on the module applies.
+   * Without the MTA-STS policy fetch (#472): it could hold the send up to
+   * 10 s, and Verify and the daily loop check it.
+   */
+  verify: (domain) => verifyDomain(domain, undefined, { skipMtaSts: true }),
   now: Date.now,
   cache: sharedCache,
 };

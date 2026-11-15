@@ -117,6 +117,12 @@ TRASH_RETENTION_DAYS=7
 # DANE_ENABLED=true
 # DANE_RESOLVER=172.30.53.53
 # COMPOSE_PROFILES=dane
+# Optional: the MTA-STS policy served for domains an admin opts in (#472): the
+# MX host names senders may use (comma list, default MAIL_HOSTNAME) and the
+# max_age in seconds (86400 to 31557600; default 1 day testing, 1 week enforce).
+# See "MTA-STS policy hosts (#472)" in section 6.
+# MTA_STS_MX=mail.yourdomain.com
+# MTA_STS_MAX_AGE=604800
 # Optional: open and click tracking (#187), off by default; nothing is tracked
 # yet in this version. Days an event is kept, 1 to 3650, default 90
 # TRACKING_ENABLED=false
@@ -529,6 +535,23 @@ certbot --nginx -d mail.yourdomain.com
 ```
 
 > **Set `DASHBOARD_TRUSTED_PROXY_HOPS=1`** once BunMail is behind one of these proxies. Both configs above forward `X-Forwarded-For`, and the dashboard login throttle (#109) reads the real client IP from it (rightmost entry) instead of the proxy's socket IP, so lockouts are per-attacker, not shared. **Keep BunMail's `:3000` bound to localhost / firewalled so the only path in is through the proxy**; otherwise a direct request could forge `X-Forwarded-For` and get a fresh throttle bucket per request. Docker-published ports bypass UFW, so the default `docker-compose.yml` publishes `3000` on `127.0.0.1` only (#205); keep it that way when the proxy runs on the same host, and publish anything else from `docker-compose.override.yml`. BunMail logs `Request bypassed the trusted proxy` (at most once an hour, #256) when a request arrives with fewer `X-Forwarded-For` entries than `DASHBOARD_TRUSTED_PROXY_HOPS`.
+
+### MTA-STS policy hosts (#472)
+
+A domain whose MTA-STS mode is `testing` or `enforce` (set by an admin on its dashboard page, off by default) has its policy served by BunMail at `https://mta-sts.<domain>/.well-known/mta-sts.txt`. Senders fetch it over HTTPS and verify the certificate, so the reverse proxy needs, for **each** such domain:
+
+- a DNS record `mta-sts.<domain>` pointing at the proxy (a CNAME to the dashboard host, or A/AAAA records);
+- a certificate valid for `mta-sts.<domain>` (Caddy obtains one on its own once the name is in the Caddyfile; with certbot, add `-d mta-sts.<domain>`);
+- the original `Host` header passed to BunMail, which picks the domain from it (Caddy does by default; the nginx config above sets `proxy_set_header Host $host`). No redirects: a sender treats a redirect as a failed fetch.
+
+```
+# /etc/caddy/Caddyfile: one more site block, or list several names
+mta-sts.yourdomain.com, mta-sts.otherdomain.com {
+    reverse_proxy localhost:3000
+}
+```
+
+BunMail answers `404` for any host that is not `mta-sts.<a verified domain with a mode set>`. The policy's `mx` lines are `MTA_STS_MX` (default `MAIL_HOSTNAME`), and in `enforce` mode the certificate senders see on port 25 (`SMTP_TLS_CERT`, see [inbound.md](inbound.md#mta-sts-policy-472)) must be valid for each of those hosts, or senders that honour the policy stop delivering.
 
 ## DANE (#345)
 

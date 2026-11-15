@@ -39,6 +39,7 @@ import { readMetricsToken, readTracingSettings } from "./config/observability.ts
 import { readDatabasePoolMax, readRedisUrl } from "./config/storage.ts";
 import { buildTlsRptConfig } from "./config/tls-rpt.ts";
 import { buildDaneConfig } from "./config/dane.ts";
+import { buildMtaStsConfig } from "./config/mta-sts.ts";
 import { buildTrackingConfig } from "./config/tracking.ts";
 import { readSsoSettings } from "./config/sso.ts";
 
@@ -150,6 +151,17 @@ export {
   readDaneEnabled,
   readDaneResolver,
 } from "./config/dane.ts";
+
+/** @public */
+export {
+  type MtaStsConfig,
+  DEFAULT_MTA_STS_ENFORCE_MAX_AGE,
+  DEFAULT_MTA_STS_TESTING_MAX_AGE,
+  MAX_MTA_STS_MAX_AGE,
+  MIN_MTA_STS_MAX_AGE,
+  readMtaStsMaxAge,
+  readMtaStsMx,
+} from "./config/mta-sts.ts";
 
 /** @public */
 export {
@@ -313,6 +325,9 @@ export const config = {
 
   /** Outbound DANE for SMTP (RFC 7672, #345); see {@link buildDaneConfig}. */
   dane: buildDaneConfig(),
+
+  /** The MTA-STS policy served for opted-in domains (#472); see {@link buildMtaStsConfig}. */
+  mtaSts: buildMtaStsConfig(),
 
   /** Open and click tracking (#187); see {@link buildTrackingConfig}. */
   tracking: buildTrackingConfig(),

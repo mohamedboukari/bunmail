@@ -1,12 +1,13 @@
 # Domains Module
 
-Manages sender domains, auto-generates DKIM keys, and verifies DNS records (SPF, DKIM, DMARC).
+Manages sender domains, auto-generates DKIM keys, verifies DNS records (SPF, DKIM, DMARC), and serves the MTA-STS policy of opted-in domains (#472).
 
 ## Module Layout
 
 ```
 src/modules/domains/
 ├── domains.plugin.ts               ← Elysia plugin (route group)
+├── mta-sts.plugin.ts               ← Public `GET /.well-known/mta-sts.txt`, keyed by Host (#472)
 ├── errors.ts                       ← DomainAlreadyRegisteredError, InvalidDomainNameError (#406), InvalidDkimSelectorError, DkimRotationError (#250)
 ├── services/
 │   ├── domain.service.ts           ← CRUD + DKIM key generation
@@ -22,6 +23,9 @@ src/modules/domains/
 │   ├── dmarc-check.service.ts      ← DMARC discovery, org-domain fallback, strict tag parsing (#250)
 │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status, mail-flow summary (#250)
 │   ├── required-dns-records.ts     ← The DNS records to publish (`dnsRecords`, #250)
+│   ├── mta-sts-served-policy.ts    ← The served MTA-STS policy text, its id, the TXT value, Host parsing (#472, pure)
+│   ├── mta-sts-hosts.service.ts    ← Which domains get a policy: one query, cached 30 s (#472)
+│   ├── mta-sts-check.service.ts    ← The MTA-STS check of Verify: TXT id and a sender-style fetch (#472)
 │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
 │   ├── sending-ips.service.ts      ← Sending IPs and the reverse DNS check (#247, #248)
 │   ├── spf-evaluator.ts            ← SPF `checkHost()`, RFC 7208 strict: lookups, limits, deadline (#373)
@@ -29,7 +33,7 @@ src/modules/domains/
 │   └── spf-address.ts              ← IP parsing, IPv4-mapped clients, CIDR matching (#373)
 ├── dtos/
 │   ├── create-domain.dto.ts        ← POST body validation
-│   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings, tracking opt-in #187)
+│   └── update-domain.dto.ts        ← PATCH body validation (unsubscribe settings, tracking opt-in #187, MTA-STS mode #472)
 ├── models/
 │   └── domain.schema.ts            ← Drizzle pgTable definition
 ├── serializations/
@@ -64,6 +68,7 @@ Table: `domains`
 | track_opens       | boolean        | NOT NULL, default `false`: open tracking opt-in, set by admins (#187). See [Open and click tracking](#open-and-click-tracking-187) |
 | track_clicks      | boolean        | NOT NULL, default `false`: click tracking opt-in, set by admins (#187) |
 | tracking_epoch    | integer        | NOT NULL, default `0`: covered by every click token's MAC; an admin bumps it to revoke the domain's click links already sent (#424). See [Revoking click links](#revoking-click-links-424) |
+| mta_sts_mode      | varchar(10)    | NOT NULL, default `'none'`, CHECK `none`, `testing` or `enforce`: the MTA-STS policy served for the domain while it is verified, set by admins (#472, migration `0046`). See [inbound.md](inbound.md#mta-sts-policy-472) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -71,7 +76,7 @@ Table: `domains`
 | last_checked_at   | timestamptz    | nullable: when the checks last ran, by Verify or the loop (#250) |
 | next_check_at     | timestamptz    | nullable, indexed: when the loop checks the domain next; NULL = due now (#250) |
 | consecutive_failures | integer     | NOT NULL, default `0`: checks in a row with a definitive failure (#250) |
-| last_check_result | jsonb          | nullable: `{ spf, dkim, dmarc, checkedAt }`, each check `{ status: "pass" \| "fail" \| "unknown", reason }` (#250) |
+| last_check_result | jsonb          | nullable: `{ spf, dkim, dmarc, mtaSts?, checkedAt }`, each check `{ status: "pass" \| "fail" \| "unknown", reason }` (#250); `mtaSts` only while the MTA-STS mode is not `none` (#472) |
 | created_at        | timestamp      | NOT NULL, default `now()`    |
 | updated_at        | timestamp      | NOT NULL, default `now()`    |
 | created_by_user_id | varchar(36) | nullable, FK → users ON DELETE SET NULL, indexed: who created it (#219, attribution only; NULL = the owner) |
@@ -129,6 +134,8 @@ The `dns-verification.service.ts` checks three DNS record types:
 Trigger verification via `POST /api/v1/domains/:id/verify` or the dashboard "Verify DNS Records" button, or let the scheduled loop run it (below). The dashboard button (and its **Complete rotation**) allows 5 DNS checks per domain per minute (`src/pages/lib/dns-verify-throttle.ts`, shared by every replica with `REDIS_URL`, #185); the API route is under the per-key API rate limit.
 
 Each check is `pass`, `fail` (a definitive answer: the record is missing or does not match) or `unknown` (the lookup itself failed: SERVFAIL, a timeout, the network, an SPF `temperror`, or no known sending IP). `verified_at` is set only when all three pass (#250).
+
+**MTA-STS (#472).** For a domain whose `mta_sts_mode` is not `none`, Verify and the re-verification loop also run `checkMtaSts` (`mta-sts-check.service.ts`): the `_mta-sts.<domain>` TXT record must announce exactly one `v=STSv1` policy with the current id, and `https://mta-sts.<domain>/.well-known/mta-sts.txt`, fetched like a sender does (`fetchMtaStsPolicy`: verified certificate, no redirects, `text/plain`, the MX private-address rule), must return the same mode, `mx` set and `max_age`. A failed TXT lookup is `unknown`, anything else wrong is `fail`. The result is stored as `last_check_result.mtaSts` and returned as `checks.mtaSts`; it is **not** one of the verification checks (`DNS_CHECK_NAMES`), so it never fails, flips or holds back the domain. The inline check of a send (`REQUIRE_VERIFIED_DOMAIN`) skips it (`skipMtaSts`, the stored outcome is kept), since its policy fetch could hold the send up to 10 s. A check that flips the domain (either way) drops the served-domains cache, so the policy starts or stops being served at once. See [inbound.md](inbound.md#mta-sts-policy-472).
 
 ### Scheduled re-verification (#250)
 
@@ -202,6 +209,8 @@ The tests run the OpenSPF RFC 7208 suite (`test/fixtures/spf/rfc7208-tests.yml`,
 | A / AAAA | `MAIL_HOSTNAME` | each `MAIL_PUBLIC_IP` | described ("this server's public IP address") when `MAIL_PUBLIC_IP` is unset; once per server |
 | PTR | each sending IP | `MAIL_HOSTNAME` | set at the hosting provider, not in the zone |
 | MX | `<domain>` | `10 <MAIL_HOSTNAME>` | `optional`: only to receive bounces, DMARC reports and inbound mail; leave an MX that serves mailboxes as it is |
+| TXT | `_mta-sts.<domain>` | `v=STSv1; id=<policy id>` | only while the MTA-STS mode is not `none` (#472); `optional`; update it whenever the id changes |
+| CNAME | `mta-sts.<domain>` | the `APP_BASE_URL` host (described when unset) | only while the MTA-STS mode is not `none` (#472); `optional`; the reverse proxy serves TLS for it |
 
 There is no DMARC report address setting, so the suggestion is `dmarc@<domain>`.
 
@@ -228,10 +237,10 @@ Returns a single domain by its name. Used by the inbound-notification path (#106
 Sets (or clears, when passed `null`) the inbound-notification address for a domain (#106). Returns `undefined` when no row matches the id.
 
 #### `updateDomainSettings(id, changes): Promise<Domain | undefined>`
-Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243) and `trackOpens` / `trackClicks` (#187); only the fields present in `changes` are written, `null` clears an unsubscribe override. Called `updateDomainUnsubscribe` before #187. Used by `PATCH /api/v1/domains/:id` and the domain page in the dashboard.
+Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243), `trackOpens` / `trackClicks` (#187) and `mtaStsMode` (#472, which drops the served-domains cache so the change is served at once); only the fields present in `changes` are written, `null` clears an unsubscribe override. Called `updateDomainUnsubscribe` before #187. Used by `PATCH /api/v1/domains/:id` and the domain page in the dashboard.
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
-Hard-deletes a domain and its keys, then drops its cached tracking epoch (#424), so its click links stop redirecting in this process at once (other replicas within 30 seconds).
+Hard-deletes a domain and its keys, then drops its cached tracking epoch (#424), so its click links stop redirecting in this process at once (other replicas within 30 seconds), and the served MTA-STS domains (#472).
 
 #### `findNonCanonicalDomainNames(): Promise<NonCanonicalDomainName[]>`
 The stored names that creation would now refuse or store differently than by case alone (#406), as `{ id, name, normalized }` (`normalized` is `null` when refused). Read-only; the boot logs one `warn` per entry.
@@ -263,7 +272,24 @@ Pure helpers shared by create, rotation and Verify: `generateDkimKeyPair()`, `is
 Runs SPF, DKIM, and DMARC checks in parallel (`runDnsChecks`), stores the outcome with `applyDomainCheck` (the failure rule above), and returns `{ spf, dkim, dmarc, spfReason, dkimReason, dmarcReason, checks }`: the booleans are true only for `pass`, `checks` has each check's `status` and `reason`. `options.source` is `manual` (default) or `scheduled` (the loop: per-domain logs at `debug`, a failed DMARC lookup not cached). SPF (#247): the record must exist exactly once, contain no `<placeholder>`, and give `pass` for every sending IP (`MAIL_PUBLIC_IP`, or the A/AAAA records of `MAIL_HOSTNAME`, from `sending-ips.service.ts`), evaluated in strict RFC 7208 mode by `checkHost()` (see [SPF evaluation](#spf-evaluation-373)) with sender `postmaster@<domain>` and HELO `MAIL_HOSTNAME`; a failed DNS lookup or an SPF `temperror` is reported as temporary (`unknown`). The dashboard suggests `v=spf1 a:<MAIL_HOSTNAME> -all` (`suggestedSpfRecord()`), to be merged into an existing record. DMARC (#250): `checkDmarc()` from `dmarc-check.service.ts`, described above.
 
 #### `runDnsChecks(domain, deps?, options?): Promise<DomainCheckResult>`
-The three checks without storing anything. Never rejects on a DNS error: that check is `unknown`.
+The three checks without storing anything, plus the MTA-STS check (`mtaSts`) when the domain's mode is not `none` (#472; `deps.fetchMtaStsPolicy` replaces the policy fetch in tests; `options.skipMtaSts` skips it and carries the stored outcome over, used by the inline check of a send). Never rejects on a DNS error: that check is `unknown`.
+
+### mta-sts-served-policy.ts (#472)
+
+Pure. `servedMtaStsPolicy(mode, settings?)` builds the policy (`{ mode, mx, maxAge, text, id }`, settings default to `config.mtaSts`); `mtaStsTxtValue(policy)` is `v=STSv1; id=<id>`; `mtaStsPolicyUrl(domain)` the fetch URL; `mtaStsDomainFromHost(host)` the domain a request's `Host` names (`null` unless it is `mta-sts.<host name>`; lowercase, port and final dot dropped).
+
+### mta-sts-hosts.service.ts (#472)
+
+- `servedMtaStsMode(domainName)`: the mode the domain's policy is served under, or `null`. Backed by one query of every verified domain whose mode is not `none`, cached 30 s (`MTA_STS_HOSTS_TTL_MS`), concurrent misses sharing one load; a failed load keeps the previous set (logged at `error`, by name and SQLSTATE), and rejects only when none was read yet.
+- `forgetMtaStsHosts()`: drops the cache; called by `updateDomainSettings` on a mode change, by `deleteDomain`, and by `applyDomainCheck` on a flip. `setMtaStsHostsDeps(override | null)`: the load and clock seam for tests.
+
+### mta-sts-check.service.ts (#472)
+
+- `checkMtaSts(domain, { resolveTxt, fetchPolicy }, settings?)`: the check described under DNS Verification, or `null` for mode `none`. Never rejects.
+
+### mta-sts.plugin.ts (#472)
+
+- `mtaStsPlugin({ lookup?, settings? })`: the public `GET /.well-known/mta-sts.txt`, mounted in `src/app.ts`. See [inbound.md](inbound.md#mta-sts-policy-472) for the answers.
 
 ### spf-evaluator.ts (#373)
 
@@ -301,7 +327,7 @@ The three checks without storing anything. Never rejects on a DNS error: that ch
 
 ### required-dns-records.ts
 
-- `getRequiredDnsRecords(domain, settings?)`: the table above. `pendingDkimDnsRecord(domain)` is the pending rotation's entry alone (or `null`). `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
+- `getRequiredDnsRecords(domain, settings?)`: the table above. `pendingDkimDnsRecord(domain)` is the pending rotation's entry alone (or `null`); `mtaStsDnsRecords(domain, settings?)` the two MTA-STS entries (empty for mode `none`, #472). `splitTxtValue(value)` splits a TXT value into quoted strings of at most 255 characters.
 
 ### sending-ip-dnsbl.service.ts (#250)
 
@@ -320,7 +346,8 @@ The `serializeDomain(domain, dns)` function:
 - **Exposes** `dkimDnsRecord`: the TXT record value users need to add to their DNS (unsplit)
 - **Exposes** `dkimPending` (`{ selector, host, dnsRecord, createdAt }` or `null`) and `dkimPrevious` (`{ selector, host, dnsRecord, rotatedAt, advice }` or `null`) for key rotation (#250)
 - **Adds** `dnsRecords` (always), and `dmarc` and `mx` from `dns`, which is `null` on `DELETE` (no lookup for a removed domain) (#250)
-- **Exposes** `lastCheckedAt` and `lastCheckResult` (`{ spf, dkim, dmarc, checkedAt }`, each check `{ status, reason }`, or `null` before the first check) (#250); `next_check_at` and `consecutive_failures` stay internal
+- **Exposes** `lastCheckedAt` and `lastCheckResult` (`{ spf, dkim, dmarc, mtaSts?, checkedAt }`, each check `{ status, reason }`, or `null` before the first check) (#250, #472); `next_check_at` and `consecutive_failures` stay internal
+- **Exposes** `mtaStsMode` (`none`, `testing` or `enforce`, #472)
 
 ## API Endpoints
 
@@ -332,7 +359,7 @@ All routes require Bearer token auth and are rate-limited.
 | GET    | /api/v1/domains               | List domains             |
 | GET    | /api/v1/domains/:id           | Get domain details       |
 | POST   | /api/v1/domains/:id/verify    | Verify DNS records       |
-| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings (#243) |
+| PATCH  | /api/v1/domains/:id           | Edit unsubscribe settings (#243), tracking opt-in (#187), MTA-STS mode (#472) |
 | DELETE | /api/v1/domains/:id           | Delete domain            |
 | POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) |
 | POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) |

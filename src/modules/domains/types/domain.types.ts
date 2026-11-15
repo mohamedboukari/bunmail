@@ -8,6 +8,20 @@ import type { InferSelectModel } from "drizzle-orm";
 export type Domain = InferSelectModel<typeof domains>;
 
 /**
+ * The MTA-STS modes an admin can pick for a domain (#472): `none` (the
+ * default) serves no policy; `testing` and `enforce` serve one with that
+ * mode at `https://mta-sts.<domain>/.well-known/mta-sts.txt` while the
+ * domain is verified.
+ */
+export const DOMAIN_MTA_STS_MODES = ["none", "testing", "enforce"] as const;
+
+/** A domain's MTA-STS mode (#472). */
+export type DomainMtaStsMode = (typeof DOMAIN_MTA_STS_MODES)[number];
+
+/** A mode under which a policy is served (#472). */
+export type ServedMtaStsMode = Exclude<DomainMtaStsMode, "none">;
+
+/**
  * Input required to create a new domain.
  *
  * `name` is the only required field: DKIM keys are generated server-side.
@@ -49,6 +63,8 @@ export interface DomainSettingsChanges {
   unsubscribeUrl?: string | null;
   trackOpens?: boolean;
   trackClicks?: boolean;
+  /** The MTA-STS policy served for the domain (#472). */
+  mtaStsMode?: DomainMtaStsMode;
 }
 
 /** A DMARC policy (`p=` and `sp=`, RFC 7489 6.3). */
@@ -111,7 +127,7 @@ export interface DmarcCheck {
 
 /** One DNS record an operator publishes for a domain (#250). */
 export interface RequiredDnsRecord {
-  type: "TXT" | "A" | "AAAA" | "PTR" | "MX";
+  type: "TXT" | "A" | "AAAA" | "PTR" | "MX" | "CNAME";
   /** Fully qualified name the record goes on (an IP address for PTR). */
   host: string;
   /** Record value as entered at a DNS provider. */

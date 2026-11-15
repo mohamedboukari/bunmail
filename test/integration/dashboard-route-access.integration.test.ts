@@ -230,6 +230,8 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   /** Revoke the domain's click tracking links (#424). */
   "POST /dashboard/domains/:id/tracking-revoke": { access: "admin" },
+  /** The domain's MTA-STS mode (#472). */
+  "POST /dashboard/domains/:id/mta-sts": { access: "admin", body: { mode: "none" } },
 
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },

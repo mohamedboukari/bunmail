@@ -30,6 +30,7 @@ import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { config } from "../../config.ts";
+import { domainMtaStsPages } from "./domains-mta-sts.plugin.tsx";
 
 /** The domain page with a flash banner (#421: a code, never text). */
 function domainFlashUrl(id: string, flash: Flash): string {
@@ -74,11 +75,12 @@ async function dkimRotationStep(
 
 /**
  * Domain pages (#291): list, add, delete, DNS verify, DKIM rotation,
- * settings, tracking link revocation (#424), detail.
+ * settings, tracking link revocation (#424), the MTA-STS mode (#472,
+ * `domains-mta-sts.plugin.tsx`), detail.
  */
 export function domainPages(app: GuardedDashboard) {
   return (
-    app
+    domainMtaStsPages(app)
       /**
        * GET /dashboard/domains
        * Domains list with add form. Shows flash messages from query params.
@@ -540,6 +542,7 @@ export function domainPages(app: GuardedDashboard) {
               dns={dns}
               smtpEnabled={config.smtp.enabled}
               trackingEnabled={config.tracking.enabled}
+              inboundStarttls={config.smtp.enabled && config.smtp.tls !== null}
               flash={flash}
             />
           );
