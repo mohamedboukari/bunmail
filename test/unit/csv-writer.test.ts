@@ -105,6 +105,14 @@ describe("csvField: dates that are not instants", () => {
     expect(csvField(new Date("infinity"))).toBe("");
     expect(csvField(new Date(Number.NaN))).toBe("");
   });
+
+  test("Bun 1.4 decodes Postgres infinity as a number: empty too (#447)", () => {
+    expect(csvField(Number.POSITIVE_INFINITY)).toBe("");
+    expect(csvField(Number.NEGATIVE_INFINITY)).toBe("");
+    expect(csvField(Number.NaN)).toBe("");
+    expect(csvField(0)).toBe("0");
+    expect(csvField(-1.5)).toBe("-1.5");
+  });
 });
 
 describe("csvRow and the BOM", () => {

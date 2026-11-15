@@ -5,7 +5,6 @@ import type { TLSSocket } from "tls";
 import Mail from "nodemailer/lib/mailer";
 import SMTPTransport from "nodemailer/lib/smtp-transport";
 import {
-  DANE_HANDSHAKE_INCOMPLETE,
   PEER_CHAIN_AVAILABLE,
   peerChain,
   usableTlsa,
@@ -32,10 +31,11 @@ import {
  * real nodemailer client under Bun, and the TLS check BunMail's nodemailer
  * patch runs right after the handshake (`patches/nodemailer@10.3.1.patch`).
  *
- * DANE-TA records are unusable under Bun 1.3.14 (`PEER_CHAIN_AVAILABLE`):
- * one test pins that the chain is still hidden and says what to switch
- * once it is not; the DANE-TA matcher is still exercised over real
- * sessions with DANE-TA forced on (`taEnabledHost`).
+ * DANE-TA records are still unusable (`PEER_CHAIN_AVAILABLE` is false):
+ * Bun 1.3.14 hid the peer chain, Bun 1.4 exposes it, and one test pins
+ * both facts until DANE-TA is switched back on; the DANE-TA matcher is
+ * still exercised over real sessions with DANE-TA forced on
+ * (`taEnabledHost`).
  *
  * The mismatch tests double as the guard against a lost patch: without
  * it, nodemailer never calls `verifyTlsSocket`, the session goes on after
@@ -182,24 +182,21 @@ describe("DANE sessions against a real smtp-server (#345)", () => {
     expect(server.snis()).toEqual(["mx.dane.example"]);
   });
 
-  test("the runtime still hides the peer chain, so DANE-TA stays off", async () => {
+  test("the runtime exposes the peer chain, but DANE-TA stays off until switched on", async () => {
     /**
-     * The server sends [leaf, CA]; Bun 1.3.14 exposes the leaf alone
-     * (`getPeerCertificate(true)` has no `issuerCertificate`).
+     * The server sends [leaf, CA]. Bun 1.3.14 exposed the leaf alone;
+     * Bun 1.4 links `issuerCertificate` in `getPeerCertificate(true)` as
+     * Node does, so the whole presented chain is visible. DANE-TA is
+     * switched back on in its own change (`PEER_CHAIN_AVAILABLE`), which
+     * updates this test and the DANE-TA notes in the docs.
      */
     const server = await startServer("starttls", "dane/ta-chain");
     const outcome = await send(server.port, {
       host: daneHost([sha256Record(3, 1, cert("ta-leaf"))]),
     });
     expect(outcome.error).toBeUndefined();
-    if (outcome.chainLength > 1 || PEER_CHAIN_AVAILABLE) {
-      throw new Error(
-        "Bun now exposes the server's certificate chain: set PEER_CHAIN_AVAILABLE to true in " +
-          "src/modules/emails/services/dane-verify.ts to re-enable DANE-TA, update this test " +
-          "and the DANE-TA notes in the docs.",
-      );
-    }
-    expect(outcome.chainLength).toBe(1);
+    expect(outcome.chainLength).toBe(2);
+    expect(PEER_CHAIN_AVAILABLE).toBe(false);
   });
 
   test("only DANE-TA records: mandatory TLS without authentication, delivered", async () => {
@@ -317,7 +314,13 @@ describe("DANE sessions against a real smtp-server (#345)", () => {
 
 describe("a handshake that did not complete (#345 review)", () => {
   test("encrypted-only DANE fails at once on a refused handshake, not after the stall limit", async () => {
-    /** A TLS 1.1 peer: Bun calls back for a handshake that did not really complete. */
+    /**
+     * A TLS 1.1 peer. Bun 1.3.14 called back for a handshake that did not
+     * really complete, which the check refused (`DANE_HANDSHAKE_INCOMPLETE`,
+     * kept as a guard and tested in `dane-verify.test.ts`); Bun 1.4 fails
+     * the handshake itself with the peer's protocol-version alert, so the
+     * check never runs.
+     */
     const server = await startServer("tls11", "dane/ee");
     const host = daneHost([{ ...sha256Record(3, 1, cert("ee")), usage: 1 }]);
     expect(host.usable).toEqual([]);
@@ -325,10 +328,13 @@ describe("a handshake that did not complete (#345 review)", () => {
     const outcome = await send(server.port, { host }, 30_000);
     expect(outcome.error).toBeInstanceOf(Error);
     expect(Date.now() - started).toBeLessThan(10_000);
-    /** The check ran and refused it, before EHLO. */
-    expect(outcome.checks).toBe(1);
-    expect(String(outcome.error)).toContain(DANE_HANDSHAKE_INCOMPLETE);
+    expect(outcome.checks).toBe(0);
+    expect(String(outcome.error)).toContain("PROTOCOL_VERSION");
     expect(classifySendFailure(outcome.error)).toBeNull();
+    const mapped = enforcedTlsFailure(outcome.error, "mx.dane.example", "DANE");
+    expect(mapped instanceof Error ? mapped.message : "").toStartWith(
+      "DANE: no authenticated TLS with mx.dane.example (",
+    );
     await Bun.sleep(200);
     expect(server.mailFroms()).toBe(0);
     expect(server.messages()).toBe(0);

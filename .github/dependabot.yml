@@ -1,5 +1,6 @@
 # Dependabot: automated dependency updates
-# Checks npm packages and GitHub Actions for security patches and updates.
+# Checks npm packages, GitHub Actions and the Dockerfile's base image for
+# security patches and updates.
 #
 # All third-party GitHub Actions in `.github/workflows/` are pinned to a
 # commit SHA (with a trailing `# vX` comment for human reference) to
@@ -50,3 +51,25 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  # The Dockerfile's base image (#447). Its `FROM oven/bun:<version>` lines
+  # are the one source of the Bun version: CI reads it from there, so this
+  # PR upgrades Bun in the image and in CI at once. Merge only after full
+  # CI and a test-server check (docs/testing.md, "Upgrading Bun").
+  # `skip-changelog`: the PR only touches the Dockerfile, which trips the
+  # changelog job (#442); add a fragment by hand when the bump is worth
+  # one for self-hosters. npm and Actions PRs touch no path that job
+  # checks, so they need no label.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - skip-changelog
+    commit-message:
+      prefix: "chore(deps):"

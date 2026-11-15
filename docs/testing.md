@@ -97,6 +97,14 @@ On a pull request, a separate `changelog` job runs `bun run changelog:check HEAD
 
 Total CI test time: about a minute and a half across all three tiers, almost all of it the integration tier (argon2id and real Postgres).
 
+## Upgrading Bun
+
+The Dockerfile's `FROM oven/bun:<version>` lines are the one source of the Bun version (#447). Every workflow that sets up Bun (`ci.yml`, both jobs, and `dependabot-lockfile.yml`) reads it from there in a first step, which fails the job unless every stage names the same `X.Y.Z` version. Dependabot's `docker` ecosystem (`.github/dependabot.yml`) opens a weekly PR when a new `oven/bun` release is out, so a bump changes one file and CI runs on the new Bun in that same PR. Locally, match it with `bun upgrade` (or a private binary called by path).
+
+**Merge rule for a Bun bump:** full CI green, then a check on the test server with the PR's image before merging: send an email, receive one inbound, authenticate over SMTP submission on 465, deliver to a DANE host, and `/health`. Bun releases have changed runtime behaviour BunMail depends on (the 1.4.4 upgrade changed how Postgres `infinity` timestamps decode, how a refused TLS handshake fails and what `getPeerCertificate(true)` returns), and CI cannot see real MX hosts or DNS.
+
+`.github/workflows/bun-canary.yml` is the early warning: every Monday (and on demand) it runs install, typecheck, unit and e2e on Bun's canary build, with no Postgres. It never runs on PRs, so it blocks nothing; on failure it opens one issue labelled `bun-canary`, or comments on the open one, with the run link.
+
 ## Coverage
 
 `bun run test:coverage` runs the unit and e2e tiers **in separate processes**, each with coverage (`test:unit:coverage` writes `coverage/unit/`, `test:e2e:coverage` writes `coverage/e2e/`), prints a per-file table for each, then runs `bun run coverage:check`. **CI runs the same scripts and fails the build if coverage drops below the floor.**

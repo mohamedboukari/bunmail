@@ -27,8 +27,10 @@ import type { CsvCell } from "../../modules/exports/types/export.types.ts";
  *   without it Excel reads a CSV as the local ANSI code page and garbles
  *   every accented name or subject. Other tools (LibreOffice, Google
  *   Sheets, Python's `csv` with `utf-8-sig`, `pandas`) skip it.
- * - A date that is not a valid instant (Postgres `infinity` becomes an
- *   invalid `Date`) is written as an empty field, never thrown on.
+ * - A date that is not a valid instant is written as an empty field,
+ *   never thrown on. Postgres `infinity` reaches it as an invalid `Date`
+ *   under Bun 1.3.14 and as the number `Infinity` (or `-Infinity`) under
+ *   Bun 1.4 (#447), so a number that is not finite is empty too.
  */
 
 /** UTF-8 byte order mark, written once before the header row. */
@@ -56,10 +58,18 @@ function dateText(date: Date): string {
   return date.toISOString();
 }
 
-/** A cell as text: dates as ISO 8601 UTC, booleans as `true` / `false`, `null` as empty. */
+/**
+ * A cell as text: dates as ISO 8601 UTC, booleans as `true` / `false`,
+ * `null` and a number that is not finite (a Postgres `infinity` timestamp
+ * under Bun 1.4) as empty.
+ */
 function cellText(cell: CsvCell): string {
   if (cell === null) return "";
   if (cell instanceof Date) return dateText(cell);
+  if (typeof cell === "number" && !Number.isFinite(cell)) {
+    logger.debug("CSV export: non-finite value written as an empty cell");
+    return "";
+  }
   return String(cell);
 }
 

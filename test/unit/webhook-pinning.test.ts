@@ -72,7 +72,7 @@ describe("buildPinnedRequest", () => {
     expect(pinned.url).toBe("https://93.184.216.34/hook");
     expect(pinned.host).toBe(HOOK_HOST);
     /** Exactly `serverName`: a custom `checkServerIdentity` would replace
-     *  Bun's pre-send certificate check with one that runs after sending. */
+     *  Bun's built-in certificate check (Bun 1.3.14 ran it after sending). */
     expect(pinned.tls).toEqual({ serverName: HOOK_HOST });
   });
 

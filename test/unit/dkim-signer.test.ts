@@ -434,7 +434,11 @@ describe("signMessage and buildTransactionMails (#345)", () => {
   });
 
   for (const [label, dkim] of [
-    ["a key that does not parse", { privateKey: "PEM" }],
+    /**
+     * Not "PEM": Bun 1.4 reports Node's OpenSSL codes (`ERR_OSSL_PEM_NO_START_LINE`),
+     * which contain that word, and the logged code is not the key.
+     */
+    ["a key that does not parse", { privateKey: "not-a-key-material" }],
     [
       "an EC key",
       {

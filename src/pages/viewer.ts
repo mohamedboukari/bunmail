@@ -11,7 +11,7 @@ import type { UserRole } from "../modules/users/types/user.types.ts";
  * for every HTTP request, so it can never be seen by another request and
  * is collected with it. It lives beside that object, not on it, so it
  * never reaches a log line. `AsyncLocalStorage.enterWith` is never used
- * (it segfaults Bun 1.3.14 inside Elysia hooks).
+ * (it segfaulted Bun 1.3.14 inside Elysia hooks).
  *
  * Only for display: every route checks the role itself (`guards.tsx`).
  * Fail closed: outside a request context, or before the session guard

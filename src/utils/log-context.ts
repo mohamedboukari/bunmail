@@ -13,8 +13,9 @@ import { randomBytes } from "crypto";
  * plus its own.
  *
  * Only `run` is used, never `enterWith`: calling `enterWith` inside an
- * Elysia hook segfaults Bun 1.3.14. HTTP requests enter their context
- * through Elysia's `wrap` hook instead (`src/app.ts`).
+ * Elysia hook segfaulted Bun 1.3.14 (fixed by 1.4.4, #447), and `run`
+ * keeps each context scoped to its callback. HTTP requests enter their
+ * context through Elysia's `wrap` hook (`src/app.ts`).
  */
 
 /**

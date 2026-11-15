@@ -34,7 +34,7 @@ import type {
  *   host whose TLSA records are all invalid by the RFC rules (RFC 8460
  *   section 4.3.2.1: none of the records was found valid; the mail still
  *   goes over unauthenticated TLS). Records that are valid but unsupported
- *   here (DANE-TA under Bun 1.3.14) are not invalid: a host with no usable
+ *   here (DANE-TA while `PEER_CHAIN_AVAILABLE` is off) are not invalid: a host with no usable
  *   record and at least one such record is reported as without DANE
  *   ({@link danePolicyOf} returns `null`). `dnssec-invalid` for a host skipped because a
  *   DNSSEC lookup failed (no valid records from the resolver), and the
@@ -116,7 +116,7 @@ export function tlsRptPolicyOf(discovery: MtaStsDiscovery): TlsRptPolicy {
  *   matching type, a digest of the wrong length, Full data that does not
  *   parse): `tlsa-invalid` as the policy failure;
  * - at least one record valid but unsupported by this implementation
- *   (DANE-TA while the runtime hides the peer chain, `PEER_CHAIN_AVAILABLE`):
+ *   (DANE-TA while `PEER_CHAIN_AVAILABLE` is off):
  *   the set is not invalid, and BunMail did not apply it, so no `tlsa`
  *   result is claimed either way. `null`: the caller reports the session
  *   as without DANE (the domain's MTA-STS policy, or `no-policy-found`).

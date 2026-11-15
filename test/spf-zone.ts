@@ -126,14 +126,10 @@ function parseZone(zonedata: unknown): Zone {
  */
 export async function loadSpfTests(path: string): Promise<SpfTestCase[]> {
   /**
-   * Bun 1.3.14's YAML parser rejects an empty folded scalar (`>-` with no
-   * text) followed by a less indented key, which the suite has once
-   * (`ip6-bad1`): read it as an empty string.
+   * Read as is: Bun 1.3.14's YAML parser rejected the suite's one empty
+   * folded scalar (`ip6-bad1`), Bun 1.4.4 reads it as an empty string (#447).
    */
-  const source = (await Bun.file(path).text()).replace(
-    /^(\s+description:) >-\n(?=\s+spec:)/gm,
-    '$1 ""\n',
-  );
+  const source = await Bun.file(path).text();
   const cases: SpfTestCase[] = [];
   const ids = new Set<string>();
   for (const part of source.split(/^---\s*$/m)) {

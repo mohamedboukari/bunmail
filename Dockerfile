@@ -23,15 +23,17 @@
 #                   the runtime migrator (`src/db/migrate.ts`). No
 #                   drizzle-kit at runtime.
 #
-# Base image is pinned to a specific Bun patch version (matches the
-# version pinned in CI) for reproducibility. The run stage applies the
+# Base image is pinned to a specific Bun patch version for
+# reproducibility. These `FROM oven/bun:<version>` lines are the one
+# source of the Bun version (#447): CI reads it from here (all stages
+# must match), and Dependabot's `docker` ecosystem proposes bumps. The run stage applies the
 # latest Debian security patches at build time so Trivy's image scan
 # doesn't flag CVEs that have a fix available upstream but haven't yet
 # been re-cut in the official base image.
 # ───────────────────────────────────────────────────────
 
 # ── Stage 1: Install all dependencies (incl. dev) ──
-FROM oven/bun:1.3.14 AS install
+FROM oven/bun:1.4.4 AS install
 
 WORKDIR /app
 
@@ -64,7 +66,7 @@ RUN bun run build:css
 # Separate stage so the run image gets node_modules without dev deps.
 # Without this stage the runtime carries drizzle-kit + esbuild, whose
 # bundled Go binaries pull ~36 (false-positive) CVEs into Trivy.
-FROM oven/bun:1.3.14 AS prod-deps
+FROM oven/bun:1.4.4 AS prod-deps
 
 WORKDIR /app
 
@@ -90,7 +92,7 @@ RUN rm -rf node_modules/typescript node_modules/@typescript \
   node_modules/.bin/tsc node_modules/.bin/tsserver
 
 # ── Stage 4: Run ──
-FROM oven/bun:1.3.14 AS run
+FROM oven/bun:1.4.4 AS run
 
 # Apply latest Debian security patches. The base image rebuilds on a
 # cadence, but new Debian CVE patches between rebuilds are exactly what

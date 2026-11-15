@@ -53,12 +53,12 @@ export async function takeExportBudget(userId: string): Promise<ExportBudgetDeci
 /* ─── Concurrency ─── */
 
 /**
- * Most exports producing at once in this process. Bun 1.3.14 drains a
- * streamed response body as fast as `pull` produces it, whatever the
- * client reads, so a stalled client still makes the server build (and
- * buffer) the whole file: the row cap bounds one export's memory, and
- * this cap bounds how many are held at once. Per process on purpose: the
- * memory it protects is this process's.
+ * Most exports producing at once in this process. Bun 1.3.14 drained a
+ * streamed response body as fast as `pull` produced it, whatever the
+ * client read, so a stalled client made the server build (and buffer)
+ * the whole file; Bun 1.4.4 applies backpressure (#447), but the row cap
+ * still bounds one export's memory, and this cap how many are held at
+ * once. Per process on purpose: the memory it protects is this process's.
  */
 export const EXPORT_MAX_CONCURRENT = 2;
 

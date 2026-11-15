@@ -10,7 +10,8 @@ import { customType } from "drizzle-orm/pg-core";
  * operators and jsonb indexes matched nothing. Passing the value itself
  * lets the driver encode it once, as the array or object it is. (A
  * `::jsonb` cast on the stringified value is encoded twice too; checked
- * against Bun 1.3.14.)
+ * against Bun 1.3.14 and again on 1.4.4, #447: same encoding, and rows
+ * either one wrote read back the same.)
  *
  * The same applies to query parameters: `${'["a"]'}::jsonb` binds a jsonb
  * string. Build JSON values in SQL from plain parameters instead, e.g.

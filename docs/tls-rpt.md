@@ -49,10 +49,10 @@ A session is recorded for a recipient domain only when that domain publishes a u
 | `testing` or `enforce` policy, MX host not named by it | `validation-failure`, reason `mx-not-in-policy` |
 | MTA-STS policy announced, fetch failed / invalid / bad certificate | `sts-policy-fetch-error` / `sts-policy-invalid` / `sts-webpki-invalid` |
 | DANE: TLSA records found, every one invalid by the RFC rules (PKIX usage, unknown selector or matching type, wrong digest length, unparsable Full data; the mail still goes over unauthenticated TLS) | `tlsa-invalid`, every session to the host |
-| DANE: no usable record, but at least one valid record this implementation does not support (DANE-TA under Bun 1.3.14) | reported as without DANE (the domain's `sts` policy, or `no-policy-found`): BunMail claims no `tlsa` result either way (RFC 8460 4.3.2.1) |
+| DANE: no usable record, but at least one valid record this implementation does not support (DANE-TA while `PEER_CHAIN_AVAILABLE` is off) | reported as without DANE (the domain's `sts` policy, or `no-policy-found`): BunMail claims no `tlsa` result either way (RFC 8460 4.3.2.1) |
 | DANE: a DNSSEC lookup of the host failed (address, CNAME or TLSA), the host skipped | `dnssec-invalid`, no address |
 | DANE: no usable TLSA record matches the certificate chain | `validation-failure`, reason `dane-tlsa-mismatch` |
-| DANE-TA (only once the runtime exposes the chain; unusable under Bun 1.3.14): the chain does not verify up to the anchor | `certificate-not-trusted` |
+| DANE-TA (only once `PEER_CHAIN_AVAILABLE` is switched on; unusable until then): the chain does not verify up to the anchor | `certificate-not-trusted` |
 | DANE-TA: the certificate names no reference identifier | `certificate-host-mismatch` |
 | DANE-TA: a certificate below the anchor expired / not yet valid | `certificate-expired` / `validation-failure`, reason `certificate-not-yet-valid` |
 | DANE: the MX did not offer or refused `STARTTLS` | `starttls-not-supported`, reason `starttls-refused` |

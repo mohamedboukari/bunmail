@@ -43,11 +43,11 @@ import {
  *    gets a 503 page rather than a 200 with a broken file;
  * 4. answers with a streamed body (`ReadableStream`): the BOM and the
  *    header row, then one chunk per batch. Batches are read in turn, one
- *    per `pull`, but Bun 1.3.14 drains a response body as fast as `pull`
- *    produces, whatever the client reads: a slow or stalled client still
- *    makes the server build and buffer the whole file. What bounds memory
- *    is therefore the row cap (one export) and the slot count (how many
- *    at once), not the client's pace;
+ *    per `pull`. Bun 1.3.14 drained a response body as fast as `pull`
+ *    produced, whatever the client read, so a stalled client made the
+ *    server build and buffer the whole file; Bun 1.4.4 pulls only as the
+ *    client reads (a few MB ahead, #447). The row cap (one export) and the
+ *    slot count (how many at once) stay the hard bound on memory;
  * 5. stops at `exportLimits.rowCap` rows. The headers are long gone by
  *    then, so the cap is announced in the file itself: one last row whose
  *    first cell says the export was truncated (the other cells empty);
