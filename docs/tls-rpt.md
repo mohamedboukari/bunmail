@@ -28,7 +28,7 @@ A session is recorded for a recipient domain only when that domain publishes a u
 
 **Policy** (`policy-type`, RFC 8460 section 4.4), from the DANE decision for the MX host and the MTA-STS discovery of the same attempt:
 
-- `tlsa` (#345, `DANE_ENABLED`), when DANE applied to the session's MX host (see [emails.md](emails.md#dane-345)): the host's TLSA records in presentation form (`3 1 1 <HEX>`, RFC 6698 section 2.2) as `policy-string`, and the MX host as `mx-host`. A host whose DANE lookups failed is recorded under a `tlsa` policy with no policy string. DANE takes precedence: such a session is never recorded under the domain's MTA-STS policy;
+- `tlsa` (#345, `DANE_ENABLED`), when DANE applied to the session's MX host (see [emails.md](emails.md#dane-345)): the host's TLSA records in presentation form (`3 1 1 <HEX>`, RFC 6698 section 2.2) as `policy-string`, and the MX host as `mx-host`. A host whose DANE lookups failed is recorded under a `tlsa` policy with no policy string. DANE takes precedence: a session DANE secured is never recorded under the domain's MTA-STS policy. A host whose TLSA records are all unusable (PKIX usages, or otherwise invalid by the RFC rules) under an MTA-STS policy in `enforce` mode gets that policy's verified TLS (#452) and is recorded under both (#473): under `sts` with the outcome of the MTA-STS verification (success, or its certificate failure), and under the host's `tlsa` policy as `tlsa-invalid`, since that RRset was evaluated and none of its records was found valid (RFC 8460 section 4.3.2.1; section 4 lets a report carry an MTA-STS policy and a TLSA record for the same domain and MX, with overlapping counts);
 - `sts` with the policy's lines (`version`, `mode`, each `mx`, `max_age`) as `policy-string` and its MX patterns as `mx-host`, when an MTA-STS policy applied (any mode);
 - `sts` with no policy string, when a policy was announced but could not be fetched (and none was cached): every session of the attempt counts as `sts-policy-fetch-error`, `sts-policy-invalid` or `sts-webpki-invalid`;
 - `no-policy-found` otherwise.
@@ -49,6 +49,7 @@ A session is recorded for a recipient domain only when that domain publishes a u
 | `testing` or `enforce` policy, MX host not named by it | `validation-failure`, reason `mx-not-in-policy` |
 | MTA-STS policy announced, fetch failed / invalid / bad certificate | `sts-policy-fetch-error` / `sts-policy-invalid` / `sts-webpki-invalid` |
 | DANE: TLSA records found, every one invalid by the RFC rules (PKIX usage, unknown selector or matching type, wrong digest length, unparsable Full data; the mail still goes over unauthenticated TLS) | `tlsa-invalid`, every session to the host |
+| DANE: TLSA records all invalid, an MTA-STS `enforce` policy secured the session (#452, #473) | the MTA-STS verification's result under `sts` (success, or one of the enforce-mode certificate rows above), and `tlsa-invalid` under the host's `tlsa` policy |
 | DANE: a DNSSEC lookup of the host failed (address, CNAME or TLSA), the host skipped | `dnssec-invalid`, no address |
 | DANE: no usable TLSA record matches the certificate chain | `validation-failure`, reason `dane-tlsa-mismatch` |
 | DANE-TA (#455): no path from the leaf to a matched anchor (a broken link, a non-CA issuer, a path length exceeded) | `certificate-not-trusted` |
@@ -87,7 +88,7 @@ Unique `(day, policy_domain)`; index on `next_attempt_at`.
 |---|---|---|
 | `id` | `varchar(36)` PK | `trr_...` |
 | `report_id` | `varchar(36)` FK | cascade |
-| `policy_type` | `varchar(16)` | `sts` or `no-policy-found` |
+| `policy_type` | `varchar(16)` | `sts`, `tlsa` or `no-policy-found` |
 | `policy_hash` | `varchar(32)` | identifies the policy within the report |
 | `policy_string`, `mx_host` | `text` | the policy's lines and MX patterns, `\n`-joined, at most 4,000 characters each |
 | `result_type` | `varchar(40)` | `success` or an RFC 8460 failure type |
