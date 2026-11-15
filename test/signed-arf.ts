@@ -50,18 +50,28 @@ export function arfResolveTxt(
   };
 }
 
-/** An abuse report about `originalMessageId`, naming `rcptTo` as the recipient. */
+/**
+ * The fixture report's default `From`: the feedback-loop sender the tests
+ * list, on the signing domain the tests trust (`fbl.isp.example.net`).
+ */
+export const ARF_FROM = "feedback@fbl.isp.example.net";
+
+/**
+ * An abuse report about `originalMessageId`, naming `rcptTo` as the
+ * recipient, from `from` ({@link ARF_FROM} by default).
+ */
 export function arfReport(opts: {
   originalMessageId: string;
   rcptTo: string;
   subject?: string;
+  from?: string;
 }): string {
   return [
-    `From: "Feedback Loop" <feedback@isp.example.net>`,
+    `From: "Feedback Loop" <${opts.from ?? ARF_FROM}>`,
     "To: fbl@example.com",
     `Subject: ${opts.subject ?? "Abuse report"}`,
     "Date: Mon, 19 Oct 2026 10:05:00 +0000",
-    `Message-ID: <${crypto.randomUUID()}@isp.example.net>`,
+    `Message-ID: <${crypto.randomUUID()}@fbl.isp.example.net>`,
     "MIME-Version: 1.0",
     'Content-Type: multipart/report; report-type=feedback-report; boundary="arf_bnd"',
     "",

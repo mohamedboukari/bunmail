@@ -180,6 +180,7 @@ describe("parseFeedbackReport: provider shapes", () => {
       sourceIp: "192.0.2.10",
       originalMessageId: "0a1b2c3d4e5f@mail.example.com",
       reporterDomain: "arf.mail.example.net",
+      reporterAddress: "feedback@arf.mail.example.net",
     });
   });
 
@@ -199,6 +200,7 @@ describe("parseFeedbackReport: provider shapes", () => {
       originalRcptTo: [],
       originalMessageId: "ffee99@mail.example.com",
       reporterDomain: "hotmail.example",
+      reporterAddress: "staff@hotmail.example",
       arrivalDate: new Date("2026-10-19T16:00:00Z"),
     });
   });
@@ -276,6 +278,50 @@ describe("parseFeedbackReport: provider shapes", () => {
       }),
     );
     expect(parsed?.arrivalDate).toEqual(new Date("2026-10-20T08:00:00Z"));
+  });
+});
+
+/**
+ * `reporterAddress`: the report's own sender, compared with
+ * `FEEDBACK_LOOP_SENDERS`. Only one `From` field holding one address
+ * counts: a DKIM signature covers the last `From` instance, while the
+ * parser reads the first, so with several the address read might not be
+ * the one signed.
+ */
+describe("parseFeedbackReport: reporterAddress", () => {
+  /** A minimal report whose top header section starts with `fromLines`. */
+  function withFrom(...fromLines: string[]): string {
+    return report({ feedback: "Feedback-Type: abuse" }).replace(
+      "From: fbl@isp.example.net\n",
+      fromLines.map((line) => `${line}\n`).join(""),
+    );
+  }
+
+  test.each([
+    ["From: fbl@isp.example.net", "fbl@isp.example.net"],
+    ["From: FBL@ISP.Example.NET", "fbl@isp.example.net"],
+    ["From: <fbl@isp.example.net>", "fbl@isp.example.net"],
+    ['From: "Feedback, Loop" <fbl@isp.example.net>', "fbl@isp.example.net"],
+    ["From: =?utf-8?q?Feedback?= <fbl@isp.example.net>", "fbl@isp.example.net"],
+  ])("%p: the address", (line, address) => {
+    expect(parseFeedbackReport(withFrom(line))?.reporterAddress).toBe(address);
+  });
+
+  test.each([
+    ["no From field", []],
+    ["two From fields", ["From: fbl@isp.example.net", "From: other@example.org"]],
+    ["two addresses", ["From: fbl@isp.example.net, other@example.org"]],
+    ["a group", ["From: Loop: fbl@isp.example.net;"]],
+    ["two angle addresses", ["From: <fbl@isp.example.net> <other@example.org>"]],
+    ["an unterminated quote", ['From: "Loop <fbl@isp.example.net>']],
+    ["no address", ["From: Feedback Loop"]],
+    ["an empty value", ["From:"]],
+    ["a comment", ["From: Feedback (loop) <fbl@isp.example.net>"]],
+    ["a non-ASCII address", ["From: fb\u212a@isp.example.net"]],
+  ] as const)("%s: null", (_label, lines) => {
+    const parsed = parseFeedbackReport(withFrom(...lines));
+    expect(parsed).not.toBeNull();
+    expect(parsed?.reporterAddress).toBeNull();
   });
 });
 
