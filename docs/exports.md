@@ -56,7 +56,7 @@ Migration `0044` adds a `(ts DESC, id DESC)` index (`NULLS FIRST`, the default o
 
 ## Memory
 
-Batches are read in turn. Bun 1.3.14 drained a streamed response as fast as it was produced, whatever the client read, so a stalled client made the server build and buffer the whole file; Bun 1.4.4 pulls only as the client reads (a few MB ahead, #447). The hard bound on memory stays the row cap (50 000 rows per export) and the per-process concurrency limit (2 exports producing at once, `src/pages/lib/export-limiter.ts`). For the same reason, the audit event's `rows` and outcome describe what the server produced, not what the client received.
+Batches are read in turn, and Bun pulls the stream only as the client reads: an export holds a few MB ahead of its client (#447; Bun 1.3.14 drained the whole file into memory whatever the client read, #456). A client that stops reading holds its export slot until the server's idle timeout (Elysia's 30 s) cancels the stream, recorded as cancelled. `test/unit/bun-runtime.test.ts` pins both, so a runtime upgrade that brings the buffering back fails. The row cap (50 000 rows per export) bounds how much one export reads, and the per-process concurrency limit (2 exports producing at once, `src/pages/lib/export-limiter.ts`) how many keyset walks and buffers run at once. Since the server runs ahead of the client, the audit event's `rows` and outcome describe what the server produced, not what the client received.
 
 ## Tests
 

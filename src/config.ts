@@ -170,8 +170,7 @@ export const config = {
     url: requiredEnv("DATABASE_URL"),
     /**
      * Most connections the pool opens (`DATABASE_POOL_MAX`, default 10):
-     * kept above the peak of concurrent queries, Bun 1.3.14's pool never
-     * queues and never stalls (#423, see `readDatabasePoolMax`).
+     * pool sizing and the connection budget (#423, see `readDatabasePoolMax`).
      */
     poolMax: readDatabasePoolMax(),
   },

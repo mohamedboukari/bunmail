@@ -43,11 +43,11 @@ import {
  *    gets a 503 page rather than a 200 with a broken file;
  * 4. answers with a streamed body (`ReadableStream`): the BOM and the
  *    header row, then one chunk per batch. Batches are read in turn, one
- *    per `pull`. Bun 1.3.14 drained a response body as fast as `pull`
- *    produced, whatever the client read, so a stalled client made the
- *    server build and buffer the whole file; Bun 1.4.4 pulls only as the
- *    client reads (a few MB ahead, #447). The row cap (one export) and the
- *    slot count (how many at once) stay the hard bound on memory;
+ *    per `pull`, and Bun pulls only as the client reads (a few MB ahead,
+ *    #447; Bun 1.3.14 drained the whole file into memory, #456). A client
+ *    that stops reading holds its slot until the server's idle timeout
+ *    (Elysia's 30 s) cancels the stream; `test/unit/bun-runtime.test.ts`
+ *    pins both;
  * 5. stops at `exportLimits.rowCap` rows. The headers are long gone by
  *    then, so the cap is announced in the file itself: one last row whose
  *    first cell says the export was truncated (the other cells empty);
@@ -55,8 +55,9 @@ import {
  *    slot, writes one log line (table, rows, duration, user) and records
  *    `export.downloaded`, before the last byte is queued. `rows` and the
  *    outcome describe what the server produced, not what the client
- *    received: with Bun buffering the body, a finished export may still
- *    be in flight, or never fully read, when it is recorded.
+ *    received: the last batch is produced a few MB ahead of the client,
+ *    so a finished export may still be in flight, or never fully read,
+ *    when it is recorded.
  */
 
 /**
@@ -69,8 +70,8 @@ export const exportLimits: { batchSize: number; rowCap: number } = {
   batchSize: 500,
   /**
    * Most rows one export writes; past it the file ends with the
-   * truncation row. With Bun buffering the response, this is what bounds
-   * one export's memory.
+   * truncation row. Bounds how much one export reads from the database
+   * (and its memory, should the runtime ever buffer the response again).
    */
   rowCap: 50_000,
 };

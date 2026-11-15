@@ -113,7 +113,7 @@ src/modules/<feature>/
 Logs must be good enough for a post-mortem (#284, full guide in `docs/logging.md`). Every new route, background job and service entry point follows these rules:
 
 - **Boundary line**: log the outcome of each unit of work once, with its IDs and a duration where it matters. HTTP requests get theirs automatically (`src/middleware/request-context.ts`).
-- **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` (`src/utils/log-context.ts`) so every line inside carries its ID. Never call `AsyncLocalStorage.enterWith` (it segfaulted Bun 1.3.14 inside Elysia hooks; `run` keeps each context scoped to its callback).
+- **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` (`src/utils/log-context.ts`) so every line inside carries its ID. Never call `AsyncLocalStorage.enterWith`: `run` keeps each context scoped to its callback, so it cannot leak into later work (it also segfaulted Bun 1.3.14 inside Elysia hooks, fixed in 1.4.4).
 - **Every failure path logs**: `warn` for expected, handled failures, `error` for unexpected ones, with the IDs involved and the error code or a sanitized message (never a raw drizzle query error: its message embeds the query parameters).
 - **Detail at `debug`**: internal steps useful while investigating, off in normal operation.
 - **No secrets, no bodies**: never log passwords, keys, tokens, hashes, cookies or message content; route emails through `redactEmail`. The logger's redaction of secret-named fields is a safety net, not a license.

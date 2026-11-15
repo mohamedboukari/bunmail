@@ -10,8 +10,8 @@ import type { UserRole } from "../modules/users/types/user.types.ts";
  * (`src/utils/log-context.ts`), which `withRequestContext` creates fresh
  * for every HTTP request, so it can never be seen by another request and
  * is collected with it. It lives beside that object, not on it, so it
- * never reaches a log line. `AsyncLocalStorage.enterWith` is never used
- * (it segfaulted Bun 1.3.14 inside Elysia hooks).
+ * never reaches a log line. `AsyncLocalStorage.enterWith` is never used:
+ * only `run`, which scopes a context to its callback (see `log-context.ts`).
  *
  * Only for display: every route checks the role itself (`guards.tsx`).
  * Fail closed: outside a request context, or before the session guard

@@ -12,10 +12,12 @@ import { randomBytes } from "crypto";
  * line. Contexts nest: an inner `runWithLogContext` sees the outer fields
  * plus its own.
  *
- * Only `run` is used, never `enterWith`: calling `enterWith` inside an
- * Elysia hook segfaulted Bun 1.3.14 (fixed by 1.4.4, #447), and `run`
- * keeps each context scoped to its callback. HTTP requests enter their
- * context through Elysia's `wrap` hook (`src/app.ts`).
+ * Only `run` is used, never `enterWith`: `run` scopes each context to its
+ * callback, so it ends with the work and cannot leak into whatever runs
+ * next on the same async path (another request's lines tagged with this
+ * one's ID). `enterWith` in an Elysia hook also segfaulted Bun 1.3.14;
+ * 1.4.4 fixed that (#447), the rule stays for the scoping (#456). HTTP
+ * requests enter their context through Elysia's `wrap` hook (`src/app.ts`).
  */
 
 /**
