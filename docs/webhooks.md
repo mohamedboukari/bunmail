@@ -99,7 +99,7 @@ Indexes:
 | `domain.verification_failed` | A verified domain flipped to failing: two DNS checks in a row (by the re-verification loop or Verify) found a record missing or wrong (#250). `verifiedAt` is cleared in the same transaction. A failed lookup (SERVFAIL, timeout) never counts. Fires once per flip. Admin keys only. See [domains.md](domains.md#failure-rule-250). |
 | `domain.verified` | A domain that was not verified (new, or flipped to failing) passed every check (#250). Admin keys only. |
 
-The list lives once, as `WEBHOOK_EVENT_TYPES` in `types/webhook.types.ts` (#425): the `WebhookEventType` union is derived from it, the REST create DTO builds its literals from it, and the dashboard's create form renders one checkbox per entry. A new event is added there and shows up in all three.
+The list lives once, as `WEBHOOK_EVENT_TYPES` in `types/webhook.types.ts` (#425): the `WebhookEventType` union is derived from it, the REST create DTO builds its literals from it, and the dashboard's create form renders one checkbox per entry. A new event is added there and shows up in all three. The dashboard's create POST checks each submitted name with the `isWebhookEventType` guard from the same file (#437), so it accepts exactly what the REST DTO accepts.
 
 ### Who receives an event
 
