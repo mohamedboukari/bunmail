@@ -45,7 +45,9 @@ With tracing on ([tracing.md](tracing.md), #363), a line written while a sampled
 | `HTTP request` | `error` for 5xx, `warn` for 401/403/429, `debug` for a healthy `/health` or favicon, `info` otherwise | `method`, `path`, `status`, `durationMs` |
 | `Processing email`, then `Email reached terminal state` / `Email send had retry groups, requeued` / `Email permanently failed (input error)` | `info` / `warn` / `error` | email id, statuses, SMTP results |
 | `Email send attempt finished` | `debug` | `emailId`, `attempt`, `durationMs` |
-| `SMTP session closed` | `info` | `remoteAddress`, `messages`, `durationMs` |
+| `SMTP session closed` | `info` | `remoteAddress`, `secure` (TLS, implicit or STARTTLS, #414), `messages`, `durationMs` |
+| `MAIL_SOURCE_IP is not an address of this host: outbound SMTP will fail` / `MAIL_SOURCE_IP differs from MAIL_PUBLIC_IP` (#414) | `warn`, once at boot | `sourceIp`, `publicIps`, `hint` |
+| `Inbound SMTP TLS error` / `SMTP submission TLS error` (#414) | `warn`, once per error: a failed STARTTLS handshake or a broken TLS record later (not told apart) | `ip`, `code` (the TLS error code), `starttls` (a STARTTLS connection, or implicit TLS) |
 | `BunMail server started` | `info` | `version` (from `package.json`), `bun`, `env`, `port`, `host` |
 | `Process crashed` | `error` | `kind` (`uncaughtException` or `unhandledRejection`), `errorName`, `error` (sanitized), `stack` (frames only); the process then exits 1 and Docker restarts it |
 | `DNSBL check did not run: connection allowed unchecked` | `warn`, at most once per `reason` every 10 minutes | `reason` (`lookup-failed:<code>`, `refused:<answer>` or `unexpected:<answer>`), `ip`, `zone`, `code` or `answer`, `suppressedSinceLast` |

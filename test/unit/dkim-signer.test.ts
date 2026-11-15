@@ -505,7 +505,7 @@ describe("signMessage and buildTransactionMails (#345)", () => {
 /** Messages the in-process receiver got: envelope and the DATA bytes, dot-unstuffed. */
 const received: Array<{ mailFrom: string; rcptTo: string[]; data: Buffer }> = [];
 
-/** A plaintext SMTP receiver (Bun cannot serve STARTTLS, see `test/smtp-fixture.ts`). */
+/** A plaintext SMTP receiver (Bun 1.3.14 cannot serve STARTTLS, see `test/smtp-fixture.ts`). */
 const receiver = new SMTPServer({
   authOptional: true,
   disabledCommands: ["STARTTLS", "AUTH"],

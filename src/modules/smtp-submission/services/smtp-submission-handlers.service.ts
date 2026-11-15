@@ -47,6 +47,8 @@ export function submissionSessionHandlers({
       inSession(session, () => {
         logger.info("SMTP session closed", {
           remoteAddress: session.remoteAddress,
+          /** Whether the session ran over TLS, implicit or STARTTLS (#414). */
+          secure: session.secure,
           messages: stats?.messages ?? 0,
           durationMs:
             stats === undefined ? null : Math.round(performance.now() - stats.startedAt),

@@ -11,6 +11,7 @@ import {
   boundPort,
   describeListenError,
   isListenError,
+  tlsSocketError,
 } from "../../inbound/services/smtp-listen.ts";
 
 /**
@@ -63,6 +64,9 @@ export function submissionMaxMessageBytes(attachmentsMaxTotalBytes: number): num
 /** The running server instance, or null when stopped. */
 let server: SMTPServer | null = null;
 
+/** Client TLS errors already logged; smtp-server can emit one twice (#414). */
+const reportedTlsErrors = new WeakSet<Error>();
+
 /** The TLS listener in front of `server` in implicit mode (#349), or null. */
 let tlsListener: TlsServer | null = null;
 
@@ -83,8 +87,9 @@ let listening: Promise<number> | null = null;
  *   (`tls.createServer`) terminates it and hands each decrypted socket to
  *   smtp-server, which runs as `secure` + `secured` ("TLS done upstream"):
  *   every session is TLS, STARTTLS is not offered, and AUTH is allowed.
- * - `starttls` (Node only, refused at boot under Bun): smtp-server offers
- *   STARTTLS and refuses AUTH before it.
+ * - `starttls` (Node, or Bun 1.4.4 and later, #414; refused at boot under
+ *   an older Bun): smtp-server offers STARTTLS on the plaintext connection,
+ *   upgrades it itself, and refuses AUTH before it.
  * - `none`: plaintext, which needs `SMTP_SUBMISSION_ALLOW_INSECURE=true`
  *   (#133) for AUTH, so a trusted-network setup works without a cert.
  */
@@ -157,7 +162,7 @@ export function start(portOverride?: number): void {
      * Implicit TLS (#349): the sessions arrive already decrypted from the
      * TLS listener below, so smtp-server treats them as secure (no
      * STARTTLS offer, AUTH allowed) and `secured` says the TLS is done
-     * upstream: it never wraps a socket itself (which Bun cannot do) and
+     * upstream: it never wraps a socket itself (which Bun 1.3.14 cannot do) and
      * does not warn about its built-in default certificate.
      */
     secure: implicit,
@@ -188,6 +193,22 @@ export function start(portOverride?: number): void {
         code: err.code,
       });
       process.exit(1);
+    }
+    /**
+     * A client's TLS error (#414): a failed STARTTLS handshake, or a broken
+     * record later on a STARTTLS or implicit-TLS session. Expected, one
+     * `warn` per error (smtp-server can report the same one twice).
+     */
+    const tlsError = tlsSocketError(err);
+    if (tlsError !== null) {
+      if (reportedTlsErrors.has(err)) return;
+      reportedTlsErrors.add(err);
+      logger.warn("SMTP submission TLS error", {
+        ip: tlsError.ip,
+        code: tlsError.code,
+        starttls: tlsError.starttls,
+      });
+      return;
     }
     logger.error("SMTP submission server error", { error: err.message });
   };

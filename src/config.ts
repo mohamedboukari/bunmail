@@ -44,6 +44,8 @@ import { readSsoSettings } from "./config/sso.ts";
 
 export { optionalBoundedInt, optionalStrictBoolean } from "./config/env.ts";
 /** @public */
+export { runtimeHasSocketFeatures, SOCKET_FEATURES_MIN_BUN } from "./config/env.ts";
+/** @public */
 export type { AppEnv, LogLevel } from "./config/app.ts";
 /** @public */
 export {
@@ -59,6 +61,11 @@ export {
   readMxRatePerMin,
   readPublicIps,
   readSendingIpDnsblCheck,
+  readSourceIps,
+  sourceIpProblem,
+  sourceIpWarnings,
+  type SourceIpWarning,
+  type SourceIps,
   readSuppressionsSharedHard,
   readSystemMailFrom,
 } from "./config/mail.ts";
@@ -114,6 +121,8 @@ export {
   readSmtpLimitSwitch,
   readSubmissionConnectionLimit,
   readSubmissionTls,
+  type InboundTls,
+  readInboundTls,
   SMTP_LIMIT_SWITCHES,
 } from "./config/smtp.ts";
 export * from "./config/observability.ts";

@@ -4,6 +4,7 @@ import {
   boundPort,
   describeListenError,
   isListenError,
+  tlsSocketError,
 } from "../../src/modules/inbound/services/smtp-listen.ts";
 
 /** Builds an error shaped like the one Bun's net server emits. */
@@ -79,5 +80,49 @@ describe("boundPort (#443)", () => {
   test("falls back to the requested port without a TCP address", () => {
     expect(boundPort({ address: () => null }, 587)).toBe(587);
     expect(boundPort({ address: () => "/tmp/smtp.sock" }, 587)).toBe(587);
+  });
+});
+
+describe("tlsSocketError (#414)", () => {
+  /** An error shaped like the ones smtp-server emits for a client's TLS failure. */
+  const tlsError = (code: string, remoteAddress?: string, meta?: object): Error =>
+    Object.assign(new Error("wrong version number"), { code, remoteAddress, meta });
+
+  test("a STARTTLS connection's error (smtp-server adds meta.protocol smtp)", () => {
+    const meta = { tlsProtocol: "TLSv1.2", protocol: "smtp", stage: "connect" };
+    expect(
+      tlsSocketError(tlsError("ERR_SSL_WRONG_VERSION_NUMBER", "203.0.113.9", meta)),
+    ).toEqual({
+      ip: "203.0.113.9",
+      code: "ERR_SSL_WRONG_VERSION_NUMBER",
+      starttls: true,
+    });
+  });
+
+  test("a TLS error without that meta (implicit TLS, terminated upstream)", () => {
+    expect(tlsSocketError(tlsError("ERR_SSL_BAD_PACKET_LENGTH", "::1"))).toEqual({
+      ip: "::1",
+      code: "ERR_SSL_BAD_PACKET_LENGTH",
+      starttls: false,
+    });
+    expect(tlsSocketError(tlsError("ERR_TLS_HANDSHAKE_TIMEOUT"))).toEqual({
+      ip: null,
+      code: "ERR_TLS_HANDSHAKE_TIMEOUT",
+      starttls: false,
+    });
+    expect(
+      tlsSocketError(tlsError("TLSError", "::1", { protocol: "http" })),
+    ).toMatchObject({
+      code: "TLSError",
+      starttls: false,
+    });
+  });
+
+  test("ignores every other error", () => {
+    expect(tlsSocketError(socketError("listen", "EADDRINUSE"))).toBeNull();
+    expect(tlsSocketError(tlsError("ECONNRESET", "203.0.113.9"))).toBeNull();
+    expect(tlsSocketError(new Error("boom"))).toBeNull();
+    expect(tlsSocketError({ code: "ERR_SSL_X" })).toBeNull();
+    expect(tlsSocketError(undefined)).toBeNull();
   });
 });

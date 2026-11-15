@@ -75,3 +75,58 @@ export function optionalStrictBoolean(
   if (trimmed === "false") return false;
   throw new Error(`[config] ${key} must be "true" or "false", got "${raw}"`);
 }
+
+/**
+ * The first Bun release verified to upgrade an accepted socket to TLS on
+ * the server side (STARTTLS) and to bind an outgoing socket to a chosen
+ * local address (`localAddress`) (#414). Bun 1.3.14 does neither: the
+ * server-side `new tls.TLSSocket(socket, { isServer: true })` never
+ * handshakes and `localAddress` is ignored. Both were fixed upstream by
+ * oven-sh/bun#31155, first released in 1.4.0; 1.4.4 is the release
+ * BunMail verified them on.
+ */
+export const SOCKET_FEATURES_MIN_BUN = "1.4.4";
+
+/** The running Bun version, or `null` under another runtime (Node). */
+export function runningBunVersion(): string | null {
+  return typeof Bun === "undefined" ? null : Bun.version;
+}
+
+/**
+ * Whether the runtime can run server-side STARTTLS and bind a source
+ * address (#414): any Node, or Bun from {@link SOCKET_FEATURES_MIN_BUN}.
+ * Compares the numeric `major.minor.patch` only, so a canary or a
+ * pre-release of a later version counts as that version. Exported for
+ * tests, which pass a version.
+ */
+export function runtimeHasSocketFeatures(
+  bunVersion: string | null = runningBunVersion(),
+): boolean {
+  if (bunVersion === null) return true;
+  const version = /^(\d+)\.(\d+)\.(\d+)/.exec(bunVersion);
+  const minimum = /^(\d+)\.(\d+)\.(\d+)/.exec(SOCKET_FEATURES_MIN_BUN);
+  if (version === null || minimum === null) return false;
+  for (let part = 1; part <= 3; part++) {
+    const have = Number(version[part]);
+    const need = Number(minimum[part]);
+    if (have !== need) return have > need;
+  }
+  return true;
+}
+
+/**
+ * The boot error for a setting that needs {@link runtimeHasSocketFeatures}
+ * on an older Bun (#414): names the setting, what Bun cannot do, the
+ * version running and the one needed.
+ */
+export function socketFeatureError(
+  setting: string,
+  why: string,
+  bunVersion: string,
+): Error {
+  return new Error(
+    `[config] ${setting} needs Bun ${SOCKET_FEATURES_MIN_BUN} or later, running ${bunVersion}:\n` +
+      `  ${why}\n` +
+      `  → Upgrade Bun (the Docker image pins it), or unset ${setting}.`,
+  );
+}

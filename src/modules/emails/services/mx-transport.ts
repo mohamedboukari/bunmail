@@ -1,8 +1,9 @@
-import { connect, type Socket } from "node:net";
+import { connect, isIP, type Socket } from "node:net";
 import type { TLSSocket } from "node:tls";
 import { createTransport } from "nodemailer";
 import type Mail from "nodemailer/lib/mailer";
 import type SMTPTransport from "nodemailer/lib/smtp-transport";
+import type { SourceIps } from "../../../config/mail.ts";
 import type { DeliveryTls } from "../models/email.schema.ts";
 import type { DaneHost } from "../types/dane.types.ts";
 import { daneSocketCheck } from "./dane-verify.ts";
@@ -236,6 +237,9 @@ export interface MxSessionOutcome {
  *   spinning, after the attempt was given up. So when the session ends,
  *   whatever the outcome, the pool is closed and every socket it used is
  *   destroyed. An unfriendly receiver cannot pile up open connections.
+ * - **Source address** (`sourceIps`, `MAIL_SOURCE_IP`, #414): the socket
+ *   is bound to the entry of the destination's family, see
+ *   {@link sourceAddressFor}.
  * - **Deadline** {@link SMTP_SESSION_DEADLINE_MS} for the whole session,
  *   shared by its transactions, and the STARTTLS stall limit of the
  *   {@link TlsRecorder}. Both fail the attempt with an error that has no
@@ -254,6 +258,8 @@ export async function runMxSession(args: {
   verifiedTls?: VerifiedTls;
   /** Set when the MX host has DNSSEC-validated TLSA records (#345); wins over `verifiedTls`. */
   dane?: DaneTls;
+  /** Local addresses to connect from (`MAIL_SOURCE_IP`, #414); none: the system's choice. */
+  sourceIps?: SourceIps;
   port?: number;
   deadlineMs?: number;
   stallMs?: number;
@@ -301,7 +307,15 @@ export async function runMxSession(args: {
     pool: true,
     maxConnections: 1,
     maxRequeues: 0,
-    getSocket: openSocket(args.address, port, setupTimeoutMs, sockets),
+    getSocket: openSocket(
+      {
+        address: args.address,
+        port,
+        localAddress: sourceAddressFor(args.address, args.sourceIps),
+      },
+      setupTimeoutMs,
+      sockets,
+    ),
   });
 
   /** One deadline for the whole session, shared by its transactions. */
@@ -382,19 +396,40 @@ function rejectedRecipients(info: unknown): RejectedRecipient[] {
 }
 
 /**
- * nodemailer's `getSocket` hook (#250): connects to `address` itself,
- * within `timeoutMs`, and records the socket in `sockets` so the session
- * can destroy it. An `error` listener stays on the socket for its whole
- * life: an error during teardown must never become an uncaught exception.
+ * The local address a connection to `address` binds (`MAIL_SOURCE_IP`,
+ * #414): the source entry of the destination's family, or `undefined`
+ * (the system's choice) when that family has none. A socket can only bind
+ * an address of its own family, so the other entry is never used.
+ */
+export function sourceAddressFor(
+  address: string,
+  sourceIps: SourceIps | undefined,
+): string | undefined {
+  if (sourceIps === undefined) return undefined;
+  const family = isIP(address);
+  const local = family === 4 ? sourceIps.v4 : family === 6 ? sourceIps.v6 : null;
+  return local ?? undefined;
+}
+
+/**
+ * nodemailer's `getSocket` hook (#250): connects to `target.address`
+ * itself, from `target.localAddress` when set (#414), within `timeoutMs`,
+ * and records the socket in `sockets` so the session can destroy it. An
+ * `error` listener stays on the socket for its whole life: an error during
+ * teardown must never become an uncaught exception.
  */
 function openSocket(
-  address: string,
-  port: number,
+  target: { address: string; port: number; localAddress: string | undefined },
   timeoutMs: number,
   sockets: Set<Socket>,
 ): NonNullable<SMTPTransport.Options["getSocket"]> {
+  const { address, port, localAddress } = target;
   return (_options, callback) => {
-    const socket = connect({ host: address, port });
+    const socket = connect(
+      localAddress === undefined
+        ? { host: address, port }
+        : { host: address, port, localAddress },
+    );
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
     let settled = false;

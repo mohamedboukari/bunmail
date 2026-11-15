@@ -7,6 +7,7 @@ import {
   createTlsRecorder,
   enforcedTlsFailure,
   mxTransportOptions,
+  sourceAddressFor,
   type TlsRecorder,
 } from "../../src/modules/emails/services/mx-transport.ts";
 import { classifySendFailure } from "../../src/utils/smtp-error.ts";
@@ -21,7 +22,7 @@ import {
  * reads nodemailer's own events, so these tests run the real nodemailer
  * client (under Bun, as in production) against a real receiving server.
  *
- * The server runs under Node (`test/smtp-fixture.ts`): Bun cannot upgrade
+ * The server runs under Node (`test/smtp-fixture.ts`): Bun 1.3.14 cannot upgrade
  * an accepted socket to TLS, so it cannot serve STARTTLS.
  *
  * nodemailer is imported through its `lib/` entry points, not the package
@@ -127,6 +128,26 @@ describe("mxTransportOptions", () => {
       verifiedTls: { ca: "-----BEGIN CERTIFICATE-----" },
     });
     expect(options.tls?.ca).toBe("-----BEGIN CERTIFICATE-----");
+  });
+});
+
+describe("sourceAddressFor (MAIL_SOURCE_IP, #414)", () => {
+  const both = { v4: "203.0.113.5", v6: "2001:db8::5" };
+
+  test("binds the entry of the destination's family", () => {
+    expect(sourceAddressFor("198.51.100.7", both)).toBe("203.0.113.5");
+    expect(sourceAddressFor("2001:db8:1::25", both)).toBe("2001:db8::5");
+  });
+
+  test("a family without an entry, or no setting: the system's choice", () => {
+    expect(
+      sourceAddressFor("2001:db8:1::25", { v4: "203.0.113.5", v6: null }),
+    ).toBeUndefined();
+    expect(
+      sourceAddressFor("198.51.100.7", { v4: null, v6: "2001:db8::5" }),
+    ).toBeUndefined();
+    expect(sourceAddressFor("198.51.100.7", undefined)).toBeUndefined();
+    expect(sourceAddressFor("not-an-ip", both)).toBeUndefined();
   });
 });
 
