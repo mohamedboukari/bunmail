@@ -2,6 +2,7 @@ import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
 import { adminGuard } from "../guards.tsx";
 import { redirect } from "../lib/responses.ts";
+import { flashUrl } from "../lib/flash.ts";
 import { parseAuditActor } from "../lib/audit.ts";
 import { csvExportResponse } from "../lib/csv-export.tsx";
 import {
@@ -262,10 +263,7 @@ export function exportPages(app: GuardedDashboard) {
           const hooks = await webhookService.listAllWebhooks();
           const webhook = hooks.find((h) => h.id === params.id);
           if (!webhook) {
-            return redirect(
-              set,
-              `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`,
-            );
+            return redirect(set, flashUrl("/dashboard/webhooks", "webhook_not_found"));
           }
           const status =
             query.status === "pending" ||

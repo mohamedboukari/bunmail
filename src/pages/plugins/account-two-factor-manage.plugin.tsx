@@ -105,7 +105,7 @@ export function accountTwoFactorManagePages(
                 "recovery_codes",
               );
               if (ended !== undefined) return ended;
-              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason]);
             }
             await limiter.clear();
             logger.warn("Recovery codes regenerated", {
@@ -116,8 +116,7 @@ export function accountTwoFactorManagePages(
             alertTwoFactorChange("recovery_codes_regenerated", auth, ip);
             return toTwoFactorPage(
               set,
-              "New recovery codes created. The old ones no longer work.",
-              "success",
+              "recovery_codes_regenerated",
               await stashRecoveryCodes(result.recoveryCodes, auth),
             );
           } catch (error: unknown) {
@@ -127,11 +126,7 @@ export function accountTwoFactorManagePages(
               ip,
               error: errorMessage(error),
             });
-            return toTwoFactorPage(
-              set,
-              "Failed to create new recovery codes: nothing was changed.",
-              "error",
-            );
+            return toTwoFactorPage(set, "recovery_codes_failed");
           }
         },
         {
@@ -184,7 +179,7 @@ export function accountTwoFactorManagePages(
               if (ended !== undefined) return ended;
               const reason =
                 result.reason === "wrong_code" ? "wrong_password" : result.reason;
-              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[reason], "error");
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[reason]);
             }
             await limiter.clear();
             logger.warn("Two-factor authentication disabled", {
@@ -194,7 +189,7 @@ export function accountTwoFactorManagePages(
               ip,
             });
             alertTwoFactorChange("disabled", auth, ip);
-            return toTwoFactorPage(set, "Two-factor authentication is off.", "success");
+            return toTwoFactorPage(set, "two_factor_disabled");
           } catch (error: unknown) {
             logger.error("Two-factor disable failed", {
               userId: auth.user.id,
@@ -202,11 +197,7 @@ export function accountTwoFactorManagePages(
               ip,
               error: errorMessage(error),
             });
-            return toTwoFactorPage(
-              set,
-              "Failed to turn off two-factor authentication: nothing was changed.",
-              "error",
-            );
+            return toTwoFactorPage(set, "two_factor_disable_failed");
           }
         },
         {

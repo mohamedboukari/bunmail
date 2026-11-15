@@ -8,6 +8,7 @@ import {
   setAccountResult,
   useDashboardMocks,
 } from "./dashboard-setup.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** Dashboard E2E: users. Setup, fakes and helpers: `dashboard-setup.ts` (#291). */
 useDashboardMocks();
@@ -97,8 +98,14 @@ describe("Dashboard E2E: users", () => {
         },
       );
       expect(response.status).toBe(302);
-      const location = decodeURIComponent(response.headers.get("location") ?? "");
-      expect(location).toContain("/dashboard/users?flash=Role changed to member.");
+      /** A code in the URL, the message on the page (#421). */
+      expect(response.headers.get("location")).toBe(
+        "/dashboard/users?flash=account_role_member",
+      );
+      expect(flashOfResponse(response)).toEqual({
+        message: "Role changed to member.",
+        type: "success",
+      });
       /** The request's client goes along, for the audit log (#221). */
       expect(accountAction).toHaveBeenCalledWith(
         OWNER.userId,
@@ -126,10 +133,11 @@ describe("Dashboard E2E: users", () => {
         { password: "hunter2-not-it" },
       );
       expect(response.status).toBe(302);
-      const location = decodeURIComponent(response.headers.get("location") ?? "");
-      expect(location).toContain("Wrong password");
-      expect(location).toContain("flashType=error");
-      expect(location).not.toContain("hunter2");
+      expect(flashOfResponse(response)).toEqual({
+        message: "Wrong password: ownership was not transferred.",
+        type: "error",
+      });
+      expect(response.headers.get("location")).not.toContain("hunter2");
       const call = accountAction.mock.calls.at(-1);
       expect(call?.slice(0, 3)).toEqual([OWNER.userId, "usr_admin", "hunter2-not-it"]);
       /** The route hands the service the transfer budget (#218). */
@@ -144,9 +152,10 @@ describe("Dashboard E2E: users", () => {
         { password: "x" },
       );
       expect(response.status).toBe(302);
-      const location = decodeURIComponent(response.headers.get("location") ?? "");
-      expect(location).toContain("Too many failed attempts, try again later.");
-      expect(location).toContain("flashType=error");
+      expect(flashOfResponse(response)).toEqual({
+        message: "Too many failed attempts, try again later.",
+        type: "error",
+      });
     });
 
     test("a removal without the right confirmation is an error flash", async () => {
@@ -157,7 +166,7 @@ describe("Dashboard E2E: users", () => {
         { confirm: "nope" },
       );
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+      expect(flashOfResponse(response)?.message).toContain(
         "Type the account's email address exactly",
       );
     });

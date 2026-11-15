@@ -3,7 +3,7 @@ import { logger } from "../../utils/logger.ts";
 import { DomainsPage } from "../routes/domains.tsx";
 import { DomainDetailPage } from "../routes/domain-detail.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
-import { flashMessageFor } from "../flash-errors.ts";
+import { dkimRotationErrorFlash, domainAddErrorFlash } from "../flash-errors.ts";
 import {
   DkimRotationError,
   DomainAlreadyRegisteredError,
@@ -19,7 +19,8 @@ import {
 } from "../../modules/domains/services/dkim-rotation.service.ts";
 import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
 import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
-import { toFlash } from "../lib/responses.ts";
+import { FLASH_QUERY, flashUrl, toFlash, type Flash } from "../lib/flash.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 import { isDnsVerifyThrottled } from "../lib/dns-verify-throttle.ts";
 import { creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
@@ -27,37 +28,43 @@ import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { config } from "../../config.ts";
 
-/** Where a DKIM rotation step lands: the domain page with a flash. */
-function domainFlashUrl(id: string, message: string, type: "success" | "error"): string {
-  return `/dashboard/domains/${id}?flash=${encodeURIComponent(message)}&flashType=${type}`;
+/** The domain page with a flash banner (#421: a code, never text). */
+function domainFlashUrl(id: string, flash: Flash): string {
+  return flashUrl(`/dashboard/domains/${id}`, flash);
 }
 
 /**
  * Runs one DKIM rotation step (#250) for the dashboard: the step's own
- * refusal (`DkimRotationError`) becomes an error flash on the domain page,
- * an unknown domain one on the list, anything else is logged and shown
- * as `fallback`.
+ * refusal (`DkimRotationError`) becomes its error flash on the domain
+ * page, an unknown domain one on the list, anything else is logged and
+ * shown as `fallback`.
  */
 async function dkimRotationStep(
   id: string,
   step: () => Promise<unknown>,
-  success: string,
-  fallback: string,
+  success: FlashCode,
+  fallback: FlashCode,
 ): Promise<string> {
   try {
     const domain = await step();
     if (domain === undefined) {
-      return `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+      return flashUrl("/dashboard/domains", "domain_not_found");
     }
-    return domainFlashUrl(id, success, "success");
+    return domainFlashUrl(id, success);
   } catch (error) {
-    if (!(error instanceof DkimRotationError)) {
+    if (error instanceof DkimRotationError) {
+      /** The banner is a code (#421): the refusal is logged with its code. */
+      logger.warn("DKIM rotation step refused via dashboard", {
+        domainId: id,
+        code: error.code,
+      });
+    } else {
       logger.error("DKIM rotation step failed via dashboard", {
         domainId: id,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    return domainFlashUrl(id, flashMessageFor(error, fallback), "error");
+    return domainFlashUrl(id, dkimRotationErrorFlash(error, fallback));
   }
 }
 
@@ -77,15 +84,14 @@ export function domainPages(app: GuardedDashboard) {
             creatorNames(auth),
           ]);
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return <DomainsPage domains={domainList} flash={flash} creators={creators} />;
         },
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -117,8 +123,7 @@ export function domainPages(app: GuardedDashboard) {
               userId: auth.user.id,
             });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain added successfully")}`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_added");
           } catch (error) {
             if (error instanceof DomainAlreadyRegisteredError) {
               logger.warn("Domain not added via dashboard: already registered");
@@ -132,8 +137,10 @@ export function domainPages(app: GuardedDashboard) {
               });
             }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent(flashMessageFor(error, "Failed to add domain"))}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/domains",
+              domainAddErrorFlash(error),
+            );
           }
           return "";
         },
@@ -157,8 +164,7 @@ export function domainPages(app: GuardedDashboard) {
 
           if (!domain) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_not_found");
             return "";
           }
           await recordAuditEvent({
@@ -169,8 +175,7 @@ export function domainPages(app: GuardedDashboard) {
 
           logger.info("Domain deleted via dashboard", { id: params.id });
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/domains?flash=${encodeURIComponent("Domain deleted")}`;
+          set.headers["location"] = flashUrl("/dashboard/domains", "domain_deleted");
           return "";
         },
         {
@@ -192,8 +197,7 @@ export function domainPages(app: GuardedDashboard) {
 
           if (!domain) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_not_found");
             return "";
           }
 
@@ -201,19 +205,20 @@ export function domainPages(app: GuardedDashboard) {
           if (await isDnsVerifyThrottled(params.id)) {
             logger.warn("Domain DNS verification throttled", { id: params.id });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Too many verification attempts: wait a minute and try again")}&flashType=error`;
+            set.headers["location"] = domainFlashUrl(
+              params.id,
+              "domain_verify_throttled",
+            );
             return "";
           }
 
           const result = await verifyDomain(domain);
           const allPassed = result.spf && result.dkim && result.dmarc;
-          /** ? for a failed lookup (#250): it changes nothing, try again later. */
-          const mark = (passed: boolean, status: string | undefined): string =>
-            passed ? "✓" : status === "unknown" ? "? (DNS lookup failed)" : "✗";
-          const message = allPassed
-            ? "All DNS records verified successfully!"
-            : `Verification: SPF ${mark(result.spf, result.checks?.spf.status)}, DKIM ${mark(result.dkim, result.checks?.dkim.status)}, DMARC ${mark(result.dmarc, result.checks?.dmarc.status)}`;
+          /**
+           * One code each way (#421): the page shows every record's own status
+           * (a failed lookup as unknown, #250), so the banner names none.
+           */
+          const code = allPassed ? "domain_verified" : "domain_verify_incomplete";
 
           logger.info("Domain DNS verification via dashboard", {
             id: params.id,
@@ -229,8 +234,7 @@ export function domainPages(app: GuardedDashboard) {
           });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${allPassed ? "success" : "error"}`;
+          set.headers["location"] = domainFlashUrl(params.id, code);
           return "";
         },
         {
@@ -253,8 +257,8 @@ export function domainPages(app: GuardedDashboard) {
           set.headers["location"] = await dkimRotationStep(
             params.id,
             () => startDkimRotation(params.id, dashboardAudit(auth, request, server)),
-            "DKIM key rotation started: publish the pending DKIM record, then complete the rotation",
-            "Failed to start the DKIM key rotation",
+            "dkim_rotation_started",
+            "dkim_rotation_start_failed",
           );
           return "";
         },
@@ -275,18 +279,14 @@ export function domainPages(app: GuardedDashboard) {
           set.status = 302;
           if (await isDnsVerifyThrottled(params.id)) {
             logger.warn("DKIM rotation complete throttled", { id: params.id });
-            set.headers["location"] = domainFlashUrl(
-              params.id,
-              "Too many DNS checks: wait a minute and try again",
-              "error",
-            );
+            set.headers["location"] = domainFlashUrl(params.id, "dkim_dns_throttled");
             return "";
           }
           set.headers["location"] = await dkimRotationStep(
             params.id,
             () => completeDkimRotation(params.id, dashboardAudit(auth, request, server)),
-            "DKIM key rotation completed: mail is now signed with the new key",
-            "Failed to complete the DKIM key rotation",
+            "dkim_rotation_completed",
+            "dkim_rotation_complete_failed",
           );
           return "";
         },
@@ -308,8 +308,8 @@ export function domainPages(app: GuardedDashboard) {
           set.headers["location"] = await dkimRotationStep(
             params.id,
             () => cancelDkimRotation(params.id, dashboardAudit(auth, request, server)),
-            "DKIM key rotation cancelled",
-            "Failed to cancel the DKIM key rotation",
+            "dkim_rotation_cancelled",
+            "dkim_rotation_cancel_failed",
           );
           return "";
         },
@@ -332,8 +332,7 @@ export function domainPages(app: GuardedDashboard) {
           const value = raw === "" ? null : raw;
           if (value !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains/${params.id}?flash=${encodeURIComponent("Enter a valid email address")}&flashType=error`;
+            set.headers["location"] = domainFlashUrl(params.id, "domain_notify_invalid");
             return "";
           }
 
@@ -341,8 +340,7 @@ export function domainPages(app: GuardedDashboard) {
 
           if (!updated) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_not_found");
             return "";
           }
           await recordAuditEvent({
@@ -352,12 +350,9 @@ export function domainPages(app: GuardedDashboard) {
             metadata: { fields: ["notifyEmail"] },
           });
 
-          const message = value
-            ? "Inbound notifications enabled"
-            : "Inbound notifications disabled";
+          const code = value ? "domain_notify_enabled" : "domain_notify_disabled";
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=success`;
+          set.headers["location"] = domainFlashUrl(params.id, code);
           return "";
         },
         {
@@ -377,18 +372,17 @@ export function domainPages(app: GuardedDashboard) {
         async ({ params, body, set, auth, request, server }) => {
           const email = (body.unsubscribeEmail ?? "").trim() || null;
           const url = (body.unsubscribeUrl ?? "").trim() || null;
-          const back = (message: string, type: "success" | "error"): string => {
+          const back = (code: FlashCode): string => {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains/${params.id}?flash=${encodeURIComponent(message)}&flashType=${type}`;
+            set.headers["location"] = domainFlashUrl(params.id, code);
             return "";
           };
 
           if (email !== null && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-            return back("Enter a valid unsubscribe email address", "error");
+            return back("domain_unsubscribe_email_invalid");
           }
           if (url !== null && (!URL.canParse(url) || !url.startsWith("https://"))) {
-            return back("The unsubscribe URL must be an https:// address", "error");
+            return back("domain_unsubscribe_url_invalid");
           }
 
           const updated = await domainService.updateDomainSettings(params.id, {
@@ -397,8 +391,7 @@ export function domainPages(app: GuardedDashboard) {
           });
           if (!updated) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_not_found");
             return "";
           }
           await recordAuditEvent({
@@ -407,7 +400,7 @@ export function domainPages(app: GuardedDashboard) {
             target: { type: "domain", id: updated.id, label: updated.name },
             metadata: { fields: ["unsubscribeEmail", "unsubscribeUrl"] },
           });
-          return back("Unsubscribe settings saved", "success");
+          return back("domain_unsubscribe_saved");
         },
         {
           beforeHandle: adminGuard,
@@ -437,8 +430,7 @@ export function domainPages(app: GuardedDashboard) {
           });
           set.status = 302;
           if (!updated) {
-            set.headers["location"] =
-              `/dashboard/domains?flash=${encodeURIComponent("Domain not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/domains", "domain_not_found");
             return "";
           }
           await recordAuditEvent({
@@ -447,10 +439,10 @@ export function domainPages(app: GuardedDashboard) {
             target: { type: "domain", id: updated.id, label: updated.name },
             metadata: { fields: ["trackOpens", "trackClicks"] },
           });
-          const message = config.tracking.enabled
-            ? "Tracking settings saved"
-            : "Tracking settings saved. Nothing is tracked while TRACKING_ENABLED is off.";
-          set.headers["location"] = domainFlashUrl(params.id, message, "success");
+          const code = config.tracking.enabled
+            ? "domain_tracking_saved"
+            : "domain_tracking_saved_off";
+          set.headers["location"] = domainFlashUrl(params.id, code);
           return "";
         },
         {
@@ -477,7 +469,7 @@ export function domainPages(app: GuardedDashboard) {
             return "Domain not found";
           }
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           const dns = await getDomainDnsStatus(domain.name);
 
@@ -498,8 +490,7 @@ export function domainPages(app: GuardedDashboard) {
             id: t.String(),
           }),
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )

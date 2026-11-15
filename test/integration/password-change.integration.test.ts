@@ -33,6 +33,7 @@ import { loginAttemptMap } from "../../src/middleware/login-rate-limit.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { config } from "../../src/config.ts";
 import type { IssuePasswordResetResult } from "../../src/modules/users/types/user.types.ts";
+import { flashOfLocation } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -326,8 +327,7 @@ describe("a completed change (#279)", () => {
     expect(response.status).toBe(302);
     const location = response.headers.get("location") ?? "";
     expect(location.startsWith(`${PAGE}?`)).toBe(true);
-    expect(decodeURIComponent(location)).toContain(SUCCESS);
-    expect(location).toContain("flashType=success");
+    expect(flashOfLocation(location)).toEqual({ message: SUCCESS, type: "success" });
     const fresh = readSessionCookie(response.headers.get("set-cookie"));
     if (!fresh) throw new Error("no new session cookie");
     expect(fresh).not.toBe(browser.token);

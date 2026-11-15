@@ -27,7 +27,7 @@ import {
 } from "../routes/account-sso.tsx";
 import { memberGuard } from "../guards.tsx";
 import { issueSsoFlowCookie } from "../lib/session-helpers.ts";
-import { setNoStore, toFlash } from "../lib/responses.ts";
+import { setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
@@ -35,6 +35,8 @@ import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { requestIp, setAuthPageHeaders } from "../lib/sign-in.tsx";
 import { SsoHandoffPage } from "../routes/sso-handoff.tsx";
 import { LINK_REFUSAL, providerById, toSsoPage } from "../lib/sso.ts";
+import { FLASH_QUERY, toFlash } from "../lib/flash.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 
 /**
  * Single sign-on (OpenID Connect, #224) on Account > Sign-in methods
@@ -48,14 +50,14 @@ import { LINK_REFUSAL, providerById, toSsoPage } from "../lib/sso.ts";
  * page. No return parameter is read.
  */
 
-/** What the page says for a refused unlink. */
+/** The page's flash code for a refused unlink (#421). */
 const UNLINK_REFUSAL: Record<
   Exclude<UnlinkSsoIdentityResult, { ok: true }>["reason"],
-  string
+  FlashCode
 > = {
-  not_found: "That link was not found: nothing was changed.",
-  rate_limited: "Too many attempts. Try again later.",
-  wrong_password: "Current password is incorrect.",
+  not_found: "sso_link_not_found",
+  rate_limited: "rate_limited",
+  wrong_password: "current_password_wrong",
 };
 
 /** A provider as the link service keys, records and labels it. */
@@ -130,7 +132,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
               <AccountSsoPage
                 rows={rows}
                 notice={notice}
-                flash={toFlash(query.flash, query.flashType)}
+                flash={toFlash(query.flash, query.flashN)}
               />
             );
           } catch (error: unknown) {
@@ -152,8 +154,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -179,7 +180,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
           const baseUrl = config.sso.baseUrl;
           if (provider === null || baseUrl === null) {
             logger.warn("SSO link refused", { ...ids, reason: "provider_unavailable" });
-            return toSsoPage(set, "That sign-in provider is not available.", "error");
+            return toSsoPage(set, "sso_provider_unavailable");
           }
           try {
             const authorized: AuthorizeSsoLinkResult = await authorizeSsoLink(
@@ -197,7 +198,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
                 provider: provider.id,
                 reason: authorized.reason,
               });
-              return toSsoPage(set, LINK_REFUSAL[authorized.reason], "error");
+              return toSsoPage(set, LINK_REFUSAL[authorized.reason]);
             }
             const started = await startSsoFlow({
               provider,
@@ -211,11 +212,8 @@ export function ssoAccountPages(app: GuardedDashboard) {
                 provider: provider.id,
                 reason: started.reason,
               });
-              return toSsoPage(
-                set,
-                `${provider.label} could not be reached. Try again later.`,
-                "error",
-              );
+              /** No label in the URL (#421): one fixed sentence. */
+              return toSsoPage(set, "sso_provider_unreachable");
             }
             issueSsoFlowCookie(set, started.flowCookie);
             logger.info("SSO link started", { ...ids, provider: provider.id });
@@ -233,11 +231,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
               provider: provider.id,
               error: errorMessage(error),
             });
-            return toSsoPage(
-              set,
-              "Failed to start linking: nothing was changed.",
-              "error",
-            );
+            return toSsoPage(set, "sso_link_start_failed");
           }
         },
         {
@@ -272,7 +266,7 @@ export function ssoAccountPages(app: GuardedDashboard) {
                 linkId: params.id,
                 reason: result.reason,
               });
-              return toSsoPage(set, UNLINK_REFUSAL[result.reason], "error");
+              return toSsoPage(set, UNLINK_REFUSAL[result.reason]);
             }
             logger.warn("SSO identity unlinked", {
               ...ids,
@@ -286,14 +280,14 @@ export function ssoAccountPages(app: GuardedDashboard) {
               ip: sessionIp(ip),
               sso: { provider: linkLabelOf(result.provider), account: result.name },
             });
-            return toSsoPage(set, "Account unlinked.", "success");
+            return toSsoPage(set, "sso_unlinked");
           } catch (error: unknown) {
             logger.error("SSO unlink failed", {
               ...ids,
               linkId: params.id,
               error: errorMessage(error),
             });
-            return toSsoPage(set, "Failed to unlink: nothing was changed.", "error");
+            return toSsoPage(set, "sso_unlink_failed");
           }
         },
         {

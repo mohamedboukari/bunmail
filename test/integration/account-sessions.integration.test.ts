@@ -22,6 +22,7 @@ import { hashToken } from "../../src/modules/users/services/token.service.ts";
 import * as geoip from "../../src/modules/users/services/geoip.service.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -245,9 +246,7 @@ describe("POST /dashboard/account/sessions/:id/revoke", () => {
     try {
       const response = await call("POST", `${PAGE}/${laptop.id}/revoke`, current.token);
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-        "Signed out that device.",
-      );
+      expect(flashOfResponse(response)?.message).toContain("Signed out that device.");
       expect(await sessionIdsOf(memberId)).toEqual(
         [current.id, expiredId, pendingId].toSorted(),
       );
@@ -321,9 +320,7 @@ describe("POST /dashboard/account/sessions/revoke-others", () => {
     try {
       const response = await call("POST", `${PAGE}/revoke-others`, current.token);
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-        "Signed out 3 other devices.",
-      );
+      expect(flashOfResponse(response)?.message).toContain("Signed out 3 other devices.");
       expect(warn).toHaveBeenCalledWith(
         "Other sessions revoked by their user",
         expect.objectContaining({

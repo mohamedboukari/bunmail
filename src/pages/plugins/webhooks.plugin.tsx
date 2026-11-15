@@ -5,17 +5,13 @@ import { WebhookDeliveriesPage } from "../routes/webhook-deliveries.tsx";
 import { WebhookDeliveryDetailPage } from "../routes/webhook-delivery-detail.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
-import { flashMessageFor } from "../flash-errors.ts";
+import { webhookCreateErrorFlash } from "../flash-errors.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as webhookService from "../../modules/webhooks/services/webhook.service.ts";
 import * as webhookDeliveryService from "../../modules/webhooks/services/webhook-delivery.service.ts";
-import { setNoStore, toFlash } from "../lib/responses.ts";
+import { setNoStore } from "../lib/responses.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
-import {
-  recordActorOf,
-  creatorNames,
-  NO_USABLE_KEY_TEXT,
-} from "../lib/record-ownership.ts";
+import { recordActorOf, creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
@@ -23,6 +19,8 @@ import { redactUrl } from "../../utils/redact.ts";
 import { ReplayLimitReachedError } from "../../modules/webhooks/errors.ts";
 import { isWebhookEventType } from "../../modules/webhooks/types/webhook.types.ts";
 import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /** Webhook pages (#291): list, create, delete, deliveries and replay. */
 export function webhookPages(app: GuardedDashboard) {
@@ -36,7 +34,7 @@ export function webhookPages(app: GuardedDashboard) {
             webhookService.listAllWebhooks(),
             creatorNames(auth),
           ]);
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
           /** One-time reveal of the webhook HMAC secret (#132): never in URL. */
           const secret = await consumeRevealSecret(
             query.reveal,
@@ -56,8 +54,7 @@ export function webhookPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
             reveal: t.Optional(t.String()),
           }),
         },
@@ -83,15 +80,14 @@ export function webhookPages(app: GuardedDashboard) {
               userId: auth.user.id,
             });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Select at least one event")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/webhooks", "webhook_no_event");
             return "";
           }
           /**
            * Only names from `WEBHOOK_EVENT_TYPES`, the list the REST DTO
            * validates against (#437): the guard narrows each entry, and a
            * single unknown name refuses the whole form, so nothing is
-           * stored. Neither the flash (it travels in the URL) nor the log
+           * stored. Neither the flash (a code, #421) nor the log
            * line quotes the submitted names: the log carries a count only.
            */
           const events = submitted.filter(isWebhookEventType);
@@ -101,8 +97,10 @@ export function webhookPages(app: GuardedDashboard) {
               unknownCount: submitted.length - events.length,
             });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Unknown webhook event")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/webhooks",
+              "webhook_unknown_event",
+            );
             return "";
           }
           try {
@@ -115,8 +113,7 @@ export function webhookPages(app: GuardedDashboard) {
             );
             if (!activeKey) {
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/webhooks?flash=${encodeURIComponent(NO_USABLE_KEY_TEXT)}&flashType=error`;
+              set.headers["location"] = flashUrl("/dashboard/webhooks", "no_usable_key");
               return "";
             }
             /** The admin-only events rule is enforced in the service, for both surfaces. */
@@ -141,11 +138,28 @@ export function webhookPages(app: GuardedDashboard) {
             );
             set.status = 302;
             set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Webhook created")}&reveal=${reveal}`;
+              `${flashUrl("/dashboard/webhooks", "webhook_created")}&reveal=${reveal}`;
           } catch (error) {
+            const flash = webhookCreateErrorFlash(error);
+            /**
+             * The banner is a code (#421), so the error is logged here: a
+             * typed refusal at `warn` with its class, anything else at
+             * `error`. Never the URL (its path or query may carry a
+             * credential, #260) nor the refusal's message (it names the host).
+             */
+            if (flash !== "webhook_create_failed") {
+              logger.warn("Dashboard webhook not created: refused", {
+                userId: auth.user.id,
+                refusal: error instanceof Error ? error.name : "unknown",
+              });
+            } else {
+              logger.error("Failed to create webhook via dashboard", {
+                userId: auth.user.id,
+                error: loggableError(error),
+              });
+            }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent(flashMessageFor(error, "Failed to create webhook"))}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/webhooks", flash);
           }
           return "";
         },
@@ -166,8 +180,10 @@ export function webhookPages(app: GuardedDashboard) {
             const hook = hooks.find((h) => h.id === params.id);
             if (!hook) {
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`;
+              set.headers["location"] = flashUrl(
+                "/dashboard/webhooks",
+                "webhook_not_found",
+              );
               return "";
             }
             const deleted = await webhookService.deleteWebhook(params.id, hook.apiKeyId);
@@ -183,12 +199,13 @@ export function webhookPages(app: GuardedDashboard) {
               });
             }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Webhook deleted")}`;
+            set.headers["location"] = flashUrl("/dashboard/webhooks", "webhook_deleted");
           } catch {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Failed to delete webhook")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/webhooks",
+              "webhook_delete_failed",
+            );
           }
           return "";
         },
@@ -212,8 +229,10 @@ export function webhookPages(app: GuardedDashboard) {
           const webhook = hooks.find((h) => h.id === params.id);
           if (!webhook) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Webhook not found")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/webhooks",
+              "webhook_not_found",
+            );
             return "";
           }
 
@@ -281,12 +300,14 @@ export function webhookPages(app: GuardedDashboard) {
           }
           if (!foundDelivery || !foundWebhook) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/webhooks?flash=${encodeURIComponent("Delivery not found")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/webhooks",
+              "webhook_delivery_not_found",
+            );
             return "";
           }
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <WebhookDeliveryDetailPage
@@ -300,8 +321,7 @@ export function webhookPages(app: GuardedDashboard) {
           beforeHandle: memberGuard,
           params: t.Object({ deliveryId: t.String() }),
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -347,10 +367,11 @@ export function webhookPages(app: GuardedDashboard) {
           }
           set.status = 302;
           set.headers["location"] = replayed
-            ? `/dashboard/webhooks/deliveries/${params.deliveryId}?flash=${encodeURIComponent(
-                "Replay queued: worker will re-attempt on next poll",
-              )}`
-            : `/dashboard/webhooks?flash=${encodeURIComponent("Delivery not found")}&flashType=error`;
+            ? flashUrl(
+                `/dashboard/webhooks/deliveries/${params.deliveryId}`,
+                "webhook_replay_queued",
+              )
+            : flashUrl("/dashboard/webhooks", "webhook_delivery_not_found");
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ deliveryId: t.String() }) },

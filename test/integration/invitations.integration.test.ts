@@ -42,6 +42,7 @@ import type {
   IssueInvitationResult,
   UserRole,
 } from "../../src/modules/users/types/user.types.ts";
+import { flashOfLocation, flashOfResponse } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -624,9 +625,7 @@ describe("revoke and resend", () => {
       },
     );
     expect(revoke.status).toBe(302);
-    expect(decodeURIComponent(revoke.headers.get("location") ?? "")).toContain(
-      "Invitation revoked.",
-    );
+    expect(flashOfResponse(revoke)?.message).toContain("Invitation revoked.");
 
     const resend = await call(
       "POST",
@@ -668,7 +667,9 @@ describe("email path", () => {
     } finally {
       info.mockRestore();
     }
-    expect(decodeURIComponent(location)).toContain("no system sender is configured");
+    expect(flashOfLocation(location)?.message).toContain(
+      "no system sender is configured",
+    );
     expect(location).not.toMatch(/invite\?token=|token%3D/);
 
     /** Another session of the same user cannot redeem it, nor destroy it. */
@@ -694,7 +695,7 @@ describe("email path", () => {
       });
       expect(response.status).toBe(302);
       const location = response.headers.get("location") ?? "";
-      expect(decodeURIComponent(location)).toContain("Invitation sent by email.");
+      expect(flashOfLocation(location)?.message).toContain("Invitation sent by email.");
       expect(location).not.toContain("reveal=");
       expect(send).toHaveBeenCalledTimes(1);
       const [args] = send.mock.calls[0] ?? [];
@@ -735,9 +736,9 @@ describe("a pending invitation of a higher role", () => {
       body: { email: INVITEE, role: "member" },
     });
     expect(response.status).toBe(302);
-    const location = decodeURIComponent(response.headers.get("location") ?? "");
-    expect(location).toContain("A pending invitation from a higher role exists");
-    expect(location).toContain("flashType=error");
+    const flash = flashOfResponse(response);
+    expect(flash?.message).toContain("A pending invitation from a higher role exists");
+    expect(flash?.type).toBe("error");
     expect(await findLiveInvitation(owners.invitation.token)).not.toBeNull();
   });
 
@@ -869,7 +870,7 @@ describe("no usable APP_BASE_URL", () => {
         });
         expect(response.status).toBe(302);
         const location = response.headers.get("location") ?? "";
-        expect(decodeURIComponent(location)).toContain(
+        expect(flashOfLocation(location)?.message).toContain(
           "APP_BASE_URL is not set, so no usable link could be emailed",
         );
         const page = await (await call("GET", location, { token: tokens.owner })).text();

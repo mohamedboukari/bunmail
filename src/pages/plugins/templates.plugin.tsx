@@ -1,19 +1,15 @@
 import { t } from "elysia";
+import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
 import { ForbiddenPage } from "../routes/forbidden.tsx";
 import { TemplatesPage } from "../routes/templates.tsx";
 import { TemplateDetailPage } from "../routes/template-detail.tsx";
 import { memberGuard } from "../guards.tsx";
-import { flashMessageFor } from "../flash-errors.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as templateService from "../../modules/templates/services/template.service.ts";
-import { toFlash } from "../lib/responses.ts";
-import {
-  recordActorOf,
-  managesAll,
-  creatorNames,
-  NO_USABLE_KEY_TEXT,
-} from "../lib/record-ownership.ts";
+import { recordActorOf, managesAll, creatorNames } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /** The 403 page text for a member changing someone else's template (#219). */
 const TEMPLATE_FORBIDDEN_TEXT =
@@ -30,7 +26,7 @@ export function templatePages(app: GuardedDashboard) {
             templateService.listAllTemplates(),
             creatorNames(auth),
           ]);
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
           return (
             <TemplatesPage
               templates={list}
@@ -43,8 +39,7 @@ export function templatePages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -62,8 +57,7 @@ export function templatePages(app: GuardedDashboard) {
             );
             if (!activeKey) {
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/templates?flash=${encodeURIComponent(NO_USABLE_KEY_TEXT)}&flashType=error`;
+              set.headers["location"] = flashUrl("/dashboard/templates", "no_usable_key");
               return "";
             }
             const variables = body.variables
@@ -85,12 +79,21 @@ export function templatePages(app: GuardedDashboard) {
               auth.user.id,
             );
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates?flash=${encodeURIComponent("Template created")}`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/templates",
+              "template_created",
+            );
           } catch (error) {
+            /** The banner is a code (#421): the error goes to the log only. */
+            logger.error("Failed to create template via dashboard", {
+              userId: auth.user.id,
+              error: loggableError(error),
+            });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates?flash=${encodeURIComponent(flashMessageFor(error, "Failed to create template"))}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/templates",
+              "template_create_failed",
+            );
           }
           return "";
         },
@@ -115,7 +118,7 @@ export function templatePages(app: GuardedDashboard) {
             return "Template not found";
           }
           const creators = await creatorNames(auth);
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
           /** Display only: the edit and delete routes check ownership again (#219). */
           const canEdit = managesAll(auth) || template.createdByUserId === auth.user.id;
           return (
@@ -131,8 +134,7 @@ export function templatePages(app: GuardedDashboard) {
           beforeHandle: memberGuard,
           params: t.Object({ id: t.String() }),
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -170,17 +172,29 @@ export function templatePages(app: GuardedDashboard) {
             }
             if (!result.ok) {
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
+              set.headers["location"] = flashUrl(
+                "/dashboard/templates",
+                "template_not_found",
+              );
               return "";
             }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates/${params.id}?flash=${encodeURIComponent("Template updated")}`;
+            set.headers["location"] = flashUrl(
+              `/dashboard/templates/${params.id}`,
+              "template_updated",
+            );
           } catch (error) {
+            /** The banner is a code (#421): the error goes to the log only. */
+            logger.error("Failed to update template via dashboard", {
+              templateId: params.id,
+              userId: auth.user.id,
+              error: loggableError(error),
+            });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates/${params.id}?flash=${encodeURIComponent(flashMessageFor(error, "Failed to update"))}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              `/dashboard/templates/${params.id}`,
+              "template_update_failed",
+            );
           }
           return "";
         },
@@ -216,17 +230,23 @@ export function templatePages(app: GuardedDashboard) {
             }
             if (!result.ok) {
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/templates?flash=${encodeURIComponent("Template not found")}&flashType=error`;
+              set.headers["location"] = flashUrl(
+                "/dashboard/templates",
+                "template_not_found",
+              );
               return "";
             }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates?flash=${encodeURIComponent("Template deleted")}`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/templates",
+              "template_deleted",
+            );
           } catch {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/templates?flash=${encodeURIComponent("Failed to delete template")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/templates",
+              "template_delete_failed",
+            );
           }
           return "";
         },

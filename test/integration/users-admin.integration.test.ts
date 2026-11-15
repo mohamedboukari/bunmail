@@ -43,6 +43,7 @@ import {
   issueOwnerSetupLink,
 } from "../../src/modules/users/services/owner.service.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** The app as `src/index.ts` mounts it: with the per-request context (#284). */
 const app = new Elysia().wrap(withRequestContext).use(pagesPlugin);
@@ -244,9 +245,7 @@ describe("Role change (#218)", () => {
       },
     );
     expect(response.status).toBe(302);
-    expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-      "Role changed to member.",
-    );
+    expect(flashOfResponse(response)?.message).toContain("Role changed to member.");
 
     expect(await openInvites([invite, other])).toEqual([other]);
     const after = await call("GET", "/dashboard/users", tokens.admin);
@@ -394,9 +393,7 @@ describe("Remove (#218)", () => {
       },
     );
     expect(response.status).toBe(302);
-    expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-      "Account removed.",
-    );
+    expect(flashOfResponse(response)?.message).toContain("Account removed.");
 
     expect(await account(ids.admin)).toBeNull();
     expect(await sessionCount(ids.admin)).toBe(0);
@@ -430,9 +427,7 @@ describe("Remove (#218)", () => {
       { confirm: "member@example.org" },
     );
     expect(response.status).toBe(302);
-    expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-      "flashType=error",
-    );
+    expect(flashOfResponse(response)?.type).toBe("error");
     expect(await snapshot()).toBe(before);
   });
 
@@ -477,9 +472,7 @@ describe("Ownership transfer (#218)", () => {
       },
     );
     expect(response.status).toBe(302);
-    expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-      "Ownership transferred.",
-    );
+    expect(flashOfResponse(response)?.message).toContain("Ownership transferred.");
 
     expect(await owners()).toEqual([ids.admin]);
     expect((await account(ids.owner))?.role).toBe("admin");
@@ -506,9 +499,7 @@ describe("Ownership transfer (#218)", () => {
         { password: "not the owner password" },
       );
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-        "Wrong password",
-      );
+      expect(flashOfResponse(response)?.message).toContain("Wrong password");
       expect(await snapshot()).toBe(before);
       expect(await owners()).toEqual([ids.owner]);
 
@@ -591,9 +582,9 @@ describe("Ownership transfer hardening (#218)", () => {
     });
   }
 
-  /** The flash a transfer response redirects with. */
+  /** The banner message a transfer response leads to (#421: resolved from its code). */
   function flashOf(response: Response): string {
-    return decodeURIComponent(response.headers.get("location") ?? "");
+    return flashOfResponse(response)?.message ?? "";
   }
 
   test("the limiter is on in the test environment", () => {
@@ -640,7 +631,7 @@ describe("Ownership transfer hardening (#218)", () => {
       const limited = await postTransfer(PASSWORD);
       expect(limited.status).toBe(302);
       expect(flashOf(limited)).toContain("Too many failed attempts, try again later.");
-      expect(flashOf(limited)).toContain("flashType=error");
+      expect(flashOfResponse(limited)?.type).toBe("error");
       expect(verify).toHaveBeenCalledTimes(maxAttempts);
       expect(await snapshot()).toBe(before);
       expect(await owners()).toEqual([ids.owner]);

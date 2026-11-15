@@ -51,6 +51,7 @@ import { issuePasswordReset } from "../../src/modules/users/services/user-admin.
 import { TWO_FACTOR_PAGE } from "../../src/modules/users/services/two-factor-policy.service.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -141,10 +142,9 @@ async function fullSession(
   return seed.session({ userId, assurance });
 }
 
-/** The flash text of a redirect to the Passkeys page. */
+/** The banner message a redirect to the Passkeys page leads to (#421: resolved from its code). */
 function flashOf(response: Response): string {
-  const location = response.headers.get("location") ?? "";
-  return new URL(location, ORIGIN).searchParams.get("flash") ?? "";
+  return flashOfResponse(response)?.message ?? "";
 }
 
 /** Asks for creation options in `token`'s session. */
@@ -831,7 +831,9 @@ describe("Managing passkeys (#223)", () => {
       token: browser.token,
       body: { name: "x".repeat(65) },
     });
-    expect(flashOf(tooLong)).toBe("The name can be at most 64 characters.");
+    expect(flashOf(tooLong)).toBe(
+      "The passkey name must be 1 to 64 characters, with no control characters.",
+    );
     expect((await passkeyRows(ids.member))[0]?.name).toBe("Desk key");
 
     const alerts = spyAlerts();

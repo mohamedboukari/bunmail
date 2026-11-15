@@ -9,6 +9,8 @@ import { auditProviderOf } from "../../modules/users/services/sso-link-policy.se
 import type { SsoAlertFacts } from "../../modules/users/services/two-factor-alert.service.ts";
 import { ssoLogoKind, type SsoLogoKind } from "../components/sso-logo.tsx";
 import { redirect } from "./responses.ts";
+import { flashUrl } from "./flash.ts";
+import type { FlashCode } from "./flash-codes.ts";
 
 /**
  * What the SSO routes share (#224): the sign-in routes
@@ -19,17 +21,14 @@ import { redirect } from "./responses.ts";
 /** The Sign-in methods page. */
 export const SSO_PAGE = "/dashboard/account/sso";
 
-/** What the page says for a refused link. */
-export const LINK_REFUSAL: Record<SsoLinkRefusal | "rate_limited", string> = {
-  rate_limited: "Too many attempts. Try again later.",
-  wrong_password: "Current password is incorrect.",
-  second_factor_required:
-    "As the owner, you need a second factor before you can link a single sign-on account.",
-  provider_already_linked: "Your account already has an account linked at that provider.",
-  already_linked:
-    "That account at the provider is already linked to another BunMail account.",
-  session_changed:
-    "Your session changed while you were at the provider. Sign in and try again.",
+/** The page's flash code for a refused link (#421: a code, never text). */
+export const LINK_REFUSAL: Record<SsoLinkRefusal | "rate_limited", FlashCode> = {
+  rate_limited: "rate_limited",
+  wrong_password: "current_password_wrong",
+  second_factor_required: "sso_second_factor_required",
+  provider_already_linked: "sso_provider_already_linked",
+  already_linked: "sso_already_linked",
+  session_changed: "sso_session_changed",
 };
 
 /** The configured provider with this id, or `null`. */
@@ -38,15 +37,8 @@ export function providerById(id: string): SsoProviderSettings | null {
 }
 
 /** Redirects to the Sign-in methods page with a flash banner. */
-export function toSsoPage(
-  set: Context["set"],
-  message: string,
-  type: "success" | "error",
-): string {
-  return redirect(
-    set,
-    `${SSO_PAGE}?flash=${encodeURIComponent(message)}&flashType=${type}`,
-  );
+export function toSsoPage(set: Context["set"], code: FlashCode): string {
+  return redirect(set, flashUrl(SSO_PAGE, code));
 }
 
 /**

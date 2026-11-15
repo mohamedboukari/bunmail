@@ -55,6 +55,7 @@ import type {
   UserRole,
 } from "../../src/modules/users/types/user.types.ts";
 import { logger } from "../../src/utils/logger.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** The dashboard as `src/index.ts` mounts it. */
 const dashboard = new Elysia().wrap(withRequestContext).use(pagesPlugin);
@@ -151,9 +152,9 @@ async function errorOf(promise: Promise<unknown>): Promise<unknown> {
   }
 }
 
-/** The decoded `location` header of a redirect. */
+/** The banner message a redirect leads to (#421: resolved from its flash code). */
 function locationOf(response: Response): string {
-  return decodeURIComponent(response.headers.get("location") ?? "");
+  return flashOfResponse(response)?.message ?? "";
 }
 
 /** A key's stored state. */

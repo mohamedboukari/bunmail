@@ -34,6 +34,7 @@ import { generateId } from "../../src/utils/id.ts";
 import { config } from "../../src/config.ts";
 import { truncateAll, seed, db, domains, emails } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 const HTTPS_BASE = "https://mail.example.com";
 
@@ -441,7 +442,7 @@ describe("domain tracking opt-in in the dashboard (admins only)", () => {
       await tokenFor("owner"),
       { trackOpens: "true", trackClicks: "true" },
     );
-    expect(decodeURIComponent(res.headers.get("location") ?? "")).toContain(
+    expect(flashOfResponse(res)?.message).toContain(
       "Nothing is tracked while TRACKING_ENABLED is off",
     );
   });

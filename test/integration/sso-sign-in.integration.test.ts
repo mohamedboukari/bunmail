@@ -56,6 +56,7 @@ import { encryptSecret } from "../../src/utils/crypto.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { config, type SsoProviderSettings } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** With the request context, as `src/index.ts` mounts it. */
 const app = new Elysia().wrap(withRequestContext).use(html()).use(pagesPlugin);
@@ -553,9 +554,7 @@ describe("signing in (#224)", () => {
       token: other.token,
       body: { password: PASSWORD },
     });
-    expect(
-      new URL(unlinked.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toBe("Account unlinked.");
+    expect(flashOfResponse(unlinked)?.message).toBe("Account unlinked.");
     expect((await sessionsOf(ids.member)).map((s) => s.id)).toEqual([other.id]);
     const gone = await call("GET", "/dashboard", { token: viaSso });
     expect(gone.headers.get("location")).toBe("/dashboard/login");
