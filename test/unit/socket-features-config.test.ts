@@ -55,10 +55,9 @@ describe("readInboundTls", () => {
   );
 
   test.each(["1.3.14", "1.4.3"])("a cert under Bun %s refuses to boot", (version) => {
+    /** A substring match, so the version needs no regex escaping. */
     expect(() => readInboundTls({ certPath: CERT, keyPath: KEY }, version)).toThrow(
-      new RegExp(
-        `SMTP_TLS_CERT needs Bun 1\\.4\\.4 or later, running ${version.replace(/\./g, "\\.")}`,
-      ),
+      `SMTP_TLS_CERT needs Bun 1.4.4 or later, running ${version}`,
     );
   });
 

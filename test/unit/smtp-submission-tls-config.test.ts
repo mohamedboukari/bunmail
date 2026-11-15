@@ -65,13 +65,13 @@ describe("readSubmissionTls", () => {
   test.each(["1.3.14", "1.4.3"])(
     "starttls is refused under Bun %s, pointing at implicit TLS on 465",
     (version) => {
-      expect(() =>
-        read({ mode: "starttls", certPath: CERT, keyPath: KEY }, version),
-      ).toThrow(
-        new RegExp(
-          `SMTP_SUBMISSION_TLS_MODE=starttls needs Bun 1\\.4\\.4 or later, running ${version.replace(/\./g, "\\.")}[\\s\\S]*port 465`,
-        ),
+      /** Substring matches, so the version needs no regex escaping. */
+      const refuse = (): unknown =>
+        read({ mode: "starttls", certPath: CERT, keyPath: KEY }, version);
+      expect(refuse).toThrow(
+        `SMTP_SUBMISSION_TLS_MODE=starttls needs Bun 1.4.4 or later, running ${version}`,
       );
+      expect(refuse).toThrow("port 465");
     },
   );
 
