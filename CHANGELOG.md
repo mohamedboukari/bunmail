@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **More custom header names are reserved (#422).** The `headers` field of `POST /api/v1/emails/send` now refuses `Errors-To`, `Disposition-Notification-To`, `Return-Receipt-To` and any name starting with `Resent-` (`Resent-From`, `Resent-Sender`, `Resent-To`, `Resent-Cc`, `Resent-Bcc`, `Resent-Date`, `Resent-Message-ID`, `Resent-Reply-To`, ...), in any case, with `422 INVALID_CUSTOM_HEADER` like the other reserved names; the mailer drops them from a stored set. A key limited by `allowed_senders` could otherwise name another identity in `Resent-From` (DMARC ignores it, mail clients may show it) or have bounces and read receipts sent to any address. SMTP submission already never copied these headers (only `In-Reply-To`, `References` and `X-*` are relayed). Found by the internal security review of 2026-11-07 (Info). Docs: `docs/api.md`, `docs/emails.md`, `docs/smtp-submission.md`, `THREAT_MODEL.md`.
+
 ## [0.12.0] - 2026-11-08
 
 > **Theme: security fixes, single sign-on, observability and transport security on top of 0.11.0.** Two advisories are fixed (`GHSA-wmgc-vwq2-88j5`: a `From` address with two `@` signs passed the sender-domain check over SMTP submission; `GHSA-9hfc-26m5-v6cj`: with `SUPPRESSIONS_SHARED_HARD`, a forged complaint could suppress an address for every API key). New and off by default: OpenID Connect single sign-on, Prometheus metrics and OpenTelemetry tracing, optional Redis for several replicas, outbound DANE and TLS-RPT, open and click tracking. The dashboard gains CSV exports (admins only), rows per page and API key tabs. BunMail now signs DKIM and evaluates SPF itself (mailauth removed) and reads multi-string TXT records correctly.
