@@ -2,7 +2,8 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { ExportCsvLink } from "../components/export-csv-link.tsx";
 import { StatusBadge } from "../components/status-badge.tsx";
 import { EngagementBadges } from "../components/email-tracking.tsx";
-import { Pagination } from "../components/pagination.tsx";
+import { KeptLimitInput, Pagination } from "../components/pagination.tsx";
+import { keptLimit } from "../pagination.ts";
 import { EmptyState } from "../components/empty-state.tsx";
 import { FlashMessage } from "../components/flash-message.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
@@ -39,9 +40,19 @@ interface EmailsPageProps {
  * Builds a `/dashboard/emails` URL that preserves the current filters while
  * overriding one of them (#137). Passing `null` for a key drops it. Keeps
  * status tabs, the two dropdowns, and pagination composable.
+ *
+ * `current.limit` is the rows-per-page size to keep (#435), already reduced
+ * by `keptLimit` to undefined at the default. No `page` is ever set, so a
+ * filter change starts on page 1.
  */
 function emailsUrl(
-  current: { status?: string; source?: string; apiKeyId?: string; tag?: string },
+  current: {
+    status?: string;
+    source?: string;
+    apiKeyId?: string;
+    tag?: string;
+    limit?: string;
+  },
   override: { status?: string | null; source?: string | null; apiKeyId?: string | null },
 ): string {
   const merged = { ...current, ...override };
@@ -50,6 +61,7 @@ function emailsUrl(
   if (merged.source) params.set("source", merged.source);
   if (merged.apiKeyId) params.set("apiKeyId", merged.apiKeyId);
   if (merged.tag) params.set("tag", merged.tag);
+  if (merged.limit) params.set("limit", merged.limit);
   const qs = params.toString();
   return qs ? `/dashboard/emails?${qs}` : "/dashboard/emails";
 }
@@ -97,8 +109,11 @@ export function EmailsPage({
     { label: "Bounced", value: "bounced" },
   ];
 
-  /** Current filter state: used to build filter-preserving links. */
-  const activeFilters = { status, source, apiKeyId, tag };
+  /**
+   * Current filter state: used to build filter-preserving links. Includes
+   * the chosen rows-per-page size when it is not the default (#435).
+   */
+  const activeFilters = { status, source, apiKeyId, tag, limit: keptLimit(limit) };
 
   return (
     <BaseLayout title="Emails" activeNav="emails">
@@ -203,6 +218,7 @@ export function EmailsPage({
             {!!status && <input type="hidden" name="status" value={status} />}
             {!!source && <input type="hidden" name="source" value={source} />}
             {!!apiKeyId && <input type="hidden" name="apiKeyId" value={apiKeyId} />}
+            <KeptLimitInput limit={limit} />
             <label class="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-400">
               Tag
               <input

@@ -863,9 +863,12 @@ describe("Component render smoke tests", () => {
   });
 
   test("HtmlPreview with HTML body", () => {
-    expect(typeof HtmlPreview({ html: "<p>hi</p>" })).toBe("string");
-    expect(typeof HtmlPreview({ html: "" })).toBe("string");
-    expect(typeof HtmlPreview({ html: "<p>x</p>", title: "Custom" })).toBe("string");
+    const pageHref = "/dashboard/emails/msg_x";
+    expect(typeof HtmlPreview({ html: "<p>hi</p>", pageHref })).toBe("string");
+    expect(typeof HtmlPreview({ html: "", pageHref })).toBe("string");
+    expect(typeof HtmlPreview({ html: "<p>x</p>", pageHref, title: "Custom" })).toBe(
+      "string",
+    );
   });
 
   test("LiveHtmlPreview: sandboxed iframe seeded with sample-rendered HTML", async () => {

@@ -1,6 +1,6 @@
 import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
-import { AuditLogPage } from "../routes/audit-log.tsx";
+import { AUDIT_LOG_PAGE_SIZE, AuditLogPage } from "../routes/audit-log.tsx";
 import { adminGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
 import { setNoStore } from "../lib/responses.ts";
@@ -20,7 +20,7 @@ export function auditLogPages(app: GuardedDashboard) {
     async ({ query, set, auth }) => {
       /** Labels are emails and IPs: never cached by the browser or a proxy. */
       setNoStore(set);
-      const { page, limit } = parsePagination(query, 50);
+      const { page, limit } = parsePagination(query, AUDIT_LOG_PAGE_SIZE);
       const action = isAuditAction(query.action) ? query.action : undefined;
       const outcome = isAuditOutcome(query.outcome) ? query.outcome : undefined;
       const actor = parseAuditActor(query.actor);

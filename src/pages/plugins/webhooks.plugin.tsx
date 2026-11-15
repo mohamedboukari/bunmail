@@ -21,6 +21,8 @@ import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { redactUrl } from "../../utils/redact.ts";
 import { ReplayLimitReachedError } from "../../modules/webhooks/errors.ts";
+import { isWebhookEventType } from "../../modules/webhooks/types/webhook.types.ts";
+import { logger } from "../../utils/logger.ts";
 
 /** Webhook pages (#291): list, create, delete, deliveries and replay. */
 export function webhookPages(app: GuardedDashboard) {
@@ -64,6 +66,45 @@ export function webhookPages(app: GuardedDashboard) {
       .post(
         "/webhooks",
         async ({ body, set, auth, request, server }) => {
+          /**
+           * The ticked events (#437): a browser sends one `events` field per
+           * ticked checkbox, so one event arrives as a string and several as
+           * an array; an empty string counts as no selection.
+           */
+          const submitted = Array.isArray(body.events)
+            ? body.events
+            : [body.events].filter(Boolean);
+          /**
+           * At least one event, as the REST DTO requires (`minItems: 1`): a
+           * webhook subscribed to nothing would never fire.
+           */
+          if (submitted.length === 0) {
+            logger.warn("Dashboard webhook not created: no event selected", {
+              userId: auth.user.id,
+            });
+            set.status = 302;
+            set.headers["location"] =
+              `/dashboard/webhooks?flash=${encodeURIComponent("Select at least one event")}&flashType=error`;
+            return "";
+          }
+          /**
+           * Only names from `WEBHOOK_EVENT_TYPES`, the list the REST DTO
+           * validates against (#437): the guard narrows each entry, and a
+           * single unknown name refuses the whole form, so nothing is
+           * stored. Neither the flash (it travels in the URL) nor the log
+           * line quotes the submitted names: the log carries a count only.
+           */
+          const events = submitted.filter(isWebhookEventType);
+          if (events.length !== submitted.length) {
+            logger.warn("Dashboard webhook not created: unknown event name", {
+              userId: auth.user.id,
+              unknownCount: submitted.length - events.length,
+            });
+            set.status = 302;
+            set.headers["location"] =
+              `/dashboard/webhooks?flash=${encodeURIComponent("Unknown webhook event")}&flashType=error`;
+            return "";
+          }
           try {
             /**
              * The key the webhook is attached to (#219): the user's own active key;
@@ -78,9 +119,7 @@ export function webhookPages(app: GuardedDashboard) {
                 `/dashboard/webhooks?flash=${encodeURIComponent(NO_USABLE_KEY_TEXT)}&flashType=error`;
               return "";
             }
-            const events = Array.isArray(body.events)
-              ? body.events
-              : [body.events].filter(Boolean);
+            /** The admin-only events rule is enforced in the service, for both surfaces. */
             const { webhook, secret } = await webhookService.createWebhook(
               { url: body.url, events },
               activeKey.id,

@@ -11,6 +11,7 @@ import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
 import { bootstrapOwner } from "./modules/users/services/owner.service.ts";
 import { buildSetupUrl } from "./modules/users/services/owner-setup-policy.service.ts";
 import { redactEmail } from "./utils/redact.ts";
+import { appBaseOrigin } from "./pages/lib/same-origin.ts";
 import { findNonCanonicalDomainNames } from "./modules/domains/services/domain.service.ts";
 
 /**
@@ -186,6 +187,22 @@ export function warnIgnoredSettings(): void {
       {
         vars: config.dashboard.legacyAuthEnv,
         note: "the dashboard signs in with the owner account (BUNMAIL_OWNER_EMAIL and the setup link)",
+      },
+    );
+  }
+
+  /**
+   * An `APP_BASE_URL` that is set but not an `http(s)://` URL (#420) is
+   * treated as unset: the dashboard same-origin check falls back to the
+   * request host (scheme not compared) and the setup, invite and reset
+   * links use localhost. Say so once, as nothing else fails loudly. The
+   * value itself is not logged (only that it is unusable).
+   */
+  if (config.appBaseUrl.trim() !== "" && appBaseOrigin(config.appBaseUrl) === null) {
+    logger.warn(
+      "APP_BASE_URL is set but is not an http(s) URL; the same-origin check falls back to the request host, and links use localhost",
+      {
+        hint: "set APP_BASE_URL to this server's public https:// URL (scheme and host the dashboard is opened at)",
       },
     );
   }

@@ -23,6 +23,8 @@
     "knip": "knip",
     "lint:xss": "bun run xss:toolchain && bun test/xss-gate.ts",
     "lint:mocks": "bun run test/mock-completeness.ts",
+    "changelog:collect": "bun run test/changelog-collect.ts",
+    "changelog:check": "bun run test/changelog-check.ts",
     "test": "bun test test/unit test/e2e",
     "test:unit": "bun test test/unit",
     "test:e2e": "bun test test/e2e",

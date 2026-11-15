@@ -83,7 +83,7 @@ bunmail/
 │   ├── index.ts                          ← Process entry: runs the boot steps in order, then starts the app, the background services and the signal handlers (#387)
 │   ├── app.ts                            ← The Elysia app: request context, security headers, OpenAPI, global `onError`, every route group; `startApp` listens
 │   ├── boot.ts                           ← Boot steps before the listener: app version, DKIM key decrypt check, stored domain name check (#406), owner bootstrap, ignored-settings warnings
-│   ├── background-services.ts            ← Starts the queue, both SMTP listeners, purge, webhook worker, re-verification, DNSBL self-check, memory sweeps
+│   ├── background-services.ts            ← Starts the queue, both SMTP listeners, purge, webhook worker, re-verification, DNSBL self-check, DANE resolver check, memory sweeps
 │   ├── process-lifecycle.ts              ← Crash logger (registered first) and the SIGINT/SIGTERM graceful shutdown (registered last)
 │   ├── config.ts                         ← Assembles `config` from config/ and re-exports its readers
 │   ├── config/                           ← Env readers with validation and the `config` section builders, one file per area (env, app, mail, auth, sso, smtp, retention, observability, storage, tls-rpt, dane)
@@ -151,6 +151,7 @@ bunmail/
 │   │   │   │   ├── mailer-dane.service.ts ← Route lookup with or without DANE, a DANE domain's per-host resolver (#345)
 │   │   │   │   ├── dane.ts               ← DANE lookups: the MX RRset, then per MX host addresses and TLSA records (RFC 7672, #345)
 │   │   │   │   ├── dane-verify.ts        ← Usable TLSA records, DANE-EE and DANE-TA matching of the server's certificates (#345)
+│   │   │   │   ├── dane-resolver-check.service.ts ← Self-check of DANE_RESOLVER: answers and validates, 30 s after boot then daily (#426)
 │   │   │   │   ├── mailer-delivery.service.ts ← MX sessions: failover, throttle, rate budget, spans
 │   │   │   │   ├── mailer-outcome.service.ts ← Each transaction's outcome on its delivery-state entry
 │   │   │   │   ├── mx-route.ts           ← MX resolution per recipient domain, implicit MX, failover across hosts (#250)
@@ -516,7 +517,7 @@ bunmail/
 │           ├── sso-logo.tsx              ← SSO button logos, inline SVG chosen by the issuer's host (#224)
 │           ├── created-by.tsx            ← "Created by" display names (#219)
 │           ├── email-chip-input.tsx      ← Multi-recipient chip input
-│           ├── html-preview.tsx          ← HTML preview in a sandboxed iframe
+│           ├── html-preview.tsx          ← HTML preview in a sandboxed iframe, remote images blocked (#419)
 │           ├── time-display.tsx          ← Timestamps rendered in the viewer's time zone (#104)
 │           └── empty-state.tsx           ← "No data yet" placeholder
 ├── test/

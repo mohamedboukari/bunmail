@@ -3,16 +3,18 @@
  * Postgres, through the real `pagesPlugin` over HTTP (no mocks): email and
  * password login, hashed opaque tokens, logout revocation, expiry on the
  * database clock, token rotation with its grace period, reuse detection,
- * disabled users and pending sessions, and the expired-session sweep.
+ * disabled users and pending sessions, the expired-session sweep, and the
+ * same-origin check behind a reverse proxy with `APP_BASE_URL` set (#420).
  *
  * `app.handle` has no socket and the default trusted-proxy-hop count is 0,
  * so every request shares the `unknown` client-IP bucket of the login
  * limiter; `loginAttemptMap` is cleared before each test.
  */
-import { describe, test, expect, beforeEach, spyOn } from "bun:test";
+import { describe, test, expect, afterEach, beforeEach, spyOn } from "bun:test";
 import { Elysia } from "elysia";
 import { eq, sql } from "drizzle-orm";
 import { db, seed, sessions, truncateAll } from "./_helpers.ts";
+import { config } from "../../src/config.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { loginAttemptMap } from "../../src/middleware/login-rate-limit.ts";
 import { userCredentials } from "../../src/modules/users/models/user-credential.schema.ts";
@@ -327,6 +329,177 @@ describe("guard", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("set-cookie")).toContain("bm_session=;");
     expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+});
+
+/* ─── Same-origin behind a reverse proxy (#420) ─── */
+
+describe("same-origin behind a reverse proxy (#420)", () => {
+  /** The public URL the browser is on; the container sees `INTERNAL`. */
+  const PUBLIC = "https://mail.example.com";
+  /** The bind address the proxy forwards to, as the request URL shows it. */
+  const INTERNAL = "http://127.0.0.1:3000";
+  const originalBaseUrl = config.appBaseUrl;
+
+  beforeEach(() => {
+    expect(Reflect.set(config, "appBaseUrl", PUBLIC)).toBe(true);
+  });
+
+  afterEach(() => {
+    expect(Reflect.set(config, "appBaseUrl", originalBaseUrl)).toBe(true);
+  });
+
+  /**
+   * A form POST as the proxy forwards it: internal URL and `Host` (nginx's
+   * default), the forwarding headers a proxy adds, the browser's `Origin`
+   * (or `Referer`) untouched.
+   */
+  function proxied(
+    path: string,
+    headers: Record<string, string>,
+    body: Record<string, string> = {},
+  ): Promise<Response> {
+    return app.handle(
+      new Request(`${INTERNAL}${path}`, {
+        method: "POST",
+        headers: {
+          host: "127.0.0.1:3000",
+          "x-forwarded-for": "203.0.113.7",
+          "x-forwarded-proto": "https",
+          "content-type": "application/x-www-form-urlencoded",
+          ...headers,
+        },
+        body: new URLSearchParams(body).toString(),
+      }),
+    );
+  }
+
+  /** The `expected` field of every cross-origin refusal among a `warn` spy's calls. */
+  function expectedFields(calls: ReadonlyArray<ReadonlyArray<unknown>>): unknown[] {
+    return calls
+      .filter((call) => String(call[0]).includes("cross-origin"))
+      .map((call) => {
+        const fields: unknown = call[1];
+        return typeof fields === "object" && fields !== null
+          ? Reflect.get(fields, "expected")
+          : undefined;
+      });
+  }
+
+  test("login: the public origin signs in; http:// or another port is refused", async () => {
+    await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    const credentials = { email: OWNER_EMAIL, password: PASSWORD };
+    const warn = spyOn(logger, "warn");
+
+    for (const origin of [
+      "http://mail.example.com",
+      "https://mail.example.com:8443",
+      "null",
+    ]) {
+      const refused = await proxied("/dashboard/login", { origin }, credentials);
+      expect(refused.status).toBe(403);
+      expect(cookieValue(refused)).toBeNull();
+    }
+    /** Behind the proxy the container's own origin is not the public one. */
+    const internal = await proxied("/dashboard/login", { origin: INTERNAL }, credentials);
+    expect(internal.status).toBe(403);
+    expect(await sessionRows()).toHaveLength(0);
+
+    const ok = await proxied("/dashboard/login", { origin: PUBLIC }, credentials);
+    expect(ok.status).toBe(302);
+    expect(ok.headers.get("location")).toBe("/dashboard");
+    expect(cookieValue(ok)).not.toBeNull();
+
+    /** The explicit default port is the same origin. */
+    loginAttemptMap.clear();
+    const port = await proxied(
+      "/dashboard/login",
+      { origin: "https://mail.example.com:443" },
+      credentials,
+    );
+    expect(port.status).toBe(302);
+
+    /** Each refusal logged what it compared with: the public origin. */
+    try {
+      expect(expectedFields(warn.mock.calls)).toEqual([PUBLIC, PUBLIC, PUBLIC, PUBLIC]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the SSH-tunnel break-glass signs in over loopback; the proxy path never does", async () => {
+    await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    const credentials = { email: OWNER_EMAIL, password: PASSWORD };
+
+    /** `ssh -L 3000:127.0.0.1:3000`, browser on `http://localhost:3000`: no proxy headers. */
+    const tunnel = await app.handle(
+      new Request("http://localhost:3000/dashboard/login", {
+        method: "POST",
+        headers: {
+          host: "localhost:3000",
+          origin: "http://localhost:3000",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(credentials).toString(),
+      }),
+    );
+    expect(tunnel.status).toBe(302);
+    expect(tunnel.headers.get("location")).toBe("/dashboard");
+
+    /** Through Caddy (public `Host`), a loopback Origin is refused. */
+    const caddy = await app.handle(
+      new Request("http://mail.example.com/dashboard/login", {
+        method: "POST",
+        headers: {
+          host: "mail.example.com",
+          origin: "http://localhost:3000",
+          "x-forwarded-for": "203.0.113.7",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(credentials).toString(),
+      }),
+    );
+    expect(caddy.status).toBe(403);
+  });
+
+  test("a guarded dashboard POST passes from the public origin or its Referer only", async () => {
+    const { id } = await seed.owner({ email: OWNER_EMAIL, password: PASSWORD });
+    const { token } = await seed.session({ userId: id });
+    const cookie = `bm_session=${token}`;
+    const body = { name: "behind-proxy" };
+    const warn = spyOn(logger, "warn");
+
+    const scheme = await proxied(
+      "/dashboard/api-keys",
+      { cookie, origin: "http://mail.example.com" },
+      body,
+    );
+    expect(scheme.status).toBe(403);
+    const referer = await proxied(
+      "/dashboard/api-keys",
+      { cookie, referer: "http://mail.example.com/dashboard/api-keys" },
+      body,
+    );
+    expect(referer.status).toBe(403);
+
+    const ok = await proxied("/dashboard/api-keys", { cookie, origin: PUBLIC }, body);
+    expect(ok.status).toBe(302);
+    expect(ok.headers.get("location")).not.toBe("/dashboard/login");
+
+    const viaReferer = await proxied(
+      "/dashboard/api-keys",
+      { cookie, referer: `${PUBLIC}/dashboard/api-keys` },
+      body,
+    );
+    expect(viaReferer.status).toBe(302);
+    expect(viaReferer.headers.get("location")).not.toBe("/dashboard/login");
+
+    /** The guard's refusals logged the origin they compared with. */
+    try {
+      expect(expectedFields(warn.mock.calls)).toEqual([PUBLIC, PUBLIC]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 
