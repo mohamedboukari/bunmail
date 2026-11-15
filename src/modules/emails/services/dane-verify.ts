@@ -1,7 +1,12 @@
 import { X509Certificate, createHash, createPublicKey, type KeyObject } from "crypto";
 import type { TlsaRecord } from "../../../utils/dns-rdata.ts";
+import { logger } from "../../../utils/logger.ts";
 import type { DaneHost } from "../types/dane.types.ts";
-import { isSubjectPublicKeyInfo, subjectPublicKeyInfo } from "./dane-der.ts";
+import {
+  isSubjectPublicKeyInfo,
+  pathLengthConstraint,
+  subjectPublicKeyInfo,
+} from "./dane-der.ts";
 
 /**
  * DANE authentication of an SMTP server (RFC 7672 section 3, #345): which
@@ -19,46 +24,69 @@ import { isSubjectPublicKeyInfo, subjectPublicKeyInfo } from "./dane-der.ts";
  * for each usage and selector, the Full(0) records and only the strongest
  * digest present (SHA2-512 over SHA2-256) are kept.
  *
- * **DANE-TA(2) is unusable for now** ({@link PEER_CHAIN_AVAILABLE}): Bun
- * 1.3.14's TLS client exposed only the server's leaf certificate, so the
- * anchor a DANE-TA record names could not be found in the presented chain.
- * Such records are treated as unsupported by the implementation, hence
- * unusable (RFC 7672 sections 2.2.3 and 3.1.3): a host whose records are
- * all DANE-TA gets mandatory TLS without authentication, and a host with
- * DANE-EE records beside them is authenticated by the DANE-EE ones only.
- * Bun 1.4.4 exposes the chain (#447); the DANE-TA matching below is kept
- * and tested on explicit chains, to be switched back on in its own change.
- *
  * **DANE-EE(3)** (RFC 7672 section 3.1.1, RFC 7671 section 5.1): the leaf
  * certificate (selector 0) or its public key (selector 1) must match.
- * Names and validity dates are ignored: the TLSA record's DNSSEC signature
- * is what dates the binding.
+ * Names and validity dates are ignored (RFC 7672 section 3.2.1, RFC 7671
+ * section 5.1): the TLSA record's DNSSEC signature is what dates the
+ * binding.
  *
- * **DANE-TA(2)** (RFC 7672 section 3.1.2, RFC 7671 section 5.2): a
- * certificate of the presented chain must match the record; that is the
- * trust anchor. Every certificate below it must be issued and signed by
- * the next one up (`checkIssued` and the signature), each intermediate
- * must be a CA, and each must be within its validity period. The trust
- * anchor's own dates are not checked: a trust anchor is an input to path
- * validation, not part of the path (RFC 5280 section 6.1.1), and here it
- * is vouched for by DNSSEC. When no presented certificate matches, a
- * "2 0 0" record carries the anchor certificate itself and a "2 1 0"
- * record its public key, and the top of the chain may be signed by it
- * (RFC 7671 sections 5.2.2 and 5.2.3). Finally the leaf must name one of
- * the reference identifiers (RFC 7672 sections 3.2.2 and 3.2.3): only its
- * DNS-IDs when it has any, else its CN; a wildcard only as the whole
- * first label, matching exactly one label.
+ * **DANE-TA(2)** (RFC 7672 sections 3.1.2 and 3.2, RFC 7671 section 5.2,
+ * #455): a certification path from the leaf up to a trust anchor the
+ * records name, built from the certificates the server presented:
+ *
+ * 1. **The anchor.** A presented certificate above the leaf that a record
+ *    matches, or, above the top of a path, an anchor a record carries in
+ *    full: a "2 0 0" certificate or a "2 1 0" public key (RFC 7671
+ *    sections 5.2.2 and 5.2.3; at most {@link MAX_DNS_ANCHORS} of them).
+ *    A DANE-TA record never makes the leaf its own anchor, neither by
+ *    matching it (or a certificate with its key) nor by carrying its key: as in OpenSSL (which Postfix
+ *    uses), DANE-TA matches only issuers, and a server that wants its
+ *    leaf trusted as is publishes DANE-EE.
+ * 2. **The links.** Each certificate of the path is issued by the next one
+ *    up (`checkIssued`: the issuer's subject is its issuer name, the key
+ *    identifiers agree, and the issuer's keyUsage, when present, allows
+ *    certificate signing) and carries its signature (`verify` with the
+ *    issuer's key); every issuer certificate is a CA (basicConstraints cA,
+ *    RFC 5280 section 6.1.4 (k)). For the anchor certificate this binds
+ *    only as far as the record does: with selector Cert(0) the record
+ *    fixes the whole certificate, its CA flag and constraints included;
+ *    with SPKI(1) it fixes only the key, the anchor's own signature is
+ *    never checked, so whoever holds that key can mint a certificate
+ *    around it with any flags (RFC 7671 sections 5.2.1 and 5.2.3: key-based
+ *    anchors carry no constraints). The path is searched over the
+ *    presented certificates in any order, since TLS 1.3 lets a server
+ *    send them out of order or with extra ones (RFC 8446 section 4.4.2),
+ *    at most {@link MAX_CHAIN_LENGTH} certificates and
+ *    {@link MAX_SIGNATURE_CHECKS} signature verifications: the check runs
+ *    synchronously in the TLS callback, and a hostile domain chooses both
+ *    the records and the chain, so past the budget the chain fails closed
+ *    as not verifying.
+ * 3. **Path length.** A pathLenConstraint on an intermediate or on the
+ *    anchor certificate (see step 2 for what binds the latter) bounds the non-self-issued intermediates below it
+ *    (RFC 5280 section 6.1.4 (l) and (m); for the anchor, RFC 7672 section
+ *    3.1.2 and RFC 7671 section 5.2.1: apply the trust anchor
+ *    certificate's constraints). Name constraints are not applied.
+ * 4. **Dates.** Every certificate below the anchor, the leaf included,
+ *    must be within its validity period (RFC 5280 section 6.1.3 (a)(2);
+ *    RFC 7671 section 5.2.3 asks for it of the top certificate under a
+ *    bare-key anchor, and section 5.1 reminds DANE-TA operators that
+ *    their certificates expire). The anchor's own dates are not checked:
+ *    a trust anchor is an input to path validation, not part of the path
+ *    (RFC 5280 section 6.1.1), and here DNSSEC vouches for it.
+ * 5. **The name.** The leaf must name one of the host's reference
+ *    identifiers (RFC 7672 section 3.2.2: the TLSA base domain, the
+ *    original next-hop domain and its CNAME expansion, see `dane.ts`):
+ *    only its DNS-IDs when it has any, else its CN; a wildcard only as the
+ *    whole first label, matching exactly one label (section 3.2.3).
+ *
+ * The chain is what Bun's `getPeerCertificate(true)` links (see
+ * {@link peerChain}): the certificates the server sent, in the order it
+ * sent them, and, when the last one is not self-signed, the root that
+ * issued it if Bun's bundled trust store has it. A record matching that
+ * root still authenticates (RFC 7671 section 5.2.2 lets a client ignore
+ * local trust anchors, it does not require it): the record, not the
+ * store, makes it the anchor.
  */
-
-/**
- * Whether the TLS client exposes the server's certificate chain, which
- * DANE-TA(2) matching needs. Bun 1.3.14 linked no `issuerCertificate`
- * from `getPeerCertificate(true)`; Bun 1.4.4 does (#447), and
- * `test/unit/mx-transport-dane.test.ts` pins that. Still `false` until
- * DANE-TA is switched back on in its own change, so DANE-TA records are
- * unusable ({@link usableTlsa}).
- */
-export const PEER_CHAIN_AVAILABLE = false;
 
 /** Certificate usages (RFC 7218). */
 const DANE_TA = 2;
@@ -74,8 +102,14 @@ const DIGEST_LENGTHS: ReadonlyMap<number, { algorithm: string; length: number }>
     [2, { algorithm: "sha512", length: 64 }],
   ]);
 
-/** Longest peer chain read from a TLS session. */
+/** Longest peer chain read from a TLS session, and longest certification path built from it. */
 const MAX_CHAIN_LENGTH = 10;
+/** The most partial paths one DANE-TA check explores, so no presented set can make it costly. */
+const MAX_PATH_STEPS = 256;
+/** The most signature verifications one DANE-TA check runs; past it the chain is "chain-invalid". */
+export const MAX_SIGNATURE_CHECKS = 64;
+/** The most DNS-carried anchors ("2 0 0", "2 1 0") one check uses, in RRset order. */
+const MAX_DNS_ANCHORS = 16;
 
 /** How a certificate name is matched (RFC 7672 section 3.2.3, RFC 6125). */
 const NAME_CHECK = {
@@ -104,12 +138,8 @@ function fullDataParses(record: TlsaRecord): boolean {
   }
 }
 
-/**
- * Whether one record is usable for SMTP, before agility (see the module
- * comment); DANE-TA only when the peer chain can be seen.
- */
-function isUsable(record: TlsaRecord, peerChainAvailable: boolean): boolean {
-  if (record.usage === DANE_TA && !peerChainAvailable) return false;
+/** Whether one record is usable for SMTP, before agility (see the module comment). */
+function isUsable(record: TlsaRecord): boolean {
   if (record.usage !== DANE_TA && record.usage !== DANE_EE) return false;
   if (record.selector !== SELECTOR_CERT && record.selector !== SELECTOR_SPKI)
     return false;
@@ -124,14 +154,9 @@ function isUsable(record: TlsaRecord, peerChainAvailable: boolean): boolean {
  * The usable records of a TLSA RRset after digest algorithm agility (RFC
  * 7671 section 9): for each usage and selector, the Full(0) records and
  * the records of the strongest digest present. Empty when none is usable.
- * `peerChainAvailable` decides whether DANE-TA records count; production
- * uses {@link PEER_CHAIN_AVAILABLE}, the matcher's tests pass `true`.
  */
-export function usableTlsa(
-  records: readonly TlsaRecord[],
-  peerChainAvailable: boolean = PEER_CHAIN_AVAILABLE,
-): TlsaRecord[] {
-  const usable = records.filter((record) => isUsable(record, peerChainAvailable));
+export function usableTlsa(records: readonly TlsaRecord[]): TlsaRecord[] {
+  const usable = records.filter(isUsable);
   const strongest = new Map<string, number>();
   for (const record of usable) {
     if (record.matchingType === MATCH_FULL) continue;
@@ -174,7 +199,16 @@ export type DaneFailure =
 
 /** What {@link verifyDaneChain} found. */
 export type DaneVerdict =
-  { ok: true; usage: "DANE-EE" | "DANE-TA" } | { ok: false; failure: DaneFailure };
+  | { ok: true; usage: "DANE-EE" }
+  | {
+      ok: true;
+      usage: "DANE-TA";
+      /** Where the trust anchor came from: the presented chain, or a full record in DNS. */
+      anchor: "presented" | "dns";
+      /** The certificates on the path below the anchor, the leaf included (at least 1). */
+      depth: number;
+    }
+  | { ok: false; failure: DaneFailure };
 
 /**
  * How specific a failure is: when several DANE-TA paths fail, the one that
@@ -190,29 +224,75 @@ const FAILURE_RANK: Record<DaneFailure, number> = {
   "name-mismatch": 5,
 };
 
-/** The trust anchor of a DANE-TA path: a certificate (in the chain or from DNS) or a bare key. */
+/** The trust anchor of a DANE-TA path: a certificate (presented or from DNS) or a bare key from DNS. */
 interface Anchor {
   key: KeyObject;
   cert: X509Certificate | null;
 }
 
+/** The signature verifications a DANE-TA check may still run (see {@link MAX_SIGNATURE_CHECKS}). */
+interface SignatureBudget {
+  left: number;
+  /** Set once a verification was refused for want of budget. */
+  spent: boolean;
+}
+
 /**
- * Checks a DANE-TA path (see the module comment): `below` are the
- * certificates under the anchor, leaf first; empty when the anchor is the
- * leaf itself (`leaf`). `null` when the path holds.
+ * Whether `issuer` issued and signed `cert` (step 2 of the module
+ * comment): when it is a certificate, a CA that `checkIssued` accepts;
+ * then its key verifies `cert`'s signature, which takes one unit of
+ * `budget` (none left: `false`, and the budget marked spent). A key the
+ * runtime cannot parse (RSA-PSS under Bun) verifies nothing.
+ */
+function issuedBy(
+  cert: X509Certificate,
+  issuer: Anchor,
+  budget: SignatureBudget,
+): boolean {
+  try {
+    if (issuer.cert !== null && (!issuer.cert.ca || !cert.checkIssued(issuer.cert))) {
+      return false;
+    }
+    if (budget.left <= 0) {
+      budget.spent = true;
+      return false;
+    }
+    budget.left -= 1;
+    return cert.verify(issuer.key);
+  } catch {
+    return false;
+  }
+}
+
+/** A presented certificate as an anchor or issuer; `null` when its key cannot be read. */
+function asAnchor(cert: X509Certificate): Anchor | null {
+  try {
+    return { key: cert.publicKey, cert };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Checks a DANE-TA path whose links already hold (steps 3 to 5 of the
+ * module comment): `below` are the certificates under the anchor, leaf
+ * first (empty when the anchor is the leaf itself), `anchor` the anchor
+ * certificate (`null` for a bare key). `null` when the path holds.
  */
 function checkTaPath(
   below: readonly X509Certificate[],
-  anchor: Anchor,
+  anchor: X509Certificate | null,
   leaf: X509Certificate,
   referenceIds: readonly string[],
   now: Date,
 ): DaneFailure | null {
-  try {
-    if (!signaturesHold(below, anchor)) return "chain-invalid";
-  } catch {
-    /** A key the runtime cannot parse (RSA-PSS under Bun) cannot verify anything. */
-    return "chain-invalid";
+  const issuers = anchor === null ? below.slice(1) : [...below.slice(1), anchor];
+  for (const [i, issuer] of issuers.entries()) {
+    const limit = pathLengthConstraint(issuer.raw);
+    if (limit === "malformed") return "chain-invalid";
+    /** The non-self-issued intermediates between this issuer and the leaf. */
+    const between = below.slice(1, i + 1).filter((c) => c.subject !== c.issuer).length;
+    if (limit !== null && between > limit) return "chain-invalid";
   }
   for (const cert of below) {
     if (now.getTime() < Date.parse(cert.validFrom)) return "not-yet-valid";
@@ -222,35 +302,26 @@ function checkTaPath(
   return named ? null : "name-mismatch";
 }
 
-/** Whether every certificate of `below` was issued and signed by the next one up, the last by `anchor`. */
-function signaturesHold(below: readonly X509Certificate[], anchor: Anchor): boolean {
-  for (let j = 0; j < below.length; j++) {
-    const cert = below[j];
-    if (cert === undefined) return false;
-    const issuer = below[j + 1];
-    if (issuer !== undefined) {
-      /** An intermediate below the anchor must be a CA that issued and signed `cert`. */
-      if (!issuer.ca || !cert.checkIssued(issuer) || !cert.verify(issuer.publicKey)) {
-        return false;
-      }
-    } else {
-      if (anchor.cert !== null && !cert.checkIssued(anchor.cert)) return false;
-      if (!cert.verify(anchor.key)) return false;
-    }
-  }
-  return true;
-}
-
-/** The anchors DNS itself carries ("2 0 0" and "2 1 0"), for a chain without the anchor in it. */
-function dnsAnchors(records: readonly TlsaRecord[]): Anchor[] {
+/**
+ * The anchors DNS itself carries ("2 0 0" and "2 1 0"), for a path whose
+ * top is not one: at most {@link MAX_DNS_ANCHORS}, and never one with the
+ * leaf's own key (`leafSpki`), which would make the leaf its own anchor.
+ */
+function dnsAnchors(
+  records: readonly TlsaRecord[],
+  leafSpki: Uint8Array | null,
+): Anchor[] {
   const anchors: Anchor[] = [];
   for (const record of records) {
     if (record.usage !== DANE_TA || record.matchingType !== MATCH_FULL) continue;
+    if (anchors.length >= MAX_DNS_ANCHORS) break;
     try {
       if (record.selector === SELECTOR_CERT) {
         const cert = new X509Certificate(record.data);
+        if (sameKey(subjectPublicKeyInfo(cert.raw), leafSpki)) continue;
         anchors.push({ key: cert.publicKey, cert });
       } else {
+        if (sameKey(record.data, leafSpki)) continue;
         const key = createPublicKey({
           key: Buffer.from(record.data),
           format: "der",
@@ -263,6 +334,122 @@ function dnsAnchors(records: readonly TlsaRecord[]): Anchor[] {
     }
   }
   return anchors;
+}
+
+/** Whether two DER SubjectPublicKeyInfos are the same bytes (an unreadable one matches nothing). */
+function sameKey(a: Uint8Array | null, b: Uint8Array | null): boolean {
+  return a !== null && b !== null && Buffer.from(a).equals(Buffer.from(b));
+}
+
+/**
+ * DANE-TA(2): searches the paths from the leaf (`chain[0]`) up through
+ * the presented certificates, depth first, for one that ends at an anchor
+ * `taRecords` name and passes {@link checkTaPath}. The issuer links are
+ * computed once per pair (presented issuer or DNS anchor), at most
+ * {@link MAX_PATH_STEPS} partial paths are explored and
+ * {@link MAX_SIGNATURE_CHECKS} signatures verified. When none holds, the
+ * failure of the path that got furthest; "chain-invalid" at least when a
+ * presented certificate matched but no path reached it, or when the
+ * signature budget ran out.
+ */
+function verifyTaPaths(
+  chain: readonly X509Certificate[],
+  taRecords: readonly TlsaRecord[],
+  referenceIds: readonly string[],
+  now: Date,
+): DaneVerdict {
+  const leaf = chain[0];
+  if (leaf === undefined) return { ok: false, failure: "no-certificate" };
+  /**
+   * Issuers only: a DANE-TA record never matches the leaf, a copy of it,
+   * or a certificate with its key (see the module comment).
+   */
+  const leafSpki = subjectPublicKeyInfo(leaf.raw);
+  const matched = chain.map(
+    (cert, i) =>
+      i > 0 &&
+      !sameKey(subjectPublicKeyInfo(cert.raw), leafSpki) &&
+      taRecords.some((record) => matches(record, cert)),
+  );
+  const fromDns = dnsAnchors(taRecords, leafSpki);
+  const budget: SignatureBudget = { left: MAX_SIGNATURE_CHECKS, spent: false };
+  let failure: DaneFailure = matched.some(Boolean) ? "chain-invalid" : "no-match";
+  const worse = (next: DaneFailure): void => {
+    if (FAILURE_RANK[next] > FAILURE_RANK[failure]) failure = next;
+  };
+  const links = new Map<string, boolean>();
+  /** Whether `chain[above]` issued `chain[below]`, computed once. */
+  const linked = (below: number, above: number): boolean => {
+    const key = `${below}>${above}`;
+    let known = links.get(key);
+    if (known === undefined) {
+      const cert = chain[below];
+      const issuer = chain[above];
+      const anchor = issuer === undefined ? null : asAnchor(issuer);
+      known = cert !== undefined && anchor !== null && issuedBy(cert, anchor, budget);
+      links.set(key, known);
+    }
+    return known;
+  };
+  const dnsLinks = new Map<string, boolean>();
+  /** Whether DNS anchor `a` issued `chain[below]`, computed once. */
+  const dnsLinked = (below: number, a: number): boolean => {
+    const key = `${below}>${a}`;
+    let known = dnsLinks.get(key);
+    if (known === undefined) {
+      const cert = chain[below];
+      const anchor = fromDns[a];
+      known =
+        cert !== undefined && anchor !== undefined && issuedBy(cert, anchor, budget);
+      dnsLinks.set(key, known);
+    }
+    return known;
+  };
+  let steps = 0;
+
+  /** Tries the path `path` (indexes into `chain`, leaf first), then each one issuer longer. */
+  const visit = (path: readonly number[]): DaneVerdict | null => {
+    steps += 1;
+    const topIndex = path[path.length - 1];
+    if (steps > MAX_PATH_STEPS || topIndex === undefined) return null;
+    const certs = path.flatMap((i) => chain[i] ?? []);
+    const top = certs[certs.length - 1];
+    if (top === undefined) return null;
+    if (matched[topIndex] === true) {
+      const pathFailure = checkTaPath(certs.slice(0, -1), top, leaf, referenceIds, now);
+      if (pathFailure === null) {
+        return {
+          ok: true,
+          usage: "DANE-TA",
+          anchor: "presented",
+          depth: certs.length - 1,
+        };
+      }
+      worse(pathFailure);
+    }
+    if (path.length < MAX_CHAIN_LENGTH) {
+      for (let next = 1; next < chain.length; next++) {
+        if (path.includes(next) || !linked(topIndex, next)) continue;
+        const verdict = visit([...path, next]);
+        if (verdict !== null) return verdict;
+      }
+    }
+    /** Presented anchors first: a DNS anchor above this path only once every longer one failed. */
+    for (const [a, anchor] of fromDns.entries()) {
+      if (!dnsLinked(topIndex, a)) continue;
+      const pathFailure = checkTaPath(certs, anchor.cert, leaf, referenceIds, now);
+      if (pathFailure === null) {
+        return { ok: true, usage: "DANE-TA", anchor: "dns", depth: certs.length };
+      }
+      worse(pathFailure);
+    }
+    return null;
+  };
+
+  const verdict = visit([0]);
+  if (verdict !== null) return verdict;
+  if (budget.spent) worse("chain-invalid");
+  return { ok: false, failure };
 }
 
 /**
@@ -284,40 +471,10 @@ export function verifyDaneChain(
     return { ok: true, usage: "DANE-EE" };
   }
 
-  /** DANE-TA(2): an anchor in the chain, then one from DNS above its top. */
+  /** DANE-TA(2): a path up to an anchor (RFC 7672 3.1.2, 3.2.2, 3.2.3). */
   const taRecords = host.usable.filter((record) => record.usage === DANE_TA);
-  let failure: DaneFailure = "no-match";
-  const worse = (next: DaneFailure): void => {
-    if (FAILURE_RANK[next] > FAILURE_RANK[failure]) failure = next;
-  };
-  for (let depth = 0; depth < chain.length; depth++) {
-    const cert = chain[depth];
-    if (cert === undefined || !taRecords.some((record) => matches(record, cert)))
-      continue;
-    let anchor: Anchor;
-    try {
-      anchor = { key: cert.publicKey, cert };
-    } catch {
-      worse("chain-invalid");
-      continue;
-    }
-    const pathFailure = checkTaPath(
-      chain.slice(0, depth),
-      anchor,
-      leaf,
-      host.referenceIds,
-      now,
-    );
-    if (pathFailure === null) return { ok: true, usage: "DANE-TA" };
-    worse(pathFailure);
-  }
-  for (const anchor of dnsAnchors(taRecords)) {
-    const pathFailure = checkTaPath(chain, anchor, leaf, host.referenceIds, now);
-    if (pathFailure === null) return { ok: true, usage: "DANE-TA" };
-    /** An anchor that signed nothing here is not a match, only a non-match. */
-    if (pathFailure !== "chain-invalid") worse(pathFailure);
-  }
-  return { ok: false, failure };
+  if (taRecords.length === 0) return { ok: false, failure: "no-match" };
+  return verifyTaPaths(chain, taRecords, host.referenceIds, now);
 }
 
 /**
@@ -340,12 +497,15 @@ export interface PeerCertificateSource {
 /**
  * The certificate chain a TLS session's server presented, leaf first,
  * from `getPeerCertificate(true)` (its `issuerCertificate` links), at most
- * {@link MAX_CHAIN_LENGTH} certificates; a self-signed certificate ends it.
+ * {@link MAX_CHAIN_LENGTH} certificates; a certificate linked twice (a
+ * self-signed root links to itself) ends it.
  *
- * Bun 1.3.14 linked no `issuerCertificate` (Node does), so there this was
- * the leaf alone, which is why DANE-TA records were made unusable
- * ({@link PEER_CHAIN_AVAILABLE}); Bun 1.4.4 links the whole presented
- * chain. `test/unit/mx-transport-dane.test.ts` pins this.
+ * Bun 1.4.4 links the certificates in the order the server sent them, not
+ * reordered as Node does, and appends the root that issued the last one
+ * when its bundled trust store has it (#455); `verifyDaneChain` takes
+ * them in any order. Bun 1.3.14 linked no `issuerCertificate`, so DANE-TA
+ * was unusable until #455. `test/unit/mx-transport-dane.test.ts` pins
+ * this.
  */
 export function peerChain(socket: PeerCertificateSource): X509Certificate[] {
   const chain: X509Certificate[] = [];
@@ -393,6 +553,11 @@ export const DANE_HANDSHAKE_INCOMPLETE =
  * waits out the STARTTLS stall limit. Then, with no usable record, any
  * TLS session passes (RFC 7672 section 2.2: TLS required, authentication
  * not).
+ *
+ * Logs the verdict at `debug` (the MX host, the usage that matched or the
+ * failure, the chain length, and for DANE-TA where the anchor came from
+ * and its depth); a failure is logged at `warn` by the caller once the
+ * session ends.
  */
 export function daneSocketCheck(
   host: DaneHost,
@@ -405,6 +570,25 @@ export function daneSocketCheck(
     }
     if (host.usable.length === 0) return null;
     const verdict = verifyDaneChain(chain, host, now());
-    return verdict.ok ? null : new Error(DANE_FAILURE_MESSAGES[verdict.failure]);
+    const context = {
+      mxHost: host.mxHost,
+      baseDomain: host.baseDomain,
+      chainLength: chain.length,
+    };
+    if (!verdict.ok) {
+      logger.debug("DANE: certificate chain not authenticated", {
+        ...context,
+        failure: verdict.failure,
+      });
+      return new Error(DANE_FAILURE_MESSAGES[verdict.failure]);
+    }
+    logger.debug("DANE: certificate chain authenticated", {
+      ...context,
+      usage: verdict.usage,
+      ...(verdict.usage === "DANE-TA"
+        ? { anchor: verdict.anchor, depth: verdict.depth }
+        : {}),
+    });
+    return null;
   };
 }
