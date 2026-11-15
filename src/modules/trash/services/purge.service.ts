@@ -16,6 +16,7 @@ import { purgeExpiredIdempotencyKeys } from "../../emails/services/idempotency.s
 import { purgeOldEmailEvents } from "../../emails/services/email-events.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 
 /**
@@ -230,7 +231,7 @@ export function start(): void {
     for (const r of results) {
       if (r.status === "rejected") {
         logger.error("Initial trash purge cycle failed", {
-          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+          error: loggableError(r.reason),
         });
       }
     }
@@ -241,7 +242,7 @@ export function start(): void {
       for (const r of results) {
         if (r.status === "rejected") {
           logger.error("Scheduled trash purge cycle failed", {
-            error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+            error: loggableError(r.reason),
           });
         }
       }

@@ -33,7 +33,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
 | `lease_until`   | timestamptz    | nullable                | Claim expiry while `sending`; renewed by the worker, reclaimable once passed (#180) |
-| `last_error`    | text           | nullable                | Error message from last failed attempt      |
+| `last_error`    | text           | nullable                | Error message from last failed attempt (a database error is stored as `Database query failed (SQLSTATE <code>)`, never with its query parameters, #458) |
 | `delivery_state` | jsonb         | nullable                | Per-group outcomes: one entry per recipient domain, or per recipient once split (#97, #236, #250). See [Per-group delivery state](#per-group-delivery-state-emailsdelivery_state-97). |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
@@ -917,7 +917,7 @@ Whether a record is usable does not depend on MTA-STS: a host whose RRset gains 
 
 - Logs: `DANE: MX records` (domain, `secure`), and one line per host decision at `debug` (`DANE: applies to the MX host` with the base domain, the record counts and `mode` `authenticated` or `encrypted-only`; `DANE: not applicable to the MX host`; `DANE: MX host skipped`; `DANE: no usable TLSA record, MTA-STS verified TLS applies` with the domain, MX host and base domain, #452), and one per certificate check (`DANE: certificate chain authenticated` with the MX host, base domain, chain length, `usage` and, for DANE-TA, `anchor` `presented` or `dns` and its `depth` below it; `DANE: certificate chain not authenticated` with the `failure`, #455). At `warn`: `DANE: MX lookup failed, delivery delayed` (domain, code), `DANE: MX host skipped, a DNSSEC lookup failed` (domain, MX host, reason) and `DANE: no authenticated TLS with the MX host` (domain, MX host, base domain, reason). The resolver check logs `DANE resolver check passed` (`info`) or `DANE resolver check failed: ...` (`error` or `warn`), see [Resolver check](#dane-345) above. Names and fixed reasons only.
 - Spans: `bunmail.mx.dane` (boolean) on `mx.deliver`, `bunmail.mx.dane_mode` (`authenticated`, `encrypted-only`, `mta-sts` when no TLSA record is usable and an enforce policy secures the session, #452, or `none`) on `mx.session` (see [tracing.md](tracing.md)).
-- TLS-RPT: a DANE session is recorded under a `tlsa` policy (the host's TLSA records in presentation form, the host as `mx-host`), see [tls-rpt.md](tls-rpt.md).
+- TLS-RPT: a DANE session is recorded under a `tlsa` policy (the host's TLSA records in presentation form, the host as `mx-host`); a session the enforce policy secured for want of a usable record (`mta-sts` above) under the `sts` policy with its verification's outcome, and as `tlsa-invalid` under the host's `tlsa` policy (#473), see [tls-rpt.md](tls-rpt.md).
 
 ### TLS reporting (#345)
 

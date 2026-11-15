@@ -1,5 +1,6 @@
 import { sendMail } from "./mailer.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { withSpan } from "../../../utils/tracing.ts";
 import { config } from "../../../config.ts";
@@ -92,7 +93,7 @@ async function poll(): Promise<void> {
     void Promise.all(sends);
   } catch (error: unknown) {
     logger.error("Queue processing error", {
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
   } finally {
     polling = false;
@@ -174,7 +175,7 @@ async function startQueueCycle(
       .catch((error: unknown) => {
         logger.error("Email send attempt crashed", {
           emailId: email.id,
-          error: error instanceof Error ? error.message : String(error),
+          error: loggableError(error),
         });
       })
       .finally(() => {
@@ -200,7 +201,7 @@ async function processEmail(email: ClaimedEmail, deps: QueueDeps): Promise<void>
       .catch((error: unknown) => {
         logger.error("Lease renewal failed", {
           ...claim,
-          error: error instanceof Error ? error.message : String(error),
+          error: loggableError(error),
         });
       });
   }, LEASE_RENEW_MS);

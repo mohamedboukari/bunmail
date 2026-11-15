@@ -20,7 +20,7 @@ import {
   type SessionTls,
 } from "./mailer-dane.service.ts";
 import type { DaneHost } from "../types/dane.types.ts";
-import { danePolicyOf } from "../../tls-rpt/services/tls-rpt-classify.ts";
+import { sessionPolicies } from "../../tls-rpt/services/tls-rpt-classify.ts";
 import { observeMxSession } from "../../tls-rpt/services/tls-rpt-observe.service.ts";
 import type { TlsRptDomain } from "../../tls-rpt/types/tls-rpt.types.ts";
 
@@ -95,8 +95,9 @@ export interface DeliveryLimits {
  * first: a host with usable TLSA records gets a DANE session, which takes
  * precedence over MTA-STS, and its TLS-RPT outcome goes under its `tlsa`
  * policy; a host whose records are all unusable gets the MTA-STS verified
- * TLS of an enforce policy (#452), else a DANE session that requires TLS
- * without authenticating it ({@link sessionTls}).
+ * TLS of an enforce policy (#452), its TLS-RPT outcome under that `sts`
+ * policy and `tlsa-invalid` under its `tlsa` one (#473), else a DANE
+ * session that requires TLS without authenticating it ({@link sessionTls}).
  *
  * `signed` is the message as `sendMail` signed it once (#345): its bytes go
  * to every transaction unchanged.
@@ -226,6 +227,7 @@ async function deliverToMxHosts(
     runSession: ({ dane, ...session }) => {
       /** DANE when it can validate, else MTA-STS enforce (RFC 8461 section 2, #452). */
       const tls = sessionTls(dane, plan.verifiedTls);
+      const mode = daneMode(dane, tls);
       return withSpan(
         "mx.session",
         {
@@ -236,7 +238,7 @@ async function deliverToMxHosts(
             /** The MX's own IP address, which the session connected to. */
             "network.peer.address": session.address,
             "bunmail.mx.transaction_count": session.transactions.length,
-            "bunmail.mx.dane_mode": daneMode(dane, tls),
+            "bunmail.mx.dane_mode": mode,
             ...localAddressAttribute(session.address),
           },
         },
@@ -252,16 +254,18 @@ async function deliverToMxHosts(
           /**
            * TLS-RPT (#345): recorded in the background, never awaited, each
            * domain from its own transactions' outcomes only; a DANE
-           * session under the host's `tlsa` policy.
+           * session under the host's `tlsa` policy, one secured by
+           * MTA-STS for want of a usable TLSA record under the `sts`
+           * policy and the `tlsa` one (#473, `sessionPolicies`).
            */
           observeMxSession(
-            plan.tlsRpt.map((target) => ({
-              target:
-                dane === null
-                  ? target
-                  : { domain: target.domain, policy: danePolicyOf(dane) },
-              outcomes: outcomes.filter((o) => domainOf.get(o.key) === target.domain),
-            })),
+            plan.tlsRpt.flatMap((target) => {
+              const own = outcomes.filter((o) => domainOf.get(o.key) === target.domain);
+              return sessionPolicies(target, dane, mode === "mta-sts").map((policy) => ({
+                target: policy,
+                outcomes: own,
+              }));
+            }),
             { mxHost: session.mxHost, address: session.address },
           );
           return outcomes;

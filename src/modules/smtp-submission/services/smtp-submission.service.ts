@@ -3,6 +3,7 @@ import type { Server as TlsServer } from "tls";
 import { SMTPServer } from "smtp-server";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { createImplicitTlsListener } from "./smtp-submission-tls.service.ts";
 import { submissionDataHandler } from "./smtp-submission-data.service.ts";
 import { submissionSessionHandlers } from "./smtp-submission-handlers.service.ts";
@@ -210,7 +211,7 @@ export function start(portOverride?: number): void {
       });
       return;
     }
-    logger.error("SMTP submission server error", { error: err.message });
+    logger.error("SMTP submission server error", { error: loggableError(err) });
   };
   smtp.on("error", onServerError);
 

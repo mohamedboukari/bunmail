@@ -1,11 +1,18 @@
 import { describe, test, expect } from "bun:test";
 import {
-  isVerifiedReport,
   signatureCanVouch,
   verifyReportDkim,
+  type DkimCheck,
 } from "../../src/modules/inbound/services/feedback-handler.service.ts";
+import { verifyFeedbackReport } from "../../src/modules/inbound/services/feedback-verification.service.ts";
 import { signingDomainOf } from "../../src/modules/inbound/services/dkim-verifier-parse.service.ts";
-import { arfReport, arfResolveTxt, signArf, signArfWith } from "../signed-arf.ts";
+import {
+  ARF_FROM,
+  arfReport,
+  arfResolveTxt,
+  signArf,
+  signArfWith,
+} from "../signed-arf.ts";
 
 /**
  * The DKIM check of a feedback-loop report, on real signatures (BunMail's
@@ -107,6 +114,14 @@ describe("verifyReportDkim", () => {
 describe("verifyReportDkim: signatures that cover too little", () => {
   const LISTED = ["fbl.isp.example.net"];
 
+  /** Whether `dkim` verifies the fixture report, from its listed sender. */
+  function isVerified(dkim: DkimCheck): boolean {
+    return verifyFeedbackReport(
+      { dkim, headers: { from: ARF_FROM, contentTypeSingle: true }, envelopeFrom: null },
+      { domains: LISTED, senders: [ARF_FROM] },
+    ).verified;
+  }
+
   test("both conditions met (custom signer, no l=, h= with From and Content-Type): counted", async () => {
     const result = await check(
       signArfWith(REPORT, "fbl.isp.example.net", {
@@ -116,7 +131,7 @@ describe("verifyReportDkim: signatures that cover too little", () => {
     );
     expect(result.result).toBe("pass");
     expect(result.passingDomains).toEqual(["fbl.isp.example.net"]);
-    expect(isVerifiedReport(result, LISTED)).toBe(true);
+    expect(isVerified(result)).toBe(true);
   });
 
   test("an l= tag: passes, not counted, even when l= covers the whole body", async () => {
@@ -127,7 +142,7 @@ describe("verifyReportDkim: signatures that cover too little", () => {
       );
       expect(result.result).toBe("pass");
       expect(result.passingDomains).toEqual([]);
-      expect(isVerifiedReport(result, LISTED)).toBe(false);
+      expect(isVerified(result)).toBe(false);
     }
   });
 
@@ -140,7 +155,7 @@ describe("verifyReportDkim: signatures that cover too little", () => {
     );
     expect(result.result).toBe("pass");
     expect(result.passingDomains).toEqual([]);
-    expect(isVerifiedReport(result, LISTED)).toBe(false);
+    expect(isVerified(result)).toBe(false);
   });
 
   test("a report altered after the signed length still verifies with l=, so it cannot count", async () => {

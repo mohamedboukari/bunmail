@@ -14,6 +14,7 @@ import { apiKeys } from "../modules/api-keys/models/api-key.schema.ts";
 import { generateId } from "../utils/id.ts";
 import { generateApiKey } from "../utils/crypto.ts";
 import { logger } from "../utils/logger.ts";
+import { loggableError } from "../utils/db-error.ts";
 
 async function seed() {
   logger.info("Seeding test API key...");
@@ -66,7 +67,7 @@ async function seed() {
 
 seed().catch((error) => {
   logger.error("Seed failed", {
-    error: error instanceof Error ? error.message : String(error),
+    error: loggableError(error),
   });
   process.exit(1);
 });

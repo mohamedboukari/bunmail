@@ -1,6 +1,7 @@
 import { Reader, type Response as MmdbResponse } from "mmdb-lib";
 import { config, type GeoipSettings } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { isBlockedIp } from "../../../utils/ssrf-guard.ts";
 
 /**
@@ -186,7 +187,7 @@ function sharedMmdbLookup(dbPath: string): Promise<MmdbLookup | null> {
     },
     (error: unknown) => {
       logger.warn("GeoIP database could not be loaded, session locations off", {
-        error: error instanceof Error ? error.message : String(error),
+        error: loggableError(error),
       });
       return null;
     },

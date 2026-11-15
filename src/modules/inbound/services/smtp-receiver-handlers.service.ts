@@ -242,7 +242,7 @@ export function receiverSessionHandlers({
             })
             .catch((error: unknown) => {
               logger.error("Unsubscribe address check failed during RCPT TO", {
-                error: error instanceof Error ? error.message : String(error),
+                error: loggableError(error),
               });
               callback(smtpError("Temporary failure, try again later", 451, "temporary"));
             });
@@ -269,7 +269,7 @@ export function receiverSessionHandlers({
             })
             .catch((error: unknown) => {
               logger.error("Return path check failed during RCPT TO", {
-                error: error instanceof Error ? error.message : String(error),
+                error: loggableError(error),
               });
               callback(smtpError("Temporary failure, try again later", 451, "temporary"));
             });
@@ -313,7 +313,7 @@ export function receiverSessionHandlers({
           .catch((error) => {
             /** DB query failed: allow through (fail open) */
             logger.error("Domain lookup failed during RCPT TO check", {
-              error: error instanceof Error ? error.message : String(error),
+              error: loggableError(error),
             });
             callback();
           });

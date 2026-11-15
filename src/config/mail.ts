@@ -334,7 +334,9 @@ export function readSuppressionsSharedHard(
  * mailbox providers whose feedback-loop reports BunMail trusts,
  * comma-separated. A complaint is shared across API keys by
  * `SUPPRESSIONS_SHARED_HARD` only when its report carries a passing DKIM
- * signature of one of these domains (see `feedback-handler.service.ts`).
+ * signature of one of these domains and comes from one of
+ * `FEEDBACK_LOOP_SENDERS` (see `readFeedbackLoopSenders` and
+ * `feedback-handler.service.ts`).
  *
  * Each entry is normalised like a registered domain name
  * (`parseDomainName`: trimmed, an IDN turned into its A-label, ASCII
@@ -362,6 +364,116 @@ export function readFeedbackLoopDomains(
     domains.push(domain);
   }
   return [...new Set(domains)];
+}
+
+/**
+ * Consumer mailbox domains: providers whose DKIM key signs the ordinary
+ * mail of every one of their users. `exact` names match as written;
+ * `anySuffix` names match under any one- or two-label suffix (`gmx.net`,
+ * `gmx.de`, `yahoo.co.uk`). A short list of the large ones, not a
+ * complete one.
+ */
+const CONSUMER_MAILBOX_DOMAINS: {
+  exact: readonly string[];
+  anySuffix: readonly string[];
+} = {
+  exact: [
+    "gmail.com",
+    "googlemail.com",
+    "ymail.com",
+    "msn.com",
+    "icloud.com",
+    "me.com",
+    "web.de",
+    "mail.ru",
+    "protonmail.com",
+    "protonmail.ch",
+    "proton.me",
+    "pm.me",
+  ],
+  anySuffix: ["gmx", "yandex", "yahoo", "hotmail", "outlook", "live", "aol"],
+};
+
+/**
+ * Whether `domain` (a normalised domain name, as `parseDomainName` returns
+ * it) is a consumer mailbox domain (see {@link CONSUMER_MAILBOX_DOMAINS}):
+ * one whose DKIM signature vouches for mail written by any of its users,
+ * so a passing signature alone says nothing about who wrote a report.
+ * Subdomains count too (`mail.yahoo.com`, `arf.mail.yahoo.com`): which
+ * names under a provider's domain its users can send from is not
+ * something BunMail can know, so such a domain is treated like the
+ * provider's own.
+ */
+export function isConsumerMailboxDomain(domain: string): boolean {
+  const { exact, anySuffix } = CONSUMER_MAILBOX_DOMAINS;
+  if (exact.some((name) => domain === name || domain.endsWith(`.${name}`))) return true;
+  const labels = domain.split(".");
+  /** A listed name followed by a one- or two-label suffix, anywhere in the name. */
+  return labels.some((label, index) => {
+    const suffixLabels = labels.length - index - 1;
+    return anySuffix.includes(label) && suffixLabels >= 1 && suffixLabels <= 2;
+  });
+}
+
+/**
+ * Reads `FEEDBACK_LOOP_SENDERS`: who may send a verified feedback-loop
+ * report, comma-separated. An entry is either one exact address
+ * (`feedback@fbl.example.net`) or `@` and a domain (`@fbl.example.net`: any
+ * address at exactly that domain, no subdomains). A complaint is verified
+ * only when its report's `From` (and its envelope sender, when not empty)
+ * matches one of them, on top of the DKIM rule of `FEEDBACK_LOOP_DOMAINS`
+ * (see `feedback-handler.service.ts`).
+ *
+ * Matching ignores case: each entry is stored lower-cased, its domain
+ * normalised like `FEEDBACK_LOOP_DOMAINS` (`parseDomainName`). Refuses to
+ * boot on an entry that is neither a bare address nor `@domain` (a display
+ * name, angle brackets, a wildcard), and on `@domain` for a consumer
+ * mailbox domain or a subdomain of one ({@link isConsumerMailboxDomain}),
+ * which would accept a
+ * report from any user of that provider: its exact feedback-loop address
+ * must be listed instead. Unset or blank gives an empty list: no report is
+ * verified. Duplicates are dropped. Exported for tests.
+ */
+export function readFeedbackLoopSenders(
+  raw: string | undefined = process.env["FEEDBACK_LOOP_SENDERS"],
+): string[] {
+  const entries = (raw ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  const senders: string[] = [];
+  for (const entry of entries) {
+    const at = entry.lastIndexOf("@");
+    const domain = at < 0 ? null : parseDomainName(entry.slice(at + 1));
+    /**
+     * `@domain` (at 0) or one bare address (the same check as
+     * `BUNMAIL_OWNER_EMAIL`). A `*` is valid in an address but here can
+     * only be meant as a wildcard, which `@domain` already is: refused.
+     * The local part must be printable ASCII, so lowercasing it folds
+     * nothing but A to Z (the report side compares the same way).
+     */
+    const local = at < 0 ? "" : entry.slice(0, at);
+    const valid =
+      domain !== null &&
+      (at === 0 ||
+        (ownerEmailProblem(entry) === null &&
+          !local.includes("*") &&
+          /^[\x21-\x7e]+$/.test(local)));
+    if (!valid) {
+      throw new Error(
+        `[config] FEEDBACK_LOOP_SENDERS must be addresses or @domain entries separated by commas, got "${entry}"`,
+      );
+    }
+    if (at === 0 && isConsumerMailboxDomain(domain)) {
+      throw new Error(
+        `[config] FEEDBACK_LOOP_SENDERS must not list "@${domain}": every user of that mailbox provider sends from it.\n` +
+          "  → List the provider's exact feedback-loop address instead (the From of a\n" +
+          "    real report), e.g. FEEDBACK_LOOP_SENDERS=feedback@fbl.example.net",
+      );
+    }
+    senders.push(`${local.toLowerCase()}@${domain}`);
+  }
+  return [...new Set(senders)];
 }
 
 /**
@@ -503,10 +615,21 @@ export function buildSuppressionsConfig() {
      * DKIM signing domains of trusted feedback-loop senders
      * (`FEEDBACK_LOOP_DOMAINS`, default empty). A complaint counts for the
      * shared gate above only when its report carries a passing DKIM
-     * signature whose `d=` is exactly one of these; any other complaint
-     * still suppresses under the reporting email's own key.
+     * signature whose `d=` is exactly one of these, from a sender listed
+     * in `feedbackLoopSenders` below; any other complaint still suppresses
+     * under the reporting email's own key.
      */
     feedbackLoopDomains: readFeedbackLoopDomains(),
+
+    /**
+     * Who may send a verified feedback-loop report
+     * (`FEEDBACK_LOOP_SENDERS`, default empty): exact addresses and
+     * `@domain` entries, lower-cased. A complaint is verified only when its
+     * report's `From`, and its envelope sender when not empty, match one
+     * of these, on top of the DKIM rule above. Empty: nothing is verified,
+     * whatever `FEEDBACK_LOOP_DOMAINS` lists.
+     */
+    feedbackLoopSenders: readFeedbackLoopSenders(),
   } as const;
 }
 

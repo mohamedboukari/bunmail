@@ -2,6 +2,8 @@ import { afterAll, describe, expect, mock, test } from "bun:test";
 import Mail from "nodemailer/lib/mailer";
 import SMTPPool from "nodemailer/lib/smtp-pool";
 import type { TlsRptObservation } from "../../src/modules/tls-rpt/types/tls-rpt.types.ts";
+import { parseServer } from "../../src/utils/dns-transport.ts";
+import { aRecord, secureZoneHandler, tlsaRecord, useFakeDns } from "../fake-dns.ts";
 import {
   startFixtureServer,
   type FixtureMode,
@@ -34,6 +36,8 @@ const { setMtaStsDeps } = await import("../../src/modules/emails/services/mta-st
 const { setMxRouteDeps } = await import("../../src/modules/emails/services/mx-route.ts");
 const { runMxSession } =
   await import("../../src/modules/emails/services/mx-transport.ts");
+const { sendToMxHosts } =
+  await import("../../src/modules/emails/services/mailer-delivery.service.ts");
 const { setTlsRptObserveDeps, settleTlsRptRecordings } =
   await import("../../src/modules/tls-rpt/services/tls-rpt-observe.service.ts");
 const { classifySession, tlsRptPolicyOf } =
@@ -221,6 +225,132 @@ describe("a session shared by several domains (the mailer's wiring)", () => {
     expect(recorded.toSorted((x, y) => x.domain.localeCompare(y.domain))).toEqual([
       { domain: "example.net", result: "starttls-not-supported" },
       { domain: "example.org", result: "starttls-not-supported" },
+    ]);
+  }, 30_000);
+});
+
+describe("a DANE host with PKIX-only TLSA records under an enforce policy (#473, the mailer's wiring)", () => {
+  const fake = useFakeDns();
+
+  /**
+   * One delivery to mx1.example.test, whose TLSA record (usage 1) is
+   * unusable for DANE, for example.org under an enforce MTA-STS policy:
+   * the session gets MTA-STS verified TLS (#452) against a fixture
+   * presenting `cert`. Returns what TLS-RPT recorded, policy type by type.
+   */
+  async function deliver(
+    cert: string,
+  ): Promise<Array<{ type: string; observation: TlsRptObservation }>> {
+    const server = await startFixtureServer("starttls", cert);
+    running.push(server);
+    fake.serve(
+      secureZoneHandler({
+        "mx1.example.test A": { answers: [aRecord("127.0.0.1")] },
+        "mx1.example.test AAAA": { answers: [] },
+        [`_${server.port}._tcp.mx1.example.test TLSA`]: {
+          answers: [tlsaRecord(1, 1, 1, new Uint8Array(32).fill(7))],
+        },
+      }),
+    );
+    const resolver = parseServer(fake.dns.server);
+    if (resolver === null) throw new Error("bad fake server address");
+    const saved = {
+      dane: { ...config.dane },
+      allowPrivateMx: config.mail.allowPrivateMx,
+    };
+    Object.assign(config.dane, { enabled: true, resolver });
+    Object.assign(config.mail, { allowPrivateMx: true });
+    setMxRouteDeps({ smtpPort: () => server.port, timeoutMs: 1_000 });
+    setMtaStsDeps({ ca: CA });
+    const recorded: Array<{ type: string; observation: TlsRptObservation }> = [];
+    setTlsRptObserveDeps({
+      enabled: () => true,
+      publishes: async () => true,
+      record: async (args) => {
+        recorded.push({ type: args.policy.type, observation: args.observation });
+        return "recorded";
+      },
+    });
+    const policy = { mode: "enforce" as const, mx: ["*.example.test"], maxAge: 60 };
+    try {
+      await sendToMxHosts(
+        {
+          hosts: ["mx1.example.test"],
+          domains: ["example.org"],
+          transactions: [
+            {
+              key: "k",
+              domain: "example.org",
+              recipients: ["user@example.org"],
+              envelopeFrom: "sender@example.com",
+            },
+          ],
+          verifiedTls: true,
+          dane: {
+            secureMx: {
+              nextHop: "example.org",
+              expandedNextHop: "example.org",
+              implicit: false,
+            },
+            stsPolicy: { id: "p1", policy },
+          },
+          tlsRpt: [
+            {
+              domain: "example.org",
+              policy: tlsRptPolicyOf({ policy: { id: "p1", policy }, failure: null }),
+            },
+          ],
+        },
+        {
+          from: "sender@example.com",
+          headerTo: "user@example.org",
+          headerCc: null,
+          replyTo: null,
+          subject: "pkix-only",
+          html: null,
+          text: "hello",
+          messageId: `<${crypto.randomUUID()}@bunmail.example.test>`,
+          headers: {},
+        },
+        { kind: "unsigned" },
+      );
+      await settleTlsRptRecordings();
+    } finally {
+      setTlsRptObserveDeps(null);
+      setMxRouteDeps(null);
+      setMtaStsDeps(null);
+      Object.assign(config.dane, saved.dane);
+      Object.assign(config.mail, { allowPrivateMx: saved.allowPrivateMx });
+    }
+    return recorded;
+  }
+
+  const TLSA_INVALID: TlsRptObservation = {
+    result: "tlsa-invalid",
+    receivingMxHostname: "mx1.example.test",
+    receivingIp: "127.0.0.1",
+    failureReasonCode: "",
+  };
+
+  test("verified: an sts success, and tlsa-invalid under the host's tlsa policy", async () => {
+    expect(await deliver("mx1.example.test")).toEqual([
+      { type: "sts", observation: { result: "success" } },
+      { type: "tlsa", observation: TLSA_INVALID },
+    ]);
+  }, 30_000);
+
+  test("a certificate for another name: certificate-host-mismatch under sts", async () => {
+    expect(await deliver("mx2.example.test")).toEqual([
+      {
+        type: "sts",
+        observation: {
+          result: "certificate-host-mismatch",
+          receivingMxHostname: "mx1.example.test",
+          receivingIp: "127.0.0.1",
+          failureReasonCode: "",
+        },
+      },
+      { type: "tlsa", observation: TLSA_INVALID },
     ]);
   }, 30_000);
 });

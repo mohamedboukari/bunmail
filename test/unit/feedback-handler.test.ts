@@ -2,7 +2,6 @@ import { describe, test, expect, spyOn } from "bun:test";
 import {
   classifyFeedbackType,
   handleFeedbackReport,
-  isVerifiedReport,
   type DkimCheck,
   type FeedbackHandlerDeps,
   type LinkedEmail,
@@ -38,6 +37,8 @@ interface Calls {
   }>;
   events: Array<{ event: string; data: Record<string, unknown>; apiKeyId: string }>;
   dkimChecks: number;
+  /** How often the signed header view was read. */
+  headerReads: number;
   /** Every write, with the transaction it ran in (`null`: outside one). */
   writes: Array<{ write: string; txId: number | null }>;
   /** How each transaction ended. */
@@ -54,6 +55,9 @@ const EMAIL: LinkedEmail = {
   tags: { flow: "reset" },
 };
 
+/** The fixture report's `From`: on the domain of the default passing signature. */
+const REPORTER = "feedback@isp.example.net";
+
 function makeDeps(opts: {
   email?: LinkedEmail;
   /** What addFromComplaint returns: a row (changed) or undefined (already on file). */
@@ -65,6 +69,14 @@ function makeDeps(opts: {
   dkim?: DkimCheck;
   /** `FEEDBACK_LOOP_DOMAINS`; default empty, so nothing is verified. */
   feedbackLoopDomains?: string[];
+  /** `FEEDBACK_LOOP_SENDERS`; default: the fixture report's sender. */
+  feedbackLoopSenders?: string[];
+  /** The envelope `MAIL FROM`; default `null` (`<>`). */
+  envelopeFrom?: string | null;
+  /** The `From` a signature covers (verifier's view); default the fixture's sender. */
+  signedFrom?: string | null;
+  /** Whether the verifier's view has one top-level `Content-Type`; default true. */
+  contentTypeSingle?: boolean;
 }): { deps: FeedbackHandlerDeps<FakeTx>; calls: Calls } {
   const calls: Calls = {
     lookups: [],
@@ -72,6 +84,7 @@ function makeDeps(opts: {
     unsubscribes: [],
     events: [],
     dkimChecks: 0,
+    headerReads: 0,
     writes: [],
     transactions: [],
   };
@@ -130,6 +143,15 @@ function makeDeps(opts: {
         );
       },
       feedbackLoopDomains: opts.feedbackLoopDomains ?? [],
+      feedbackLoopSenders: opts.feedbackLoopSenders ?? [REPORTER],
+      envelopeFrom: opts.envelopeFrom ?? null,
+      readSignedHeaders: () => {
+        calls.headerReads += 1;
+        return {
+          from: opts.signedFrom === undefined ? REPORTER : opts.signedFrom,
+          contentTypeSingle: opts.contentTypeSingle ?? true,
+        };
+      },
     },
   };
 }
@@ -154,6 +176,7 @@ function makeReport(overrides: Partial<FeedbackReport> = {}): FeedbackReport {
     sourceIp: "192.0.2.10",
     originalMessageId: "abc@mail.example.com",
     reporterDomain: "isp.example.net",
+    reporterAddress: REPORTER,
     ...overrides,
   };
 }
@@ -363,67 +386,6 @@ describe("handleFeedbackReport: one transaction (#184)", () => {
   });
 });
 
-/** A DKIM verdict whose passing signatures are `passingDomains`. */
-function dkimOf(passingDomains: string[], result = "pass"): DkimCheck {
-  return { result, signingDomain: passingDomains[0] ?? null, passingDomains };
-}
-
-/**
- * The verified-report rule: a complaint may be shared across API keys only
- * when a DKIM signature passed for one of `FEEDBACK_LOOP_DOMAINS`, exactly.
- */
-describe("isVerifiedReport", () => {
-  const LISTED = ["fbl.isp.example.net", "complaints.example.org"];
-
-  test("no signature, or none that passed: not verified", () => {
-    expect(isVerifiedReport(dkimOf([], "none"), LISTED)).toBe(false);
-    expect(isVerifiedReport(dkimOf([], "fail"), LISTED)).toBe(false);
-    expect(isVerifiedReport(dkimOf([], "temperror"), LISTED)).toBe(false);
-    /** A failing signature of a listed domain is not in `passingDomains`. */
-    expect(
-      isVerifiedReport(
-        { result: "fail", signingDomain: "fbl.isp.example.net", passingDomains: [] },
-        LISTED,
-      ),
-    ).toBe(false);
-  });
-
-  test("a passing signature of a domain not listed: not verified", () => {
-    expect(isVerifiedReport(dkimOf(["attacker.example"]), LISTED)).toBe(false);
-  });
-
-  test("a passing signature of a listed domain: verified, ASCII case and a final dot ignored", () => {
-    expect(isVerifiedReport(dkimOf(["fbl.isp.example.net"]), LISTED)).toBe(true);
-    expect(isVerifiedReport(dkimOf(["FBL.ISP.Example.NET"]), LISTED)).toBe(true);
-    expect(isVerifiedReport(dkimOf(["complaints.example.org."]), LISTED)).toBe(true);
-    expect(
-      isVerifiedReport(dkimOf(["fbl.isp.example.net"]), ["FBL.isp.example.net"]),
-    ).toBe(true);
-  });
-
-  test("exact match only: no subdomain, no parent, no look-alike suffix", () => {
-    /** A subdomain of a listed domain does not count. */
-    expect(isVerifiedReport(dkimOf(["x.fbl.isp.example.net"]), LISTED)).toBe(false);
-    /** Nor does its parent. */
-    expect(isVerifiedReport(dkimOf(["isp.example.net"]), LISTED)).toBe(false);
-    /** Nor a name that merely ends with the same characters. */
-    expect(isVerifiedReport(dkimOf(["evilfbl.isp.example.net"]), LISTED)).toBe(false);
-  });
-
-  test("several signatures: any passing one of a listed domain is enough", () => {
-    expect(
-      isVerifiedReport(dkimOf(["forwarder.example", "complaints.example.org"]), LISTED),
-    ).toBe(true);
-    expect(
-      isVerifiedReport(dkimOf(["forwarder.example", "attacker.example"]), LISTED),
-    ).toBe(false);
-  });
-
-  test("an empty allowlist verifies nothing", () => {
-    expect(isVerifiedReport(dkimOf(["fbl.isp.example.net"]), [])).toBe(false);
-  });
-});
-
 describe("handleFeedbackReport: verified complaints", () => {
   test("a passing signature of a listed domain stores the complaint as verified", async () => {
     const { deps, calls } = makeDeps({
@@ -471,6 +433,192 @@ describe("handleFeedbackReport: verified complaints", () => {
       dkim: "pass",
       dkimDomain: "isp.example.net",
       recipient: redactEmail("reader@example.org"),
+    });
+  });
+});
+
+/**
+ * A verified complaint must also come from a configured feedback-loop
+ * sender: a report signed by a listed domain but sent by an unlisted
+ * address, or signed by a domain the `From` does not belong to, stays per
+ * key, and the reason is logged.
+ */
+describe("handleFeedbackReport: the feedback-loop sender", () => {
+  /** Runs `report` through the handler, capturing info and warn lines. */
+  async function run(
+    opts: Parameters<typeof makeDeps>[0],
+    report: FeedbackReport = makeReport(),
+  ): Promise<{ calls: Calls; lines: Array<{ level: string; args: unknown[] }> }> {
+    const { deps, calls } = makeDeps(opts);
+    const lines: Array<{ level: string; args: unknown[] }> = [];
+    const info = spyOn(logger, "info").mockImplementation((...args: unknown[]) => {
+      lines.push({ level: "info", args });
+    });
+    const warn = spyOn(logger, "warn").mockImplementation((...args: unknown[]) => {
+      lines.push({ level: "warn", args });
+    });
+    try {
+      await handleFeedbackReport(report, deps);
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
+    }
+    return { calls, lines };
+  }
+
+  /** The "not verified" line, if one was logged. */
+  function notVerifiedLine(
+    lines: Array<{ level: string; args: unknown[] }>,
+  ): { level: string; args: unknown[] } | undefined {
+    return lines.find((line) =>
+      String(line.args[0]).startsWith("Complaint not verified"),
+    );
+  }
+
+  test("signed by a listed domain but from an unlisted sender: not verified, warned, still suppressed per key", async () => {
+    const { calls, lines } = await run(
+      {
+        email: EMAIL,
+        feedbackLoopDomains: ["isp.example.net"],
+        signedFrom: "someone@isp.example.net",
+      },
+      makeReport({ reporterAddress: "someone@isp.example.net" }),
+    );
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(calls.events).toHaveLength(1);
+    const line = notVerifiedLine(lines);
+    expect(line?.level).toBe("warn");
+    expect(line?.args[1]).toMatchObject({
+      unverifiedReason: "sender_not_listed",
+      reporter: redactEmail("someone@isp.example.net"),
+      passingDomains: ["isp.example.net"],
+      emailId: "msg_1",
+    });
+  });
+
+  test("the same report from the listed sender: verified, no such line", async () => {
+    const { calls, lines } = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+    });
+    expect(calls.complaints[0]?.verified).toBe(true);
+    expect(notVerifiedLine(lines)).toBeUndefined();
+  });
+
+  test("a listed sender whose domain the signature does not cover: not_aligned", async () => {
+    const { calls, lines } = await run(
+      {
+        email: EMAIL,
+        feedbackLoopDomains: ["isp.example.net"],
+        feedbackLoopSenders: ["feedback@other.example.org"],
+        signedFrom: "feedback@other.example.org",
+      },
+      makeReport({ reporterAddress: "feedback@other.example.org" }),
+    );
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(lines)?.args[1]).toMatchObject({
+      unverifiedReason: "not_aligned",
+    });
+  });
+
+  test("no single From address: sender_missing", async () => {
+    const { calls, lines } = await run(
+      { email: EMAIL, feedbackLoopDomains: ["isp.example.net"], signedFrom: null },
+      makeReport({ reporterAddress: null }),
+    );
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(lines)?.args[1]).toMatchObject({
+      unverifiedReason: "sender_missing",
+    });
+  });
+
+  test("an envelope sender that is not listed: envelope_not_listed; an empty one is accepted", async () => {
+    const unlisted = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      envelopeFrom: "bounces@elsewhere.example",
+    });
+    expect(unlisted.calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(unlisted.lines)?.args[1]).toMatchObject({
+      unverifiedReason: "envelope_not_listed",
+      envelopeFrom: redactEmail("bounces@elsewhere.example"),
+    });
+
+    const listed = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      envelopeFrom: REPORTER,
+    });
+    expect(listed.calls.complaints[0]?.verified).toBe(true);
+
+    const empty = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      envelopeFrom: null,
+    });
+    expect(empty.calls.complaints[0]?.verified).toBe(true);
+  });
+
+  test("the From the report claims is not trusted: only the From a signature covers is checked", async () => {
+    const { calls, lines } = await run(
+      {
+        email: EMAIL,
+        feedbackLoopDomains: ["isp.example.net"],
+        signedFrom: "user@isp.example.net",
+      },
+      makeReport({ reporterAddress: REPORTER }),
+    );
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(lines)?.args[1]).toMatchObject({
+      unverifiedReason: "sender_not_listed",
+      reporter: redactEmail(REPORTER),
+      signedFrom: redactEmail("user@isp.example.net"),
+    });
+  });
+
+  test("no single top-level Content-Type in the signed view: not verified", async () => {
+    const { calls, lines } = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      contentTypeSingle: false,
+    });
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(lines)?.args[1]).toMatchObject({
+      unverifiedReason: "content_type_ambiguous",
+    });
+  });
+
+  test("no passing signature: the header section is not read again", async () => {
+    const { calls } = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      dkim: { result: "none", signingDomain: null, passingDomains: [] },
+    });
+    expect(calls.headerReads).toBe(0);
+    expect(calls.complaints[0]?.verified).toBe(false);
+  });
+
+  test("FEEDBACK_LOOP_SENDERS empty: fails closed, nothing verified, logged at info", async () => {
+    const { calls, lines } = await run({
+      email: EMAIL,
+      feedbackLoopDomains: ["isp.example.net"],
+      feedbackLoopSenders: [],
+    });
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(calls.events).toHaveLength(1);
+    const line = notVerifiedLine(lines);
+    expect(line?.level).toBe("info");
+    expect(line?.args[1]).toMatchObject({ unverifiedReason: "no_feedback_loop_senders" });
+  });
+
+  test("FEEDBACK_LOOP_DOMAINS empty (feature off): no extra line, the reason rides on the complaint line", async () => {
+    const { calls, lines } = await run({ email: EMAIL });
+    expect(calls.complaints[0]?.verified).toBe(false);
+    expect(notVerifiedLine(lines)).toBeUndefined();
+    const handled = lines.find((line) => line.args[0] === "Complaint handled");
+    expect(handled?.args[1]).toMatchObject({
+      verified: false,
+      unverifiedReason: "no_feedback_loop_domains",
     });
   });
 });
