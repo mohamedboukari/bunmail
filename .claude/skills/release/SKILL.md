@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a bunmail release with bun pm version - CHANGELOG prep commit first, version bump and tag, then verify the GitHub Release and the signed GHCR image. Use when the user asks to release, cut, tag, or publish a new bunmail version.
+description: Cut a bunmail release with bun pm version - CHANGELOG prep commit (changelog:collect) first, version bump and tag, then verify the GitHub Release and the signed GHCR image. Use when the user asks to release, cut, tag, or publish a new bunmail version.
 ---
 
 # /release: cut a bunmail release
@@ -16,15 +16,20 @@ gh pr list --state open     # anything that should land first?
 gh run list --branch main --limit 5   # CI and Security green on main?
 ```
 
-- Read `CHANGELOG.md` `[Unreleased]` and propose the version: breaking changes mean a minor bump while pre-1.0 (0.x), features mean minor, fixes only mean patch.
+- Read `CHANGELOG.md` `[Unreleased]` and the fragments in `docs/changes/` (one file per entry; the type is in the name, `<issue>.<type>.md`) and propose the version: breaking changes mean a minor bump while pre-1.0 (0.x), features mean minor, fixes only mean patch.
 - Flag **breaking config or deploy changes** prominently (new required env vars, port changes, migrations that need a manual step). They must be at the top of the release notes.
 
 ## 2. CHANGELOG prep commit (the version bump does NOT touch the changelog)
 
-- Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` (today's date).
-- Add a fresh empty `## [Unreleased]` above it.
+```bash
+bun run changelog:collect X.Y.Z
+git diff --stat              # CHANGELOG.md plus the deleted fragments
+```
+
+- `changelog:collect X.Y.Z` writes every fragment of `docs/changes/` into `[Unreleased]` (grouped Added, Changed, Deprecated, Removed, Fixed, Security, merged into the existing subsections), renames that section to `## [X.Y.Z] - YYYY-MM-DD` (today, UTC), adds a fresh empty `## [Unreleased]` above it and deletes the collected fragments (`docs/changes/README.md` stays). It refuses a malformed fragment, an existing `[X.Y.Z]` section or an empty release without changing anything. Never rename the heading by hand.
+- Read the new section: an upgrade guide (`### Upgrade guide (from X.Y-1.x)`, first under the heading) and breaking changes go in by hand.
 - Optionally add a one-line `> **Theme: ...**` summary under the new heading, matching earlier releases.
-- Commit: `docs: cut CHANGELOG [X.Y.Z] section ahead of release` (no AI attribution lines).
+- Commit (CHANGELOG.md and the deleted fragments together): `docs: cut CHANGELOG [X.Y.Z] section ahead of release` (no AI attribution lines).
 
 ## 3. Bump, tag and push (after the user confirms X.Y.Z)
 
