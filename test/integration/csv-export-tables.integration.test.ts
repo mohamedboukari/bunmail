@@ -418,6 +418,25 @@ describe("CSV export cell contents (#430)", () => {
     expect(rows.find((r) => r.status === "failed")?.subject).toBe("'=cmd|' /C calc'!A0");
   });
 
+  test("inbound: a formula after a line break in the subject is neutralised (#451)", async () => {
+    const id = generateId("inb");
+    await db.insert(inboundEmails).values({
+      id,
+      fromAddress: "attacker@example.org",
+      toAddress: "support@example.com",
+      subject: 'Hi\n=HYPERLINK("http://evil.example","x");',
+      messageId: "<linebreak@example.org>",
+    });
+    try {
+      const { text, csv } = await exportAs("/dashboard/inbound/export.csv");
+      const row = rowObjects(csv).find((r) => r.id === id);
+      expect(row?.subject).toBe('Hi\n\'=HYPERLINK("http://evil.example","x");');
+      expect(text).not.toMatch(/[\r\n][  ​﻿]*=HYPERLINK/);
+    } finally {
+      await db.delete(inboundEmails).where(eq(inboundEmails.id, id));
+    }
+  });
+
   test("webhooks: the URL is reduced to its origin, events are listed (#260 policy)", async () => {
     const [row] = rowObjects((await exportAs("/dashboard/webhooks/export.csv")).csv);
     expect(row?.url_origin).toBe("https://hooks.example.com");

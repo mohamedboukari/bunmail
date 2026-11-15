@@ -24,6 +24,7 @@ import { config } from "../../src/config.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { truncateAll, seed, db, webhooks } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** Mirrors the global onError mapping in src/index.ts for these errors. */
 const api = new Elysia()
@@ -198,9 +199,13 @@ describe("webhooks per API key (#258)", () => {
       events: "email.sent",
     });
     expect(res.status).toBe(302);
-    const location = decodeURIComponent(res.headers.get("location") ?? "");
-    expect(location).toContain("flashType=error");
-    expect(location).toContain(`maximum of ${MAX} webhooks`);
+    /** The limit travels as the code's number (#421), never as text. */
+    expect(res.headers.get("location")).toBe(
+      `/dashboard/webhooks?flash=webhook_limit_reached&flashN=${MAX}`,
+    );
+    const flash = flashOfResponse(res);
+    expect(flash?.type).toBe("error");
+    expect(flash?.message).toContain(`maximum of ${MAX} webhooks`);
     expect(await hookCount(id)).toBe(MAX);
   });
 });

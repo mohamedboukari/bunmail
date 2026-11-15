@@ -15,18 +15,3 @@ export function redirect(set: Context["set"], location: string): string {
 export function setNoStore(set: Context["set"]): void {
   set.headers["cache-control"] = "no-store";
 }
-
-/**
- * Builds the flash-banner prop from the `flash` / `flashType` query
- * params. Both are attacker-controllable, so `flashType` is narrowed to
- * the two values the banner actually renders rather than asserted: an
- * `as "success" | "error"` cast would let an arbitrary string through
- * wearing the union's type.
- */
-export function toFlash(
-  message: string | undefined,
-  rawType: string | undefined,
-): { message: string; type: "success" | "error" } | undefined {
-  if (!message) return undefined;
-  return { message, type: rawType === "error" ? "error" : "success" };
-}

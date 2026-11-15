@@ -56,6 +56,3 @@ export async function creatorDirectory(auth: DashboardAuth): Promise<CreatorDire
 export async function creatorNames(auth: DashboardAuth): Promise<CreatorNames> {
   return (await creatorDirectory(auth)).names;
 }
-
-/** Flash text when a dashboard create needs an API key the user may use (#219). */
-export const NO_USABLE_KEY_TEXT = "Create an API key first";

@@ -51,6 +51,7 @@ import {
   toSsoPage,
   uncountedCallbackRefusal,
 } from "../lib/sso.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 
 /**
  * The public single sign-on routes (OpenID Connect, #224), mounted before
@@ -69,9 +70,8 @@ import {
 /** Where a failed sign-in, or a link callback without a session, lands: one generic message. */
 const LOGIN_FAILED = "/dashboard/login?error=sso";
 
-/** What the Sign-in methods page says when a link's provider round trip failed. */
-const FLOW_FAILED =
-  "Linking did not complete: the provider's answer was not accepted. Try again.";
+/** The Sign-in methods page's flash code when a link's provider round trip failed. */
+const FLOW_FAILED = "sso_link_flow_failed";
 
 /**
  * The redirect of a refused sign-in. Every refusal of a proven identity
@@ -197,10 +197,8 @@ async function finishLink(
   context: CallbackContext,
 ): Promise<string> {
   const { provider, ip, sessionToken } = context;
-  const fail = (message: string): string =>
-    sessionToken === undefined
-      ? redirect(set, LOGIN_FAILED)
-      : toSsoPage(set, message, "error");
+  const fail = (code: FlashCode): string =>
+    sessionToken === undefined ? redirect(set, LOGIN_FAILED) : toSsoPage(set, code);
   const outcome = await finishSsoLinkCallback({
     provider,
     baseUrl: context.baseUrl,
@@ -238,7 +236,8 @@ async function finishLink(
     ip: sessionIp(ip),
     sso: { provider: provider.label, account: outcome.name },
   });
-  return toSsoPage(set, `${provider.label} linked.`, "success");
+  /** No label in the URL (#421): the page lists the new link just below. */
+  return toSsoPage(set, "sso_linked");
 }
 
 export function ssoLoginPages(app: PublicDashboard) {
@@ -435,10 +434,10 @@ export function ssoLoginPages(app: PublicDashboard) {
             presented !== undefined && isWellFormedToken(presented)
               ? presented
               : undefined;
-          const refuse = (linkMessage: string, loginUrl: string): string =>
+          const refuse = (linkFlash: FlashCode, loginUrl: string): string =>
             sessionToken === undefined
               ? redirect(set, loginUrl)
-              : toSsoPage(set, linkMessage, "error");
+              : toSsoPage(set, linkFlash);
 
           const flowCookie = readSsoFlowCookie(cookieHeader);
           const uncounted = uncountedCallbackRefusal(request.headers, flowCookie);

@@ -23,6 +23,7 @@ import * as smtpReceiver from "../../src/modules/inbound/services/smtp-receiver.
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { withRequestContext } from "../../src/middleware/request-context.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** The inbound receiver's port: it binds 0 and the OS picks a free one (#443). */
 let inboundPort = 0;
@@ -131,9 +132,7 @@ async function reply(
     ...extra,
   });
   expect(response.status).toBe(302);
-  expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-    "Email queued for delivery",
-  );
+  expect(flashOfResponse(response)?.message).toContain("Email queued for delivery");
   const [row] = await db.select().from(emails).orderBy(desc(emails.createdAt)).limit(1);
   if (!row) throw new Error("no email queued");
   return row;

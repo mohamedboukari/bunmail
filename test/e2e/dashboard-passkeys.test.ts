@@ -23,6 +23,7 @@ import {
   useDashboardMocks,
   warnLog,
 } from "./dashboard-setup.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** Dashboard E2E: passkeys. Setup, fakes and helpers: `dashboard-setup.ts` (#291). */
 useDashboardMocks();
@@ -86,14 +87,9 @@ describe("Passkey routes (#223)", () => {
     };
   }
 
-  /** The flash of a redirect. */
+  /** The banner message a redirect leads to (#421: resolved from its code). */
   function flashOf(response: Response): string {
-    return (
-      new URL(
-        response.headers.get("location") ?? "",
-        "http://localhost",
-      ).searchParams.get("flash") ?? ""
-    );
+    return flashOfResponse(response)?.message ?? "";
   }
 
   /** A pending session the second-step routes will find. */
@@ -523,7 +519,10 @@ describe("Passkey routes (#223)", () => {
           problem: "Give the passkey a name.",
         }),
       );
-      expect(flashOf(await rename())).toBe("Give the passkey a name.");
+      /** One fixed sentence: the policy's problem text never reaches the URL (#421). */
+      expect(flashOf(await rename())).toBe(
+        "The passkey name must be 1 to 64 characters, with no control characters.",
+      );
       renamePasskey.mockImplementationOnce(() =>
         Promise.resolve({ ok: false, reason: "not_found" }),
       );

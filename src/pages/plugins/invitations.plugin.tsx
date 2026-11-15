@@ -13,11 +13,13 @@ import { ForbiddenPage } from "../routes/forbidden.tsx";
 import { adminGuard } from "../guards.tsx";
 import * as inviteService from "../../modules/users/services/invite.service.ts";
 import { grantableRoles } from "../../modules/users/services/invite-policy.service.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardClient } from "../lib/audit.ts";
+import { FLASH_QUERY, flashMessage, flashUrl, toFlash } from "../lib/flash.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 
 /* ─── Invitation helpers (#217) ─── */
 
@@ -26,36 +28,35 @@ function inviteActorOf(auth: DashboardAuth): InviteActor {
   return { id: auth.user.id, role: auth.user.role };
 }
 
-/** Why the invitation email did not go out, in the inviter's flash message. */
-const INVITE_MAIL_FAILURE_TEXT: Record<InviteMailFailure, string> = {
-  not_configured: "no system sender is configured",
-  sender_unavailable: "the system sender's domain is not registered or not DKIM-verified",
-  send_failed: "sending failed",
-  no_base_url: "APP_BASE_URL is not set, so no usable link could be emailed",
+/**
+ * The inviter's flash code when the invitation email did not go out, one
+ * per reason (#421: the message, with the reason in words, is looked up by
+ * code).
+ */
+const INVITE_MAIL_FAILURE_FLASH: Record<InviteMailFailure, FlashCode> = {
+  not_configured: "invitation_unsent_not_configured",
+  sender_unavailable: "invitation_unsent_sender_unavailable",
+  send_failed: "invitation_unsent_send_failed",
+  no_base_url: "invitation_unsent_no_base_url",
 };
 
-/** Flash text for a refused invitation action (other than a role refusal). */
-const INVITE_REFUSAL_TEXT: Record<InviteRefusal, string> = {
-  invalid_email: "Enter one valid email address.",
-  role_not_allowed: "Your role cannot grant or manage that role.",
-  account_exists: "An account already exists for that address.",
-  pending_higher_role:
-    "A pending invitation from a higher role exists for this address. Only the owner can replace it.",
-  not_found: "Invitation not found: it may have been accepted, revoked or replaced.",
+/** Flash code for a refused invitation action (a role refusal shows its message on the 403 page). */
+const INVITE_REFUSAL_FLASH: Record<InviteRefusal, FlashCode> = {
+  invalid_email: "invite_invalid_email",
+  role_not_allowed: "invite_role_not_allowed",
+  account_exists: "invite_account_exists",
+  pending_higher_role: "invite_pending_higher_role",
+  not_found: "invite_not_found",
 };
 
-/** 302 back to the Invitations page with a flash message (never the link or token). */
+/** 302 back to the Invitations page with a flash code (never the link or token). */
 function invitationsRedirect(
   set: Context["set"],
-  message: string,
-  type: "success" | "error",
+  code: FlashCode,
   reveal?: string,
 ): string {
-  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
-  return redirect(
-    set,
-    `/dashboard/invitations?${query}${reveal ? `&reveal=${reveal}` : ""}`,
-  );
+  const location = flashUrl("/dashboard/invitations", code);
+  return redirect(set, `${location}${reveal ? `&reveal=${reveal}` : ""}`);
 }
 
 /**
@@ -70,9 +71,11 @@ function answerInviteRefusal(
 ): string | Promise<string> {
   if (reason === "role_not_allowed") {
     set.status = 403;
-    return <ForbiddenPage message={INVITE_REFUSAL_TEXT.role_not_allowed} />;
+    return (
+      <ForbiddenPage message={flashMessage(INVITE_REFUSAL_FLASH.role_not_allowed)} />
+    );
   }
-  return invitationsRedirect(set, INVITE_REFUSAL_TEXT[reason], "error");
+  return invitationsRedirect(set, INVITE_REFUSAL_FLASH[reason]);
 }
 
 /**
@@ -90,13 +93,15 @@ async function answerIssuedInvitation(
 ): Promise<string> {
   if (!result.ok) return answerInviteRefusal(set, result.reason);
   if (result.delivery.sent) {
-    return invitationsRedirect(set, `Invitation ${verb} by email.`, "success");
+    return invitationsRedirect(
+      set,
+      verb === "sent" ? "invitation_sent" : "invitation_resent",
+    );
   }
   const reveal = await stashRevealSecret(result.url, "invite_link", revealOwnerOf(auth));
   return invitationsRedirect(
     set,
-    `Invitation created, but the email was not sent: ${INVITE_MAIL_FAILURE_TEXT[result.delivery.reason]}. Copy the link below and share it with the invitee.`,
-    "success",
+    INVITE_MAIL_FAILURE_FLASH[result.delivery.reason],
     reveal,
   );
 }
@@ -116,7 +121,7 @@ export function invitationPages(app: GuardedDashboard) {
         async ({ query, auth, set }) => {
           setNoStore(set);
           const invitations = await inviteService.listPendingInvitations();
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
           /** One-time reveal bound to this user and session (#280): never in a URL. */
           const revealedLink = await consumeRevealSecret(
             query.reveal,
@@ -135,8 +140,7 @@ export function invitationPages(app: GuardedDashboard) {
         {
           beforeHandle: adminGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
             reveal: t.Optional(t.String()),
           }),
         },
@@ -165,7 +169,7 @@ export function invitationPages(app: GuardedDashboard) {
             logger.error("Failed to create invitation via dashboard", {
               error: errorMessage(error),
             });
-            return invitationsRedirect(set, "Failed to create the invitation.", "error");
+            return invitationsRedirect(set, "invitation_create_failed");
           }
         },
         {
@@ -191,7 +195,7 @@ export function invitationPages(app: GuardedDashboard) {
             dashboardClient(request, server),
           );
           if (!result.ok) return answerInviteRefusal(set, result.reason);
-          return invitationsRedirect(set, "Invitation revoked.", "success");
+          return invitationsRedirect(set, "invitation_revoked");
         },
         {
           beforeHandle: adminGuard,
@@ -220,7 +224,7 @@ export function invitationPages(app: GuardedDashboard) {
               invitationId: params.id,
               error: errorMessage(error),
             });
-            return invitationsRedirect(set, "Failed to resend the invitation.", "error");
+            return invitationsRedirect(set, "invitation_resend_failed");
           }
         },
         {

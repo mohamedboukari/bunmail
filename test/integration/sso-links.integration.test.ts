@@ -58,6 +58,7 @@ import { issuePasswordReset } from "../../src/modules/users/services/user-admin.
 import { issueOwnerSetupLink } from "../../src/modules/users/services/owner.service.ts";
 import { generateId } from "../../src/utils/id.ts";
 import { config, type SsoProviderSettings } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 /** With the request context, so the sidebar knows its viewer (the Sign-in methods link). */
 const app = new Elysia().wrap(withRequestContext).use(html()).use(pagesPlugin);
@@ -146,14 +147,14 @@ function flowCookieOf(response: Response): string | undefined {
   return readSsoFlowCookie(cookie ?? null);
 }
 
-/** The flash text and type of a redirect to the Sign-in methods page. */
+/**
+ * The path and the banner (message and type) a redirect to the Sign-in
+ * methods page leads to (#421: resolved from its flash code).
+ */
 function flashOf(response: Response): { path: string; flash: string; type: string } {
   const url = new URL(response.headers.get("location") ?? "", ORIGIN);
-  return {
-    path: url.pathname,
-    flash: url.searchParams.get("flash") ?? "",
-    type: url.searchParams.get("flashType") ?? "",
-  };
+  const banner = flashOfResponse(response);
+  return { path: url.pathname, flash: banner?.message ?? "", type: banner?.type ?? "" };
 }
 
 /** Starts a link in `token`'s session; returns the provider URL and the flow cookie. */
@@ -284,7 +285,8 @@ describe("linking (#224)", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(flashOf(response)).toEqual({
       path: PAGE,
-      flash: "Corp SSO linked.",
+      /** No provider label in the URL (#421): one fixed sentence. */
+      flash: "Single sign-on account linked.",
       type: "success",
     });
     /** The flow cookie is cleared. */
@@ -616,9 +618,9 @@ describe("the owner rule stays true (#224)", () => {
       body: { password: PASSWORD, code: "000000" },
     });
     expect(response.status).toBe(302);
-    expect(
-      new URL(response.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toContain("unlink it on the Sign-in methods page");
+    expect(flashOfResponse(response)?.message).toContain(
+      "unlink it on the Sign-in methods page",
+    );
     const totp = await db
       .select()
       .from(userCredentials)
@@ -643,9 +645,9 @@ describe("the owner rule stays true (#224)", () => {
         body: { password: PASSWORD },
       },
     );
-    expect(
-      new URL(refused.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toContain("unlink it on the Sign-in methods page");
+    expect(flashOfResponse(refused)?.message).toContain(
+      "unlink it on the Sign-in methods page",
+    );
     expect(
       (await auditRows("auth.two_factor.removal_refused")).map((r) => r.metadata),
     ).toEqual([{ factor: "passkey", reason: "owner_sso_link" }]);
@@ -659,9 +661,7 @@ describe("the owner rule stays true (#224)", () => {
         body: { password: PASSWORD },
       },
     );
-    expect(
-      new URL(removed.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toBe("Passkey removed.");
+    expect(flashOfResponse(removed)?.message).toBe("Passkey removed.");
   });
 
   test("a member with a link may remove its last second factor (the rule is the owner's)", async () => {
@@ -676,9 +676,7 @@ describe("the owner rule stays true (#224)", () => {
         body: { password: PASSWORD },
       },
     );
-    expect(
-      new URL(response.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toBe("Passkey removed.");
+    expect(flashOfResponse(response)?.message).toBe("Passkey removed.");
   });
 
   test("ownership cannot go to an admin with a link and no second factor", async () => {
@@ -691,9 +689,9 @@ describe("the owner rule stays true (#224)", () => {
       token: session.token,
       body: { password: PASSWORD },
     });
-    expect(
-      new URL(refused.headers.get("location") ?? "", ORIGIN).searchParams.get("flash"),
-    ).toContain("must set up a second factor before becoming the owner");
+    expect(flashOfResponse(refused)?.message).toContain(
+      "must set up a second factor before becoming the owner",
+    );
     const [stillAdmin] = await db
       .select({ role: users.role })
       .from(users)

@@ -11,9 +11,9 @@ import * as apiKeyService from "../../modules/api-keys/services/api-key.service.
 import * as inboundService from "../../modules/inbound/services/inbound.service.ts";
 import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
 import { toIdArray } from "../lib/form.ts";
-import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /** Inbound email pages (#291): list, trash, detail and the reply form. */
 export function inboundPages(app: GuardedDashboard) {
@@ -26,7 +26,7 @@ export function inboundPages(app: GuardedDashboard) {
 
           const { data, total } = await inboundService.listInboundEmails({ page, limit });
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <InboundPage
@@ -43,8 +43,7 @@ export function inboundPages(app: GuardedDashboard) {
           query: t.Object({
             page: t.Optional(t.String()),
             limit: t.Optional(t.String()),
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -63,7 +62,7 @@ export function inboundPages(app: GuardedDashboard) {
             limit,
           });
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <InboundTrashPage
@@ -81,8 +80,7 @@ export function inboundPages(app: GuardedDashboard) {
           query: t.Object({
             page: t.Optional(t.String()),
             limit: t.Optional(t.String()),
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -96,8 +94,10 @@ export function inboundPages(app: GuardedDashboard) {
           logger.info("Bulk-trashed inbound emails via dashboard", { count });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound?flash=${encodeURIComponent(`${count} email(s) moved to trash`)}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound", {
+            code: "emails_trashed",
+            n: count,
+          });
           return "";
         },
         {
@@ -121,8 +121,10 @@ export function inboundPages(app: GuardedDashboard) {
           logger.info("Bulk-restored inbound emails via dashboard", { restored });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound/trash?flash=${encodeURIComponent(`${restored} email(s) restored`)}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound/trash", {
+            code: "emails_restored",
+            n: restored,
+          });
           return "";
         },
         {
@@ -146,8 +148,10 @@ export function inboundPages(app: GuardedDashboard) {
           logger.info("Bulk-permanent-deleted inbound emails via dashboard", { deleted });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound/trash?flash=${encodeURIComponent(`${deleted} email(s) deleted forever`)}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound/trash", {
+            code: "emails_deleted_forever",
+            n: deleted,
+          });
           return "";
         },
         {
@@ -166,8 +170,10 @@ export function inboundPages(app: GuardedDashboard) {
           logger.info("Emptied inbound trash via dashboard", { deleted });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound/trash", {
+            code: "trash_emptied",
+            n: deleted,
+          });
           return "";
         },
         { beforeHandle: adminGuard },
@@ -181,15 +187,16 @@ export function inboundPages(app: GuardedDashboard) {
 
           if (!email) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/inbound?flash=${encodeURIComponent("Inbound email not found")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/inbound",
+              "inbound_email_not_found",
+            );
             return "";
           }
 
           logger.info("Inbound email trashed via dashboard", { id: params.id });
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound?flash=${encodeURIComponent("Email moved to trash")}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound", "email_trashed");
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
@@ -200,13 +207,11 @@ export function inboundPages(app: GuardedDashboard) {
         "/inbound/:id/restore",
         async ({ params, set }) => {
           const email = await inboundService.restoreInboundEmail(params.id);
-          const message = email ? "Email restored" : "Trashed email not found";
-          const type: "success" | "error" = email ? "success" : "error";
+          const code = email ? "email_restored" : "trashed_email_not_found";
           if (email) logger.info("Inbound restored via dashboard", { id: params.id });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound/trash", code);
           return "";
         },
         { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
@@ -217,15 +222,13 @@ export function inboundPages(app: GuardedDashboard) {
         "/inbound/:id/permanent",
         async ({ params, set }) => {
           const email = await inboundService.permanentDeleteInboundEmail(params.id);
-          const message = email ? "Email deleted forever" : "Trashed email not found";
-          const type: "success" | "error" = email ? "success" : "error";
+          const code = email ? "email_deleted_forever" : "trashed_email_not_found";
           if (email) {
             logger.info("Inbound permanently deleted via dashboard", { id: params.id });
           }
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/inbound/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+          set.headers["location"] = flashUrl("/dashboard/inbound/trash", code);
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },

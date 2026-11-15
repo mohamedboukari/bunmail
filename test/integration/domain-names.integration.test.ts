@@ -23,6 +23,7 @@ import { domainsPlugin } from "../../src/modules/domains/domains.plugin.ts";
 import { pagesPlugin } from "../../src/pages/pages.plugin.tsx";
 import { truncateAll, seed, db, domains } from "./_helpers.ts";
 import { readJson } from "../read-json.ts";
+import { flashOfLocation, flashOfResponse } from "../flash-of.ts";
 
 /** Mirrors the domain name branches of the global onError in `src/app.ts`. */
 const api = new Elysia()
@@ -178,14 +179,14 @@ describe("normalising and checking a name on create (#406)", () => {
     const res = await addOnDashboard("exa mple.com");
     expect(res.status).toBe(302);
     const location = res.headers.get("location") ?? "";
-    expect(location).toContain("flashType=error");
-    expect(decodeURIComponent(location)).toContain("must be a host name");
+    expect(flashOfLocation(location)?.type).toBe("error");
+    expect(flashOfLocation(location)?.message).toContain("must be a host name");
     expect(await db.select().from(domains)).toHaveLength(0);
   });
 
   test("dashboard: a valid name is stored normalised", async () => {
     const res = await addOnDashboard("Mail.Example.org.");
-    expect(res.headers.get("location")).not.toContain("flashType=error");
+    expect(flashOfResponse(res)?.type).toBe("success");
     const [row] = await db.select().from(domains);
     expect(row?.name).toBe("mail.example.org");
   }, 30_000);

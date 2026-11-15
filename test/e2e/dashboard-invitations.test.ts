@@ -15,6 +15,7 @@ import {
   warnLog,
   UNKNOWN_TOKEN,
 } from "./dashboard-setup.ts";
+import { flashOfLocation, flashOfResponse } from "../flash-of.ts";
 
 /** Dashboard E2E: invitations. Setup, fakes and helpers: `dashboard-setup.ts` (#291). */
 useDashboardMocks();
@@ -203,9 +204,9 @@ describe("Dashboard E2E: invitations", () => {
         role: "member",
       });
       expect(response.status).toBe(302);
-      const location = decodeURIComponent(response.headers.get("location") ?? "");
-      expect(location).toContain("A pending invitation from a higher role exists");
-      expect(location).toContain("flashType=error");
+      const flash = flashOfResponse(response);
+      expect(flash?.message).toContain("A pending invitation from a higher role exists");
+      expect(flash?.type).toBe("error");
     });
 
     test("an admin's role select offers member only", async () => {
@@ -237,7 +238,9 @@ describe("Dashboard E2E: invitations", () => {
       expect(response.status).toBe(302);
       const location = response.headers.get("location") ?? "";
       expect(location).not.toContain(INVITE_TOKEN);
-      expect(decodeURIComponent(location)).toContain("no system sender is configured");
+      expect(flashOfLocation(location)?.message).toContain(
+        "no system sender is configured",
+      );
       const reveal = new URL(location, "http://localhost").searchParams.get("reveal");
       expect(reveal).toBeTruthy();
 
@@ -267,7 +270,7 @@ describe("Dashboard E2E: invitations", () => {
         role: "member",
       });
       const location = response.headers.get("location") ?? "";
-      expect(decodeURIComponent(location)).toContain("Invitation sent by email.");
+      expect(flashOfLocation(location)?.message).toBe("Invitation sent by email.");
       expect(location).not.toContain("reveal=");
     });
 

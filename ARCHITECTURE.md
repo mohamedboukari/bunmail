@@ -450,13 +450,13 @@ bunmail/
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
 │       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387)
-│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect/flash, record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387), the CSV writer, export stream and export budget (#430)
+│       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect, flash codes (#421), record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387), the CSV writer, export stream and export budget (#430)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
 │       ├── session.ts                    ← Session cookie read/set/clear (pure, #174, #216)
 │       ├── viewer.ts                     ← Request-scoped viewer role, so the nav hides admin-only links (#218), and whether the viewer holds an SSO link (#224)
-│       ├── flash-errors.ts               ← Error flash text that never carries an internal error message
-│       ├── send-warnings.ts              ← Send-flash sentence for unverified DNS records (#245)
+│       ├── flash-errors.ts               ← Error flash code for a typed refusal; never an error message in a URL (#421)
+│       ├── send-warnings.ts              ← Send-flash code and sentence for unverified DNS records (#245, #421)
 │       ├── favicon.ts                    ← Inline SVG favicon
 │       ├── landing.plugin.tsx            ← Public landing page at /
 │       ├── unsubscribe.plugin.tsx        ← Public one-click unsubscribe at /u/:token, rate limited (#249); the /t/ tracking routes (#187) are in modules/tracking

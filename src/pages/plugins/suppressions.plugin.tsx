@@ -4,11 +4,11 @@ import { adminGuard, memberGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as suppressionService from "../../modules/suppressions/services/suppression-unscoped.service.ts";
-import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /** Suppression pages (#291): the list and per-row delete. */
 export function suppressionPages(app: GuardedDashboard) {
@@ -47,7 +47,7 @@ export function suppressionPages(app: GuardedDashboard) {
             allKeys.map((k) => [k.id, { name: k.name }]),
           );
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <SuppressionsPage
@@ -72,8 +72,7 @@ export function suppressionPages(app: GuardedDashboard) {
             limit: t.Optional(t.String()),
             email: t.Optional(t.String()),
             apiKeyId: t.Optional(t.String()),
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -99,14 +98,11 @@ export function suppressionPages(app: GuardedDashboard) {
               target: { type: "suppression", id: removed.id, label: removed.email },
             });
           }
-          const flash = removed
-            ? `Suppression for ${removed.email} removed`
-            : "Suppression not found (already deleted?)";
-          const flashType = removed ? "success" : "error";
+          /** No address in the URL (#421): the code only. */
+          const code = removed ? "suppression_removed" : "suppression_not_found";
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/suppressions?flash=${encodeURIComponent(flash)}&flashType=${flashType}`;
+          set.headers["location"] = flashUrl("/dashboard/suppressions", code);
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },

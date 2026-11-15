@@ -310,7 +310,7 @@ Every dashboard table can be downloaded as CSV by **admins and the owner** (`adm
 
 - **Metadata only.** Each export selects an explicit column list in the database: message bodies (`html`, `text_content`, `raw_message`), custom headers, attachments, the delivery state, key hashes, DKIM key material, template bodies, webhook secrets and payloads, DMARC report XML, token hashes and every credential never leave the database for an export; a webhook URL is exported as its origin only.
 - **Format.** RFC 4180: comma separated, CRLF line ends, a field containing `"`, `,`, CR or LF is quoted with its quotes doubled; a field containing `;` or a tab is quoted too, so Excel set to split on `;` (German, French, Dutch) keeps it in one cell. A timestamp that is not an instant (Postgres `infinity`) is an empty cell. UTF-8 **with a byte order mark**, so Excel opens accents and non-Latin text correctly (LibreOffice, Google Sheets and `pandas` skip it). Timestamps in ISO 8601 UTC, booleans `true` / `false`, lists joined by `; `. Written by the in-repo writer `src/pages/lib/csv.ts` (no dependency).
-- **Formula injection** (OWASP CSV injection): a text cell starting with a tab or a CR, or whose first visible character (after spaces, no-break spaces, U+200B or U+FEFF) is `=`, `+`, `-` or `@`, gets a leading `'`, which spreadsheets show as text and never evaluate. Inside a cell, a `;` or tab followed (after such spaces) by one of those characters gets a `'` before the character too, since a `;` locale starts a new cell there (`x;=cmd|...`).
+- **Formula injection** (OWASP CSV injection): a text cell starting with a tab or a CR, or whose first visible character (after spaces, no-break spaces, U+200B or U+FEFF) is `=`, `+`, `-` or `@`, gets a leading `'`, which spreadsheets show as text and never evaluate. Inside a cell, a `;` or tab followed (after such spaces) by one of those characters gets a `'` before the character too, since a `;` locale starts a new cell there (`x;=cmd|...`). The same goes for a CR or LF inside a cell (#451): Excel in a `;` locale does not see the quotes and starts a new row at the line break (`Hi\n=HYPERLINK(...)`). The line break is kept, so a multi-line value stays intact.
 - **Streaming.** Rows are read in turn, in batches of 500, by keyset pagination on the table's order (timestamp, then id; the cursor keeps Postgres microseconds; `(ts, id)` indexes from migration `0044` serve the emails, trash, suppressions, tombstones and DMARC walks), and written to a streamed body. Bun 1.3.14 drains a streamed response as fast as it is produced, whatever the client reads, so a slow or stalled client still makes the server build and buffer the whole file: what bounds memory is the row cap (one export) and the concurrency limit (how many at once). Newest first, except users (oldest first, like the page).
 - **Row cap: 50 000 rows per export** (`exportLimits.rowCap` in `src/pages/lib/csv-export.tsx`). The headers are sent before the cap can be known, so a capped file ends with one more row whose first cell reads `Truncated: this export stops at 50000 rows. Narrow the page filters to export the rest.` (the other cells empty). A file of exactly the cap has no such row.
 - **Headers.** `Content-Type: text/csv; charset=utf-8`, `Content-Disposition: attachment; filename="bunmail-<table>-<UTC date>.csv"`, `Cache-Control: no-store`.
@@ -527,7 +527,9 @@ src/pages/
 │   ├── session-guard.ts      ← The session guard (`resolve` putting `auth` on the context) and the `PublicDashboard` / `GuardedDashboard` types
 │   ├── session-helpers.ts    ← Issue / clear the session cookie, token-reuse revoke
 │   ├── same-origin.ts        ← CSRF same-origin check
-│   ├── responses.ts          ← `redirect`, `setNoStore`, `toFlash`
+│   ├── responses.ts          ← `redirect`, `setNoStore`
+│   ├── flash.ts              ← Flash banners by code: `flashUrl`, `toFlash`, `FLASH_QUERY`, `flashMessage` (#421)
+│   ├── flash-codes.ts        ← Every flash code and its message and colour (#421)
 │   ├── record-ownership.ts   ← Record actor, "Created by" names (#219)
 │   ├── audit.ts              ← Audit context (user, IP, user agent) of a dashboard request (#221)
 │   ├── reveal-owner.ts       ← Owner a one-time reveal is bound to (#280)
@@ -536,9 +538,9 @@ src/pages/
 │   ├── csv.ts                ← RFC 4180 CSV writer: quoting, CRLF, BOM, formula-injection escape (#430)
 │   ├── csv-export.tsx        ← Streams one export: Sec-Fetch-Site check, slot, budget, batches, row cap, audit and log line (#430)
 │   ├── export-limiter.ts     ← Export budget (10 per user per 10 minutes, shared store) and slots (2 at once per process) (#430)
-│   ├── sso.ts                ← What the SSO routes share: provider lookup, link refusal texts, the login page's SSO buttons (#224)
+│   ├── sso.ts                ← What the SSO routes share: provider lookup, link refusal codes, the login page's SSO buttons (#224)
 │   ├── passkeys.ts           ← What the passkey routes share: relying party, options refusals, cross-origin refusal, audit reasons, finish-form schema (#223)
-│   ├── account-two-factor.ts ← What the Two-factor routes share: refusal texts, page redirect, change alerts, recovery-code reveal (#220)
+│   ├── account-two-factor.ts ← What the Two-factor routes share: refusal codes, page redirect, change alerts, recovery-code reveal (#220)
 │   ├── client-ip.ts          ← Client IP of a request, for the account pages' log lines
 │   ├── error-message.ts      ← Error text for a log line
 │   └── form.ts               ← Repeated form field to `string[]`
@@ -636,10 +638,22 @@ directly in JSX: those run on the server and bake in the server's tz/locale.
 
 ## Form Actions
 
-Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash message in query params. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
+Dashboard uses standard HTML forms with POST actions. After each action the user is redirected back with a flash banner named in the query. A small client-side script (in the list pages) tracks checkbox state and toggles the bulk action bar visibility.
+
+### Flash messages (#421)
+
+A redirect carries a **flash code**, never text: `?flash=<code>`, built with `flashUrl(path, flash)` (`src/pages/lib/flash.ts`). The page reads it back with `toFlash(query.flash, query.flashN)` and shows the message and colour written for that code in `src/pages/lib/flash-codes.ts`; every page with a banner spreads `FLASH_QUERY` into its query schema. So a link from anyone else can only show one of BunMail's own messages inside the dashboard, never attacker-written words ("your account was compromised, call ...").
+
+- **Typed.** `Flash` is a code of `FLASH_MESSAGES` (fixed text) or `{ code, n }` with a code of `NUMERIC_FLASH_MESSAGES`: an unknown code is a type error at the call site. The code decides the colour, so there is no `flashType` in the URL.
+- **Numbers only.** A message built from a value takes one non-negative integer, `?flashN=<digits>` (digits only, at most 999,999,999, the maximum `flashUrl` clamps to and `toFlash` accepts): a count (`emails_trashed`, `trash_emptied`, `sessions_revoked_others`), a limit (`webhook_limit_reached`, `send_too_many_to`), or the unverified sender-domain records as bits (`email_queued_unverified`: DKIM 1, SPF 2, DMARC 4). The worst a crafted link can do is show a wrong number in one of these sentences.
+- **No free text.** What used to be spliced into a flash is now one fixed sentence per case or one code per variant: a provider's label (`sso_linked`, `sso_provider_unreachable`), a suppressed address (`suppression_removed`), a refusal reason (one code per reason of every refusal map: users, invitations, two-factor, passkeys, SSO), an invitation's mail failure (one code per reason), a reset link on localhost (`reset_link_created_localhost`), a role change (`account_role_admin`, `account_role_member`). An error never reaches the URL: `src/pages/flash-errors.ts` maps each typed refusal of a send, a domain add, a webhook create (a URL the SSRF guard refuses is `webhook_url_blocked`) and a DKIM rotation step to its code, and anything else to the action's fallback code. The route logs the error itself: a typed refusal at `warn` with its class or code, anything else at `error` (through `loggableError`, never the webhook URL).
+- **Unknown renders nothing.** An unknown code, free text from an old bookmark, a prototype key such as `__proto__`, or a `flashN` with anything but digits shows no banner and is not an error (the query fields are plain strings, so nothing is a `422`).
+- **Untouched.** The one-time secret reveal (`?reveal=`, #132) still travels beside the code. A page that renders a banner itself, without a redirect (a form re-rendered with its error, the `429` replay page), passes `{ message, type }` directly: that text never comes from the URL.
+
+A new flash: add its code (lower snake case, never reused for another meaning) to the right table in `flash-codes.ts`, then redirect with `flashUrl`. `test/unit/flash.test.ts` renders every code.
 
 **General**
-- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219). The success flash names the sender domain's DNS records that are not verified (DKIM, SPF, DMARC) or says the domain is unregistered (development), #245; a send refused on its sender domain or subject shows the reason as an error flash. A reply form also posts `inboundId` (the inbound email's id, never header text): the server sets `In-Reply-To` and `References` from that email's stored, validated ids (#192, see [inbound.md](inbound.md#threading-192))
+- Send email → `POST /dashboard/send` (a member may submit only its own key's id; any other is refused with an error flash and nothing is sent, #219). The success flash names the sender domain's DNS records that are not verified (DKIM, SPF, DMARC) or says the domain is unregistered (development), #245; a send refused on its sender domain or subject shows the reason as an error flash (a fixed sentence per refusal, #421). A reply form also posts `inboundId` (the inbound email's id, never header text): the server sets `In-Reply-To` and `References` from that email's stored, validated ids (#192, see [inbound.md](inbound.md#threading-192))
 - Create API key → `POST /dashboard/api-keys` (form fields: `name`, `allowedSenders`, `isAdmin`; `isAdmin` is ignored for members, #219)
 - Promote / demote API key → `POST /dashboard/api-keys/:id/admin` (admins and the owner)
 - Set allowed senders → `POST /dashboard/api-keys/:id/senders`
@@ -679,7 +693,7 @@ Dashboard uses standard HTML forms with POST actions. After each action the user
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`
-- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; each name must be an entry of `WEBHOOK_EVENT_TYPES`, as in the REST API: an unknown one, even mixed with valid ones, gets the error flash "Unknown webhook event" and an empty `events` field gets "Select at least one event", nothing stored, #437; inbound and domain events still need an admin key)
+- Create webhook → `POST /dashboard/webhooks` (form fields: `url`, `events`, one per ticked event; the form lists every event type, `email.complained` and `email.received` included, #425; each name must be an entry of `WEBHOOK_EVENT_TYPES`, as in the REST API: an unknown one, even mixed with valid ones, gets the error flash "Unknown webhook event" and an empty `events` field gets "Select at least one event" (codes `webhook_unknown_event` and `webhook_no_event`, #421), nothing stored, #437; inbound and domain events still need an admin key)
 - Delete webhook → `POST /dashboard/webhooks/:id/delete`
 - Replay a webhook delivery → `POST /dashboard/webhooks/deliveries/:deliveryId/replay`
 - Remove a suppression → `POST /dashboard/suppressions/:id/delete`

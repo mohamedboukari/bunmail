@@ -5,13 +5,13 @@ import { EmailSendRejectedError } from "../../modules/emails/errors.ts";
 import { SendEmailPage } from "../routes/send-email.tsx";
 import { memberGuard } from "../guards.tsx";
 import { sendSuccessFlash } from "../send-warnings.ts";
-import { flashMessageFor } from "../flash-errors.ts";
+import { sendErrorFlash } from "../flash-errors.ts";
 import * as emailService from "../../modules/emails/services/email.service.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
-import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /**
  * The send form and its POST. The first group of `emailPages`
@@ -37,7 +37,7 @@ export function emailSendPages(app: GuardedDashboard) {
           const activeKeys = keys.filter((k) => k.isActive);
           const defaultApiKeyId = activeKeys[0]?.id;
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <SendEmailPage
@@ -50,8 +50,7 @@ export function emailSendPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -79,8 +78,7 @@ export function emailSendPages(app: GuardedDashboard) {
               role: auth.user.role,
             });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/send?flash=${encodeURIComponent("Selected API key is not available. Pick an active one and try again.")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/send", "send_key_unavailable");
             return "";
           }
 
@@ -120,8 +118,10 @@ export function emailSendPages(app: GuardedDashboard) {
             });
             set.status = 302;
             /** Unverified sender-domain records are named in the flash (#245). */
-            set.headers["location"] =
-              `/dashboard/send?flash=${encodeURIComponent(sendSuccessFlash(warnings))}`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/send",
+              sendSuccessFlash(warnings),
+            );
           } catch (error) {
             if (error instanceof EmailSendRejectedError) {
               /** Refused on its input (#245): expected; the service logged the email id. */
@@ -135,8 +135,7 @@ export function emailSendPages(app: GuardedDashboard) {
               });
             }
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/send?flash=${encodeURIComponent(flashMessageFor(error, "Failed to send email"))}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/send", sendErrorFlash(error));
           }
           return "";
         },
