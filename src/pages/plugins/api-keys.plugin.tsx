@@ -5,12 +5,13 @@ import { ApiKeyCreatorInactiveError } from "../../modules/api-keys/errors.ts";
 import { ApiKeysPage, apiKeysTabOf } from "../routes/api-keys.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import { recordActorOf, managesAll, creatorDirectory } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /**
  * Parses the comma-joined value the allowed-senders chip input submits
@@ -46,7 +47,7 @@ export function apiKeyPages(app: GuardedDashboard) {
           ]);
 
           /** Parse flash message from query params (set after create/revoke) */
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           /**
            * The raw key is delivered via a one-time server-side reveal token
@@ -74,8 +75,7 @@ export function apiKeyPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
             reveal: t.Optional(t.String()),
             /** Narrowed by `apiKeysTabOf`; a plain string so junk never 422s. */
             tab: t.Optional(t.String()),
@@ -133,21 +133,25 @@ export function apiKeyPages(app: GuardedDashboard) {
             );
             set.status = 302;
             set.headers["location"] =
-              `/dashboard/api-keys?flash=${encodeURIComponent("API key created successfully")}&reveal=${reveal}`;
+              `${flashUrl("/dashboard/api-keys", "api_key_created")}&reveal=${reveal}`;
           } catch (error) {
             if (error instanceof ApiKeyCreatorInactiveError) {
               /** The service logged the refusal (#219). */
               set.status = 302;
-              set.headers["location"] =
-                `/dashboard/api-keys?flash=${encodeURIComponent("Your account can no longer create API keys")}&flashType=error`;
+              set.headers["location"] = flashUrl(
+                "/dashboard/api-keys",
+                "api_key_creator_inactive",
+              );
               return "";
             }
             logger.error("Failed to create API key via dashboard", {
               error: error instanceof Error ? error.message : String(error),
             });
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/api-keys?flash=${encodeURIComponent("Failed to create API key")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/api-keys",
+              "api_key_create_failed",
+            );
           }
           return "";
         },
@@ -189,17 +193,17 @@ export function apiKeyPages(app: GuardedDashboard) {
             });
             return redirect(
               set,
-              `/dashboard/api-keys?flash=${encodeURIComponent(isAdmin ? "Key promoted to admin" : "Key set to restricted")}`,
+              flashUrl(
+                "/dashboard/api-keys",
+                isAdmin ? "api_key_promoted" : "api_key_restricted",
+              ),
             );
           }
-          const message =
+          const code =
             result.reason === "not_found"
-              ? "API key not found"
-              : "Only keys of an active admin or the owner can be made admin";
-          return redirect(
-            set,
-            `/dashboard/api-keys?flash=${encodeURIComponent(message)}&flashType=error`,
-          );
+              ? "api_key_not_found"
+              : "api_key_promotion_refused";
+          return redirect(set, flashUrl("/dashboard/api-keys", code));
         },
         {
           beforeHandle: adminGuard,
@@ -238,8 +242,8 @@ export function apiKeyPages(app: GuardedDashboard) {
 
           set.status = 302;
           set.headers["location"] = updated
-            ? `/dashboard/api-keys?flash=${encodeURIComponent("Allowed senders updated")}`
-            : `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+            ? flashUrl("/dashboard/api-keys", "api_key_senders_updated")
+            : flashUrl("/dashboard/api-keys", "api_key_not_found");
           return "";
         },
         {
@@ -268,8 +272,10 @@ export function apiKeyPages(app: GuardedDashboard) {
 
           if (!apiKey) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/api-keys?flash=${encodeURIComponent("API key not found")}&flashType=error`;
+            set.headers["location"] = flashUrl(
+              "/dashboard/api-keys",
+              "api_key_not_found",
+            );
             return "";
           }
 
@@ -278,8 +284,7 @@ export function apiKeyPages(app: GuardedDashboard) {
             userId: auth.user.id,
           });
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/api-keys?flash=${encodeURIComponent("API key revoked")}`;
+          set.headers["location"] = flashUrl("/dashboard/api-keys", "api_key_revoked");
           return "";
         },
         {

@@ -7,18 +7,16 @@ import { AccountPasswordPage } from "../routes/account-password.tsx";
 import { memberGuard } from "../guards.tsx";
 import * as passwordChangeService from "../../modules/users/services/password-change.service.ts";
 import { issueSession } from "../lib/session-helpers.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
 import type { accountTwoFactorManagePages } from "./account-two-factor-manage.plugin.tsx";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /* ─── Password change helpers (#279) ─── */
 
 /** Where the form lives, and where a completed change lands. */
 const PASSWORD_PAGE = "/dashboard/account/password";
-
-/** The success flash: the user stays signed in here only. */
-const CHANGED_TEXT = "Password changed. You were signed out on every other device.";
 
 /**
  * Text and status for a refused change, re-rendered on the form. A wrong
@@ -62,15 +60,14 @@ export function accountPasswordPages(
           return (
             <AccountPasswordPage
               email={auth.user.email}
-              flash={toFlash(query.flash, query.flashType)}
+              flash={toFlash(query.flash, query.flashN)}
             />
           );
         },
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -148,10 +145,8 @@ export function accountPasswordPages(
             });
 
             issueSession(set, result.sessionToken);
-            return redirect(
-              set,
-              `${PASSWORD_PAGE}?flash=${encodeURIComponent(CHANGED_TEXT)}&flashType=success`,
-            );
+            /** The success flash: the user stays signed in here only. */
+            return redirect(set, flashUrl(PASSWORD_PAGE, "password_changed"));
           } catch (error: unknown) {
             logger.error("Password change failed", {
               userId,

@@ -12,9 +12,9 @@ import { parsePagination } from "../pagination.ts";
 import * as emailService from "../../modules/emails/services/email.service.ts";
 import * as tombstoneService from "../../modules/emails/services/tombstone.service.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
-import { toFlash } from "../lib/responses.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { emailSendPages } from "./emails-send.plugin.tsx";
+import { FLASH_QUERY, toFlash } from "../lib/flash.ts";
 
 /**
  * The email list and the tombstones (#34). Takes the instance the send
@@ -74,7 +74,7 @@ export function emailListPages(app: ReturnType<typeof emailSendPages>) {
                   message: describeTagProblem(parsedTag, "Tag filter"),
                   type: "error" as const,
                 }
-              : toFlash(query.flash, query.flashType);
+              : toFlash(query.flash, query.flashN);
 
           return (
             <EmailsPage
@@ -105,8 +105,7 @@ export function emailListPages(app: ReturnType<typeof emailSendPages>) {
             apiKeyId: t.Optional(t.String()),
             /** Tag filter (#189), `key:value`. */
             tag: t.Optional(t.String()),
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )

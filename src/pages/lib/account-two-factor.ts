@@ -6,6 +6,8 @@ import type {
 import { stashRevealSecret } from "../reveal-store.ts";
 import { TWO_FACTOR_PAGE } from "../../modules/users/services/two-factor-policy.service.ts";
 import { redirect } from "./responses.ts";
+import { flashUrl } from "./flash.ts";
+import type { FlashCode } from "./flash-codes.ts";
 import { revealOwnerOf } from "./reveal-owner.ts";
 import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-alert.service.ts";
 import { sessionIp } from "../../modules/users/services/session-policy.service.ts";
@@ -13,33 +15,28 @@ import { sessionIp } from "../../modules/users/services/session-policy.service.t
 /* ─── Two-factor helpers (#220) ─── */
 
 /**
- * What the Two-factor page says for a refused action. A wrong code and a
- * wrong password get one message where both are asked for, so the page
- * never says which of the two was wrong.
+ * The Two-factor page's flash code for a refused action (#421: a code,
+ * never text). A wrong code and a wrong password get one message where
+ * both are asked for, so the page never says which of the two was wrong.
  */
-export const TWO_FACTOR_REFUSAL: Record<TwoFactorRefusal, string> = {
-  rate_limited: "Too many attempts. Try again later.",
-  no_pending: "Start the setup again: no setup was in progress in this browser.",
-  already_enabled: "Two-factor authentication is already on.",
-  not_enabled: "Two-factor authentication is off.",
-  wrong_code: "Invalid code. Try again.",
-  wrong_password: "The password or the code is incorrect.",
-  sso_link_requires_second_factor:
-    "You are the owner and have a single sign-on account linked: unlink it on the Sign-in methods page before turning two-factor authentication off.",
+export const TWO_FACTOR_REFUSAL: Record<TwoFactorRefusal, FlashCode> = {
+  rate_limited: "rate_limited",
+  no_pending: "two_factor_no_pending",
+  already_enabled: "two_factor_already_enabled",
+  not_enabled: "two_factor_not_enabled",
+  wrong_code: "two_factor_wrong_code",
+  wrong_password: "two_factor_wrong_password",
+  sso_link_requires_second_factor: "two_factor_sso_link",
 };
 
 /** Redirects to the Two-factor page with a flash banner (and a reveal token). */
 export function toTwoFactorPage(
   set: Context["set"],
-  message: string,
-  type: "success" | "error",
+  code: FlashCode,
   reveal?: string,
 ): string {
-  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
-  return redirect(
-    set,
-    `${TWO_FACTOR_PAGE}?${query}${reveal === undefined ? "" : `&reveal=${reveal}`}`,
-  );
+  const location = flashUrl(TWO_FACTOR_PAGE, code);
+  return redirect(set, `${location}${reveal === undefined ? "" : `&reveal=${reveal}`}`);
 }
 
 /**

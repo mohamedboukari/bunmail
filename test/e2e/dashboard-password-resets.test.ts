@@ -19,6 +19,7 @@ import {
   warnLog,
   UNKNOWN_TOKEN,
 } from "./dashboard-setup.ts";
+import { flashOfLocation, flashOfResponse } from "../flash-of.ts";
 
 /** Dashboard E2E: password resets. Setup, fakes and helpers: `dashboard-setup.ts` (#291). */
 useDashboardMocks();
@@ -185,7 +186,7 @@ describe("Dashboard E2E: password resets", () => {
       const location = response.headers.get("location") ?? "";
       expect(location).toContain("reveal=");
       expect(location).not.toContain(RESET_TOKEN);
-      expect(decodeURIComponent(location)).toContain("Password reset link created");
+      expect(flashOfLocation(location)?.message).toContain("Password reset link created");
       expect(issuePasswordReset).toHaveBeenCalledWith(
         OWNER.userId,
         "usr_admin",
@@ -215,9 +216,7 @@ describe("Dashboard E2E: password resets", () => {
         "/dashboard/users/usr_admin/reset-password",
         seedSession(),
       );
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-        "APP_BASE_URL is not set",
-      );
+      expect(flashOfResponse(response)?.message).toContain("APP_BASE_URL is not set");
     });
 
     test("a member gets 403 and the service is never called", async () => {
@@ -245,10 +244,11 @@ describe("Dashboard E2E: password resets", () => {
         seedSession(),
       );
       expect(disabled.status).toBe(302);
-      const location = decodeURIComponent(disabled.headers.get("location") ?? "");
-      expect(location).toContain("Reactivate the account before resetting its password.");
-      expect(location).toContain("flashType=error");
-      expect(location).not.toContain("reveal=");
+      expect(flashOfResponse(disabled)).toEqual({
+        message: "Reactivate the account before resetting its password.",
+        type: "error",
+      });
+      expect(disabled.headers.get("location")).not.toContain("reveal=");
     });
 
     test("an issue failure is logged and answered with an error flash", async () => {
@@ -261,7 +261,7 @@ describe("Dashboard E2E: password resets", () => {
         seedSession(),
       );
       expect(response.status).toBe(302);
-      expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
+      expect(flashOfResponse(response)?.message).toBe(
         "Failed to create the password reset link.",
       );
       expect(

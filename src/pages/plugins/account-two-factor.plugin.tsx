@@ -9,7 +9,7 @@ import {
   TWO_FACTOR_PAGE,
   twoFactorRequired,
 } from "../../modules/users/services/two-factor-policy.service.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
@@ -22,6 +22,7 @@ import {
   toTwoFactorPage,
 } from "../lib/account-two-factor.ts";
 import type { accountSessionPages } from "./account-sessions.plugin.tsx";
+import { FLASH_QUERY, toFlash } from "../lib/flash.ts";
 
 /**
  * The Two-factor page (#220) and the enrolment: start and confirm. Takes
@@ -64,7 +65,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
                   twoFactorRequired(config.dashboard.require2fa, auth.user.role)
                 }
                 recoveryCodes={recoveryCodes}
-                flash={toFlash(query.flash, query.flashType)}
+                flash={toFlash(query.flash, query.flashN)}
               />
             );
           } catch (error: unknown) {
@@ -90,8 +91,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
             reveal: t.Optional(t.String()),
           }),
         },
@@ -128,11 +128,11 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
                 reason: result.reason,
                 ip,
               });
-              const message =
+              const code =
                 result.reason === "wrong_password"
-                  ? "Current password is incorrect."
+                  ? "current_password_wrong"
                   : TWO_FACTOR_REFUSAL[result.reason];
-              return toTwoFactorPage(set, message, "error");
+              return toTwoFactorPage(set, code);
             }
             logger.info("Two-factor enrolment started", {
               userId: auth.user.id,
@@ -145,11 +145,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
               sessionId: auth.session.id,
               error: errorMessage(error),
             });
-            return toTwoFactorPage(
-              set,
-              "Failed to start the setup: nothing was changed.",
-              "error",
-            );
+            return toTwoFactorPage(set, "two_factor_start_failed");
           }
         },
         {
@@ -185,7 +181,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
                 reason: result.reason,
                 ip,
               });
-              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason], "error");
+              return toTwoFactorPage(set, TWO_FACTOR_REFUSAL[result.reason]);
             }
             logger.warn("Two-factor authentication enabled", {
               userId: auth.user.id,
@@ -196,8 +192,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
             alertTwoFactorChange("enabled", auth, ip);
             return toTwoFactorPage(
               set,
-              "Two-factor authentication is on. You were signed out on every other device.",
-              "success",
+              "two_factor_enabled",
               await stashRecoveryCodes(result.recoveryCodes, auth),
             );
           } catch (error: unknown) {
@@ -207,11 +202,7 @@ export function accountTwoFactorPages(app: ReturnType<typeof accountSessionPages
               ip,
               error: errorMessage(error),
             });
-            return toTwoFactorPage(
-              set,
-              "Failed to turn on two-factor authentication: nothing was changed.",
-              "error",
-            );
+            return toTwoFactorPage(set, "two_factor_enable_failed");
           }
         },
         {

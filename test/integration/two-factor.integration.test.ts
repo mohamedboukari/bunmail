@@ -72,6 +72,7 @@ import * as passwordService from "../../src/modules/users/services/password.serv
 import * as mailer from "../../src/modules/emails/services/mailer.service.ts";
 import { domains } from "../../src/modules/domains/models/domain.schema.ts";
 import { config } from "../../src/config.ts";
+import { flashOfResponse } from "../flash-of.ts";
 
 const app = new Elysia().use(pagesPlugin);
 
@@ -308,9 +309,7 @@ describe("enrolment", () => {
       body: { code: "000000" },
     });
     expect(response.status).toBe(302);
-    expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-      "Invalid code",
-    );
+    expect(flashOfResponse(response)?.message).toContain("Invalid code");
     expect(await totpRow(ids.member)).toBeUndefined();
     expect(await recoveryRows(ids.member)).toHaveLength(0);
     expect(await assuranceOf(browser.id)).toBe("password");
@@ -432,9 +431,7 @@ describe("enrolment", () => {
       token: browser.token,
       body: { password: PASSWORD },
     });
-    expect(decodeURIComponent(started.headers.get("location") ?? "")).toContain(
-      "already on",
-    );
+    expect(flashOfResponse(started)?.message).toContain("already on");
     const [row] = await db
       .select({ pending: sessions.totpPendingSecret })
       .from(sessions)
@@ -444,9 +441,7 @@ describe("enrolment", () => {
       token: browser.token,
       body: { code: "123456" },
     });
-    expect(decodeURIComponent(confirmed.headers.get("location") ?? "")).toContain(
-      "Start the setup again",
-    );
+    expect(flashOfResponse(confirmed)?.message).toContain("Start the setup again");
   });
 });
 
@@ -772,7 +767,7 @@ describe("disable and regenerate", () => {
       token: browser.token,
       body: { password: "not the password at all", code: codeAt(key) },
     });
-    expect(decodeURIComponent(wrongPassword.headers.get("location") ?? "")).toContain(
+    expect(flashOfResponse(wrongPassword)?.message).toContain(
       "The password or the code is incorrect.",
     );
     expect(await totpRow(ids.member)).toBeDefined();
@@ -781,7 +776,7 @@ describe("disable and regenerate", () => {
       token: browser.token,
       body: { password: PASSWORD, code: "000000" },
     });
-    expect(decodeURIComponent(wrongCode.headers.get("location") ?? "")).toContain(
+    expect(flashOfResponse(wrongCode)?.message).toContain(
       "The password or the code is incorrect.",
     );
     expect(await totpRow(ids.member)).toBeDefined();
@@ -790,9 +785,10 @@ describe("disable and regenerate", () => {
       token: browser.token,
       body: { password: PASSWORD, code: codeAt(key) },
     });
-    expect(decodeURIComponent(done.headers.get("location") ?? "")).toContain(
-      "Two-factor authentication is off.",
-    );
+    expect(flashOfResponse(done)).toEqual({
+      message: "Two-factor authentication turned off.",
+      type: "success",
+    });
     expect(await totpRow(ids.member)).toBeUndefined();
     expect(await recoveryRows(ids.member)).toHaveLength(0);
     /** Sessions are kept. */
@@ -817,9 +813,7 @@ describe("disable and regenerate", () => {
       token: browser.token,
       body: { code: codes[0] ?? "" },
     });
-    expect(decodeURIComponent(withRecovery.headers.get("location") ?? "")).toContain(
-      "Invalid code",
-    );
+    expect(flashOfResponse(withRecovery)?.message).toContain("Invalid code");
     expect(
       (await recoveryRows(ids.member)).filter((r) => r.usedAt === null),
     ).toHaveLength(10);
@@ -1043,9 +1037,7 @@ describe("re-authentication before enrolment (review 1)", () => {
       token: browser.token,
       body: { password: "not the password at all" },
     });
-    expect(decodeURIComponent(refused.headers.get("location") ?? "")).toContain(
-      "Current password is incorrect.",
-    );
+    expect(flashOfResponse(refused)?.message).toContain("Current password is incorrect.");
     const [row] = await db
       .select({ pending: sessions.totpPendingSecret })
       .from(sessions)
@@ -1059,9 +1051,7 @@ describe("re-authentication before enrolment (review 1)", () => {
       token: browser.token,
       body: { code: "123456" },
     });
-    expect(decodeURIComponent(confirmed.headers.get("location") ?? "")).toContain(
-      "Start the setup again",
-    );
+    expect(flashOfResponse(confirmed)?.message).toContain("Start the setup again");
     expect(await totpRow(ids.member)).toBeUndefined();
   });
 
@@ -1083,9 +1073,7 @@ describe("re-authentication before enrolment (review 1)", () => {
           token: browser.token,
           body: { password: PASSWORD },
         });
-        expect(decodeURIComponent(blocked.headers.get("location") ?? "")).toContain(
-          "Too many attempts",
-        );
+        expect(flashOfResponse(blocked)?.message).toContain("Too many attempts");
         expect(verify).not.toHaveBeenCalled();
       } finally {
         verify.mockRestore();
@@ -1243,9 +1231,10 @@ describe("disable on an account without 2FA (review 3)", () => {
           token: browser.token,
           body: { password, code: "123456" },
         });
-        expect(decodeURIComponent(response.headers.get("location") ?? "")).toContain(
-          "Two-factor authentication is off.",
-        );
+        expect(flashOfResponse(response)).toEqual({
+          message: "Two-factor authentication is off.",
+          type: "error",
+        });
       }
       expect(verify).not.toHaveBeenCalled();
     } finally {

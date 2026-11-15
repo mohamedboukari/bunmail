@@ -16,7 +16,7 @@ import { sendTwoFactorAlert } from "../../modules/users/services/two-factor-aler
 import { sessionIp } from "../../modules/users/services/session-policy.service.ts";
 import { AccountPasskeysPage } from "../routes/account-passkeys.tsx";
 import { memberGuard } from "../guards.tsx";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { dashboardClient } from "../lib/audit.ts";
 import { passwordChangeLimiter } from "../lib/password-limiter.ts";
@@ -28,31 +28,29 @@ import {
   currentRelyingParty,
   refuseOptions,
 } from "../lib/passkeys.ts";
+import { FLASH_QUERY, flashMessage, flashUrl, toFlash } from "../lib/flash.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 
 /* ─── Account: the Passkeys page ─── */
 
 /** Redirects to the Passkeys page with a flash banner. */
-function toPasskeysPage(
-  set: Context["set"],
-  message: string,
-  type: "success" | "error",
-): string {
-  return redirect(
-    set,
-    `${PASSKEYS_PAGE}?flash=${encodeURIComponent(message)}&flashType=${type}`,
-  );
+function toPasskeysPage(set: Context["set"], code: FlashCode): string {
+  return redirect(set, flashUrl(PASSKEYS_PAGE, code));
 }
 
-/** What the Passkeys page says for a refused action. */
-const ACCOUNT_REFUSAL: Partial<Record<PasskeyRefusal, string>> = {
-  rate_limited: "Too many attempts. Try again later.",
-  wrong_password: "Current password is incorrect.",
-  no_challenge: "The passkey setup expired or was already used. Start again.",
-  rejected: "The passkey could not be verified. Start again.",
-  already_registered: "That passkey is already registered.",
-  not_found: "That passkey was not found: nothing was changed.",
-  sso_link_requires_second_factor:
-    "You are the owner and have a single sign-on account linked: unlink it on the Sign-in methods page before removing your last second factor.",
+/**
+ * The Passkeys page's flash code for a refused action (#421: a code,
+ * never text); the options endpoint answers the code's message as JSON.
+ * Any other refusal is `passkey_nothing_changed`.
+ */
+const ACCOUNT_REFUSAL: Partial<Record<PasskeyRefusal, FlashCode>> = {
+  rate_limited: "rate_limited",
+  wrong_password: "current_password_wrong",
+  no_challenge: "passkey_no_challenge",
+  rejected: "passkey_rejected",
+  already_registered: "passkey_already_registered",
+  not_found: "passkey_not_found",
+  sso_link_requires_second_factor: "passkey_sso_link",
 };
 
 /** The account's own passkey change, emailed in the background (never awaited). */
@@ -105,7 +103,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
                   factors.passkeys === 0 &&
                   twoFactorRequired(config.dashboard.require2fa, auth.user.role)
                 }
-                flash={toFlash(query.flash, query.flashType)}
+                flash={toFlash(query.flash, query.flashN)}
               />
             );
           } catch (error: unknown) {
@@ -128,8 +126,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
         {
           beforeHandle: memberGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -174,7 +171,9 @@ export function passkeyAccountPages(app: GuardedDashboard) {
                 return refuseOptions(set, 400, { error: result.problem });
               }
               return refuseOptions(set, result.reason === "rate_limited" ? 429 : 400, {
-                error: ACCOUNT_REFUSAL[result.reason] ?? "Nothing was changed.",
+                error: flashMessage(
+                  ACCOUNT_REFUSAL[result.reason] ?? "passkey_nothing_changed",
+                ),
               });
             }
             logger.info("Passkey registration started", {
@@ -218,7 +217,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
         async ({ body, auth, set, request, server }) => {
           const ip = requestIp(request, server?.requestIP(request)?.address);
           const rp = currentRelyingParty();
-          if (!rp) return toPasskeysPage(set, PASSKEYS_OFF, "error");
+          if (!rp) return toPasskeysPage(set, "passkeys_off");
           try {
             const result = await passkeyService.finishRegistration(
               {
@@ -238,8 +237,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               });
               return toPasskeysPage(
                 set,
-                ACCOUNT_REFUSAL[result.reason] ?? "Nothing was changed.",
-                "error",
+                ACCOUNT_REFUSAL[result.reason] ?? "passkey_nothing_changed",
               );
             }
             logger.warn("Passkey added", {
@@ -252,10 +250,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
             alertPasskeyChange("passkey_added", auth, ip, result.name);
             return toPasskeysPage(
               set,
-              result.sessionsRevoked > 0
-                ? "Passkey added. You were signed out on every other device."
-                : "Passkey added.",
-              "success",
+              result.sessionsRevoked > 0 ? "passkey_added_signed_out" : "passkey_added",
             );
           } catch (error: unknown) {
             logger.error("Passkey registration failed", {
@@ -264,11 +259,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               ip,
               error: errorMessage(error),
             });
-            return toPasskeysPage(
-              set,
-              "Failed to add the passkey: nothing was changed.",
-              "error",
-            );
+            return toPasskeysPage(set, "passkey_add_failed");
           }
         },
         { beforeHandle: memberGuard, body: FINISH_BODY },
@@ -297,28 +288,24 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               });
               return toPasskeysPage(
                 set,
+                /** One fixed sentence for the name policy (#421): never the problem text. */
                 result.reason === "invalid_name"
-                  ? result.problem
-                  : (ACCOUNT_REFUSAL[result.reason] ?? "Nothing was changed."),
-                "error",
+                  ? "passkey_invalid_name"
+                  : (ACCOUNT_REFUSAL[result.reason] ?? "passkey_nothing_changed"),
               );
             }
             logger.info("Passkey renamed", {
               userId: auth.user.id,
               passkeyId: params.id,
             });
-            return toPasskeysPage(set, "Passkey renamed.", "success");
+            return toPasskeysPage(set, "passkey_renamed");
           } catch (error: unknown) {
             logger.error("Passkey rename failed", {
               userId: auth.user.id,
               passkeyId: params.id,
               error: errorMessage(error),
             });
-            return toPasskeysPage(
-              set,
-              "Failed to rename the passkey: nothing was changed.",
-              "error",
-            );
+            return toPasskeysPage(set, "passkey_rename_failed");
           }
         },
         {
@@ -358,8 +345,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               });
               return toPasskeysPage(
                 set,
-                ACCOUNT_REFUSAL[result.reason] ?? "Nothing was changed.",
-                "error",
+                ACCOUNT_REFUSAL[result.reason] ?? "passkey_nothing_changed",
               );
             }
             logger.warn("Passkey removed", {
@@ -369,7 +355,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               ip,
             });
             alertPasskeyChange("passkey_removed", auth, ip, result.name);
-            return toPasskeysPage(set, "Passkey removed.", "success");
+            return toPasskeysPage(set, "passkey_removed");
           } catch (error: unknown) {
             logger.error("Passkey removal failed", {
               userId: auth.user.id,
@@ -377,11 +363,7 @@ export function passkeyAccountPages(app: GuardedDashboard) {
               ip,
               error: errorMessage(error),
             });
-            return toPasskeysPage(
-              set,
-              "Failed to remove the passkey: nothing was changed.",
-              "error",
-            );
+            return toPasskeysPage(set, "passkey_remove_failed");
           }
         },
         {

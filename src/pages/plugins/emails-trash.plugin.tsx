@@ -6,8 +6,8 @@ import { adminGuard, memberGuard } from "../guards.tsx";
 import { parsePagination } from "../pagination.ts";
 import * as emailService from "../../modules/emails/services/email.service.ts";
 import { toIdArray } from "../lib/form.ts";
-import { toFlash } from "../lib/responses.ts";
 import type { emailListPages } from "./emails-list.plugin.tsx";
+import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
 
 /**
  * The trash page and the trash actions: bulk and single trash, restore
@@ -32,7 +32,7 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
             limit,
           });
 
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
 
           return (
             <EmailsTrashPage
@@ -50,8 +50,7 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
           query: t.Object({
             page: t.Optional(t.String()),
             limit: t.Optional(t.String()),
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
           }),
         },
       )
@@ -68,8 +67,10 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
           logger.info("Bulk-trashed emails via dashboard", { count });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails?flash=${encodeURIComponent(`${count} email(s) moved to trash`)}`;
+          set.headers["location"] = flashUrl("/dashboard/emails", {
+            code: "emails_trashed",
+            n: count,
+          });
           return "";
         },
         {
@@ -96,8 +97,10 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
           logger.info("Bulk-restored emails via dashboard", { restored });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails/trash?flash=${encodeURIComponent(`${restored} email(s) restored`)}`;
+          set.headers["location"] = flashUrl("/dashboard/emails/trash", {
+            code: "emails_restored",
+            n: restored,
+          });
           return "";
         },
         {
@@ -124,8 +127,10 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
           logger.info("Bulk-permanent-deleted emails via dashboard", { deleted });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails/trash?flash=${encodeURIComponent(`${deleted} email(s) deleted forever`)}`;
+          set.headers["location"] = flashUrl("/dashboard/emails/trash", {
+            code: "emails_deleted_forever",
+            n: deleted,
+          });
           return "";
         },
         {
@@ -147,8 +152,10 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
           logger.info("Emptied emails trash via dashboard", { deleted });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails/trash?flash=${encodeURIComponent(`Trash emptied: ${deleted} email(s) permanently deleted`)}`;
+          set.headers["location"] = flashUrl("/dashboard/emails/trash", {
+            code: "trash_emptied",
+            n: deleted,
+          });
           return "";
         },
         { beforeHandle: adminGuard },
@@ -165,15 +172,13 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
 
           if (!email) {
             set.status = 302;
-            set.headers["location"] =
-              `/dashboard/emails?flash=${encodeURIComponent("Email not found")}&flashType=error`;
+            set.headers["location"] = flashUrl("/dashboard/emails", "email_not_found");
             return "";
           }
 
           logger.info("Email trashed via dashboard", { id: params.id });
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails?flash=${encodeURIComponent("Email moved to trash")}`;
+          set.headers["location"] = flashUrl("/dashboard/emails", "email_trashed");
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },
@@ -188,14 +193,12 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
         async ({ params, set }) => {
           const email = await emailService.restoreEmailUnscoped(params.id);
 
-          const message = email ? "Email restored" : "Trashed email not found";
-          const type: "success" | "error" = email ? "success" : "error";
+          const code = email ? "email_restored" : "trashed_email_not_found";
 
           if (email) logger.info("Email restored via dashboard", { id: params.id });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+          set.headers["location"] = flashUrl("/dashboard/emails/trash", code);
           return "";
         },
         { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
@@ -210,15 +213,13 @@ export function emailTrashPages(app: ReturnType<typeof emailListPages>) {
         async ({ params, set }) => {
           const email = await emailService.permanentDeleteEmailUnscoped(params.id);
 
-          const message = email ? "Email deleted forever" : "Trashed email not found";
-          const type: "success" | "error" = email ? "success" : "error";
+          const code = email ? "email_deleted_forever" : "trashed_email_not_found";
 
           if (email)
             logger.info("Email permanently deleted via dashboard", { id: params.id });
 
           set.status = 302;
-          set.headers["location"] =
-            `/dashboard/emails/trash?flash=${encodeURIComponent(message)}&flashType=${type}`;
+          set.headers["location"] = flashUrl("/dashboard/emails/trash", code);
           return "";
         },
         { beforeHandle: adminGuard, params: t.Object({ id: t.String() }) },

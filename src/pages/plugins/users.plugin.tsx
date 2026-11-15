@@ -15,35 +15,37 @@ import { UsersPage } from "../routes/users.tsx";
 import { ForbiddenPage } from "../routes/forbidden.tsx";
 import { adminGuard } from "../guards.tsx";
 import * as userAdminService from "../../modules/users/services/user-admin.service.ts";
-import { redirect, setNoStore, toFlash } from "../lib/responses.ts";
+import { redirect, setNoStore } from "../lib/responses.ts";
 import { errorMessage } from "../lib/error-message.ts";
 import { revealOwnerOf } from "../lib/reveal-owner.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardClient } from "../lib/audit.ts";
+import { FLASH_QUERY, flashMessage, flashUrl, toFlash } from "../lib/flash.ts";
+import type { FlashCode } from "../lib/flash-codes.ts";
 
 /* ─── Account management helpers (#218) ─── */
 
 /**
- * Text for a refused account action. The first group can only come from
- * a crafted request (the Users page never offers the button), so it is
- * answered with the 403 page; the rest are races or typos and go back to
- * the page as an error flash.
+ * Flash code for a refused account action (#421: the message is looked up
+ * by code). The first group can only come from a crafted request (the
+ * Users page never offers the button), so it is answered with the 403
+ * page, showing the code's message; the rest are races or typos and go
+ * back to the page as an error flash.
  */
-const ACCOUNT_REFUSAL_TEXT: Record<AccountRefusal, string> = {
-  actor_inactive: "Your account can no longer manage accounts.",
-  self: "You cannot change the role or status of your own account.",
-  target_is_owner: "The owner cannot be demoted, deactivated or removed.",
-  role_not_allowed: "Your role cannot do this to that account.",
-  invalid_role: "An account can only be made an admin or a member here.",
-  not_found: "Account not found: it may have been removed.",
-  unchanged: "Nothing to change: the account already has that role or status.",
-  confirm_mismatch: "Type the account's email address exactly to remove it.",
-  wrong_password: "Wrong password: ownership was not transferred.",
-  not_eligible: "Ownership can only go to an active admin.",
-  sso_link_without_second_factor:
-    "That admin has a single sign-on account linked and no second factor: they must set up a second factor before becoming the owner.",
-  rate_limited: "Too many failed attempts, try again later.",
-  account_disabled: "Reactivate the account before resetting its password.",
+const ACCOUNT_REFUSAL_FLASH: Record<AccountRefusal, FlashCode> = {
+  actor_inactive: "account_actor_inactive",
+  self: "account_self",
+  target_is_owner: "account_target_is_owner",
+  role_not_allowed: "account_role_not_allowed",
+  invalid_role: "account_invalid_role",
+  not_found: "account_not_found",
+  unchanged: "account_unchanged",
+  confirm_mismatch: "account_confirm_mismatch",
+  wrong_password: "account_wrong_password",
+  not_eligible: "account_not_eligible",
+  sso_link_without_second_factor: "account_sso_link_without_second_factor",
+  rate_limited: "account_rate_limited",
+  account_disabled: "account_disabled",
 };
 
 /** Refusals answered with the 403 page: no button on the page leads to them. */
@@ -71,15 +73,10 @@ function transferLimiter(actorId: string, ip: string): AttemptLimiter {
   ]);
 }
 
-/** 302 back to the Users page with a flash message (never a link or token). */
-function usersRedirect(
-  set: Context["set"],
-  message: string,
-  type: "success" | "error",
-  reveal?: string,
-): string {
-  const query = `flash=${encodeURIComponent(message)}&flashType=${type}`;
-  return redirect(set, `/dashboard/users?${query}${reveal ? `&reveal=${reveal}` : ""}`);
+/** 302 back to the Users page with a flash code (never a link or token). */
+function usersRedirect(set: Context["set"], code: FlashCode, reveal?: string): string {
+  const location = flashUrl("/dashboard/users", code);
+  return redirect(set, `${location}${reveal ? `&reveal=${reveal}` : ""}`);
 }
 
 /**
@@ -90,14 +87,14 @@ function usersRedirect(
 function answerAccountAction(
   set: Context["set"],
   result: AccountActionResult,
-  success: string,
+  success: FlashCode,
 ): string | Promise<string> {
-  if (result.ok) return usersRedirect(set, success, "success");
+  if (result.ok) return usersRedirect(set, success);
   if (ACCOUNT_REFUSAL_FORBIDDEN.has(result.reason)) {
     set.status = 403;
-    return <ForbiddenPage message={ACCOUNT_REFUSAL_TEXT[result.reason]} />;
+    return <ForbiddenPage message={flashMessage(ACCOUNT_REFUSAL_FLASH[result.reason])} />;
   }
-  return usersRedirect(set, ACCOUNT_REFUSAL_TEXT[result.reason], "error");
+  return usersRedirect(set, ACCOUNT_REFUSAL_FLASH[result.reason]);
 }
 
 /**
@@ -111,19 +108,16 @@ async function answerPasswordReset(
   auth: DashboardAuth,
   result: IssuePasswordResetResult,
 ): Promise<string> {
-  if (!result.ok) return answerAccountAction(set, result, "");
+  /** `success` is unused on a refusal. */
+  if (!result.ok) return answerAccountAction(set, result, "reset_link_created");
   const reveal = await stashRevealSecret(
     result.url,
     "password_reset_link",
     revealOwnerOf(auth),
   );
-  const fallback = result.usedFallback
-    ? " APP_BASE_URL is not set, so the link points at localhost."
-    : "";
   return usersRedirect(
     set,
-    `Password reset link created. Copy it below and share it privately: it works once, for one hour.${fallback}`,
-    "success",
+    result.usedFallback ? "reset_link_created_localhost" : "reset_link_created",
     reveal,
   );
 }
@@ -146,7 +140,7 @@ export function userPages(app: GuardedDashboard) {
         async ({ query, auth, set }) => {
           setNoStore(set);
           const accounts = await userAdminService.listAccounts();
-          const flash = toFlash(query.flash, query.flashType);
+          const flash = toFlash(query.flash, query.flashN);
           /** One-time reveal of a reset link (#277), bound to this user and session (#280). */
           const revealedResetLink = await consumeRevealSecret(
             query.reveal,
@@ -165,8 +159,7 @@ export function userPages(app: GuardedDashboard) {
         {
           beforeHandle: adminGuard,
           query: t.Object({
-            flash: t.Optional(t.String()),
-            flashType: t.Optional(t.String()),
+            ...FLASH_QUERY,
             reveal: t.Optional(t.String()),
           }),
         },
@@ -187,7 +180,12 @@ export function userPages(app: GuardedDashboard) {
             body.role,
             dashboardClient(request, server),
           );
-          return answerAccountAction(set, result, `Role changed to ${body.role}.`);
+          /** A success means the role was `admin` or `member` (else `invalid_role`). */
+          return answerAccountAction(
+            set,
+            result,
+            body.role === "admin" ? "account_role_admin" : "account_role_member",
+          );
         },
         {
           beforeHandle: adminGuard,
@@ -210,7 +208,7 @@ export function userPages(app: GuardedDashboard) {
             params.id,
             dashboardClient(request, server),
           );
-          return answerAccountAction(set, result, "Account deactivated and signed out.");
+          return answerAccountAction(set, result, "account_deactivated");
         },
         {
           beforeHandle: adminGuard,
@@ -231,7 +229,7 @@ export function userPages(app: GuardedDashboard) {
             params.id,
             dashboardClient(request, server),
           );
-          return answerAccountAction(set, result, "Account reactivated.");
+          return answerAccountAction(set, result, "account_reactivated");
         },
         {
           beforeHandle: adminGuard,
@@ -253,7 +251,7 @@ export function userPages(app: GuardedDashboard) {
             body.confirm,
             dashboardClient(request, server),
           );
-          return answerAccountAction(set, result, "Account removed.");
+          return answerAccountAction(set, result, "account_removed");
         },
         {
           beforeHandle: adminGuard,
@@ -284,11 +282,7 @@ export function userPages(app: GuardedDashboard) {
             transferLimiter(auth.user.id, ip),
             { ip, userAgent: request.headers.get("user-agent") },
           );
-          return answerAccountAction(
-            set,
-            result,
-            "Ownership transferred. You are now an admin.",
-          );
+          return answerAccountAction(set, result, "ownership_transferred");
         },
         {
           beforeHandle: adminGuard,
@@ -321,11 +315,7 @@ export function userPages(app: GuardedDashboard) {
               targetUserId: params.id,
               error: errorMessage(error),
             });
-            return usersRedirect(
-              set,
-              "Failed to create the password reset link.",
-              "error",
-            );
+            return usersRedirect(set, "reset_link_failed");
           }
         },
         {
