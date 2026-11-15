@@ -9,6 +9,7 @@ import {
   completeDkimRotation,
   startDkimRotation,
 } from "./services/dkim-rotation.service.ts";
+import { revokeTrackingLinks } from "./services/tracking-revocation.service.ts";
 import { pendingDkimDnsRecord } from "./services/required-dns-records.ts";
 import {
   getDomainDnsStatus,
@@ -32,6 +33,7 @@ import { restAuditContext } from "../audit/services/audit-context.service.ts";
  * - POST /:id/dkim/rotate            → Start a DKIM key rotation (#250)
  * - POST /:id/dkim/rotate/complete   → Switch to the pending key once published
  * - DELETE /:id/dkim/rotate          → Cancel the pending rotation
+ * - POST /:id/tracking-revocation    → Revoke the domain's click tracking links (#424)
  *
  * All routes are protected by Bearer token auth and rate limiting.
  */
@@ -383,6 +385,44 @@ export const domainsPlugin = new Elysia({
         summary: "Cancel DKIM key rotation",
         description:
           "Drops the pending DKIM key; the active key is untouched. 409 DKIM_NO_PENDING_ROTATION when no rotation is pending.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * POST /api/v1/domains/:id/tracking-revocation
+   *
+   * Revokes every click tracking link already sent from the domain
+   * (#424): bumps its tracking epoch, so those links answer `404` instead
+   * of redirecting. Links in mail sent afterwards work. Open pixels are
+   * not affected. Audited as `domain.tracking_links_revoked`.
+   */
+  .post(
+    "/:id/tracking-revocation",
+    async ({ params, set, apiKeyId, apiKeyName, request, server }) => {
+      logger.info("POST /api/v1/domains/:id/tracking-revocation", {
+        domainId: params.id,
+      });
+
+      const domain = await revokeTrackingLinks(
+        params.id,
+        restAuditContext({ apiKeyId, apiKeyName, request, server }),
+      );
+      if (!domain) {
+        set.status = 404;
+        return { success: false, error: "Domain not found" };
+      }
+
+      return { success: true, data: serializeDomain(domain, null) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Domains"],
+        summary: "Revoke click tracking links",
+        description:
+          "Bumps the domain's tracking epoch (trackingEpoch in the response): every click tracking link already sent from the domain stops redirecting (a 404, within 30 seconds on other replicas), links in mail sent afterwards work. Open pixels are not affected. Audited as domain.tracking_links_revoked.",
         security: [{ bearerAuth: [] }],
       },
     },

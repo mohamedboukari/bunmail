@@ -1,0 +1,1 @@
+ALTER TABLE "domains" ADD COLUMN "tracking_epoch" integer DEFAULT 0 NOT NULL;

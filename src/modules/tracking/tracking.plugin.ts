@@ -11,7 +11,16 @@ import {
   type RateLimitOptions,
 } from "../../middleware/rate-limit-core.ts";
 import { recordTrackingRequest } from "../metrics/services/metrics.service.ts";
-import { verifyClickToken, verifyOpenToken } from "./services/tracking-token.ts";
+import {
+  verifyClickToken,
+  verifyOpenToken,
+  type VerifiedClickToken,
+} from "./services/tracking-token.ts";
+import {
+  checkClickLink,
+  type ClickLinkCheck,
+  type ClickRefusal,
+} from "./services/tracking-epoch.service.ts";
 import {
   createTrackingRecorder,
   type RecordResult,
@@ -31,7 +40,12 @@ import type { TrackingHit, TrackingKind } from "./types/tracking.types.ts";
  * - `GET /t/c/<token>`: a `302` to the URL BunMail signed for that email
  *   and link, re-checked as `http(s)` at redirect time, else a neutral
  *   404 page that never shows the URL. No open redirect, and no
- *   server-side fetch anywhere.
+ *   server-side fetch anywhere. A token whose MAC verified must also
+ *   match its sender domain's current tracking epoch (#424,
+ *   `tracking-epoch.service.ts`): a revoked link, a link of a deleted
+ *   domain, and a link from before #424 whose email is gone get the
+ *   same 404 as an invalid token (and count against the same limit). A
+ *   database failure on that check gets a `503`, never a redirect.
  *
  * Valid requests are always served, whatever `TRACKING_ENABLED` says
  * (links already sent keep working), and never rate limited: Gmail's and
@@ -89,6 +103,18 @@ function invalidResponse(): Response {
   });
 }
 
+/** The epoch check could not run (a database failure): never a redirect, never a 404 that would look final. */
+function unavailableResponse(): Response {
+  return new Response("Service unavailable", {
+    status: 503,
+    headers: {
+      ...COMMON_HEADERS,
+      "content-type": "text/plain; charset=utf-8",
+      "retry-after": "30",
+    },
+  });
+}
+
 function limitedResponse(retryAfter: number): Response {
   return new Response("Too many requests", {
     status: 429,
@@ -108,6 +134,17 @@ export interface TrackingPluginOptions {
   recorder?: TrackingRecorder;
   /** Called with each background recording, so a test can wait for it. */
   onRecord?: (task: Promise<RecordResult | null>) => void;
+  /** The epoch check of a verified click token (#424); a test can pass a failing one. */
+  checkClick?: (token: VerifiedClickToken) => Promise<ClickLinkCheck>;
+}
+
+/** A verified click link refused by the epoch check (#424): ids only, never the URL. */
+interface ClickRefusalLog {
+  reason: ClickRefusal;
+  emailId: string;
+  domainId: string | null;
+  position: number;
+  tokenVersion: 1 | 2;
 }
 
 /**
@@ -117,17 +154,21 @@ export interface TrackingPluginOptions {
 export function trackingPlugin(options: TrackingPluginOptions = {}) {
   const limit = options.limit ?? DEFAULT_LIMIT;
   const recorder = options.recorder ?? createTrackingRecorder();
+  const checkClick = options.checkClick ?? checkClickLink;
   const buckets = new Map<string, RateLimitEntry>();
   let lastPrune = Date.now();
 
   /**
    * Counts one invalid token for the client: the 429 once it is over the
-   * limit (logged once per window and bucket), else the neutral 404.
+   * limit (logged once per window and bucket), else the neutral 404. A
+   * click link the epoch check refused (`refusal`) is logged at `info`
+   * while the client is under the limit.
    */
   function refuse(
     kind: TrackingKind,
     request: Request,
     socketIp: string | undefined,
+    refusal?: ClickRefusalLog,
   ): Response {
     recordTrackingRequest(kind, "invalid");
     const now = Date.now();
@@ -143,7 +184,11 @@ export function trackingPlugin(options: TrackingPluginOptions = {}) {
       }),
     );
     const decision = checkRateLimit(buckets, bucket, now, limit);
-    logger.debug("Tracking token not valid", { kind, method: request.method });
+    if (refusal === undefined) {
+      logger.debug("Tracking token not valid", { kind, method: request.method });
+    } else if (!decision.limited) {
+      logger.info("Tracking click link refused", { ...refusal, method: request.method });
+    }
     if (!decision.limited) return invalidResponse();
     if (decision.count === limit.max + 1) {
       logger.warn("Tracking requests with invalid tokens rate limited", {
@@ -199,7 +244,9 @@ export function trackingPlugin(options: TrackingPluginOptions = {}) {
     )
     .get(
       "/t/c/:token",
-      ({ params, request, server }) => {
+      async ({ params, request, server }) => {
+        const socketIp = server?.requestIP(request)?.address;
+        /** Verified without the database: an invalid token never reaches a query. */
         const subject = verifyClickToken(params.token);
         /** `verifyClickToken` only returns canonical `http(s)` URLs; checked again before redirecting. */
         const target = subject === null ? null : new URL(subject.url);
@@ -208,7 +255,30 @@ export function trackingPlugin(options: TrackingPluginOptions = {}) {
           target === null ||
           (target.protocol !== "http:" && target.protocol !== "https:")
         ) {
-          return refuse("click", request, server?.requestIP(request)?.address);
+          return refuse("click", request, socketIp);
+        }
+        /** The domain's current tracking epoch (#424): a revoked link never redirects. */
+        let check: ClickLinkCheck;
+        try {
+          check = await checkClick(subject);
+        } catch (error) {
+          /** Name and SQLSTATE only, never a driver message or the URL. */
+          logger.error("Tracking click link not checked", {
+            emailId: subject.emailId,
+            tokenVersion: subject.version,
+            errorName: error instanceof Error ? error.name : typeof error,
+            sqlState: sqlStateOf(error),
+          });
+          return unavailableResponse();
+        }
+        if (!check.ok) {
+          return refuse("click", request, socketIp, {
+            reason: check.reason,
+            emailId: subject.emailId,
+            domainId: check.domainId,
+            position: subject.position,
+            tokenVersion: subject.version,
+          });
         }
         const response = redirectResponse(subject.url);
         recordLater(request, {

@@ -17,10 +17,13 @@ import {
  *
  * - `TRACKING_ENABLED` is still on (the kill switch takes effect at once);
  * - the email still names one recipient (a row written another way never
- *   gets a token) and `APP_BASE_URL` is still an `https://` URL.
+ *   gets a token) and `APP_BASE_URL` is still an `https://` URL;
+ * - clicks only: the sender domain still exists. Click tokens carry its
+ *   id and current tracking epoch (#424), so a retry after an admin
+ *   revoked the domain's links gets links of the new epoch.
  *
  * Tokens are deterministic, so every retry gets the same URLs and the
- * same body.
+ * same body (until the domain's epoch is bumped).
  */
 
 /** The parts of an email row tracking is built from. */
@@ -31,6 +34,15 @@ export interface TrackedEmail {
   bcc: string | null;
   trackOpens: boolean;
   trackClicks: boolean;
+}
+
+/** The parts of the sender domain's row tracking is built from. */
+export interface TrackingDomain {
+  id: string;
+  /** `domains.tracking_epoch` (#424), signed into every click token. */
+  trackingEpoch: number;
+  /** The domain's static one-click unsubscribe URL, never rewritten. */
+  unsubscribeUrl: string | null;
 }
 
 /** Instance settings; from `config` unless a test passes its own. */
@@ -49,13 +61,14 @@ function configuredSettings(): TrackingSettings {
 
 /**
  * The tracking to apply to an email's body, or `undefined` when nothing is
- * tracked. `unsubscribeUrl` is the sender domain's static one-click URL:
- * links to it are never rewritten, nor is any link to BunMail's own host
- * (`/u/`, `/t/`, the dashboard, in any encoding).
+ * tracked. `domain` is the sender domain (`null` when it is gone: links
+ * are then left alone, as click tokens name the domain). Links to its
+ * static one-click unsubscribe URL are never rewritten, nor is any link
+ * to BunMail's own host (`/u/`, `/t/`, the dashboard, in any encoding).
  */
 export function trackingForEmail(
   email: TrackedEmail,
-  unsubscribeUrl: string | null,
+  domain: TrackingDomain | null,
   settings: TrackingSettings = configuredSettings(),
 ): BodyTracking | undefined {
   if (!settings.enabled || (!email.trackOpens && !email.trackClicks)) return undefined;
@@ -68,21 +81,26 @@ export function trackingForEmail(
 
   /** Links to BunMail's own host are never rewritten, whatever their scheme or path. */
   const ownHost = new URL(base).hostname;
+  const unsubscribeUrl = domain?.unsubscribeUrl ?? null;
   const ownUnsubscribe = unsubscribeUrl === null ? null : canonical(unsubscribeUrl);
+  const clickDomain =
+    domain === null ? null : { domainId: domain.id, epoch: domain.trackingEpoch };
 
-  const links = email.trackClicks
-    ? {
-        ownHost,
-        unsubscribeUrl: ownUnsubscribe,
-        trackingUrl: (url: string, position: number): string | null => {
-          const token = mintClickToken(
-            { emailId: email.id, position, url },
-            settings.keys,
-          );
-          return token === null ? null : `${base}/t/c/${token}`;
-        },
-      }
-    : null;
+  const links =
+    email.trackClicks && clickDomain !== null
+      ? {
+          ownHost,
+          unsubscribeUrl: ownUnsubscribe,
+          trackingUrl: (url: string, position: number): string | null => {
+            const token = mintClickToken(
+              { emailId: email.id, position, url },
+              clickDomain,
+              settings.keys,
+            );
+            return token === null ? null : `${base}/t/c/${token}`;
+          },
+        }
+      : null;
 
   if (pixelUrl === null && links === null) return undefined;
   return { pixelUrl, links };

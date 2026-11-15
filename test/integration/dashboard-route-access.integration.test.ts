@@ -228,6 +228,8 @@ const ROUTES: Record<string, RouteSpec> = {
     access: "admin",
     body: { trackOpens: "true" },
   },
+  /** Revoke the domain's click tracking links (#424). */
+  "POST /dashboard/domains/:id/tracking-revoke": { access: "admin" },
 
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },

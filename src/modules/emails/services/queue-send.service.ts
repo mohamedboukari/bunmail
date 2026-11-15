@@ -201,9 +201,10 @@ export async function sendClaimedEmail(
     /**
      * Open and click tracking (#187): decided at create and stored on the
      * row; applied only while `TRACKING_ENABLED` is still on. Deterministic
-     * tokens, so a retry carries the same body.
+     * tokens, so a retry carries the same body (click tokens carry the
+     * domain's current tracking epoch, #424).
      */
-    const tracking = trackingForEmail(email, domain?.unsubscribeUrl ?? null);
+    const tracking = trackingForEmail(email, domain ?? null);
 
     const result = await deps.sendMail({
       from: email.fromAddress,

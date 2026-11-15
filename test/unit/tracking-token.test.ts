@@ -13,11 +13,14 @@ import {
   parseUnsubscribeToken,
   unsubscribeMacMatches,
 } from "../../src/modules/suppressions/services/unsubscribe-token.ts";
+import { legacyClickToken } from "../legacy-click-token.ts";
 
 /**
  * Open and click tracking tokens (#187): deterministic, MAC-bound to the
- * email (and, for a click, the link and its URL), strict parsing, and no
- * token of one kind ever passes as another.
+ * email (and, for a click, the link, its URL, and since #424 the sender
+ * domain and its tracking epoch), strict parsing, links minted before
+ * #424 (v1) still verifying, and no token of one kind ever passes as
+ * another.
  */
 
 const keys = deriveTrackingKeys(Buffer.alloc(32, 7));
@@ -26,13 +29,17 @@ const EMAIL = "msg_0123456789abcdef01234567";
 const OTHER_EMAIL = "msg_fedcba9876543210fedcba98";
 const RECIPIENT = "user@example.org";
 const URL_ = "https://example.com/pricing?utm_source=mail#plans";
+const DOMAIN = { domainId: "dom_00112233445566778899aabb", epoch: 0 };
+const OTHER_DOMAIN_ID = "dom_ffeeddccbbaa998877665544";
 
 /** A click token for the defaults, which must exist. */
 function click(
   overrides: Partial<{ emailId: string; position: number; url: string }> = {},
+  domain: { domainId: string; epoch: number } = DOMAIN,
 ): string {
   const token = mintClickToken(
     { emailId: EMAIL, position: 2, url: URL_, ...overrides },
+    domain,
     keys,
   );
   if (token === null) throw new Error("expected a token");
@@ -86,28 +93,96 @@ describe("open tokens", () => {
 });
 
 describe("click tokens", () => {
-  test("round trip: deterministic, names the email, position and exact URL", () => {
+  test("round trip: deterministic, names the email, position, exact URL, domain and epoch", () => {
     const token = click();
     expect(token).toBe(click());
     expect(verifyClickToken(token, keys)).toEqual({
       emailId: EMAIL,
       position: 2,
       url: URL_,
+      domainId: DOMAIN.domainId,
+      epoch: 0,
+      version: 2,
     });
     expect(verifyClickToken(token, otherKeys)).toBeNull();
   });
 
+  test("the domain and epoch are part of the token and of its MAC (#424)", () => {
+    const token = click({}, { domainId: DOMAIN.domainId, epoch: 7 });
+    const [hex, position, encoded, domainHex, epoch, mac] = token.split(".");
+    expect(domainHex).toBe(DOMAIN.domainId.slice(4));
+    expect(epoch).toBe("7");
+    expect(verifyClickToken(token, keys)).toMatchObject({ epoch: 7, version: 2 });
+    /** Another epoch, or another domain, with this MAC. */
+    for (const forged of [
+      `${hex}.${position}.${encoded}.${domainHex}.0.${mac}`,
+      `${hex}.${position}.${encoded}.${domainHex}.8.${mac}`,
+      `${hex}.${position}.${encoded}.${OTHER_DOMAIN_ID.slice(4)}.${epoch}.${mac}`,
+    ]) {
+      expect(verifyClickToken(forged, keys)).toBeNull();
+    }
+    /** Epochs written another way, or out of range. */
+    expect(
+      verifyClickToken(`${hex}.${position}.${encoded}.${domainHex}.07.${mac}`, keys),
+    ).toBeNull();
+    expect(
+      verifyClickToken(
+        `${hex}.${position}.${encoded}.${domainHex}.99999999999.${mac}`,
+        keys,
+      ),
+    ).toBeNull();
+  });
+
+  test("only dom_<24 hex> domain ids and epochs 0 to 2^31 - 1 get a token", () => {
+    const subject = { emailId: EMAIL, position: 0, url: URL_ };
+    for (const domain of [
+      { domainId: "dom_xyz", epoch: 0 },
+      { domainId: "msg_00112233445566778899aabb", epoch: 0 },
+      { ...DOMAIN, epoch: -1 },
+      { ...DOMAIN, epoch: 1.5 },
+      { ...DOMAIN, epoch: 2_147_483_648 },
+    ]) {
+      expect(mintClickToken(subject, domain, keys)).toBeNull();
+    }
+    const max = mintClickToken(subject, { ...DOMAIN, epoch: 2_147_483_647 }, keys);
+    expect(verifyClickToken(max ?? "", keys)).toMatchObject({ epoch: 2_147_483_647 });
+  });
+
+  test("a v1 token (minted before #424) still verifies, as version 1 without a domain", () => {
+    const legacy = legacyClickToken({ emailId: EMAIL, position: 2, url: URL_ }, keys);
+    expect(verifyClickToken(legacy, keys)).toEqual({
+      emailId: EMAIL,
+      position: 2,
+      url: URL_,
+      version: 1,
+    });
+    expect(verifyClickToken(legacy, otherKeys)).toBeNull();
+    const [hex, position, encoded, mac] = legacy.split(".");
+    expect(verifyClickToken(`${hex}.3.${encoded}.${mac}`, keys)).toBeNull();
+    /** A v1 MAC with a domain and epoch added never passes as v2. */
+    expect(
+      verifyClickToken(
+        `${hex}.${position}.${encoded}.${DOMAIN.domainId.slice(4)}.0.${mac}`,
+        keys,
+      ),
+    ).toBeNull();
+    /** A v2 MAC with the domain and epoch removed never passes as v1. */
+    const [, , , , , v2Mac] = click().split(".");
+    expect(verifyClickToken(`${hex}.${position}.${encoded}.${v2Mac}`, keys)).toBeNull();
+  });
+
   test("tampering with any part fails", () => {
     const token = click();
-    const [hex, position, encoded, mac] = token.split(".");
+    const [hex, position, encoded, domainHex, epoch, mac] = token.split(".");
+    const tail = `${domainHex}.${epoch}.${mac}`;
     expect(verifyClickToken(flip(token, 0), keys)).toBeNull();
-    expect(verifyClickToken(`${hex}.3.${encoded}.${mac}`, keys)).toBeNull();
+    expect(verifyClickToken(`${hex}.3.${encoded}.${tail}`, keys)).toBeNull();
     const evil = Buffer.from("https://evil.example/").toString("base64url");
-    expect(verifyClickToken(`${hex}.${position}.${evil}.${mac}`, keys)).toBeNull();
+    expect(verifyClickToken(`${hex}.${position}.${evil}.${tail}`, keys)).toBeNull();
     expect(verifyClickToken(flip(token, token.length - 1), keys)).toBeNull();
     /** Another email's id with this MAC. */
     expect(
-      verifyClickToken(`${OTHER_EMAIL.slice(4)}.${position}.${encoded}.${mac}`, keys),
+      verifyClickToken(`${OTHER_EMAIL.slice(4)}.${position}.${encoded}.${tail}`, keys),
     ).toBeNull();
   });
 
@@ -115,10 +190,17 @@ describe("click tokens", () => {
     const token = click();
     expect(verifyClickToken(token.slice(0, -1), keys)).toBeNull();
     expect(verifyClickToken(`${token}0`, keys)).toBeNull();
-    const [hex, position, encoded, mac] = token.split(".");
-    expect(verifyClickToken(`${hex}.${position}.${encoded}=.${mac}`, keys)).toBeNull();
-    expect(verifyClickToken(`${hex}.02.${encoded}.${mac}`, keys)).toBeNull();
+    const [hex, position, encoded, domainHex, epoch, mac] = token.split(".");
+    const tail = `${domainHex}.${epoch}.${mac}`;
+    expect(verifyClickToken(`${hex}.${position}.${encoded}=.${tail}`, keys)).toBeNull();
+    expect(verifyClickToken(`${hex}.02.${encoded}.${tail}`, keys)).toBeNull();
     expect(verifyClickToken("a".repeat(5000), keys)).toBeNull();
+  });
+
+  test("the longest URL still makes a token that verifies", () => {
+    const url = `https://example.com/${"a".repeat(2048 - "https://example.com/".length)}`;
+    const token = click({ url }, { ...DOMAIN, epoch: 2_147_483_647 });
+    expect(verifyClickToken(token, keys)?.url).toBe(url);
   });
 
   test("only canonical http(s) URLs of at most 2048 characters are ever signed", () => {
@@ -132,22 +214,32 @@ describe("click tokens", () => {
       "https://example.com",
       `https://example.com/${"a".repeat(2048)}`,
     ]) {
-      expect(mintClickToken({ emailId: EMAIL, position: 0, url }, keys)).toBeNull();
+      expect(
+        mintClickToken({ emailId: EMAIL, position: 0, url }, DOMAIN, keys),
+      ).toBeNull();
     }
     expect(trackableUrl("https://example.com/")).toBe("https://example.com/");
     expect(trackableUrl("http://example.com/a?b=1")).toBe("http://example.com/a?b=1");
   });
 
   test("a token whose payload decodes to a non-http URL never verifies, even with a valid-looking MAC", () => {
-    const [hex, position, , mac] = click().split(".");
+    const [hex, position, , domainHex, epoch, mac] = click().split(".");
     const js = Buffer.from("javascript:alert(1)").toString("base64url");
-    expect(verifyClickToken(`${hex}.${position}.${js}.${mac}`, keys)).toBeNull();
+    expect(
+      verifyClickToken(`${hex}.${position}.${js}.${domainHex}.${epoch}.${mac}`, keys),
+    ).toBeNull();
   });
 
   test("positions are 0 to 99", () => {
-    expect(mintClickToken({ emailId: EMAIL, position: -1, url: URL_ }, keys)).toBeNull();
-    expect(mintClickToken({ emailId: EMAIL, position: 100, url: URL_ }, keys)).toBeNull();
-    expect(mintClickToken({ emailId: EMAIL, position: 1.5, url: URL_ }, keys)).toBeNull();
+    expect(
+      mintClickToken({ emailId: EMAIL, position: -1, url: URL_ }, DOMAIN, keys),
+    ).toBeNull();
+    expect(
+      mintClickToken({ emailId: EMAIL, position: 100, url: URL_ }, DOMAIN, keys),
+    ).toBeNull();
+    expect(
+      mintClickToken({ emailId: EMAIL, position: 1.5, url: URL_ }, DOMAIN, keys),
+    ).toBeNull();
     expect(verifyClickToken(click({ position: 99 }), keys)?.position).toBe(99);
   });
 });

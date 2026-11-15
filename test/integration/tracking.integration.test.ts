@@ -10,7 +10,12 @@
  *   `machine` guess, and the metrics;
  * - the full path: a tracked send composed by the queue carries the pixel
  *   and rewritten links (never in the text part), and following them
- *   records events.
+ *   records events;
+ * - per-domain revocation (#424): a link from before #424 (v1) redirects
+ *   while its email's domain is at epoch 0, a bump refuses it and every
+ *   v2 link of the old epoch at once in this process, a link of a deleted
+ *   domain or of a purged v1 email is refused like an invalid token, and
+ *   a database failure never redirects.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { Elysia } from "elysia";
@@ -27,9 +32,16 @@ import {
   type RecordResult,
 } from "../../src/modules/tracking/services/tracking-record.service.ts";
 import {
+  deriveTrackingKeys,
   mintClickToken,
   mintOpenToken,
 } from "../../src/modules/tracking/services/tracking-token.ts";
+import { revokeTrackingLinks } from "../../src/modules/domains/services/tracking-revocation.service.ts";
+import { deleteDomain } from "../../src/modules/domains/services/domain.service.ts";
+import { domains } from "../../src/modules/domains/models/domain.schema.ts";
+import { auditEvents } from "../../src/modules/audit/models/audit-event.schema.ts";
+import type { AuditContext } from "../../src/modules/audit/types/audit.types.ts";
+import { legacyClickToken } from "../legacy-click-token.ts";
 import { emailEvents } from "../../src/modules/emails/models/email-event.schema.ts";
 import { createEmail } from "../../src/modules/emails/services/email.service.ts";
 import { runQueueCycle } from "../../src/modules/emails/services/queue.service.ts";
@@ -97,10 +109,17 @@ function request(
 
 let apiKeyId = "";
 let emailId = "";
+/** The sender domain of the tracked emails. */
+let domainId = "";
 
-/** A sent, single-recipient email tracked for opens and clicks. */
+/** A sent, single-recipient email from {@link domainId}, tracked for opens and clicks. */
 async function trackedEmail(sentAgoMs = 60 * 60 * 1000): Promise<string> {
-  const { id } = await seed.email({ apiKeyId, toAddress: RECIPIENT, status: "sent" });
+  const { id } = await seed.email({
+    apiKeyId,
+    toAddress: RECIPIENT,
+    status: "sent",
+    domainId,
+  });
   await db
     .update(emails)
     .set({
@@ -116,8 +135,20 @@ function openPath(id: string = emailId): string {
   return `/t/o/${mintOpenToken(id)}.gif`;
 }
 
-function clickPath(id: string = emailId, position = 0, url = TARGET): string {
-  return `/t/c/${mintClickToken({ emailId: id, position, url })}`;
+/** A v2 click link under `domain` at `epoch` (by default the tracked emails' domain at 0). */
+function clickPath(
+  id: string = emailId,
+  position = 0,
+  url = TARGET,
+  domain: { domainId: string; epoch: number } = { domainId, epoch: 0 },
+): string {
+  return `/t/c/${mintClickToken({ emailId: id, position, url }, domain)}`;
+}
+
+/** A click link as BunMail minted them before #424 (v1, no domain in it). */
+function legacyClickPath(id: string = emailId, position = 0, url = TARGET): string {
+  const keys = deriveTrackingKeys(config.dkimEncryptionKey);
+  return `/t/c/${legacyClickToken({ emailId: id, position, url }, keys)}`;
 }
 
 async function events(
@@ -140,6 +171,7 @@ beforeEach(async () => {
   pending = [];
   app = buildApp();
   apiKeyId = (await seed.apiKey()).id;
+  domainId = (await seed.domain({ trackOpens: true, trackClicks: true })).id;
   emailId = await trackedEmail();
 });
 
@@ -261,12 +293,14 @@ describe("GET /t/c/<token>", () => {
 
   test("an invalid token: a neutral 404 page that never shows the URL", async () => {
     const path = clickPath();
-    const [hex, position, , mac] = path.slice("/t/c/".length).split(".");
+    const [hex, position, , domainHex, epoch, mac] = path
+      .slice("/t/c/".length)
+      .split(".");
     const evil = Buffer.from("https://evil.example/steal").toString("base64url");
     const js = Buffer.from("javascript:alert(1)").toString("base64url");
     for (const bad of [
-      `/t/c/${hex}.${position}.${evil}.${mac}`,
-      `/t/c/${hex}.${position}.${js}.${mac}`,
+      `/t/c/${hex}.${position}.${evil}.${domainHex}.${epoch}.${mac}`,
+      `/t/c/${hex}.${position}.${js}.${domainHex}.${epoch}.${mac}`,
       "/t/c/garbage",
     ]) {
       const res = await request(bad);
@@ -297,6 +331,200 @@ describe("GET /t/c/<token>", () => {
     await db.delete(emails).where(eq(emails.id, emailId));
     expect((await request(clickPath(emailId, 2))).headers.get("location")).toBe(TARGET);
     expect(await settle()).toEqual(["untracked", "untracked", "untracked"]);
+  });
+});
+
+describe("per-domain revocation of click links (#424)", () => {
+  /** The current tracking epoch of the tracked emails' domain. */
+  async function epoch(): Promise<number | undefined> {
+    const [row] = await db
+      .select({ epoch: domains.trackingEpoch })
+      .from(domains)
+      .where(eq(domains.id, domainId));
+    return row?.epoch;
+  }
+
+  /** The audit context of a bump made with the test's API key. */
+  function audit(): AuditContext {
+    return {
+      actor: { type: "api_key", id: apiKeyId, label: "test" },
+      ip: null,
+      userAgent: null,
+    };
+  }
+
+  test("a v1 link (before #424) redirects while its email's domain is at epoch 0", async () => {
+    expect(await epoch()).toBe(0);
+    const res = await request(legacyClickPath());
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(TARGET);
+    expect(await settle()).toEqual(["recorded"]);
+  });
+
+  test("a bump refuses v1 and v2 links of the old epoch at once, like invalid tokens; new links work", async () => {
+    const v1 = legacyClickPath(emailId, 1);
+    const v2 = clickPath(emailId, 2);
+    /** Both redirect first: the epoch 0 is now cached in this process. */
+    expect((await request(v1)).status).toBe(302);
+    expect((await request(v2)).status).toBe(302);
+
+    const domain = await revokeTrackingLinks(domainId, audit());
+    expect(domain?.trackingEpoch).toBe(1);
+    expect(await epoch()).toBe(1);
+
+    /** The cached epoch was dropped by the bump: refused right away. */
+    const invalid = await (await request("/t/c/garbage")).text();
+    for (const path of [v1, v2]) {
+      const res = await request(path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get("location")).toBeNull();
+      expect(await res.text()).toBe(invalid);
+    }
+    const fresh = await request(clickPath(emailId, 3, TARGET, { domainId, epoch: 1 }));
+    expect(fresh.status).toBe(302);
+    expect(fresh.headers.get("location")).toBe(TARGET);
+    await settle();
+    expect(
+      (await events()).map((e) => e.linkPosition ?? -1).toSorted((a, b) => a - b),
+    ).toEqual([1, 2, 3]);
+  });
+
+  test("the bump is audited, and refused links log ids only, never the URL", async () => {
+    const info = spyOn(logger, "info");
+    try {
+      const v2 = clickPath(emailId, 0);
+      await revokeTrackingLinks(domainId, audit());
+      expect((await request(v2)).status).toBe(404);
+      const refused = info.mock.calls.find(
+        ([msg]) => msg === "Tracking click link refused",
+      );
+      expect(refused?.[1]).toEqual({
+        reason: "revoked",
+        emailId,
+        domainId,
+        position: 0,
+        tokenVersion: 2,
+        method: "GET",
+      });
+      expect(JSON.stringify(info.mock.calls)).not.toContain("secret");
+    } finally {
+      info.mockRestore();
+    }
+    const rows = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, "domain.tracking_links_revoked"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ targetId: domainId, actorType: "api_key" });
+    expect(rows[0]?.metadata).toEqual({ epoch: 1 });
+  });
+
+  test("a v2 link of a deleted domain, or of a domain id that never existed, is refused", async () => {
+    const other = (await seed.domain()).id;
+    const path = clickPath(emailId, 0, TARGET, { domainId: other, epoch: 0 });
+    await db.delete(domains).where(eq(domains.id, other));
+    expect((await request(path)).status).toBe(404);
+    const never = clickPath(emailId, 1, TARGET, {
+      domainId: "dom_000000000000000000000000",
+      epoch: 0,
+    });
+    expect((await request(never)).status).toBe(404);
+    expect(await settle()).toEqual([]);
+  });
+
+  test("a v1 link whose email is purged, or whose email has no domain, is refused", async () => {
+    const orphan = await trackedEmail();
+    await db.update(emails).set({ domainId: null }).where(eq(emails.id, orphan));
+    expect((await request(legacyClickPath(orphan))).status).toBe(404);
+    const path = legacyClickPath();
+    await db.delete(emails).where(eq(emails.id, emailId));
+    expect((await request(path)).status).toBe(404);
+    /** A v2 link of the purged email still works: it names its domain. */
+    expect((await request(clickPath(emailId, 4))).status).toBe(302);
+  });
+
+  test("deleting the domain stops its v2 links at once in this process, cached or not", async () => {
+    /** Cached: the first click stored the domain's epoch. */
+    expect((await request(clickPath(emailId, 0))).status).toBe(302);
+    expect(await deleteDomain(domainId)).toBeDefined();
+    expect((await request(clickPath(emailId, 1))).status).toBe(404);
+  });
+
+  test("a valid v1 link reads its email and its domain's epoch once, not on every click", async () => {
+    const quiet = buildApp({ recorder: async () => "untracked" });
+    expect((await request(legacyClickPath(emailId, 0), { target: quiet })).status).toBe(
+      302,
+    );
+    const select = spyOn(db, "select");
+    try {
+      for (const position of [1, 2, 3]) {
+        const res = await request(legacyClickPath(emailId, position), { target: quiet });
+        expect(res.status).toBe(302);
+      }
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  test("refused links count against the invalid-token rate limit", async () => {
+    const limited = buildApp({ limit: { max: 1, windowMs: 60_000 } });
+    const path = clickPath(emailId, 0);
+    await revokeTrackingLinks(domainId, audit());
+    const statuses = [
+      (await request(path, { target: limited })).status,
+      (await request(path, { target: limited })).status,
+    ];
+    expect(statuses).toEqual([404, 429]);
+  });
+
+  test("invalid click tokens are refused before any database query", async () => {
+    const select = spyOn(db, "select");
+    try {
+      const [hex, position, encoded, domainHex, , mac] = clickPath()
+        .slice("/t/c/".length)
+        .split(".");
+      /** A forged epoch: the MAC fails, so no epoch lookup. */
+      expect(
+        (await request(`/t/c/${hex}.${position}.${encoded}.${domainHex}.9.${mac}`))
+          .status,
+      ).toBe(404);
+      expect(select).not.toHaveBeenCalled();
+    } finally {
+      select.mockRestore();
+    }
+  });
+
+  test("a failing epoch check never redirects: a 503, logged by name only", async () => {
+    const failing = buildApp({
+      checkClick: () => Promise.reject(new Error("connection refused: postgres://u:p@h")),
+    });
+    const error = spyOn(logger, "error");
+    try {
+      const res = await request(clickPath(), { target: failing });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("location")).toBeNull();
+      expect(error.mock.calls[0]?.[1]).toEqual({
+        emailId,
+        tokenVersion: 2,
+        errorName: "Error",
+        sqlState: null,
+      });
+    } finally {
+      error.mockRestore();
+    }
+    expect(await settle()).toEqual([]);
+  });
+
+  test("an unknown domain id: revokeTrackingLinks returns undefined and audits nothing", async () => {
+    expect(
+      await revokeTrackingLinks("dom_000000000000000000000000", audit()),
+    ).toBeUndefined();
+    const rows = await db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.action, "domain.tracking_links_revoked"));
+    expect(rows).toEqual([]);
   });
 });
 

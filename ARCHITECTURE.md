@@ -218,6 +218,7 @@ bunmail/
 │   │   │   │   ├── domain-name.ts        ← Name normalisation and the host name rule on create (#406)
 │   │   │   │   ├── dkim-keys.ts          ← DKIM key pair, selector rules, dated selectors, TXT match (#250)
 │   │   │   │   ├── dkim-rotation.service.ts ← DKIM key rotation: start, complete, cancel (#250)
+│   │   │   │   ├── tracking-revocation.service.ts ← Revoke a domain's click tracking links: bump the epoch (#424)
 │   │   │   │   ├── domain-dkim.service.ts ← DKIM options for out-of-queue mail (inbound notify, invitations, #217)
 │   │   │   │   ├── dns-verification.service.ts ← SPF/DKIM/DMARC checks (pass, fail or unknown)
 │   │   │   │   ├── domain-check-state.ts ← Verification state machine: failure count, flip, schedule (#250)
@@ -333,7 +334,7 @@ bunmail/
 │   │   │   └── types/tls-rpt.types.ts
 │   │   ├── tracking/                     ← Open and click tracking (#187): public /t/ routes, no REST plugin; see docs/tracking.md
 │   │   │   ├── tracking.plugin.ts        ← GET /t/o/<token>.gif (pixel), GET /t/c/<token> (302), invalid tokens rate limited
-│   │   │   ├── services/                 ← tracking-token.ts (open and click HMAC tokens, verified without the database), html-scan.ts (bounded markup scan), href-decode.ts (unambiguous href reading), link-rewriter.ts (href rewriter, skip rules), body-tracking.ts (links then pixel), tracking-injection.ts (per-email tracking at send time), tracking-guards.ts (in-process dedupe, caps, budget, concurrency), tracking-record.service.ts (event transaction), tracking-client.ts (client_kind, stored URL)
+│   │   │   ├── services/                 ← tracking-token.ts (open and click HMAC tokens, verified without the database), tracking-epoch.service.ts (click link revocation: the domain epoch check and its 30 s cache, #424), html-scan.ts (bounded markup scan), href-decode.ts (unambiguous href reading), link-rewriter.ts (href rewriter, skip rules), body-tracking.ts (links then pixel), tracking-injection.ts (per-email tracking at send time), tracking-guards.ts (in-process dedupe, caps, budget, concurrency), tracking-record.service.ts (event transaction), tracking-client.ts (client_kind, stored URL)
 │   │   │   └── types/tracking.types.ts
 │   │   ├── trash/
 │   │   │   └── services/
@@ -816,6 +817,7 @@ Indexes: `uq_email_attachments_email_position` unique `(email_id, position)` (al
 | notify_email      | varchar(255)   | nullable; address notified on inbound mail for this domain (#106) |
 | track_opens       | boolean        | NOT NULL, default `false`; open tracking opt-in, set by admins (#187) |
 | track_clicks      | boolean        | NOT NULL, default `false`; click tracking opt-in, set by admins (#187) |
+| tracking_epoch    | integer        | NOT NULL, default `0`; covered by every click token's MAC, bumped by an admin to revoke the domain's click links already sent (#424) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -1147,6 +1149,7 @@ tlsrpt_reports ──1:N──▶ tlsrpt_results  (CASCADE on parent delete, #34
 | POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) | Yes |
 | POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) | Yes |
 | DELETE | /api/v1/domains/:id/dkim/rotate | Cancel the pending rotation (#250) | Yes |
+| POST   | /api/v1/domains/:id/tracking-revocation | Revoke the domain's click tracking links: bump its tracking epoch (#424) | Yes |
 
 ### Webhooks
 
@@ -1293,6 +1296,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/domains/:id/notify-email | Set/clear inbound notification address (#106) | Admin |
 | POST   | /dashboard/domains/:id/unsubscribe | Set/clear List-Unsubscribe overrides (#243) | Admin |
 | POST   | /dashboard/domains/:id/tracking | Set the open and click tracking opt-in (#187) | Admin |
+| POST   | /dashboard/domains/:id/tracking-revoke | Revoke the domain's click tracking links (#424) | Admin |
 | GET    | /dashboard/domains/:id             | Domain detail           | Member |
 | GET    | /dashboard/templates               | Templates management    | Member |
 | POST   | /dashboard/templates               | Create template         | Member |
@@ -1347,11 +1351,11 @@ Not under `/api/v1` and outside the auth middleware: the token (an HMAC over ema
 | Method | Path       | Description | Auth |
 |--------|------------|-------------|------|
 | GET    | /t/o/:token.gif | The 43-byte transparent GIF; records an open in the background. Invalid token: `404` | Token |
-| GET    | /t/c/:token | `302` to the URL signed for that email and link; records a click in the background. Invalid token: `404` page without the URL | Token |
+| GET    | /t/c/:token | `302` to the URL signed for that email and link while its domain is at the link's tracking epoch (#424); records a click in the background. Invalid, revoked or deleted-domain token: `404` page without the URL | Token |
 
-Not under `/api/v1` and outside the auth middleware: the token (an HMAC from a key derived from `DKIM_ENCRYPTION_KEY`) is the credential. Valid requests are always served (links already sent work with the kill switch off); only invalid tokens are rate limited (30 a minute per client IP). `HEAD` is never recorded. `no-store, private`, `no-referrer`, `noindex`, no cookie, no server-side fetch.
+Not under `/api/v1` and outside the auth middleware: the token (an HMAC from a key derived from `DKIM_ENCRYPTION_KEY`) is the credential. Valid requests are always served (links already sent work with the kill switch off, until an admin revokes the domain's click links, #424); only invalid tokens (revoked click links included) are rate limited (30 a minute per client IP). `HEAD` is never recorded. `no-store, private`, `no-referrer`, `noindex`, no cookie, no server-side fetch.
 
-**Flow.** `createEmail` decides and stores `track_opens` / `track_clicks`. On each attempt the queue builds the email's tracking (`trackingForEmail`) while `TRACKING_ENABLED` is on, and `composeMessageBody` derives the text alternative from the original HTML, then rewrites the links and adds the pixel; DKIM signs the final body, and the deterministic tokens keep it identical on retries. A pixel fetch or click verifies the token without the database, answers, then records the event (dedupe 60 s and caps of 20 opens and 50 clicks per email, checked in process first, then 100 a second and 4 at once per process, with a 2 s lock timeout) and sets `first_opened_at` / `first_clicked_at` in one transaction under a lock on the email row. See [docs/tracking.md](docs/tracking.md).
+**Flow.** `createEmail` decides and stores `track_opens` / `track_clicks`. On each attempt the queue builds the email's tracking (`trackingForEmail`) while `TRACKING_ENABLED` is on, and `composeMessageBody` derives the text alternative from the original HTML, then rewrites the links and adds the pixel; DKIM signs the final body, and the deterministic tokens keep it identical on retries (click tokens carry the domain's current tracking epoch). A pixel fetch or click verifies the token without the database (a click then checks its domain's epoch, cached 30 s per process, #424), answers, then records the event (dedupe 60 s and caps of 20 opens and 50 clicks per email, checked in process first, then 100 a second and 4 at once per process, with a 2 s lock timeout) and sets `first_opened_at` / `first_clicked_at` in one transaction under a lock on the email row. See [docs/tracking.md](docs/tracking.md).
 
 ---
 

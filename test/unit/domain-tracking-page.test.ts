@@ -5,9 +5,15 @@ import { TrackingPanel } from "../../src/pages/routes/domain-detail-tracking.tsx
  * The domain page's open and click tracking panel (#187): two checkboxes
  * posting to `/dashboard/domains/:id/tracking`, ticked from the stored
  * opt-in, and a note while `TRACKING_ENABLED` keeps everything off.
+ * Plus "Revoke tracking links" (#424), a confirmed POST.
  */
 
-const domain = { id: "dom_track", trackOpens: false, trackClicks: false };
+const domain = {
+  id: "dom_track",
+  trackOpens: false,
+  trackClicks: false,
+  trackingEpoch: 0,
+};
 
 /** The `<input>` tag of the checkbox named `name`. */
 function checkbox(html: string, name: string): string {
@@ -47,5 +53,20 @@ describe("TrackingPanel", () => {
   test("carries the unreliability caveat", async () => {
     const html = await TrackingPanel({ domain, trackingEnabled: true });
     expect(html).toContain("Open counts are unreliable");
+  });
+
+  test("revoke tracking links: a confirmed POST to the domain's revoke route (#424)", async () => {
+    const html = await TrackingPanel({ domain, trackingEnabled: true });
+    const form = html.match(
+      /<form method="POST" action="\/dashboard\/domains\/dom_track\/tracking-revoke">[\s\S]*?<\/form>/,
+    );
+    expect(form?.[0]).toContain("data-confirm=");
+    expect(form?.[0]).toContain("Revoke tracking links");
+    expect(html).not.toContain("so far.");
+    const revoked = await TrackingPanel({
+      domain: { ...domain, trackingEpoch: 2 },
+      trackingEnabled: true,
+    });
+    expect(revoked).toContain("Revoked 2 times so far.");
   });
 });
