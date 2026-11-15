@@ -44,6 +44,7 @@ With tracing on ([tracing.md](tracing.md), #363), a line written while a sampled
 |---|---|---|
 | `HTTP request` | `error` for 5xx, `warn` for 401/403/429, `debug` for a healthy `/health` or favicon, `info` otherwise | `method`, `path`, `status`, `durationMs` |
 | `Processing email`, then `Email reached terminal state` / `Email send had retry groups, requeued` / `Email permanently failed (input error)` | `info` / `warn` / `error` | email id, statuses, SMTP results |
+| `Email requeued: temporary error before sending` / `Email requeued: unexpected error before sending` / `Email failed: error before sending for the whole retry window` (#474) | `warn` / `error` / `error` | `emailId`, `attempt`, `error` (`loggableError`'s text), `retryInSeconds` |
 | `Email send attempt finished` | `debug` | `emailId`, `attempt`, `durationMs` |
 | `SMTP session closed` | `info` | `remoteAddress`, `secure` (TLS, implicit or STARTTLS, #414), `messages`, `durationMs` |
 | `MAIL_SOURCE_IP is not an address of this host: outbound SMTP will fail` / `MAIL_SOURCE_IP differs from MAIL_PUBLIC_IP` (#414) | `warn`, once at boot | `sourceIp`, `publicIps`, `hint` |
@@ -73,7 +74,7 @@ The `path` of the request line never contains the query string (owner setup link
 - **Query parameters.** Any logged string containing a drizzle query error keeps its SQL and loses its bound values (`\nparams: [REDACTED]`), as a safety net for call sites that log `error.message` (#260).
 - **The seed API key.** `src/db/seed.ts` prints the new key to the terminal directly, never through the logger (#260).
 - **The one documented exception:** the owner setup link (#215), logged once per minted link so the operator can claim the account. It is single use and expires after 24 hours.
-- Drizzle query errors on the account paths, in the dashboard's failure lines (#448) and in the background services (the email queue, the webhook worker, the SMTP listeners, inbound notifications, the purge and self-check jobs, #458) are logged with the Postgres SQLSTATE only, never with the query parameters. A send that fails on a database error stores the same text in `emails.last_error` and the `email.failed` payload.
+- Drizzle query errors on the account paths, in the dashboard's failure lines (#448) and in the background services (the email queue, the webhook worker, the SMTP listeners, inbound notifications, the purge and self-check jobs, #458) are logged with the Postgres SQLSTATE only, never with the query parameters. A send that hits a database error before reaching an MX host stores the same text in `emails.last_error` while it is retried (#474), and in the `email.failed` payload when it finally fails.
 
 ## Tracing an incident
 

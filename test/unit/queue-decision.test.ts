@@ -1,11 +1,14 @@
 import { describe, test, expect } from "bun:test";
+import { DrizzleQueryError } from "drizzle-orm";
 import {
+  classifySendError,
   decideRowOutcome,
   failureOf,
   retryMaxAgeMs,
   type SentAttempt,
 } from "../../src/modules/emails/services/queue-decision.service.ts";
 import type { ClaimedEmail } from "../../src/modules/emails/services/queue-claim.service.ts";
+import { UnsendableEmailError } from "../../src/modules/emails/errors.ts";
 import type {
   DeliveryGroup,
   DeliveryState,
@@ -308,4 +311,90 @@ describe("failureOf", () => {
     expect(failureOf(group("failed", { lastError: "connection reset" }))).toBeUndefined();
     expect(failureOf(group("failed"))).toBeUndefined();
   });
+});
+
+/**
+ * `classifySendError` (#474): an error thrown before a send reached an MX
+ * host. Only an input error fails the email at once; a database or
+ * connection error, and any error nobody expected, is retried.
+ */
+describe("classifySendError", () => {
+  /** A drizzle query error over a Postgres error with this SQLSTATE. */
+  function queryError(sqlState: string): DrizzleQueryError {
+    const cause = Object.assign(new Error("server error"), {
+      code: "ERR_POSTGRES_SERVER_ERROR",
+      errno: sqlState,
+    });
+    return new DrizzleQueryError("select $1", ["reader@example.org"], cause);
+  }
+  /** A drizzle query error over a Bun SQL or socket error with this code. */
+  function connectionError(code: string): DrizzleQueryError {
+    const cause = Object.assign(new Error("connection problem"), { code });
+    return new DrizzleQueryError("select $1", ["reader@example.org"], cause);
+  }
+
+  const cases: Array<[string, unknown, "input" | "transient" | "unknown"]> = [
+    [
+      "no valid recipients",
+      new UnsendableEmailError("No valid recipients after parsing to/cc/bcc"),
+      "input",
+    ],
+    [
+      "an attachment no longer stored",
+      new UnsendableEmailError("Attachment 1 is no longer stored"),
+      "input",
+    ],
+    ["08006 connection failure", queryError("08006"), "transient"],
+    ["08001 cannot connect", queryError("08001"), "transient"],
+    ["40001 serialization failure", queryError("40001"), "transient"],
+    ["40P01 deadlock", queryError("40P01"), "transient"],
+    ["53300 too many connections", queryError("53300"), "transient"],
+    ["55P03 lock not available", queryError("55P03"), "transient"],
+    ["57014 statement timeout", queryError("57014"), "transient"],
+    ["57P01 admin shutdown", queryError("57P01"), "transient"],
+    ["57P03 cannot connect now", queryError("57P03"), "transient"],
+    [
+      "a bare Postgres error (no drizzle wrapper)",
+      Object.assign(new Error("x"), { errno: "40001" }),
+      "transient",
+    ],
+    ["connection closed", connectionError("ERR_POSTGRES_CONNECTION_CLOSED"), "transient"],
+    [
+      "connection refused",
+      connectionError("ERR_POSTGRES_CONNECTION_REFUSED"),
+      "transient",
+    ],
+    [
+      "connection timeout",
+      connectionError("ERR_POSTGRES_CONNECTION_TIMEOUT"),
+      "transient",
+    ],
+    ["idle timeout", connectionError("ERR_POSTGRES_IDLE_TIMEOUT"), "transient"],
+    ["query cancelled", connectionError("ERR_POSTGRES_QUERY_CANCELLED"), "transient"],
+    ["socket reset", connectionError("ECONNRESET"), "transient"],
+    [
+      "a bare socket timeout",
+      Object.assign(new Error("x"), { code: "ETIMEDOUT" }),
+      "transient",
+    ],
+    ["55000 (not 55P03)", queryError("55000"), "unknown"],
+    ["23514 check violation", queryError("23514"), "unknown"],
+    ["42P01 undefined table", queryError("42P01"), "unknown"],
+    ["a drizzle error without a cause", new DrizzleQueryError("select 1", []), "unknown"],
+    ["another driver code", connectionError("ERR_POSTGRES_SYNTAX_ERROR"), "unknown"],
+    [
+      "a plain Error",
+      new Error("No valid recipients after parsing to/cc/bcc"),
+      "unknown",
+    ],
+    ["a TypeError", new TypeError("x is not a function"), "unknown"],
+    ["a thrown string", "boom", "unknown"],
+    ["undefined", undefined, "unknown"],
+  ];
+
+  for (const [name, error, kind] of cases) {
+    test(`${name}: ${kind}`, () => {
+      expect(classifySendError(error)).toBe(kind);
+    });
+  }
 });

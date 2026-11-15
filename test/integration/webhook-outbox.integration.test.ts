@@ -30,6 +30,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { runQueueCycle } from "../../src/modules/emails/services/queue.service.ts";
 import type { sendMail } from "../../src/modules/emails/services/mailer.service.ts";
 import type { DeliveryGroup } from "../../src/modules/emails/models/email.schema.ts";
+import { UnsendableEmailError } from "../../src/modules/emails/errors.ts";
 import {
   handleParsedBounce,
   resolveReturnPath,
@@ -237,7 +238,7 @@ const CASES: Case[] = [
     emailStatus: "queued",
     run: () =>
       queueCycle(async () => {
-        throw new Error("No valid recipients");
+        throw new UnsendableEmailError("No valid recipients");
       }),
     throwsOnFailure: false,
     failureLog: "Email send attempt crashed",

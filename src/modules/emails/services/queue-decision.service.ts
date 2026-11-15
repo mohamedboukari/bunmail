@@ -4,6 +4,8 @@ import type { emails } from "../models/email.schema.ts";
 import type { DeliveryState, DeliveryGroup } from "../models/email.schema.ts";
 import type { WebhookEventType } from "../../webhooks/types/webhook.types.ts";
 import { parseSmtpError, type ParsedSmtpError } from "../../../utils/smtp-error.ts";
+import { isTransientDbError } from "../../../utils/db-error.ts";
+import { UnsendableEmailError } from "../errors.ts";
 import { config } from "../../../config.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { deferralDelayMs } from "./rate-budget.ts";
@@ -16,6 +18,27 @@ import type { ClaimedEmail } from "./queue-claim.service.ts";
  */
 export function retryMaxAgeMs(): number {
   return config.mail.retryMaxAgeHours * 60 * 60 * 1000;
+}
+
+/**
+ * What an error thrown before a send reached an MX host means for the
+ * email (#474):
+ *
+ * - `input`: the email can never be sent as stored
+ *   ({@link UnsendableEmailError}: no valid recipients, an attachment no
+ *   longer stored). It fails at once.
+ * - `transient`: a database or connection failure that can pass on its
+ *   own (a transient SQLSTATE class, a lost or refused connection, a pool
+ *   or socket error, see `isTransientDbError`). Retried on the backoff.
+ * - `unknown`: anything else. Retried too, since losing mail is worse than
+ *   a few more attempts; `MAIL_RETRY_MAX_AGE_HOURS` still ends it.
+ */
+export type SendErrorKind = "input" | "transient" | "unknown";
+
+/** Classifies an error thrown before a send reached an MX host (#474). Pure. */
+export function classifySendError(error: unknown): SendErrorKind {
+  if (error instanceof UnsendableEmailError) return "input";
+  return isTransientDbError(error) ? "transient" : "unknown";
 }
 
 /** Earliest time any MX group was delivered, if one was. */

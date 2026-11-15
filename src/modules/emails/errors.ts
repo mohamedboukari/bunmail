@@ -351,3 +351,23 @@ export class TooManyRecipientsError extends EmailSendRejectedError {
     this.max = max;
   }
 }
+
+/**
+ * A queued email that can never be sent as stored (#474), so retrying
+ * cannot help: the queue fails it at once with `email.failed`. Raised on
+ * the send path only, never by `createEmail`, so it is not an
+ * {@link EmailSendRejectedError}:
+ *
+ * - `No valid recipients after parsing to/cc/bcc` (`sendMail`): no
+ *   delivery entry could be built from the row's addresses.
+ * - `Attachment <n> is no longer stored` (the queue's attachment load,
+ *   #181): its bytes were dropped while the email was still being sent.
+ *
+ * Any other error before a send reaches an MX host (a database or
+ * connection failure, or one nobody expected) is retried on the backoff
+ * instead. The message is fixed text, safe to store, log and send in a
+ * webhook payload.
+ */
+export class UnsendableEmailError extends Error {
+  override readonly name = "UnsendableEmailError";
+}

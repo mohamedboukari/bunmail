@@ -15,6 +15,7 @@ import { logger } from "../../../utils/logger.ts";
 import { loggableError } from "../../../utils/db-error.ts";
 import { redactEmail } from "../../../utils/redact.ts";
 import { config } from "../../../config.ts";
+import { UnsendableEmailError } from "../errors.ts";
 import { nextRetryDelayMs } from "./retry-schedule.ts";
 import { splitToList } from "./recipient-limits.ts";
 import { findById as findApiKeyById } from "../../api-keys/services/api-key.service.ts";
@@ -27,7 +28,11 @@ import {
   resolveDomainForEmail,
 } from "./queue-domain.service.ts";
 import { releaseRow, type Claim, type ClaimedEmail } from "./queue-claim.service.ts";
-import { retryMaxAgeMs, type SentAttempt } from "./queue-decision.service.ts";
+import {
+  classifySendError,
+  retryMaxAgeMs,
+  type SentAttempt,
+} from "./queue-decision.service.ts";
 import {
   metricSource,
   recordSendOutcome,
@@ -253,41 +258,26 @@ export async function sendClaimedEmail(
       return;
     }
     /**
-     * Otherwise `sendMail` only throws for fundamental input errors (no
-     * valid recipients after parsing): never for transport / SMTP
-     * failures, which return as `failed`/`retry` groups in state.
-     * So this catch is a one-shot terminal: mark `failed`, no retry.
-     * The status and `email.failed` commit together (#184).
+     * Anything else was thrown before a send reached an MX host: `sendMail`
+     * returns transport and SMTP failures as `failed`/`retry` entries in
+     * its state, never as a throw. Only an input error (#474,
+     * {@link UnsendableEmailError}) fails the email at once; a database or
+     * connection error (the domain lookup, the suppression re-check, the
+     * attachments load) or an unexpected one goes back on the retry
+     * backoff instead of losing the mail.
      *
-     * A database error lands here too (the domain lookup, the suppression
-     * re-check, the attachments load), and its message embeds the query
-     * parameters (a recipient, the sender). The stored `last_error`, the
-     * `email.failed` payload and the log line all carry `loggableError`'s
-     * text (#458): the SQLSTATE for a database error, the fixed message of
-     * an input error.
+     * A database error's message embeds the query parameters (a recipient,
+     * the sender). The stored `last_error`, the `email.failed` payload and
+     * the log line all carry `loggableError`'s text (#458): the SQLSTATE
+     * for a database error, the fixed message of an input error.
      */
     const errorMessage = loggableError(error);
-    await db.transaction((tx) =>
-      releaseRowWithEvents(
-        tx,
-        email,
-        claim,
-        { status: "failed", lastError: errorMessage },
-        [
-          {
-            event: "email.failed",
-            data: {
-              emailId,
-              from: email.fromAddress,
-              to: email.toAddress,
-              subject: email.subject,
-              tags: email.tags,
-              error: errorMessage,
-            },
-          },
-        ],
-      ),
-    );
+    const kind = classifySendError(error);
+    if (kind !== "input") {
+      await retryAfterSendError(email, claim, kind, errorMessage);
+      return;
+    }
+    await failBeforeSend(email, claim, errorMessage);
     logger.error("Email permanently failed (input error)", {
       emailId,
       attempt,
@@ -335,7 +325,9 @@ async function loadOutboundAttachments(emailId: string): Promise<OutboundAttachm
         emailId,
         position: attachment.position,
       });
-      throw new Error(`Attachment ${attachment.position} is no longer stored`);
+      throw new UnsendableEmailError(
+        `Attachment ${attachment.position} is no longer stored`,
+      );
     }
     outbound.push({
       filename: attachment.filename,
@@ -408,18 +400,8 @@ async function holdForDkimKey(
       ? `DKIM key for ${domainName} cannot be decrypted with DKIM_ENCRYPTION_KEY: not sent unsigned`
       : `DKIM key for ${domainName} cannot be used to sign: not sent unsigned`;
   const what = problem === "unreadable" ? "DKIM key unreadable" : "DKIM signing failed";
-  const retryDelayMs = nextRetryDelayMs(claim.attempt, email.ageMs, retryMaxAgeMs());
-  if (retryDelayMs !== null) {
-    const retrySeconds = Math.round(retryDelayMs / 1000);
-    await releaseRow(
-      claim,
-      {
-        status: "queued",
-        nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
-        lastError,
-      },
-      db,
-    );
+  const retrySeconds = await requeueOnBackoff(email, claim, lastError);
+  if (retrySeconds !== null) {
     logger.error(`Email held: ${what}`, {
       emailId: email.id,
       domain: domainName,
@@ -428,7 +410,90 @@ async function holdForDkimKey(
     });
     return;
   }
-  /** The status and `email.failed` commit together (#184). */
+  await failBeforeSend(email, claim, lastError);
+  logger.error(`Email failed: ${what} for the whole retry window`, {
+    emailId: email.id,
+    domain: domainName,
+    attempt: claim.attempt,
+  });
+}
+
+/**
+ * An error before the send reached an MX host that is not an input error
+ * (#474): a database or connection failure, or an unexpected one. Back to
+ * `queued` on the normal retry backoff, the claim's `attempts` increment
+ * kept as for a temporary SMTP failure, `last_error` the sanitized text and
+ * no webhook; `failed` with `email.failed` once the email is too old to
+ * retry. Nothing was sent, so the delivery state is untouched.
+ */
+async function retryAfterSendError(
+  email: ClaimedEmail,
+  claim: Claim,
+  kind: "transient" | "unknown",
+  errorMessage: string,
+): Promise<void> {
+  const retrySeconds = await requeueOnBackoff(email, claim, errorMessage);
+  if (retrySeconds !== null) {
+    const details = {
+      emailId: email.id,
+      attempt: claim.attempt,
+      error: errorMessage,
+      retryInSeconds: retrySeconds,
+    };
+    /** A database blip is expected now and then; anything else is not. */
+    if (kind === "transient") {
+      logger.warn("Email requeued: temporary error before sending", details);
+    } else {
+      logger.error("Email requeued: unexpected error before sending", details);
+    }
+    return;
+  }
+  await failBeforeSend(email, claim, errorMessage);
+  logger.error("Email failed: error before sending for the whole retry window", {
+    emailId: email.id,
+    attempt: claim.attempt,
+    error: errorMessage,
+  });
+  emailsFinished.inc({ status: "failed", source: metricSource(email) });
+}
+
+/**
+ * Puts a claimed email back to `queued` on the retry backoff (#180), when
+ * it is young enough for another attempt: `next_attempt_at` from
+ * {@link nextRetryDelayMs} on the database clock, `last_error` set, the
+ * lease released, the claim's `attempts` increment kept. Nothing else
+ * changes. Returns the wait in seconds, or `null` when the email is too
+ * old to retry (nothing written: the caller fails it).
+ */
+async function requeueOnBackoff(
+  email: ClaimedEmail,
+  claim: Claim,
+  lastError: string,
+): Promise<number | null> {
+  const retryDelayMs = nextRetryDelayMs(claim.attempt, email.ageMs, retryMaxAgeMs());
+  if (retryDelayMs === null) return null;
+  const retrySeconds = Math.round(retryDelayMs / 1000);
+  await releaseRow(
+    claim,
+    {
+      status: "queued",
+      nextAttemptAt: sql`NOW() + interval ${sql.raw(`'${retrySeconds} seconds'`)}`,
+      lastError,
+    },
+    db,
+  );
+  return retrySeconds;
+}
+
+/**
+ * Fails a claimed email that was never sent: `failed` with `lastError`, and
+ * `email.failed` with it as `error`, committed together (#184).
+ */
+async function failBeforeSend(
+  email: ClaimedEmail,
+  claim: Claim,
+  lastError: string,
+): Promise<void> {
   await db.transaction((tx) =>
     releaseRowWithEvents(tx, email, claim, { status: "failed", lastError }, [
       {
@@ -444,9 +509,4 @@ async function holdForDkimKey(
       },
     ]),
   );
-  logger.error(`Email failed: ${what} for the whole retry window`, {
-    emailId: email.id,
-    domain: domainName,
-    attempt: claim.attempt,
-  });
 }
