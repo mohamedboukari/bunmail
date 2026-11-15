@@ -1,4 +1,5 @@
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import * as geoip from "./geoip.service.ts";
 import { setSessionLocation } from "./session.service.ts";
 
@@ -34,7 +35,7 @@ export async function locateSession(
     logger.warn("Session location lookup failed", {
       sessionId,
       ip,
-      error: error instanceof Error ? error.message : String(error),
+      error: loggableError(error),
     });
     return null;
   }

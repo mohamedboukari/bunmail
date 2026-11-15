@@ -26,6 +26,7 @@ import {
   purgeOldDeliveries,
 } from "./webhook-delivery.service.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { redactUrl } from "../../../utils/redact.ts";
 import { config } from "../../../config.ts";
@@ -130,7 +131,7 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
     batch = await claimDueDeliveries(BATCH_SIZE);
   } catch (err) {
     logger.error("Webhook worker: claim failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: loggableError(err),
     });
     return { claimed: 0 };
   }
@@ -162,7 +163,7 @@ export async function runPollCycle(): Promise<{ claimed: number }> {
            *  tick and we'll re-attempt. Log loud. */
           logger.error("Webhook worker: failed to persist attempt outcome", {
             deliveryId: row.id,
-            error: err instanceof Error ? err.message : String(err),
+            error: loggableError(err),
           });
         }
 
@@ -212,10 +213,9 @@ export function runCleanupCycle(): Promise<{ deleted: number }> {
       }
       return result;
     } catch (err) {
-      /** The logger strips a drizzle error's query parameters (#260). */
       logger.error("Webhook worker: cleanup failed", {
         retentionDays,
-        error: err instanceof Error ? err.message : String(err),
+        error: loggableError(err),
       });
       return { deleted: 0 };
     }

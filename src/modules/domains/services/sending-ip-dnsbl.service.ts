@@ -27,6 +27,7 @@ import { isIP } from "net";
 import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { runWithLogContext } from "../../../utils/log-context.ts";
 import { isBlockedIp, parseIpv6 } from "../../../utils/ssrf-guard.ts";
 import { withTimeout } from "../../emails/services/mx-route.ts";
@@ -438,7 +439,7 @@ export function runDnsblSelfCheck(
       } catch (error: unknown) {
         logger.error("DNSBL self-check failed", {
           errorName: error instanceof Error ? error.name : typeof error,
-          error: error instanceof Error ? error.message : String(error),
+          error: loggableError(error),
         });
         return null;
       }

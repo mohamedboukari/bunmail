@@ -1,5 +1,6 @@
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import type { DkimOptions } from "../../emails/services/mailer.service.ts";
 import type { Domain } from "../types/domain.types.ts";
@@ -33,7 +34,7 @@ function decryptDkimPrivateKey(stored: string | null, domainName: string): strin
   } catch (err) {
     logger.error("Failed to decrypt DKIM private key: no signing key for this message", {
       domain: domainName,
-      error: err instanceof Error ? err.message : String(err),
+      error: loggableError(err),
     });
     return null;
   }

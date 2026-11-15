@@ -22,6 +22,7 @@ import { webhooks } from "../modules/webhooks/models/webhook.schema.ts";
 import { encryptSecret, isEncryptedSecret } from "../utils/crypto.ts";
 import { config } from "../config.ts";
 import { logger } from "../utils/logger.ts";
+import { loggableError } from "../utils/db-error.ts";
 
 export async function encryptWebhookSecrets(): Promise<{
   encrypted: number;
@@ -61,7 +62,7 @@ export async function encryptWebhookSecrets(): Promise<{
        */
       logger.error("Failed to encrypt webhook signing secret", {
         webhookId: row.id,
-        error: err instanceof Error ? err.message : String(err),
+        error: loggableError(err),
       });
     }
   }

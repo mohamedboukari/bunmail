@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../../../db/index.ts";
 import { domains } from "../../domains/models/domain.schema.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 import { decryptSecret, isEncryptedSecret } from "../../../utils/crypto.ts";
 import { config } from "../../../config.ts";
 import { domainNameIs } from "../../domains/services/domain.service.ts";
@@ -98,7 +99,7 @@ function readDkimPrivateKey(
   } catch (err) {
     logger.error("Failed to decrypt DKIM private key", {
       domain: domainName,
-      error: err instanceof Error ? err.message : String(err),
+      error: loggableError(err),
     });
     return { dkimPrivateKey: null, dkimKeyUnreadable: true };
   }

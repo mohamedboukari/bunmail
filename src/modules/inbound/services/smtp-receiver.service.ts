@@ -25,6 +25,7 @@ import {
 import { MAX_MESSAGE_BYTES, receiverDataHandler } from "./smtp-receiver-data.service.ts";
 import { config } from "../../../config.ts";
 import { logger } from "../../../utils/logger.ts";
+import { loggableError } from "../../../utils/db-error.ts";
 
 /** Reference to the running SMTP server instance */
 let server: SMTPServer | null = null;
@@ -173,7 +174,7 @@ export function start(notifyDeps: InboundNotifyDeps = inboundNotifyDeps()): void
       return;
     }
     logger.error("SMTP server error", {
-      error: err instanceof Error ? err.message : String(err),
+      error: loggableError(err),
     });
   });
 

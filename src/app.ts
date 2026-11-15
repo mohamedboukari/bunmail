@@ -9,6 +9,7 @@ import { apiPlugins } from "./modules/api-plugins.ts";
 import { openapi } from "@elysiajs/openapi";
 import { config } from "./config.ts";
 import { logger } from "./utils/logger.ts";
+import { loggableError } from "./utils/db-error.ts";
 import { ApiKeyCreatorInactiveError } from "./modules/api-keys/errors.ts";
 import { serializeSendError } from "./modules/emails/serializations/send-error.serialization.ts";
 import {
@@ -249,8 +250,9 @@ export function startApp(appVersion: string) {
 
       const message = error instanceof Error ? error.message : "Internal server error";
 
+      /** The log line goes through `loggableError` (#458): a drizzle error's message embeds the query parameters. */
       logger.error("Unhandled error", {
-        error: message,
+        error: loggableError(error),
         stack:
           config.env === "development" && error instanceof Error
             ? error.stack

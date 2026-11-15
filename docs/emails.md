@@ -33,7 +33,7 @@ Handles email queuing, delivery, and retrieval. Emails are queued via the REST A
 | `next_attempt_at` | timestamptz  | NOT NULL, default now   | Earliest time the queue may try the email; pushed out by the retry backoff (#180) |
 | `locked_by`     | varchar(64)    | nullable                | Worker holding the row while `sending` (#180) |
 | `lease_until`   | timestamptz    | nullable                | Claim expiry while `sending`; renewed by the worker, reclaimable once passed (#180) |
-| `last_error`    | text           | nullable                | Error message from last failed attempt      |
+| `last_error`    | text           | nullable                | Error message from last failed attempt (a database error is stored as `Database query failed (SQLSTATE <code>)`, never with its query parameters, #458) |
 | `delivery_state` | jsonb         | nullable                | Per-group outcomes: one entry per recipient domain, or per recipient once split (#97, #236, #250). See [Per-group delivery state](#per-group-delivery-state-emailsdelivery_state-97). |
 | `message_id`    | varchar(255)   | nullable                | SMTP message ID (set after successful send) |
 | `sent_at`       | timestamp      | nullable                | When the email was successfully delivered   |
