@@ -1,5 +1,6 @@
 import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
 import { consumeRevealSecret, stashRevealSecret } from "../reveal-store.ts";
 import { ApiKeyCreatorInactiveError } from "../../modules/api-keys/errors.ts";
 import { ApiKeysPage, apiKeysTabOf } from "../routes/api-keys.tsx";
@@ -144,8 +145,13 @@ export function apiKeyPages(app: GuardedDashboard) {
               );
               return "";
             }
+            /**
+             * Never the raw message (#448): a failed insert's embeds the query
+             * parameters, the allowed-sender addresses among them.
+             */
             logger.error("Failed to create API key via dashboard", {
-              error: error instanceof Error ? error.message : String(error),
+              userId: auth.user.id,
+              error: loggableError(error),
             });
             set.status = 302;
             set.headers["location"] = flashUrl(

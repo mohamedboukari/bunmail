@@ -1,5 +1,6 @@
 import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
 import { DomainsPage } from "../routes/domains.tsx";
 import { DomainDetailPage } from "../routes/domain-detail.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
@@ -59,9 +60,10 @@ async function dkimRotationStep(
         code: error.code,
       });
     } else {
+      /** Never the raw message: a database error's embeds the query parameters (#448). */
       logger.error("DKIM rotation step failed via dashboard", {
         domainId: id,
-        error: error instanceof Error ? error.message : String(error),
+        error: loggableError(error),
       });
     }
     return domainFlashUrl(id, dkimRotationErrorFlash(error, fallback));
@@ -125,15 +127,18 @@ export function domainPages(app: GuardedDashboard) {
             set.status = 302;
             set.headers["location"] = flashUrl("/dashboard/domains", "domain_added");
           } catch (error) {
+            const ids = { userId: auth.user.id };
             if (error instanceof DomainAlreadyRegisteredError) {
-              logger.warn("Domain not added via dashboard: already registered");
+              logger.warn("Domain not added via dashboard: already registered", ids);
             } else if (error instanceof InvalidDomainNameError) {
-              logger.warn("Domain not added via dashboard: invalid name");
+              logger.warn("Domain not added via dashboard: invalid name", ids);
             } else if (error instanceof InvalidDkimSelectorError) {
-              logger.warn("Domain not added via dashboard: invalid DKIM selector");
+              logger.warn("Domain not added via dashboard: invalid DKIM selector", ids);
             } else {
+              /** Never the raw message: a database error's embeds the query parameters (#448). */
               logger.error("Failed to add domain via dashboard", {
-                error: error instanceof Error ? error.message : String(error),
+                ...ids,
+                error: loggableError(error),
               });
             }
             set.status = 302;

@@ -71,7 +71,7 @@ The `path` of the request line never contains the query string (owner setup link
 - **Query parameters.** Any logged string containing a drizzle query error keeps its SQL and loses its bound values (`\nparams: [REDACTED]`), as a safety net for call sites that log `error.message` (#260).
 - **The seed API key.** `src/db/seed.ts` prints the new key to the terminal directly, never through the logger (#260).
 - **The one documented exception:** the owner setup link (#215), logged once per minted link so the operator can claim the account. It is single use and expires after 24 hours.
-- Drizzle query errors on the account paths are logged with the Postgres SQLSTATE only, never with the query parameters.
+- Drizzle query errors on the account paths and in the dashboard's failure lines are logged with the Postgres SQLSTATE only, never with the query parameters (#448).
 
 ## Tracing an incident
 
@@ -105,6 +105,6 @@ Every new route, background job and service entry point follows these rules (als
 
 1. **Boundary line**: the outcome of each unit of work is logged once, with its IDs and a duration where it matters. HTTP requests get theirs automatically.
 2. **Background work runs in a context**: wrap a new job, worker iteration or connection handler in `runWithLogContext({ job, jobId })` so every line inside carries its ID.
-3. **Every failure path logs** at `warn` (expected, handled) or `error` (unexpected), with the IDs involved and the error code or message, never the raw error object of a database query.
+3. **Every failure path logs** at `warn` (expected, handled) or `error` (unexpected), with the IDs involved and the error code or `loggableError(error)` (`src/utils/db-error.ts`), never a database query error's raw message or object: both embed the query parameters (#448).
 4. **Detail at `debug`**: internal steps useful while investigating, not in normal operation.
 5. **No secrets, no bodies**: never log passwords, keys, tokens, hashes, cookies or message content; route emails through `redactEmail`. The redaction safety net is not a license to pass them.

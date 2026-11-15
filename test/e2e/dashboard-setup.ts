@@ -102,12 +102,22 @@ export function fakeKey(
 }
 
 /** Every export of api-key.service.ts: mock.module leaks across files (#121). */
-export const listApiKeys = mock((_actor?: unknown) => Promise.resolve([]));
+export const listApiKeys = mock((_actor?: unknown): Promise<Record<string, unknown>[]> =>
+  Promise.resolve([]),
+);
 export const createApiKey = mock((_input: unknown, _actor?: unknown) =>
   Promise.resolve({
     apiKey: fakeKey(),
     rawKey: "bm_live_test1234567890abcdef12345678",
   }),
+);
+
+/**
+ * The send the dashboard's Send page calls; resolves a queued email.
+ * Exported so a test can make it throw (#448: what a failed send logs).
+ */
+export const createEmail = mock((_input: unknown, _apiKeyId: string): Promise<unknown> =>
+  Promise.resolve({ email: {}, warnings: [], attachments: [] }),
 );
 
 /** What the fake ownership-checked template changes answer (#219); tests swap it. */
@@ -761,9 +771,7 @@ export function registerDashboardMocks(): void {
     checkTagFilters: mock(() => []),
     getEmailByIdUnscoped: mock(() => Promise.resolve(undefined)),
     getEmailById: mock(() => Promise.resolve(undefined)),
-    createEmail: mock(() =>
-      Promise.resolve({ email: {}, warnings: [], attachments: [] }),
-    ),
+    createEmail,
     /** Attachment metadata (#181), and the download lookup: none here. */
     attachmentsFor: mock(() => Promise.resolve(new Map())),
     findAttachmentForDownload: mock(() => Promise.resolve(undefined)),
