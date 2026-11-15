@@ -233,16 +233,23 @@ export function inboundPages(app: GuardedDashboard) {
 
       .get(
         "/inbound/:id",
-        async ({ params, set }) => {
+        async ({ params, query, set }) => {
           /**
            * The email of ours it replies to (#192). Every role that may open
            * this page (member and up) may open that email's page too.
            */
+          /** `?images=1` loads remote images in the HTML preview (#419); anything else keeps them blocked. */
+          const remoteImages = query.images === "1";
           const live = await inboundService.getInboundEmailById(params.id);
           if (live) {
             const repliedTo = await replyThreading.getRepliedEmail(live);
             return (
-              <InboundDetailPage email={live} isTrashed={false} repliedTo={repliedTo} />
+              <InboundDetailPage
+                email={live}
+                isTrashed={false}
+                repliedTo={repliedTo}
+                remoteImages={remoteImages}
+              />
             );
           }
 
@@ -250,14 +257,23 @@ export function inboundPages(app: GuardedDashboard) {
           if (trashed) {
             const repliedTo = await replyThreading.getRepliedEmail(trashed);
             return (
-              <InboundDetailPage email={trashed} isTrashed={true} repliedTo={repliedTo} />
+              <InboundDetailPage
+                email={trashed}
+                isTrashed={true}
+                repliedTo={repliedTo}
+                remoteImages={remoteImages}
+              />
             );
           }
 
           set.status = 404;
           return "Inbound email not found";
         },
-        { beforeHandle: memberGuard, params: t.Object({ id: t.String() }) },
+        {
+          beforeHandle: memberGuard,
+          params: t.Object({ id: t.String() }),
+          query: t.Object({ images: t.Optional(t.String()) }),
+        },
       )
 
       /**

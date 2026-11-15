@@ -516,7 +516,7 @@ bunmail/
 │           ├── sso-logo.tsx              ← SSO button logos, inline SVG chosen by the issuer's host (#224)
 │           ├── created-by.tsx            ← "Created by" display names (#219)
 │           ├── email-chip-input.tsx      ← Multi-recipient chip input
-│           ├── html-preview.tsx          ← HTML preview in a sandboxed iframe
+│           ├── html-preview.tsx          ← HTML preview in a sandboxed iframe, remote images blocked (#419)
 │           ├── time-display.tsx          ← Timestamps rendered in the viewer's time zone (#104)
 │           └── empty-state.tsx           ← "No data yet" placeholder
 ├── test/
