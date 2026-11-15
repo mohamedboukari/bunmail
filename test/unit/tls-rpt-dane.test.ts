@@ -11,14 +11,14 @@ import {
 } from "../../src/modules/emails/services/dane-verify.ts";
 import { enforcedTlsFailure } from "../../src/modules/emails/services/mx-transport.ts";
 import type { DaneHost } from "../../src/modules/emails/types/dane.types.ts";
-import type { TlsRptPolicy } from "../../src/modules/tls-rpt/types/tls-rpt.types.ts";
 import type { TlsaRecord } from "../../src/utils/dns-rdata.ts";
 
 /**
  * DANE in TLS reports (#345, RFC 8460): a session to a host under DANE is
  * reported under a `tlsa` policy whose string is the TLSA records in
- * presentation form; all-unusable records are `tlsa-invalid`; the DANE
- * check's failures map to fixed result types and reason codes.
+ * presentation form; all-unusable records are `tlsa-invalid`; DANE-TA
+ * records are applied like DANE-EE ones (#455); the DANE check's failures
+ * map to fixed result types and reason codes.
  */
 
 const RECORD = {
@@ -62,20 +62,13 @@ describe("danePolicyOf", () => {
     });
   });
 
-  /** The policy of `host`, which must be one. */
-  function policyOf(daneHost: DaneHost): TlsRptPolicy {
-    const policy = danePolicyOf(daneHost);
-    if (policy === null) throw new Error("expected a tlsa policy");
-    return policy;
-  }
-
   /** A host with `records`, usable as in production. */
   function hostWith(records: TlsaRecord[]): DaneHost {
     return { ...host(true), records, usable: usableTlsa(records) };
   }
 
   test("every record invalid by the RFC rules: tlsa-invalid on every session, even a delivered one", () => {
-    const policy = policyOf(host(false));
+    const policy = danePolicyOf(host(false));
     expect(policy.policyFailure).toBe("tlsa-invalid");
     expect(classifySession(policy, { ...AT, outcomes: [{ tls: "starttls" }] })).toEqual({
       result: "tlsa-invalid",
@@ -88,26 +81,46 @@ describe("danePolicyOf", () => {
       { ...RECORD, data: RECORD.data.subarray(0, 20) },
       { ...RECORD, matchingType: 9 },
     ]);
-    expect(policyOf(invalid).policyFailure).toBe("tlsa-invalid");
+    expect(danePolicyOf(invalid).policyFailure).toBe("tlsa-invalid");
   });
 
-  test("only DANE-TA records (valid, unsupported while PEER_CHAIN_AVAILABLE is off): no tlsa result claimed", () => {
-    expect(danePolicyOf(hostWith([{ ...RECORD, usage: 2, selector: 0 }]))).toBeNull();
+  test("only DANE-TA records (#455): a tlsa policy, applied; a session is a tlsa success or failure", () => {
+    const policy = danePolicyOf(hostWith([{ ...RECORD, usage: 2, selector: 0 }]));
+    expect(policy).toEqual({
+      type: "tlsa",
+      policyString: [`2 0 1 ${"AB".repeat(32)}`],
+      mxHost: ["mx.example.org"],
+      mode: null,
+      policyFailure: null,
+    });
+    expect(classifySession(policy, { ...AT, outcomes: [{ tls: "starttls" }] })).toEqual({
+      result: "success",
+    });
+    const refused = classifySession(policy, {
+      ...AT,
+      outcomes: [{ tls: null, error: daneError(DANE_FAILURE_MESSAGES["chain-invalid"]) }],
+    });
+    expect(refused).toEqual({
+      result: "certificate-not-trusted",
+      receivingMxHostname: "mx.example.org",
+      receivingIp: "203.0.113.4",
+      failureReasonCode: "",
+    });
   });
 
-  test("RFC-invalid records beside a merely unsupported one: still no tlsa-invalid", () => {
-    expect(
-      danePolicyOf(
-        hostWith([
-          { ...RECORD, usage: 1 },
-          { ...RECORD, usage: 2, selector: 0 },
-        ]),
-      ),
-    ).toBeNull();
+  test("RFC-invalid records beside a DANE-TA one: a tlsa policy, not tlsa-invalid", () => {
+    const policy = danePolicyOf(
+      hostWith([
+        { ...RECORD, usage: 1 },
+        { ...RECORD, usage: 2, selector: 0 },
+      ]),
+    );
+    expect(policy.type).toBe("tlsa");
+    expect(policy.policyFailure).toBeNull();
   });
 
   test("DANE-EE beside DANE-TA: a tlsa policy listing every record, applied", () => {
-    const policy = policyOf(hostWith([RECORD, { ...RECORD, usage: 2, selector: 0 }]));
+    const policy = danePolicyOf(hostWith([RECORD, { ...RECORD, usage: 2, selector: 0 }]));
     expect(policy.policyString).toEqual([
       `3 1 1 ${"AB".repeat(32)}`,
       `2 0 1 ${"AB".repeat(32)}`,
@@ -117,7 +130,7 @@ describe("danePolicyOf", () => {
 
   test("an authenticated session is a success", () => {
     expect(
-      classifySession(policyOf(host(true)), {
+      classifySession(danePolicyOf(host(true)), {
         ...AT,
         outcomes: [{ tls: "starttls" }],
       }),

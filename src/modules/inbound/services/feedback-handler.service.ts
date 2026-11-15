@@ -11,10 +11,11 @@
  * message (its recipients, their mailbox provider) can name one. That is
  * enough for the sending key's own list, but not across keys: the tenant
  * that sent the email holds its Message-ID too. So DKIM on the report is
- * checked, and the complaint is stored as **verified** only when a
- * signature passes for one of the operator's `FEEDBACK_LOOP_DOMAINS` (see
- * {@link isVerifiedReport}); only a verified complaint is shared with the
- * other keys by `SUPPRESSIONS_SHARED_HARD`. An unverified one still
+ * checked, and the complaint is stored as **verified** only when it comes
+ * from one of the operator's `FEEDBACK_LOOP_SENDERS`, signed by a domain
+ * of `FEEDBACK_LOOP_DOMAINS` aligned with its `From` (see
+ * `feedback-verification.service.ts`); only a verified complaint is shared
+ * with the other keys by `SUPPRESSIONS_SHARED_HARD`. An unverified one still
  * suppresses under the email's own key, and fires `email.complained`, as
  * before: not every provider signs its reports.
  *
@@ -45,6 +46,12 @@ import {
   type DkimVerifyDeps,
 } from "./dkim-verifier.service.ts";
 import { lowerAscii, signingDomainOf } from "./dkim-verifier-parse.service.ts";
+import {
+  readSignedHeaderView,
+  verifyFeedbackReport,
+  type FeedbackVerification,
+  type SignedHeaderView,
+} from "./feedback-verification.service.ts";
 import type {
   FeedbackAction,
   FeedbackOutcome,
@@ -75,7 +82,7 @@ export interface LinkedEmail {
   tags: EmailTags | null;
 }
 
-/** DKIM verdict on the report itself: logged, and the input of {@link isVerifiedReport}. */
+/** DKIM verdict on the report itself: logged, and an input of `verifyFeedbackReport`. */
 export interface DkimCheck {
   /** `pass`, `fail`, `neutral`, `none`, `temperror`, `permerror`, `policy`, or `skipped`. */
   result: string;
@@ -126,9 +133,26 @@ export interface FeedbackHandlerDeps<T> {
   verifyDkim: () => Promise<DkimCheck>;
   /**
    * `FEEDBACK_LOOP_DOMAINS`, normalised: the signing domains whose passing
-   * signature makes a complaint verified. Empty: nothing is verified.
+   * signature may make a complaint verified. Empty: nothing is verified.
    */
   feedbackLoopDomains: readonly string[];
+  /**
+   * `FEEDBACK_LOOP_SENDERS`, normalised: the addresses and `@domain`
+   * entries a verified report's `From` (and non-empty envelope sender)
+   * must match. Empty: nothing is verified.
+   */
+  feedbackLoopSenders: readonly string[];
+  /**
+   * The SMTP envelope `MAIL FROM` the report arrived with, `null` for the
+   * null reverse-path `<>`. Not authenticated; see `verifyFeedbackReport`.
+   */
+  envelopeFrom: string | null;
+  /**
+   * `From` and `Content-Type` read the way the DKIM verifier reads the
+   * header section (`readSignedHeaderView`). Called only when a signature
+   * passed, so the header section is known to be small.
+   */
+  readSignedHeaders: () => SignedHeaderView;
 }
 
 export interface HandleFeedbackResult {
@@ -147,37 +171,6 @@ export function classifyFeedbackType(feedbackType: string | null): FeedbackActio
   }
   if (feedbackType === "opt-out") return "opt-out";
   return "ignore";
-}
-
-/**
- * Whether a report is a **verified** feedback-loop report: at least one of
- * its DKIM signatures passed and may vouch for it (see `signatureCanVouch`:
- * no testing-mode key, no `l=`, `h=` covering From and Content-Type)
- * and its `d=` is exactly one of `allowedDomains` (`FEEDBACK_LOOP_DOMAINS`),
- * compared without ASCII case and without a final dot. An empty allowlist
- * verifies nothing.
- *
- * A passing signature alone is not enough: anyone can sign a hand-made
- * report with a domain of their own. Only the domains the operator listed
- * (their providers' feedback-loop signers) count.
- *
- * Exact match only, no subdomains: a listed `example.net` does not accept
- * `d=fbl.example.net`. A subdomain rule would trust every name under the
- * listed one, so one mistaken entry (a two-label public suffix such as
- * `co.uk`, or a provider that hands out subdomains to its users) would let
- * anyone verify; and there is no public suffix list here to guard against
- * it. A miss only means the complaint stays per key, which is the safe
- * side, and the log line's `dkimDomain` shows the exact `d=` to list.
- */
-export function isVerifiedReport(
-  dkim: DkimCheck,
-  allowedDomains: readonly string[],
-): boolean {
-  if (allowedDomains.length === 0) return false;
-  const canonical = (domain: string): string =>
-    lowerAscii(domain.trim()).replace(/\.$/, "");
-  const allowed = new Set(allowedDomains.map(canonical));
-  return dkim.passingDomains.some((domain) => allowed.has(canonical(domain)));
 }
 
 /**
@@ -282,9 +275,29 @@ export async function handleFeedbackReport<T>(
     };
   }
 
-  /** Whether the complaint may be shared with other keys (see `isVerifiedReport`). */
-  const verified = isVerifiedReport(dkim, deps.feedbackLoopDomains);
-  const complaintContext = { ...linkedContext, verified };
+  /** Whether the complaint may be shared with other keys (see `verifyFeedbackReport`). */
+  const headers: SignedHeaderView =
+    dkim.passingDomains.length > 0
+      ? deps.readSignedHeaders()
+      : { from: null, contentTypeSingle: false };
+  const verification = verifyFeedbackReport(
+    { dkim, headers, envelopeFrom: deps.envelopeFrom },
+    { domains: deps.feedbackLoopDomains, senders: deps.feedbackLoopSenders },
+  );
+  const verified = verification.verified;
+  const complaintContext = {
+    ...linkedContext,
+    verified,
+    unverifiedReason: verification.verified ? null : verification.reason,
+  };
+  logUnverified(verification, {
+    ...complaintContext,
+    passingDomains: dkim.passingDomains,
+    /** The `From` the report claims (ARF parser) and the one a signature covers. */
+    reporter: redactEmail(report.reporterAddress),
+    signedFrom: redactEmail(headers.from),
+    envelopeFrom: deps.envelopeFrom === null ? "<>" : redactEmail(deps.envelopeFrom),
+  });
 
   const payload = {
     emailId: original.id,
@@ -343,6 +356,29 @@ export async function handleFeedbackReport<T>(
     suppressionId: suppression.id,
   });
   return { outcome: "complained", emailId: original.id };
+}
+
+/**
+ * Logs why a complaint is not verified, once the operator configured
+ * `FEEDBACK_LOOP_DOMAINS` (with it empty the feature is off, and the
+ * complaint's own lines carry `unverifiedReason` only). `warn` when a
+ * listed domain did sign the report but its sender or envelope does not
+ * match: either a list to complete or a report that does not come from the
+ * provider's feedback loop. `info` otherwise. The reason code is the
+ * context's `unverifiedReason`; the caller puts `passingDomains` and the
+ * addresses (through `redactEmail`) in `context`.
+ */
+function logUnverified(
+  verification: FeedbackVerification,
+  context: Record<string, unknown>,
+): void {
+  if (verification.verified || verification.reason === "no_feedback_loop_domains") return;
+  const reason = verification.reason;
+  const signedByListedDomain =
+    reason !== "no_feedback_loop_senders" && reason !== "domain_not_listed";
+  const message = "Complaint not verified: it stays under the sending key";
+  if (signedByListedDomain) logger.warn(message, context);
+  else logger.info(message, context);
 }
 
 /**
@@ -498,12 +534,15 @@ export async function verifyReportDkim(
  * top-level type is a `feedback-report`. The caller acknowledges the SMTP
  * transaction and stores nothing, whatever the outcome.
  *
+ * @param envelopeFrom - The SMTP envelope `MAIL FROM`, lower-cased by the
+ *   caller; `null` for the null reverse-path `<>`.
  * @param dkimDeps - The DKIM verifier's TXT lookup and clock; the real ones
  *   unless a test passes its own (a signed fixture's key, a fixed time).
  */
 export async function handleInboundFeedbackReport(
   raw: string,
   rawBytes: Buffer,
+  envelopeFrom: string | null,
   dkimDeps: DkimVerifyDeps = {},
 ): Promise<HandleFeedbackResult> {
   return handleFeedbackReport<Tx>(parseFeedbackReport(raw), {
@@ -513,7 +552,10 @@ export async function handleInboundFeedbackReport(
     unsubscribe,
     enqueueEvent,
     verifyDkim: () => verifyReportDkim(raw, rawBytes, dkimDeps),
-    /** Read per report, so the list in effect is the current config. */
+    /** Read per report, so the lists in effect are the current config. */
     feedbackLoopDomains: config.suppressions.feedbackLoopDomains,
+    feedbackLoopSenders: config.suppressions.feedbackLoopSenders,
+    envelopeFrom,
+    readSignedHeaders: () => readSignedHeaderView(rawBytes),
   });
 }

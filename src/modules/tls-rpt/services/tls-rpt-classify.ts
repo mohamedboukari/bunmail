@@ -2,7 +2,6 @@ import { tlsaPresentation } from "../../../utils/dns-rdata.ts";
 import type { DeliveryTls } from "../../emails/models/email.schema.ts";
 import { mxMatchesPattern, type MtaStsDiscovery } from "../../emails/services/mta-sts.ts";
 import type { DaneHost } from "../../emails/types/dane.types.ts";
-import { usableTlsa } from "../../emails/services/dane-verify.ts";
 import type {
   TlsRptFailureType,
   TlsRptObservation,
@@ -33,15 +32,14 @@ import type {
  * - DANE (#345, policy type `tlsa`): `tlsa-invalid` for every session to a
  *   host whose TLSA records are all invalid by the RFC rules (RFC 8460
  *   section 4.3.2.1: none of the records was found valid; the mail still
- *   goes over unauthenticated TLS). Records that are valid but unsupported
- *   here (DANE-TA while `PEER_CHAIN_AVAILABLE` is off) are not invalid: a host with no usable
- *   record and at least one such record is reported as without DANE
- *   ({@link danePolicyOf} returns `null`). `dnssec-invalid` for a host skipped because a
- *   DNSSEC lookup failed (no valid records from the resolver), and the
- *   certificate results above for a DANE-TA chain that does not verify
- *   (`certificate-not-trusted`), names the wrong host
- *   (`certificate-host-mismatch`) or has expired. `dane-required` is not
- *   used: BunMail has no mandatory-DANE setting (RFC 7672 section 6).
+ *   goes over unauthenticated TLS). Every valid record is supported, DANE-EE
+ *   and DANE-TA alike (#455), so a session to a host with a usable record
+ *   is a `tlsa` success or failure. `dnssec-invalid` for a host skipped
+ *   because a DNSSEC lookup failed (no valid records from the resolver),
+ *   and the certificate results above for a DANE-TA chain that does not
+ *   verify up to its anchor (`certificate-not-trusted`), names the wrong
+ *   host (`certificate-host-mismatch`) or has expired. `dane-required` is
+ *   not used: BunMail has no mandatory-DANE setting (RFC 7672 section 6).
  *
  * A session that failed before TLS mattered (refused connection, timeout,
  * an SMTP reply) is not reported: RFC 8460 section 4.3 leaves transient
@@ -107,22 +105,15 @@ export function tlsRptPolicyOf(discovery: MtaStsDiscovery): TlsRptPolicy {
 /**
  * The `tlsa` policy of a session under DANE (#345): the host's TLSA
  * records in presentation form (RFC 8460 section 4.4, RFC 6698 section
- * 2.2) and its name as `mx-host`.
- *
- * With no usable record, the reading closest to RFC 8460 section 4.3.2.1
- * ("none of the records in the RRset were found to be valid"):
- *
- * - every record invalid by the RFC rules (PKIX usages, unknown selector or
- *   matching type, a digest of the wrong length, Full data that does not
- *   parse): `tlsa-invalid` as the policy failure;
- * - at least one record valid but unsupported by this implementation
- *   (DANE-TA while `PEER_CHAIN_AVAILABLE` is off):
- *   the set is not invalid, and BunMail did not apply it, so no `tlsa`
- *   result is claimed either way. `null`: the caller reports the session
- *   as without DANE (the domain's MTA-STS policy, or `no-policy-found`).
+ * 2.2) and its name as `mx-host`. With no usable record, every record is
+ * invalid by the RFC rules (PKIX usages, unknown selector or matching
+ * type, a digest of the wrong length, Full data that does not parse):
+ * `tlsa-invalid` as the policy failure (RFC 8460 section 4.3.2.1, "none of
+ * the records in the RRset were found to be valid"). Since DANE-TA is
+ * supported (#455), no record is valid but unsupported, so there is no
+ * longer a case reported as without DANE.
  */
-export function danePolicyOf(host: DaneHost): TlsRptPolicy | null {
-  if (host.usable.length === 0 && usableTlsa(host.records, true).length > 0) return null;
+export function danePolicyOf(host: DaneHost): TlsRptPolicy {
   return {
     type: "tlsa",
     policyString: host.records.map(tlsaPresentation),

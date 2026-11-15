@@ -7,7 +7,12 @@
  * `src/index.ts` calls them in order.
  */
 import { networkInterfaces } from "os";
-import { config, daneResolverIsLocal, sourceIpWarnings } from "./config.ts";
+import {
+  config,
+  daneResolverIsLocal,
+  isConsumerMailboxDomain,
+  sourceIpWarnings,
+} from "./config.ts";
 import { logger } from "./utils/logger.ts";
 import { loggableError } from "./utils/db-error.ts";
 import { findUndecryptableDomainKeys } from "./db/encrypt-domain-keys.ts";
@@ -264,5 +269,49 @@ export function warnIgnoredSettings(): void {
       missing: skipped.missing,
       hint: "set both variables to show its sign-in button, or remove it from SSO_PROVIDERS",
     });
+  }
+
+  warnFeedbackLoopSettings();
+}
+
+/**
+ * The feedback-loop lists behind verified complaints, checked once at
+ * boot (the handler re-reads them per report, so nothing else would say
+ * why no complaint is ever verified):
+ *
+ * - `FEEDBACK_LOOP_DOMAINS` set but `FEEDBACK_LOOP_SENDERS` empty: no
+ *   complaint is verified (the handler fails closed), so none is shared by
+ *   `SUPPRESSIONS_SHARED_HARD`. Warned, not refused: complaints still
+ *   suppress under the sending key, and a deployment that set only the
+ *   domains before the senders list existed keeps booting.
+ * - `FEEDBACK_LOOP_DOMAINS` lists a consumer mailbox domain: that key
+ *   signs mail any of the provider's users writes. Warned, not refused:
+ *   some providers sign their feedback-loop reports with that same domain,
+ *   and an exact address in `FEEDBACK_LOOP_SENDERS` (the config refuses
+ *   `@domain` for such a domain) keeps the rule sound. The warning makes
+ *   the operator check that those entries are the provider's dedicated
+ *   feedback-loop addresses.
+ */
+function warnFeedbackLoopSettings(): void {
+  const { feedbackLoopDomains, feedbackLoopSenders } = config.suppressions;
+  if (feedbackLoopDomains.length > 0 && feedbackLoopSenders.length === 0) {
+    logger.warn(
+      "FEEDBACK_LOOP_DOMAINS is set but FEEDBACK_LOOP_SENDERS is empty: no complaint is verified or shared",
+      {
+        hint: "set FEEDBACK_LOOP_SENDERS to the From address of each provider's feedback-loop reports (see docs/feedback-loops.md)",
+      },
+    );
+  }
+  const consumer = feedbackLoopDomains.filter((domain) =>
+    isConsumerMailboxDomain(domain),
+  );
+  if (consumer.length > 0) {
+    logger.warn(
+      "FEEDBACK_LOOP_DOMAINS lists a mailbox provider domain that signs its users' mail",
+      {
+        domains: consumer,
+        hint: "list only the provider's exact feedback-loop From address in FEEDBACK_LOOP_SENDERS for these domains, never another address of theirs (see docs/feedback-loops.md)",
+      },
+    );
   }
 }
