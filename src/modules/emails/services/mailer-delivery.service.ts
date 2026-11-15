@@ -259,11 +259,7 @@ async function deliverToMxHosts(
               target:
                 dane === null
                   ? target
-                  : /** Records unsupported here (DANE-TA): reported as without DANE. */
-                    {
-                      domain: target.domain,
-                      policy: danePolicyOf(dane) ?? target.policy,
-                    },
+                  : { domain: target.domain, policy: danePolicyOf(dane) },
               outcomes: outcomes.filter((o) => domainOf.get(o.key) === target.domain),
             })),
             { mxHost: session.mxHost, address: session.address },

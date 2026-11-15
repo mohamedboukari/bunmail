@@ -4,11 +4,7 @@ import { readFileSync } from "fs";
 import type { TLSSocket } from "tls";
 import Mail from "nodemailer/lib/mailer";
 import SMTPTransport from "nodemailer/lib/smtp-transport";
-import {
-  PEER_CHAIN_AVAILABLE,
-  peerChain,
-  usableTlsa,
-} from "../../src/modules/emails/services/dane-verify.ts";
+import { peerChain, usableTlsa } from "../../src/modules/emails/services/dane-verify.ts";
 import {
   createTlsRecorder,
   enforcedTlsFailure,
@@ -31,11 +27,10 @@ import {
  * real nodemailer client under Bun, and the TLS check BunMail's nodemailer
  * patch runs right after the handshake (`patches/nodemailer@10.3.1.patch`).
  *
- * DANE-TA records are still unusable (`PEER_CHAIN_AVAILABLE` is false):
- * Bun 1.3.14 hid the peer chain, Bun 1.4 exposes it, and one test pins
- * both facts until DANE-TA is switched back on; the DANE-TA matcher is
- * still exercised over real sessions with DANE-TA forced on
- * (`taEnabledHost`).
+ * DANE-TA (#455) needs the chain the server presented, which Bun 1.4
+ * exposes (Bun 1.3.14 showed the leaf alone): one test pins that, in the
+ * order the server sent it, and the DANE-TA sessions run over real two-
+ * and three-level chains.
  *
  * The mismatch tests double as the guard against a lost patch: without
  * it, nodemailer never calls `verifyTlsSocket`, the session goes on after
@@ -88,14 +83,6 @@ function daneHost(records: TlsaRecord[]): DaneHost {
   };
 }
 
-/**
- * The same with DANE-TA records counted as usable, as once the runtime
- * exposes the chain: keeps the DANE-TA matcher tested over real sessions.
- */
-function taEnabledHost(records: TlsaRecord[]): DaneHost {
-  return { ...daneHost(records), usable: usableTlsa(records, true) };
-}
-
 const MESSAGE: Mail.Options = {
   from: "sender@example.com",
   to: "rcpt@example.org",
@@ -112,10 +99,11 @@ async function send(
   port: number,
   dane: DaneTls,
   stallMs = 2_000,
-): Promise<{ error?: unknown; tls: string | null; checks: number; chainLength: number }> {
+): Promise<{ error?: unknown; tls: string | null; checks: number; chain: string[] }> {
   const recorder = createTlsRecorder(stallMs);
   let checks = 0;
-  let chainLength = 0;
+  /** The subjects of the chain the check saw, leaf first. */
+  let chain: string[] = [];
   const options = mxTransportOptions({
     address: "127.0.0.1",
     mxHost: "mx.dane.example",
@@ -130,7 +118,7 @@ async function send(
     port,
     verifyTlsSocket: (socket: TLSSocket) => {
       checks += 1;
-      chainLength = peerChain(socket).length;
+      chain = peerChain(socket).map((c) => c.subject);
       return check === undefined ? null : check(socket);
     },
   };
@@ -138,9 +126,9 @@ async function send(
   recorder.beginTransaction();
   try {
     await Promise.race([mailer.sendMail(MESSAGE), recorder.stalled]);
-    return { tls: recorder.result(), checks, chainLength };
+    return { tls: recorder.result(), checks, chain };
   } catch (error: unknown) {
-    return { error, tls: recorder.result(), checks, chainLength };
+    return { error, tls: recorder.result(), checks, chain };
   } finally {
     recorder.dispose();
     mailer.close();
@@ -182,65 +170,95 @@ describe("DANE sessions against a real smtp-server (#345)", () => {
     expect(server.snis()).toEqual(["mx.dane.example"]);
   });
 
-  test("the runtime exposes the peer chain, but DANE-TA stays off until switched on", async () => {
+  test("the runtime exposes the presented chain, in the order sent (#447, #455)", async () => {
     /**
-     * The server sends [leaf, CA]. Bun 1.3.14 exposed the leaf alone;
-     * Bun 1.4 links `issuerCertificate` in `getPeerCertificate(true)` as
-     * Node does, so the whole presented chain is visible. DANE-TA is
-     * switched back on in its own change (`PEER_CHAIN_AVAILABLE`), which
-     * updates this test and the DANE-TA notes in the docs.
+     * Bun 1.3.14 exposed the leaf alone; Bun 1.4 links `issuerCertificate`
+     * in `getPeerCertificate(true)` in the order the server sent the
+     * certificates (Node reorders them), which DANE-TA needs. A server
+     * sending them out of order (TLS 1.3 allows it) still authenticates:
+     * the verifier builds the path itself.
      */
-    const server = await startServer("starttls", "dane/ta-chain");
-    const outcome = await send(server.port, {
-      host: daneHost([sha256Record(3, 1, cert("ta-leaf"))]),
+    const ordered = await startServer("starttls", "dane/ta3-chain");
+    const root = cert("ta3-root");
+    const outcome = await send(ordered.port, {
+      host: daneHost([sha256Record(2, 0, root)]),
     });
     expect(outcome.error).toBeUndefined();
-    expect(outcome.chainLength).toBe(2);
-    expect(PEER_CHAIN_AVAILABLE).toBe(false);
-  });
-
-  test("only DANE-TA records: mandatory TLS without authentication, delivered", async () => {
-    const server = await startServer("starttls", "dane/ta-chain");
-    /** A digest of an unrelated CA: would not match, and is not checked. */
-    const host = daneHost([
-      sha256Record(2, 0, cert("ee")),
-      sha256Record(2, 1, cert("ca")),
+    expect(outcome.chain).toEqual([
+      "CN=mx.dane.example",
+      "CN=BunMail DANE test intermediate",
+      "CN=BunMail DANE test root",
     ]);
-    expect(host.usable).toEqual([]);
-    const outcome = await send(server.port, { host });
-    expect(outcome.error).toBeUndefined();
-    expect(outcome.tls).toBe("starttls");
-    expect(await server.waitForMessages(1)).toBe(1);
+    const unordered = await startServer("starttls", "dane/ta3-unordered");
+    const shuffled = await send(unordered.port, {
+      host: daneHost([sha256Record(2, 0, root)]),
+    });
+    expect(shuffled.error).toBeUndefined();
+    expect(shuffled.chain).toEqual([
+      "CN=mx.dane.example",
+      "CN=BunMail DANE test root",
+      "CN=BunMail DANE test intermediate",
+    ]);
+    expect(await unordered.waitForMessages(1)).toBe(1);
   });
 
-  test("DANE-EE beside DANE-TA: authenticated against the DANE-EE records only", async () => {
+  test("DANE-TA: the intermediate in the middle of a three-level chain anchors it", async () => {
+    const server = await startServer("starttls", "dane/ta3-chain");
+    for (const selector of [0, 1]) {
+      const outcome = await send(server.port, {
+        host: daneHost([sha256Record(2, selector, cert("ta3-int"))]),
+      });
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.tls).toBe("starttls");
+    }
+    expect(await server.waitForMessages(2)).toBe(2);
+  });
+
+  test("DANE-TA: an anchor the chain does not lead to is refused before MAIL FROM", async () => {
+    const server = await startServer("starttls", "dane/ta-chain");
+    const outcome = await send(server.port, {
+      host: daneHost([
+        sha256Record(2, 0, cert("ta3-root")),
+        sha256Record(2, 1, cert("ee")),
+      ]),
+    });
+    expect(outcome.checks).toBe(1);
+    expect(String(outcome.error)).toContain("DANE: no TLSA record matches");
+    expect(classifySendFailure(outcome.error)).toBeNull();
+    await Bun.sleep(200);
+    expect(server.mailFroms()).toBe(0);
+  });
+
+  test("DANE-EE beside DANE-TA: either authenticates", async () => {
     const server = await startServer("starttls", "dane/ta-chain");
     const ca = cert("ca");
-    /** The "2 0 0" anchor would authenticate this server, but it is not used. */
     const anchor: TlsaRecord = {
       usage: 2,
       selector: 0,
       matchingType: 0,
       data: Uint8Array.from(ca.raw),
     };
-    const refused = await send(server.port, {
+    /** The DANE-EE record names another certificate; the "2 0 0" anchor issued this one. */
+    const byAnchor = await send(server.port, {
       host: daneHost([sha256Record(3, 1, cert("ee")), anchor]),
     });
-    expect(String(refused.error)).toContain("DANE: no TLSA record matches");
-    await Bun.sleep(200);
-    expect(server.mailFroms()).toBe(0);
-    const accepted = await send(server.port, {
-      host: daneHost([sha256Record(3, 1, cert("ta-leaf")), anchor]),
+    expect(byAnchor.error).toBeUndefined();
+    /** The DANE-EE record matches; the DANE-TA one names an unrelated CA. */
+    const byLeaf = await send(server.port, {
+      host: daneHost([
+        sha256Record(3, 1, cert("ta-leaf")),
+        sha256Record(2, 0, cert("ta3-root")),
+      ]),
     });
-    expect(accepted.error).toBeUndefined();
-    expect(await server.waitForMessages(1)).toBe(1);
+    expect(byLeaf.error).toBeUndefined();
+    expect(await server.waitForMessages(2)).toBe(2);
   });
 
-  test("DANE-TA matcher, when enabled: an anchor published in full (2 0 0) that issued the certificate delivers", async () => {
+  test("DANE-TA: an anchor published in full (2 0 0) that issued the certificate delivers", async () => {
     const server = await startServer("starttls", "dane/ta-chain");
     const ca = cert("ca");
     const outcome = await send(server.port, {
-      host: taEnabledHost([
+      host: daneHost([
         { usage: 2, selector: 0, matchingType: 0, data: Uint8Array.from(ca.raw) },
       ]),
     });
@@ -268,12 +286,12 @@ describe("DANE sessions against a real smtp-server (#345)", () => {
     expect(server.messages()).toBe(0);
   });
 
-  test("DANE-TA matcher, when enabled: a name no reference identifier matches is refused before MAIL FROM", async () => {
+  test("DANE-TA: a name no reference identifier matches is refused before MAIL FROM", async () => {
     const server = await startServer("starttls", "dane/ta-chain");
     const ca = cert("ca");
     const outcome = await send(server.port, {
       host: {
-        ...taEnabledHost([
+        ...daneHost([
           { usage: 2, selector: 0, matchingType: 0, data: Uint8Array.from(ca.raw) },
         ]),
         referenceIds: ["mx.example.org", "example.org"],

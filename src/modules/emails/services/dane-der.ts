@@ -15,6 +15,10 @@
  *
  * Definite lengths only (DER), at most 4 length bytes, every element
  * inside its parent. Anything else is `null`: no SPKI, so no match.
+ *
+ * The same walk reads on to the extensions for the one constraint a
+ * DANE-TA(2) path needs that the runtime does not expose: the
+ * basicConstraints path length ({@link pathLengthConstraint}, #455).
  */
 
 /** DER tags met on the way. */
@@ -22,6 +26,13 @@ const TAG_SEQUENCE = 0x30;
 const TAG_INTEGER = 0x02;
 const TAG_VERSION = 0xa0;
 const TAG_BIT_STRING = 0x03;
+const TAG_BOOLEAN = 0x01;
+const TAG_OCTET_STRING = 0x04;
+const TAG_OID = 0x06;
+/** `[3] EXPLICIT Extensions` of a TBSCertificate. */
+const TAG_EXTENSIONS = 0xa3;
+/** The DER content of the basicConstraints OID, 2.5.29.19. */
+const BASIC_CONSTRAINTS_OID = [0x55, 0x1d, 0x13];
 
 /** One DER element: its tag, where it starts, where its content starts and ends. */
 interface Element {
@@ -57,11 +68,8 @@ function readElement(der: Uint8Array, at: number, limit: number): Element | null
   return { tag, start: at, contentStart, end };
 }
 
-/**
- * The DER SubjectPublicKeyInfo of a certificate, exactly as it is encoded
- * in it, or `null` when the DER cannot be walked (see the module comment).
- */
-export function subjectPublicKeyInfo(certificate: Uint8Array): Uint8Array | null {
+/** The TBSCertificate of a certificate and its SubjectPublicKeyInfo element, or `null`. */
+function walkToSpki(certificate: Uint8Array): { tbs: Element; spki: Element } | null {
   const cert = readElement(certificate, 0, certificate.length);
   if (cert === null || cert.tag !== TAG_SEQUENCE) return null;
   const tbs = readElement(certificate, cert.contentStart, cert.end);
@@ -81,7 +89,106 @@ export function subjectPublicKeyInfo(certificate: Uint8Array): Uint8Array | null
   }
   const spki = readElement(certificate, element.end, tbs.end);
   if (spki === null || !isSpki(certificate, spki)) return null;
-  return certificate.slice(spki.start, spki.end);
+  return { tbs, spki };
+}
+
+/**
+ * The DER SubjectPublicKeyInfo of a certificate, exactly as it is encoded
+ * in it, or `null` when the DER cannot be walked (see the module comment).
+ */
+export function subjectPublicKeyInfo(certificate: Uint8Array): Uint8Array | null {
+  const walked = walkToSpki(certificate);
+  return walked === null ? null : certificate.slice(walked.spki.start, walked.spki.end);
+}
+
+/**
+ * The pathLenConstraint of a certificate's basicConstraints extension
+ * (RFC 5280 section 4.2.1.9): the most non-self-issued intermediate
+ * certificates that may follow it in a path. `null` when it sets none (no
+ * extension, or no pathLenConstraint in it); `"malformed"` when the DER
+ * cannot be walked, which the caller treats as a broken chain.
+ *
+ *   TBSCertificate ::= SEQUENCE { ..., subjectPublicKeyInfo,
+ *     [1] issuerUniqueID OPTIONAL, [2] subjectUniqueID OPTIONAL,
+ *     [3] EXPLICIT Extensions OPTIONAL }
+ *   Extension ::= SEQUENCE { extnID OID, critical BOOLEAN DEFAULT FALSE,
+ *     extnValue OCTET STRING }
+ *   BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE,
+ *     pathLenConstraint INTEGER (0..MAX) OPTIONAL }
+ */
+export function pathLengthConstraint(
+  certificate: Uint8Array,
+): number | null | "malformed" {
+  const walked = walkToSpki(certificate);
+  if (walked === null) return "malformed";
+  let at = walked.spki.end;
+  while (at < walked.tbs.end) {
+    const element = readElement(certificate, at, walked.tbs.end);
+    if (element === null) return "malformed";
+    if (element.tag === TAG_EXTENSIONS) return basicConstraintsIn(certificate, element);
+    at = element.end;
+  }
+  return null;
+}
+
+/** The pathLenConstraint in the `[3]` extensions element `wrapper`; see {@link pathLengthConstraint}. */
+function basicConstraintsIn(
+  der: Uint8Array,
+  wrapper: Element,
+): number | null | "malformed" {
+  const list = readElement(der, wrapper.contentStart, wrapper.end);
+  if (list === null || list.tag !== TAG_SEQUENCE) return "malformed";
+  let at = list.contentStart;
+  while (at < list.end) {
+    const extension = readElement(der, at, list.end);
+    if (extension === null || extension.tag !== TAG_SEQUENCE) return "malformed";
+    at = extension.end;
+    const id = readElement(der, extension.contentStart, extension.end);
+    if (id === null || id.tag !== TAG_OID) return "malformed";
+    if (!sameBytes(der.subarray(id.contentStart, id.end), BASIC_CONSTRAINTS_OID))
+      continue;
+    let value = readElement(der, id.end, extension.end);
+    if (value !== null && value.tag === TAG_BOOLEAN) {
+      value = readElement(der, value.end, extension.end);
+    }
+    if (value === null || value.tag !== TAG_OCTET_STRING) return "malformed";
+    return pathLengthIn(der, value);
+  }
+  return null;
+}
+
+/** The pathLenConstraint of the BasicConstraints inside the extnValue `octets`. */
+function pathLengthIn(der: Uint8Array, octets: Element): number | null | "malformed" {
+  const constraints = readElement(der, octets.contentStart, octets.end);
+  if (constraints === null || constraints.tag !== TAG_SEQUENCE) return "malformed";
+  if (constraints.end !== octets.end) return "malformed";
+  if (constraints.contentStart === constraints.end) return null;
+  let field = readElement(der, constraints.contentStart, constraints.end);
+  if (field !== null && field.tag === TAG_BOOLEAN) {
+    if (field.end === constraints.end) return null;
+    field = readElement(der, field.end, constraints.end);
+  }
+  if (field === null || field.tag !== TAG_INTEGER) return "malformed";
+  return nonNegativeInteger(der.subarray(field.contentStart, field.end));
+}
+
+/** A DER INTEGER's value, which must not be negative; past any real path length it is capped. */
+function nonNegativeInteger(bytes: Uint8Array): number | "malformed" {
+  const first = bytes[0];
+  if (first === undefined || (first & 0x80) !== 0) return "malformed";
+  let value = 0;
+  for (const byte of bytes) {
+    value = value * 256 + byte;
+    if (value > 0xffffff) return Number.MAX_SAFE_INTEGER;
+  }
+  return value;
+}
+
+/** Whether `bytes` are exactly `expected`. */
+function sameBytes(bytes: Uint8Array, expected: readonly number[]): boolean {
+  return (
+    bytes.length === expected.length && expected.every((byte, i) => bytes[i] === byte)
+  );
 }
 
 /**
