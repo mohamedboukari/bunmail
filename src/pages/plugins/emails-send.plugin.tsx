@@ -1,7 +1,8 @@
 import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
 import { redactEmail } from "../../utils/redact.ts";
-import { EmailSendRejectedError } from "../../modules/emails/errors.ts";
+import { serializeSendError } from "../../modules/emails/serializations/send-error.serialization.ts";
 import { SendEmailPage } from "../routes/send-email.tsx";
 import { memberGuard } from "../guards.tsx";
 import { sendSuccessFlash } from "../send-warnings.ts";
@@ -123,15 +124,27 @@ export function emailSendPages(app: GuardedDashboard) {
               sendSuccessFlash(warnings),
             );
           } catch (error) {
-            if (error instanceof EmailSendRejectedError) {
-              /** Refused on its input (#245): expected; the service logged the email id. */
+            /**
+             * A refusal the API would answer with a code (#245: the input, the
+             * suppression list, the allowed senders, a revoked key) is
+             * expected: logged at `warn` with that code only, since some of
+             * those errors carry the sender or the recipient (#448). Anything
+             * else is unexpected, and a database error's message embeds the
+             * query parameters (recipients, subject), so it goes through
+             * `loggableError`.
+             */
+            const refusal = serializeSendError(error);
+            if (refusal) {
               logger.warn("Dashboard send refused", {
                 apiKeyId: chosenKey.id,
-                code: error.code,
+                userId: auth.user.id,
+                code: refusal.body.code,
               });
             } else {
               logger.error("Failed to send email via dashboard", {
-                error: error instanceof Error ? error.message : String(error),
+                apiKeyId: chosenKey.id,
+                userId: auth.user.id,
+                error: loggableError(error),
               });
             }
             set.status = 302;

@@ -1,5 +1,6 @@
 import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
+import { loggableError } from "../../utils/db-error.ts";
 import { DomainsPage } from "../routes/domains.tsx";
 import { DomainDetailPage } from "../routes/domain-detail.tsx";
 import { adminGuard, memberGuard } from "../guards.tsx";
@@ -9,6 +10,7 @@ import {
   DomainAlreadyRegisteredError,
   InvalidDkimSelectorError,
   InvalidDomainNameError,
+  TrackingEpochExhaustedError,
 } from "../../modules/domains/errors.ts";
 import * as domainService from "../../modules/domains/services/domain.service.ts";
 import { verifyDomain } from "../../modules/domains/services/dns-verification.service.ts";
@@ -17,6 +19,7 @@ import {
   completeDkimRotation,
   startDkimRotation,
 } from "../../modules/domains/services/dkim-rotation.service.ts";
+import { revokeTrackingLinks } from "../../modules/domains/services/tracking-revocation.service.ts";
 import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
 import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
 import { FLASH_QUERY, flashUrl, toFlash, type Flash } from "../lib/flash.ts";
@@ -59,16 +62,20 @@ async function dkimRotationStep(
         code: error.code,
       });
     } else {
+      /** Never the raw message: a database error's embeds the query parameters (#448). */
       logger.error("DKIM rotation step failed via dashboard", {
         domainId: id,
-        error: error instanceof Error ? error.message : String(error),
+        error: loggableError(error),
       });
     }
     return domainFlashUrl(id, dkimRotationErrorFlash(error, fallback));
   }
 }
 
-/** Domain pages (#291): list, add, delete, DNS verify, DKIM rotation, settings, detail. */
+/**
+ * Domain pages (#291): list, add, delete, DNS verify, DKIM rotation,
+ * settings, tracking link revocation (#424), detail.
+ */
 export function domainPages(app: GuardedDashboard) {
   return (
     app
@@ -125,15 +132,18 @@ export function domainPages(app: GuardedDashboard) {
             set.status = 302;
             set.headers["location"] = flashUrl("/dashboard/domains", "domain_added");
           } catch (error) {
+            const ids = { userId: auth.user.id };
             if (error instanceof DomainAlreadyRegisteredError) {
-              logger.warn("Domain not added via dashboard: already registered");
+              logger.warn("Domain not added via dashboard: already registered", ids);
             } else if (error instanceof InvalidDomainNameError) {
-              logger.warn("Domain not added via dashboard: invalid name");
+              logger.warn("Domain not added via dashboard: invalid name", ids);
             } else if (error instanceof InvalidDkimSelectorError) {
-              logger.warn("Domain not added via dashboard: invalid DKIM selector");
+              logger.warn("Domain not added via dashboard: invalid DKIM selector", ids);
             } else {
+              /** Never the raw message: a database error's embeds the query parameters (#448). */
               logger.error("Failed to add domain via dashboard", {
-                error: error instanceof Error ? error.message : String(error),
+                ...ids,
+                error: loggableError(error),
               });
             }
             set.status = 302;
@@ -452,6 +462,56 @@ export function domainPages(app: GuardedDashboard) {
             trackOpens: t.Optional(t.Literal("true")),
             trackClicks: t.Optional(t.Literal("true")),
           }),
+        },
+      )
+
+      /**
+       * POST /dashboard/domains/:id/tracking-revoke
+       * Revokes every click tracking link already sent from the domain
+       * (#424): bumps its tracking epoch, so those links stop redirecting.
+       * The button asks for confirmation. Audited as
+       * `domain.tracking_links_revoked` by the service.
+       */
+      .post(
+        "/domains/:id/tracking-revoke",
+        async ({ params, set, auth, request, server }) => {
+          set.status = 302;
+          try {
+            const domain = await revokeTrackingLinks(
+              params.id,
+              dashboardAudit(auth, request, server),
+            );
+            set.headers["location"] =
+              domain === undefined
+                ? flashUrl("/dashboard/domains", "domain_not_found")
+                : domainFlashUrl(params.id, "tracking_links_revoked");
+          } catch (error) {
+            /**
+             * The highest epoch is refused and logged (`warn`) by the
+             * service; anything else is unexpected and logged here, by
+             * name only, since the banner no longer shows it.
+             */
+            if (error instanceof TrackingEpochExhaustedError) {
+              set.headers["location"] = domainFlashUrl(
+                params.id,
+                "tracking_epoch_exhausted",
+              );
+            } else {
+              logger.error("Tracking links not revoked via dashboard", {
+                domainId: params.id,
+                errorName: error instanceof Error ? error.name : typeof error,
+              });
+              set.headers["location"] = domainFlashUrl(
+                params.id,
+                "tracking_revoke_failed",
+              );
+            }
+          }
+          return "";
+        },
+        {
+          beforeHandle: adminGuard,
+          params: t.Object({ id: t.String() }),
         },
       )
 

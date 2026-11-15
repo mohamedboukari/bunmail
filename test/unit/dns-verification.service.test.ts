@@ -115,6 +115,7 @@ const baseDomain = {
   notifyEmail: null as string | null,
   trackOpens: false,
   trackClicks: false,
+  trackingEpoch: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
   createdByUserId: null,

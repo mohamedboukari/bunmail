@@ -16,6 +16,7 @@ import {
   InvalidDomainNameError,
 } from "../errors.ts";
 import { normalizeDomainName, parseDomainName } from "./domain-name.ts";
+import { forgetTrackingEpoch } from "../../tracking/services/tracking-epoch.service.ts";
 import {
   DEFAULT_DKIM_SELECTOR,
   dkimRecordValue,
@@ -340,7 +341,9 @@ export async function updateDomainSettings(
 /**
  * Deletes a domain by its ID (hard delete).
  *
- * Removes the domain row entirely from the database.
+ * Removes the domain row entirely from the database, then drops its
+ * cached tracking epoch so its click links stop redirecting in this
+ * process at once (#424; other replicas within `TRACKING_EPOCH_TTL_MS`).
  *
  * @param id - The domain ID to delete
  * @returns The deleted domain row, or undefined if not found
@@ -355,6 +358,7 @@ export async function deleteDomain(id: string): Promise<Domain | undefined> {
     return undefined;
   }
 
+  forgetTrackingEpoch(domain.id);
   logger.info("Domain deleted", { id: domain.id, name: domain.name });
 
   return domain;

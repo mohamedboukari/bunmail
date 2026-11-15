@@ -149,6 +149,15 @@ export const domains = pgTable(
     trackOpens: boolean("track_opens").notNull().default(false),
     trackClicks: boolean("track_clicks").notNull().default(false),
 
+    /**
+     * Tracking epoch of the domain's click links (#424), covered by the
+     * click token MAC. An admin bumps it to revoke every click link
+     * already sent from the domain ("Revoke tracking links"); links minted
+     * afterwards carry the new value. Links from before #424 count as
+     * epoch 0, so they stop working at the first bump.
+     */
+    trackingEpoch: integer("tracking_epoch").notNull().default(0),
+
     /** When this domain was added */
     createdAt: timestamp("created_at").notNull().defaultNow(),
 

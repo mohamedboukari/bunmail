@@ -13,6 +13,7 @@ src/modules/domains/
 │   ├── domain-name.ts              ← Name normalisation and the host name rule on create (#406)
 │   ├── dkim-keys.ts                ← Key generation, selector rules, dated selectors, TXT match (#250)
 │   ├── dkim-rotation.service.ts    ← DKIM key rotation: start, complete, cancel (#250)
+│   ├── tracking-revocation.service.ts ← Revoke the domain's click tracking links: bump the epoch (#424)
 │   ├── domain-dkim.service.ts      ← DKIM options for mail sent outside the queue (#106, #217)
 │   ├── dns-verification.service.ts ← SPF/DKIM/DMARC DNS verification (pass, fail or unknown)
 │   ├── domain-check-state.ts       ← Verification state machine: failure count, flip, schedule (#250)
@@ -62,6 +63,7 @@ Table: `domains`
 | notify_email      | varchar(255)   | nullable, when set, inbound mail received for this domain triggers a summary notification email to this address (#106). Use an external mailbox. |
 | track_opens       | boolean        | NOT NULL, default `false`: open tracking opt-in, set by admins (#187). See [Open and click tracking](#open-and-click-tracking-187) |
 | track_clicks      | boolean        | NOT NULL, default `false`: click tracking opt-in, set by admins (#187) |
+| tracking_epoch    | integer        | NOT NULL, default `0`: covered by every click token's MAC; an admin bumps it to revoke the domain's click links already sent (#424). See [Revoking click links](#revoking-click-links-424) |
 | spf_verified      | boolean        | NOT NULL, default `false`    |
 | dkim_verified     | boolean        | NOT NULL, default `false`    |
 | dmarc_verified    | boolean        | NOT NULL, default `false`    |
@@ -229,7 +231,7 @@ Sets (or clears, when passed `null`) the inbound-notification address for a doma
 Updates `unsubscribeEmail` and/or `unsubscribeUrl` (#243) and `trackOpens` / `trackClicks` (#187); only the fields present in `changes` are written, `null` clears an unsubscribe override. Called `updateDomainUnsubscribe` before #187. Used by `PATCH /api/v1/domains/:id` and the domain page in the dashboard.
 
 #### `deleteDomain(id): Promise<Domain | undefined>`
-Hard-deletes a domain and its keys.
+Hard-deletes a domain and its keys, then drops its cached tracking epoch (#424), so its click links stop redirecting in this process at once (other replicas within 30 seconds).
 
 #### `findNonCanonicalDomainNames(): Promise<NonCanonicalDomainName[]>`
 The stored names that creation would now refuse or store differently than by case alone (#406), as `{ id, name, normalized }` (`normalized` is `null` when refused). Read-only; the boot logs one `warn` per entry.
@@ -246,6 +248,10 @@ Pure helpers shared by create, rotation and Verify: `generateDkimKeyPair()`, `is
 
 - `startDkimRotation(id, audit, now?)`, `completeDkimRotation(id, audit, deps?, now?)`, `cancelDkimRotation(id, audit)`: the steps above. Each returns the updated domain, or `undefined` for an unknown id, and throws `DkimRotationError` (`409` with `code`) when the domain's state refuses the step. Each locks the row (`FOR UPDATE`) and writes the change and its audit event in one transaction. Complete looks up DNS before the transaction and, inside it, checks that the pending key is still the one it looked up.
 - `checkDkimKeyPublished(domain, selector, pem, deps?)`: the publish check with its reason; the TXT lookup goes through the domains DNS seam (`resolveDomainTxt`), so `setDomainDnsDeps()` stubs it in tests.
+
+### tracking-revocation.service.ts (#424)
+
+- `revokeTrackingLinks(id, audit)`: bumps `tracking_epoch` by one and records `domain.tracking_links_revoked` (`{ epoch }`, the new value) in one transaction, then drops the domain's cached epoch in this process (`forgetTrackingEpoch`, tracking module). Returns the updated domain, or `undefined` for an unknown id (logged at `warn`, nothing audited). At the highest epoch it throws `TrackingEpochExhaustedError` (`409 TRACKING_EPOCH_EXHAUSTED`, mapped by the global error handler, an error flash in the dashboard), logged at `warn`, nothing changed.
 
 ### domain-dkim.service.ts
 
@@ -331,6 +337,7 @@ All routes require Bearer token auth and are rate-limited.
 | POST   | /api/v1/domains/:id/dkim/rotate | Start a DKIM key rotation (#250) |
 | POST   | /api/v1/domains/:id/dkim/rotate/complete | Switch to the pending key once published (#250) |
 | DELETE | /api/v1/domains/:id/dkim/rotate | Cancel the pending rotation (#250) |
+| POST   | /api/v1/domains/:id/tracking-revocation | Revoke the domain's click tracking links (#424) |
 
 `POST /api/v1/domains` accepts an optional `notifyEmail` field to set the
 inbound-notification address at create time (see below), and an optional
@@ -369,3 +376,7 @@ Each domain carries an opt-in for open and click tracking, `track_opens` and `tr
 - **Per domain, not per key:** the domain is the reputation and disclosure unit, and keys share domains. A send can opt out (`tracking: { opens: false }`) but never turn on what the domain has off, whatever its key's role.
 - **Not alone:** tracking also needs `TRACKING_ENABLED=true` on the server, exactly one recipient and an `https://` `APP_BASE_URL`; `transactional` mail is tracked only when the send asks. See [emails.md](emails.md#open-and-click-tracking-187).
 - **Queued mail keeps its decision:** it is made when the email is created and stored on it, so changing the opt-in affects mail created afterwards only.
+
+### Revoking click links (#424)
+
+A click link already sent keeps redirecting, even after the domain opts out. An admin can revoke every click link sent from the domain so far: **Revoke tracking links** on the domain page (`POST /dashboard/domains/:id/tracking-revoke`, `adminGuard`, asks for confirmation) or `POST /api/v1/domains/:id/tracking-revocation` with an admin key. It bumps `tracking_epoch` (audited as `domain.tracking_links_revoked` with the new epoch); the old links then answer the invalid-link `404`, at once in the process that made the change and within 30 seconds on other replicas. Links in mail sent afterwards work, and open pixels are not affected. Deleting the domain also revokes its links (same timing). A revocation does not stop the abusing key from minting new links: revoke that key (or turn click tracking off for the domain) first, then revoke the links. At the highest epoch (2^31 - 1) it is refused with `409 TRACKING_EPOCH_EXHAUSTED`. The response's `trackingEpoch` (0 until the first revocation) and the dashboard's "Revoked N times so far" show it. See [tracking.md](tracking.md#revoking-click-links-424).

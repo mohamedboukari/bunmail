@@ -254,6 +254,8 @@ export interface AuditMetadataByAction {
   "domain.dkim_rotation_started": { selector: string };
   "domain.dkim_rotation_completed": { selector: string };
   "domain.dkim_rotation_cancelled": { selector: string };
+  /** Click tracking links of the domain revoked (#424): the new tracking epoch. */
+  "domain.tracking_links_revoked": { epoch: number };
   "webhook.created": { events: string[] };
   "webhook.deleted": null;
   "suppression.created": { reason: string };
@@ -337,6 +339,7 @@ export const AUDIT_ACTION_LABELS: { readonly [A in AuditAction]: string } = {
   "domain.dkim_rotation_started": "DKIM key rotation started",
   "domain.dkim_rotation_completed": "DKIM key rotation completed",
   "domain.dkim_rotation_cancelled": "DKIM key rotation cancelled",
+  "domain.tracking_links_revoked": "Tracking links revoked",
   "webhook.created": "Webhook created",
   "webhook.deleted": "Webhook deleted",
   "suppression.created": "Suppression added",

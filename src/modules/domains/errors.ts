@@ -47,6 +47,25 @@ export class InvalidDkimSelectorError extends Error {
   }
 }
 
+/**
+ * A domain whose tracking epoch is at its highest value (#424, the
+ * largest Postgres `integer`), so its click links cannot be revoked
+ * again. Mapped to `409 TRACKING_EPOCH_EXHAUSTED` by the global error
+ * handler; the dashboard shows the message. Nothing changed. Unreachable
+ * in practice (two billion revocations).
+ */
+export class TrackingEpochExhaustedError extends Error {
+  override readonly name = "TrackingEpochExhaustedError";
+  readonly code = "TRACKING_EPOCH_EXHAUSTED";
+  readonly status = 409;
+
+  constructor() {
+    super(
+      "This domain's tracking links cannot be revoked again: its tracking epoch is at its highest value. Delete and re-add the domain to start over.",
+    );
+  }
+}
+
 /** Why a DKIM key rotation step was refused (#250). */
 export type DkimRotationErrorCode =
   /** Start while a rotation is already pending. */

@@ -1,16 +1,22 @@
 import type { Domain } from "../../modules/domains/types/domain.types.ts";
 
+/** "1 time", "3 times": how often the domain's click links were revoked (its epoch). */
+function revokedTimes(epoch: number): string {
+  return epoch === 1 ? "1 time" : `${epoch} times`;
+}
+
 /**
  * The domain's open and click tracking opt-in (#187): two checkboxes,
  * saved by `POST /dashboard/domains/:id/tracking` (admins only). Says
  * when `TRACKING_ENABLED` keeps everything off, and that open counts are
- * unreliable.
+ * unreliable. Below, "Revoke tracking links" (#424, admins only, asks for
+ * confirmation) bumps the domain's tracking epoch.
  */
 export function TrackingPanel({
   domain,
   trackingEnabled,
 }: {
-  domain: Pick<Domain, "id" | "trackOpens" | "trackClicks">;
+  domain: Pick<Domain, "id" | "trackOpens" | "trackClicks" | "trackingEpoch">;
   /** `TRACKING_ENABLED`: off, nothing is tracked whatever is ticked here. */
   trackingEnabled: boolean;
 }) {
@@ -64,6 +70,26 @@ export function TrackingPanel({
           Save
         </button>
       </form>
+      <div class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-800">
+        <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
+          Click links already sent keep redirecting, even after tracking is turned off.
+          Revoking makes every click link sent from this domain so far stop working (it
+          shows "This link is not valid"); links in mail sent afterwards work. Open pixels
+          are not affected.
+          {domain.trackingEpoch > 0 && (
+            <span safe>{` Revoked ${revokedTimes(domain.trackingEpoch)} so far.`}</span>
+          )}
+        </p>
+        <form method="POST" action={`/dashboard/domains/${domain.id}/tracking-revoke`}>
+          <button
+            type="submit"
+            class="px-3 py-1.5 text-sm font-medium rounded-lg border border-red-300 dark:border-red-800 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950 transition-colors whitespace-nowrap"
+            data-confirm="Revoke every click link already sent from this domain? They stop redirecting at once (within 30 seconds on other replicas). This cannot be undone."
+          >
+            Revoke tracking links
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -138,6 +138,14 @@ export const FLASH_MESSAGES = {
   domain_tracking_saved_off: success(
     "Tracking settings saved. Nothing is tracked while TRACKING_ENABLED is off.",
   ),
+  /* Click tracking link revocation (#424). */
+  tracking_links_revoked: success(
+    "Tracking links revoked: click links already sent from this domain no longer redirect",
+  ),
+  tracking_epoch_exhausted: failure(
+    "This domain's tracking links cannot be revoked again: its tracking epoch is at its highest value. Delete and re-add the domain to start over.",
+  ),
+  tracking_revoke_failed: failure("Failed to revoke the tracking links"),
 
   /* ─── Domains: DKIM key rotation (#250) ─── */
   dkim_rotation_started: success(

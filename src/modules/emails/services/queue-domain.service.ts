@@ -12,6 +12,7 @@ import { domainNameIs } from "../../domains/services/domain.service.ts";
  * faking the full Drizzle row type.
  */
 export interface DomainLookupRow {
+  id: string;
   name: string;
   dkimSelector: string;
   dkimPrivateKey: string | null;
@@ -19,6 +20,8 @@ export interface DomainLookupRow {
   dkimKeyUnreadable: boolean;
   unsubscribeEmail: string | null;
   unsubscribeUrl: string | null;
+  /** Tracking epoch of the domain's click links (#424), signed into each click token. */
+  trackingEpoch: number;
 }
 
 /**
@@ -105,11 +108,13 @@ function readDkimPrivateKey(
 export async function queryDomainById(id: string): Promise<DomainLookupRow | undefined> {
   const [row] = await db
     .select({
+      id: domains.id,
       name: domains.name,
       dkimSelector: domains.dkimSelector,
       dkimPrivateKey: domains.dkimPrivateKey,
       unsubscribeEmail: domains.unsubscribeEmail,
       unsubscribeUrl: domains.unsubscribeUrl,
+      trackingEpoch: domains.trackingEpoch,
     })
     .from(domains)
     .where(eq(domains.id, id));
@@ -123,11 +128,13 @@ export async function queryDomainByName(
 ): Promise<DomainLookupRow | undefined> {
   const [row] = await db
     .select({
+      id: domains.id,
       name: domains.name,
       dkimSelector: domains.dkimSelector,
       dkimPrivateKey: domains.dkimPrivateKey,
       unsubscribeEmail: domains.unsubscribeEmail,
       unsubscribeUrl: domains.unsubscribeUrl,
+      trackingEpoch: domains.trackingEpoch,
     })
     .from(domains)
     .where(domainNameIs(name));

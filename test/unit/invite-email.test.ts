@@ -119,6 +119,7 @@ const DOMAIN: Domain = {
   notifyEmail: null,
   trackOpens: false,
   trackClicks: false,
+  trackingEpoch: 0,
   createdAt: new Date(),
   updatedAt: new Date(),
   createdByUserId: null,

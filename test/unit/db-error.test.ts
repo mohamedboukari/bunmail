@@ -1,6 +1,7 @@
 import { describe, test, expect } from "bun:test";
 import { DrizzleQueryError } from "drizzle-orm";
 import { loggableError, sqlStateOf } from "../../src/utils/db-error.ts";
+import { errorMessage } from "../../src/pages/lib/error-message.ts";
 
 /**
  * `loggableError` (#184): a failed write's log line never carries a
@@ -55,5 +56,27 @@ describe("sqlStateOf", () => {
   test("null when there is none", () => {
     expect(sqlStateOf(new Error("plain"))).toBeNull();
     expect(sqlStateOf(undefined)).toBeNull();
+  });
+});
+
+/**
+ * The dashboard's `errorMessage` (#448): not every service the pages call
+ * sanitizes its database errors, so it reduces a drizzle error itself.
+ */
+describe("errorMessage", () => {
+  test("a drizzle query error loses its query and parameters", () => {
+    const cause = Object.assign(new Error("injected failure"), { errno: "23505" });
+    const error = new DrizzleQueryError(
+      "insert into invitations (email) values ($1)",
+      ["reader@example.org"],
+      cause,
+    );
+    expect(errorMessage(error)).toBe("Database query failed (SQLSTATE 23505)");
+  });
+
+  test("other errors keep their message", () => {
+    expect(errorMessage(new Error("User store query failed (SQLSTATE 40001)"))).toBe(
+      "User store query failed (SQLSTATE 40001)",
+    );
   });
 });

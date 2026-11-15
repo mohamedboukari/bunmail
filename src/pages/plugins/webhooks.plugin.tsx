@@ -200,7 +200,13 @@ export function webhookPages(app: GuardedDashboard) {
             }
             set.status = 302;
             set.headers["location"] = flashUrl("/dashboard/webhooks", "webhook_deleted");
-          } catch {
+          } catch (error) {
+            /** The banner is a code (#421): the error goes to the log only (#448). */
+            logger.error("Failed to delete webhook via dashboard", {
+              webhookId: params.id,
+              userId: auth.user.id,
+              error: loggableError(error),
+            });
             set.status = 302;
             set.headers["location"] = flashUrl(
               "/dashboard/webhooks",

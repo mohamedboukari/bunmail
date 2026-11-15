@@ -90,6 +90,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "POST /api/v1/domains/:id/dkim/rotate": { access: "admin" },
   "POST /api/v1/domains/:id/dkim/rotate/complete": { access: "admin" },
   "DELETE /api/v1/domains/:id/dkim/rotate": { access: "admin" },
+  /** Revoke the domain's click tracking links (#424). */
+  "POST /api/v1/domains/:id/tracking-revocation": { access: "admin" },
 
   "POST /api/v1/webhooks/": {
     access: "key",
