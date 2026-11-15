@@ -141,8 +141,9 @@ export interface SendMailResult {
  * `retry`. A domain whose MX records are DNSSEC-validated gets a session
  * plan of its own over every MX host in preference order; each host is
  * then decided as it is reached (`mailer-dane.service.ts`): one with
- * validated TLSA records only gets mail over TLS that matches them (DANE
- * wins over MTA-STS there), and any DANE failure is retried or fails over
+ * usable validated TLSA records only gets mail over TLS that matches them
+ * (DANE wins over MTA-STS there; with none usable an enforce policy
+ * applies, #452), and any DANE failure is retried or fails over
  * to the next host, never sent in plaintext and never bounced. A report is
  * sent without DANE (RFC 8460 section 3).
  *
