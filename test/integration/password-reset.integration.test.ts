@@ -138,7 +138,13 @@ function call(
   if (opts.token) headers["cookie"] = `bm_session=${opts.token}`;
   const url = `http://localhost${path}`;
   if (method === "GET") return app.handle(new Request(url, { headers }));
-  headers["origin"] = opts.origin ?? "http://localhost";
+  /**
+   * The browser's origin: the public `BASE_URL` while it is set (the
+   * same-origin check then compares with it, #420, as behind a proxy where
+   * the request URL is the container), else the request's own host.
+   */
+  headers["origin"] =
+    opts.origin ?? (config.appBaseUrl === BASE_URL ? BASE_URL : "http://localhost");
   headers["content-type"] = "application/x-www-form-urlencoded";
   return app.handle(
     new Request(url, {

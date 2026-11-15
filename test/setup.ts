@@ -18,3 +18,13 @@ process.env["DKIM_ENCRYPTION_KEY"] ??= "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
 /** Falls back so tests don't need a real DB URL when not exercising it. */
 process.env["DATABASE_URL"] ??= "postgres://test:test@localhost:5432/test";
+
+/**
+ * No public base URL in tests, as on CI (#420). Bun loads a developer's
+ * `.env` before this preload, and an `APP_BASE_URL` there (say
+ * `http://localhost:3000`) would make the dashboard same-origin check
+ * compare every test POST's `Origin: http://localhost` with that origin
+ * and refuse it. Tests that need a base URL set `config.appBaseUrl`
+ * themselves.
+ */
+process.env["APP_BASE_URL"] = "";
