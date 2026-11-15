@@ -267,6 +267,25 @@ describe("selectRelayHeaders (#177)", () => {
     expect(dropped).toEqual([]);
   });
 
+  test("never relays Resent-*, Errors-To or receipt headers (#422)", () => {
+    /**
+     * Outside the relay allowlist, so they are not copied at all (and not
+     * reported as dropped); the validator also reserves them as a second
+     * line of defence.
+     */
+    const { headers, dropped } = selectRelayHeaders([
+      line("Resent-From: other@example.com"),
+      line("Resent-Sender: other@example.com"),
+      line("resent-to: other@example.com"),
+      line("Errors-To: other@example.com"),
+      line("Disposition-Notification-To: other@example.com"),
+      line("Return-Receipt-To: other@example.com"),
+      line("X-Ok: 1"),
+    ]);
+    expect(headers).toEqual({ "X-Ok": "1" });
+    expect(dropped).toEqual([]);
+  });
+
   test("unfolds continuation lines and trims the value", () => {
     const { headers } = selectRelayHeaders([
       line("References: <a@example.com>\r\n <b@example.com>\r\n\t<c@example.com>  "),
