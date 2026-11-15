@@ -13,6 +13,7 @@
 import { describe, test, expect, afterAll } from "bun:test";
 import { createServer } from "node:net";
 import { runMxSession } from "../../src/modules/emails/services/mx-transport.ts";
+import { runtimeHasSocketFeatures } from "../../src/config.ts";
 import { classifySendFailure } from "../../src/utils/smtp-error.ts";
 import {
   startFixtureServer,
@@ -145,3 +146,58 @@ describe("runMxSession: the connection is closed however the session ends", () =
     }
   });
 });
+
+/**
+ * `MAIL_SOURCE_IP` (#414): the session's socket binds the source address
+ * of the destination's family. Bun 1.3.14 ignores `localAddress` (the
+ * config refuses the setting there), so this block skips on a Bun older
+ * than 1.4.4 (`runtimeHasSocketFeatures`).
+ */
+describe.skipIf(!runtimeHasSocketFeatures())(
+  "runMxSession: MAIL_SOURCE_IP (#414)",
+  () => {
+    test("bound to a local address, the session delivers", async () => {
+      const server = await startServer("plaintext");
+      const outcomes = await runMxSession({
+        address: "127.0.0.1",
+        mxHost: "mx.example.test",
+        heloName: "bunmail.example.test",
+        transactions: [transaction(0)],
+        port: server.port,
+        sourceIps: { v4: "127.0.0.1", v6: null },
+      });
+      expect(outcomes).toEqual([{ key: "mx.example.test#0", tls: "plaintext" }]);
+      expect(await server.waitForMessages(1)).toBe(1);
+    });
+
+    test("an address this host does not have fails the attempt, retryable, without connecting", async () => {
+      const server = await startServer("plaintext");
+      const outcomes = await runMxSession({
+        address: "127.0.0.1",
+        mxHost: "mx.example.test",
+        heloName: "bunmail.example.test",
+        transactions: [transaction(0)],
+        port: server.port,
+        /** TEST-NET-1: never assigned to a host, so the bind is refused. */
+        sourceIps: { v4: "192.0.2.1", v6: null },
+      });
+      expect(outcomes).toHaveLength(1);
+      expect(Reflect.get(Object(outcomes[0]?.error), "code")).toBe("EADDRNOTAVAIL");
+      expect(classifySendFailure(outcomes[0]?.error)).toBeNull();
+      expect(server.connections()).toBe(0);
+    });
+
+    test("an IPv4 destination ignores an IPv6-only setting: the system's choice", async () => {
+      const server = await startServer("plaintext");
+      const outcomes = await runMxSession({
+        address: "127.0.0.1",
+        mxHost: "mx.example.test",
+        heloName: "bunmail.example.test",
+        transactions: [transaction(0)],
+        port: server.port,
+        sourceIps: { v4: null, v6: "2001:db8::5" },
+      });
+      expect(outcomes).toEqual([{ key: "mx.example.test#0", tls: "plaintext" }]);
+    });
+  },
+);

@@ -69,7 +69,7 @@ src/modules/inbound/
 │   ├── dkim-verifier-key.service.ts ← key record lookup and checks, the signature check
 │   ├── dnsbl.service.ts             ← DNSBL lookup + pure skip decision (no DB)
 │   ├── inbound-notify.service.ts    ← Inbound arrival notification emails
-│   ├── smtp-listen.ts               ← Port bind failures of both SMTP servers: explain and exit (#167)
+│   ├── smtp-listen.ts               ← Server errors of both SMTP servers: port bind failures (explain and exit, #167), failed STARTTLS handshakes (#414)
 │   ├── notify-throttle.ts           ← Notification budgets: 5 per address, 30 per domain, per 10 min (#250)
 │   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
 │   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
@@ -114,8 +114,21 @@ Table: `inbound_emails`
 |----------------|---------|--------------------------------------------|
 | `SMTP_ENABLED` | `false` | Set to `true` to start the SMTP server     |
 | `SMTP_PORT`    | `2525`  | Port for the inbound SMTP server           |
+| `SMTP_TLS_CERT` / `SMTP_TLS_KEY` | _(empty)_ | PEM certificate and key paths: set both to offer STARTTLS (#414, needs Bun 1.4.4 or later). See [STARTTLS](#starttls-414). |
 
 In production, set `SMTP_PORT=25` and configure your domain's MX record to point to your server.
+
+### STARTTLS (#414)
+
+Off by default: without `SMTP_TLS_CERT` / `SMTP_TLS_KEY` the receiver does not offer STARTTLS, as before. With both set, STARTTLS (RFC 3207) is advertised in the EHLO reply and used whenever the sending server asks for it, so mail between your senders' MTAs and BunMail is encrypted on the wire. It is **opportunistic**: offered, never required, because an MX must accept mail from senders without TLS. AUTH stays off with or without TLS.
+
+- **Certificate:** for the hostname your MX record names (`mx.yourdomain.com`, often `MAIL_HOSTNAME`), PEM files readable by the container (uid 1000), mounted like the submission certificate (see `docker-compose.override.example.yml`). Senders rarely verify inbound certificates without an MTA-STS policy, but a valid one keeps the door open for that. One of the two set without the other, or a file that cannot be read, refuses to boot.
+- **Needs Bun 1.4.4 or later.** Bun 1.3.14 cannot upgrade an accepted socket to TLS on the server side (the handshake never completes, see [smtp-submission.md](smtp-submission.md#tls-modes-349)), so with a certificate set BunMail refuses to boot on it instead of offering a STARTTLS every sender would stall on.
+- **What smtp-server does:** it upgrades the connection itself, forgets everything said before the handshake (EHLO, any transaction), and discards plaintext a client pipelined after `STARTTLS` (no command injection). The per-IP connection limit and the DNSBL check ran at connect time and are not repeated.
+- **Logs:** the start line carries `starttls: true | false`, and each `SMTP session closed` line `secure` (whether the session ran over TLS). A sender's TLS error (a failed handshake: plaintext after `STARTTLS`, no protocol or cipher in common; or a broken TLS record later in the session) is logged once at `warn` as `Inbound SMTP TLS error`, with its `ip`, the TLS error `code` and `starttls: true`; the receiver keeps serving everyone else, and after a failed handshake the sender usually retries without TLS. The line does not say whether the handshake had completed: under Bun 1.4.4 both cases reach BunMail alike (smtp-server's `meta.stage` is `connect` for both).
+- **Tested:** `test/integration/inbound-starttls.integration.test.ts` delivers over STARTTLS and in plaintext, checks the failed-handshake log, and hangs up at every stage after the upgrade (no socket left in `CLOSE_WAIT`, no CPU spin, #351); the STARTTLS tests skip on a Bun older than 1.4.4.
+
+Not done yet: serving an MTA-STS policy for your domains (so senders require TLS to BunMail) and receiving TLS reports (`_smtp._tls` `rua`) are follow-ups; both only make sense now that inbound STARTTLS exists.
 
 ### First-boot checklist (Docker Compose)
 
@@ -183,7 +196,7 @@ Layers 1 to 3 fail open on errors (DNS timeout, DB unreachable). This means legi
 
 ## How It Works
 
-1. Client connects → rate limit check (memory, or one Redis round trip) → DNSBL check (DNS lookup)
+1. Client connects → rate limit check (memory, or one Redis round trip) → DNSBL check (DNS lookup); with a certificate it may then upgrade with STARTTLS (#414)
 2. RCPT TO command → `unsub+<token>` addresses (#249) and `b+` return paths (#236) verified, others validated against registered domains
 3. DATA command → `unsub+` recipients suppressed (#249), mail to verified return paths handled (DSNs bounce the bound recipient, the rest is dropped, #236), feedback-loop reports handled (#191), DSNs to any other address dropped, then the message is parsed with `mailparser`
 4. Sender, recipient, subject, HTML, text, raw message, the validated threading ids and the link to the email it replies to (#192) stored in `inbound_emails`
@@ -279,9 +292,11 @@ See [docs/domains.md](domains.md#inbound-notifications-106) for the field and en
 
 The receiver's public surface; the code sits in the `smtp-receiver-*.service.ts` files beside it, one per concern (#387, see the module layout above). It also re-exports `storeInboundEmail` (`smtp-receiver-store.service.ts`).
 
-#### `start(notifyDeps?): void`
-Starts the SMTP server on the configured port. `notifyDeps` (mailer, clock,
-notification throttle) default to the production ones; tests inject their own.
+#### `start(notifyDeps?, portOverride?): void`
+Starts the SMTP server on the configured port (or `portOverride`, for tests),
+with STARTTLS when `SMTP_TLS_CERT` / `SMTP_TLS_KEY` are set (#414).
+`notifyDeps` (mailer, clock, notification throttle) default to the production
+ones; tests inject their own.
 
 #### `listeningPort(): Promise<number>`
 The port the running server is bound to, once it listens (#443): `SMTP_PORT`

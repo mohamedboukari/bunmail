@@ -5,8 +5,8 @@
  * `mx1.example.test`, a leaf of the test CA, which every client verifies
  * against that CA; every client is a Node child process
  * (`test/fixtures/smtp-submission-client.mjs`), so the client is never the
- * thing under test. Bun cannot act as a STARTTLS server, and smtp-server's
- * own implicit TLS fails under Bun for the same reason, so BunMail
+ * thing under test. Bun 1.3.14 cannot act as a STARTTLS server, and
+ * smtp-server's own implicit TLS fails under it for the same reason, so BunMail
  * terminates TLS with the runtime's TLS server and hands each socket to
  * smtp-server (`SMTPServer#connect`). These tests pin that handover: a
  * smtp-server upgrade that breaks it fails here.
@@ -15,7 +15,6 @@
  * socket behind (Bun kept one in CLOSE_WAIT and spun a CPU core on it).
  */
 
-import { readFileSync } from "fs";
 import { describe, test, expect, beforeAll, afterAll, beforeEach, spyOn } from "bun:test";
 import type { Mock } from "bun:test";
 import { eq } from "drizzle-orm";
@@ -24,6 +23,7 @@ import { config } from "../../src/config.ts";
 import { logger } from "../../src/utils/logger.ts";
 import { truncateAll, seed, db, emails } from "./_helpers.ts";
 import { boundTestPort } from "../listen-port.ts";
+import { IDLE_CPU_BUDGET, serverCpuShare, socketsLeftAfterHangUp } from "./_sockets.ts";
 
 /**
  * The implicit-TLS server's port (never the privileged 465): it binds 0
@@ -274,81 +274,6 @@ describe("SMTP submission: implicit TLS (#349)", () => {
 
 /* ─── #351: a client hanging up leaves nothing behind ─── */
 
-/** `/proc/net/tcp` state codes of a server socket a gone client must not leave. */
-const LINGERING_STATES = new Map([
-  ["01", "ESTABLISHED"],
-  ["08", "CLOSE_WAIT"],
-]);
-
-/**
- * The server's sockets on the test port that are still open for a client
- * (the listener aside). Linux: the kernel's TCP tables, by local port (the
- * Node clients get other ephemeral ports, never the one the listener holds).
- * macOS: `lsof` on this process, where a socket the runtime never released
- * also shows as CLOSED.
- */
-function lingeringSockets(): string[] {
-  if (process.platform === "linux") {
-    const local = `:${submissionPort.toString(16).toUpperCase().padStart(4, "0")}`;
-    const states: string[] = [];
-    for (const table of ["/proc/net/tcp", "/proc/net/tcp6"]) {
-      let rows: string[];
-      try {
-        rows = readFileSync(table, "utf8").split("\n").slice(1);
-      } catch {
-        /** No IPv6 table on a host without IPv6. */
-        continue;
-      }
-      for (const row of rows) {
-        const [, address, , state] = row.trim().split(/\s+/);
-        const name = state === undefined ? undefined : LINGERING_STATES.get(state);
-        if (address?.endsWith(local) && name !== undefined) states.push(name);
-      }
-    }
-    return states;
-  }
-  const lsof = Bun.which("lsof");
-  if (lsof === null) throw new Error("these tests need /proc/net/tcp or `lsof`");
-  const out = Bun.spawnSync([
-    lsof,
-    "-nP",
-    "-a",
-    "-p",
-    String(process.pid),
-    `-iTCP:${submissionPort}`,
-  ]).stdout.toString();
-  return out
-    .split("\n")
-    .map((line) => /\((ESTABLISHED|CLOSE_WAIT|CLOSED)\)$/.exec(line.trim())?.[1])
-    .filter((state) => state !== undefined);
-}
-
-/** Polls for up to 2 s until no socket lingers; returns what is left. */
-async function socketsLeftAfterHangUp(): Promise<string[]> {
-  const deadline = Date.now() + 2000;
-  for (;;) {
-    const left = lingeringSockets();
-    if (left.length === 0 || Date.now() > deadline) return left;
-    await Bun.sleep(50);
-  }
-}
-
-/**
- * The share of one CPU core this (server) process uses over 3 s, after a
- * short settle. A socket Bun spins on takes the whole core (about 1.0);
- * idle is a few percent. The 0.25 budget leaves room both ways, so a busy
- * shared CI runner neither fails it nor hides a spin.
- */
-const IDLE_CPU_BUDGET = 0.25;
-async function serverCpuShare(): Promise<number> {
-  await Bun.sleep(250);
-  const before = process.cpuUsage();
-  const startedAt = performance.now();
-  await Bun.sleep(3000);
-  const used = process.cpuUsage(before);
-  return (used.user + used.system) / 1000 / (performance.now() - startedAt);
-}
-
 describe("SMTP submission: implicit TLS, client hang-ups (#351)", () => {
   const savedRateLimit = { ...config.smtpSubmission.connectionRateLimit };
 
@@ -378,7 +303,7 @@ describe("SMTP submission: implicit TLS, client hang-ups (#351)", () => {
       /** A half-closed client is closed by the server, not left half-open. */
       if (mode === "half-close") expect(result.serverEnded).toBe(true);
 
-      expect(await socketsLeftAfterHangUp()).toEqual([]);
+      expect(await socketsLeftAfterHangUp(submissionPort)).toEqual([]);
       expect(await serverCpuShare()).toBeLessThan(IDLE_CPU_BUDGET);
     }, 15_000);
   }
@@ -394,7 +319,7 @@ describe("SMTP submission: implicit TLS, client hang-ups (#351)", () => {
       runs: 20,
     });
 
-    expect(await socketsLeftAfterHangUp()).toEqual([]);
+    expect(await socketsLeftAfterHangUp(submissionPort)).toEqual([]);
     expect(await serverCpuShare()).toBeLessThan(IDLE_CPU_BUDGET);
 
     const { id: apiKeyId, rawKey } = await seed.apiKey();

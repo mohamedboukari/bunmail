@@ -10,6 +10,8 @@
  *   ehlo       TLS from the first byte, then the greeting and EHLO reply
  *   hangup     TLS, the greeting, then drops the connection without QUIT
  *   plaintext  no TLS at all: sends EHLO and AUTH PLAIN in the clear
+ *   auth-before-starttls  waits for the plaintext greeting, then EHLO and
+ *              AUTH PLAIN without STARTTLS (#414, the server's STARTTLS mode)
  *
  * Hang-up modes (#351), each repeated `SUBMISSION_REPEAT` times (default 1),
  * one connection after the other; `hangup` repeats the same way:
@@ -284,6 +286,20 @@ if (mode === "send") {
   };
   socket.on("close", finish);
   setTimeout(finish, 2000);
+} else if (mode === "auth-before-starttls") {
+  const socket = connectTcp({ host, port });
+  socket.on("error", (error) => done({ ok: false, error: error.message }));
+  const auth = Buffer.from(`\0apikey\0${key}`).toString("base64");
+  readReply(socket, (greeting) => {
+    socket.write("EHLO client.example.test\r\n");
+    readReply(socket, (ehlo) => {
+      socket.write(`AUTH PLAIN ${auth}\r\n`);
+      readReply(socket, (reply) => {
+        socket.destroy();
+        done({ ok: true, greeting, ehlo, text: reply.join("\n") });
+      });
+    });
+  });
 } else {
   done({ ok: false, error: `unknown mode ${mode}` });
 }
