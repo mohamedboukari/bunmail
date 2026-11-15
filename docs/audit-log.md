@@ -95,6 +95,7 @@ recordAuditEvent(input, tx?)
 | `api_key.created` / `updated` / `admin_changed` / `revoked` | user or api_key | api_key | `isAdmin`, `allowedSenders` (a count), `fields` |
 | `domain.created` / `updated` / `verified` / `deleted` | user or api_key | domain | `fields`; `spf`, `dkim`, `dmarc` |
 | `domain.dkim_rotation_started` / `_completed` / `_cancelled` (#250) | user or api_key | domain | `selector` (the pending selector; on completion, the new active one) |
+| `domain.tracking_links_revoked` (#424) | user or api_key | domain | `epoch` (the new tracking epoch; every click link of an older one stops redirecting) |
 | `webhook.created` / `deleted` | user or api_key | webhook (label: origin only) | `events` |
 | `suppression.created` / `deleted` | api_key or user | suppression (label: the address) | `reason` |
 | `audit_log.purged` | system (`retention purge`) | audit_log | `deleted`, `retentionDays` |

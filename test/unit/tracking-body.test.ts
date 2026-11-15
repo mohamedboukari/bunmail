@@ -4,6 +4,7 @@ import { insertOpenPixel } from "../../src/modules/tracking/services/body-tracki
 import {
   trackingForEmail,
   type TrackedEmail,
+  type TrackingDomain,
   type TrackingSettings,
 } from "../../src/modules/tracking/services/tracking-injection.ts";
 import {
@@ -36,11 +37,22 @@ const email: TrackedEmail = {
   trackOpens: true,
   trackClicks: true,
 };
+/** The sender domain: no unsubscribe URL, epoch 0. */
+const domain: TrackingDomain = {
+  id: "dom_00112233445566778899aabb",
+  trackingEpoch: 0,
+  unsubscribeUrl: null,
+};
+/** The same domain with a static one-click unsubscribe URL. */
+const withUnsubscribe = (url: string): TrackingDomain => ({
+  ...domain,
+  unsubscribeUrl: url,
+});
 const HTML = `<p>Hello, see <a href="https://example.com/pricing?ref=mail">pricing</a>.</p><p><a href="https://example.com/leave">unsubscribe</a></p>`;
 
 describe("trackingForEmail", () => {
   test("both kinds: a pixel URL and link options", () => {
-    const tracking = trackingForEmail(email, null, settings);
+    const tracking = trackingForEmail(email, domain, settings);
     expect(tracking?.pixelUrl).toMatch(
       /^https:\/\/mail\.example\.com\/t\/o\/[0-9a-f]{24}\.[0-9a-f]{32}\.gif$/,
     );
@@ -50,15 +62,15 @@ describe("trackingForEmail", () => {
 
   test("only what the row says, and nothing when it says neither", () => {
     expect(
-      trackingForEmail({ ...email, trackClicks: false }, null, settings)?.links,
+      trackingForEmail({ ...email, trackClicks: false }, domain, settings)?.links,
     ).toBeNull();
     expect(
-      trackingForEmail({ ...email, trackOpens: false }, null, settings)?.pixelUrl,
+      trackingForEmail({ ...email, trackOpens: false }, domain, settings)?.pixelUrl,
     ).toBeNull();
     expect(
       trackingForEmail(
         { ...email, trackOpens: false, trackClicks: false },
-        null,
+        domain,
         settings,
       ),
     ).toBeUndefined();
@@ -66,37 +78,57 @@ describe("trackingForEmail", () => {
 
   test("nothing while TRACKING_ENABLED is off (checked at send time)", () => {
     expect(
-      trackingForEmail(email, null, { ...settings, enabled: false }),
+      trackingForEmail(email, domain, { ...settings, enabled: false }),
     ).toBeUndefined();
   });
 
   test("nothing without one recipient or an https APP_BASE_URL", () => {
     expect(
-      trackingForEmail({ ...email, cc: "x@example.org" }, null, settings),
+      trackingForEmail({ ...email, cc: "x@example.org" }, domain, settings),
     ).toBeUndefined();
     expect(
       trackingForEmail(
         { ...email, toAddress: "a@example.org, b@example.org" },
-        null,
+        domain,
         settings,
       ),
     ).toBeUndefined();
     expect(
-      trackingForEmail(email, null, {
+      trackingForEmail(email, domain, {
         ...settings,
         appBaseUrl: "http://mail.example.com",
       }),
     ).toBeUndefined();
   });
 
+  test("click tokens carry the domain's current epoch; no domain, no rewritten links (#424)", () => {
+    const bumped = trackingForEmail(email, { ...domain, trackingEpoch: 4 }, settings);
+    const href = bumped?.links?.trackingUrl("https://example.com/a", 0) ?? "";
+    expect(verifyClickToken(href.split("/t/c/")[1] ?? "", keys)).toMatchObject({
+      domainId: domain.id,
+      epoch: 4,
+    });
+    const orphan = trackingForEmail(email, null, settings);
+    expect(orphan?.links).toBeNull();
+    expect(orphan?.pixelUrl).toMatch(/\/t\/o\//);
+  });
+
   test("the domain's unsubscribe URL is skipped, canonical", () => {
-    const tracking = trackingForEmail(email, "https://Example.com/leave", settings);
+    const tracking = trackingForEmail(
+      email,
+      withUnsubscribe("https://Example.com/leave"),
+      settings,
+    );
     expect(tracking?.links?.unsubscribeUrl).toBe("https://example.com/leave");
   });
 });
 
 describe("composeMessageBody with tracking", () => {
-  const tracking = trackingForEmail(email, "https://example.com/leave", settings);
+  const tracking = trackingForEmail(
+    email,
+    withUnsubscribe("https://example.com/leave"),
+    settings,
+  );
 
   test("the text part comes from the original HTML: no tracking URL in it", () => {
     const body = composeMessageBody(HTML, null, tracking);
@@ -120,6 +152,9 @@ describe("composeMessageBody with tracking", () => {
       emailId: email.id,
       position: 0,
       url: "https://example.com/pricing?ref=mail",
+      domainId: domain.id,
+      epoch: 0,
+      version: 2,
     });
   });
 
@@ -133,7 +168,11 @@ describe("composeMessageBody with tracking", () => {
   });
 
   test("deterministic: a retry composes the same body, so the DKIM body hash is stable", () => {
-    const again = trackingForEmail(email, "https://example.com/leave", settings);
+    const again = trackingForEmail(
+      email,
+      withUnsubscribe("https://example.com/leave"),
+      settings,
+    );
     expect(composeMessageBody(HTML, null, again)).toEqual(
       composeMessageBody(HTML, null, tracking),
     );

@@ -12,12 +12,14 @@ import {
  */
 
 const sampleRow: DomainLookupRow = {
+  id: "dom_00112233445566778899aabb",
   name: "example.com",
   dkimSelector: "bunmail",
   dkimPrivateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----",
   dkimKeyUnreadable: false,
   unsubscribeEmail: null,
   unsubscribeUrl: null,
+  trackingEpoch: 0,
 };
 
 /**

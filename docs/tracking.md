@@ -9,6 +9,7 @@ src/modules/tracking/
 ├── tracking.plugin.ts              ← GET /t/o/<token>.gif and GET /t/c/<token>, invalid-token limiter, background recording
 ├── services/
 │   ├── tracking-token.ts           ← Open and click tokens: HKDF keys, mint, verify (constant time, no database)
+│   ├── tracking-epoch.service.ts   ← Click link revocation (#424): the domain epoch check, the epoch cache
 │   ├── html-scan.ts                ← Bounded scan of the real markup (tags, raw-text elements, the last real </body>)
 │   ├── href-decode.ts              ← An href read as a browser would, or refused when ambiguous
 │   ├── link-rewriter.ts            ← Rewrites <a href> values; skip rules
@@ -23,23 +24,35 @@ src/modules/tracking/
 
 ## Gates
 
-Three gates, all off by default: `TRACKING_ENABLED`, the sender domain's opt-in (admins), and the send not opting out; `transactional` mail only when the send asks; only single-recipient mail and an `https://` `APP_BASE_URL`. The decision is stored on the email at create. At send time the queue re-checks the kill switch, the recipient and the base URL (`trackingForEmail`), so turning `TRACKING_ENABLED` off stops new pixels and links at once; links already sent keep redirecting.
+Three gates, all off by default: `TRACKING_ENABLED`, the sender domain's opt-in (admins), and the send not opting out; `transactional` mail only when the send asks; only single-recipient mail and an `https://` `APP_BASE_URL`. The decision is stored on the email at create. At send time the queue re-checks the kill switch, the recipient and the base URL (`trackingForEmail`), so turning `TRACKING_ENABLED` off stops new pixels and links at once; links already sent keep redirecting until an admin revokes them (see [Revoking click links](#revoking-click-links-424)).
 
 ## Tokens
 
-Both are HMAC-SHA256 truncated to 128 bits, with keys derived by HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` (no new secret), one per kind, and compared in constant time. Both verify **without the database**, so an invalid token is refused, and rate limited, before any query, and a response never tells whether an email exists. Deterministic, so a retry carries the same body.
+Both are HMAC-SHA256 truncated to 128 bits, with keys derived by HKDF-SHA256 from `DKIM_ENCRYPTION_KEY` (no new secret), one per kind, and compared in constant time. Both verify **without the database**, so an invalid token is refused, and rate limited, before any query, and a response never tells whether an email exists. Deterministic, so a retry carries the same body (until the domain's click links are revoked, below).
 
 | Kind | Layout | MAC over | HKDF label |
 |---|---|---|---|
 | Open | `<email id hex>.<MAC>` (57 characters) | `open:v1:<email id>` | `bunmail open token v1` |
-| Click | `<email id hex>.<position>.<base64url(url)>.<MAC>` | `click:v1:<email id>:<position>:<url>` | `bunmail click token v1` |
+| Click (v2, #424) | `<email id hex>.<position>.<base64url(url)>.<domain id hex>.<epoch>.<MAC>` | `click:v2:<email id>:<position>:<domain id>:<epoch>:<url>` | `bunmail click token v1` |
+| Click (v1, before #424) | `<email id hex>.<position>.<base64url(url)>.<MAC>` | `click:v1:<email id>:<position>:<url>` | `bunmail click token v1` |
 
 - Only canonical (`new URL(url).href`) `http:` and `https:` URLs of at most 2048 characters are ever signed or accepted; the base64url part must be the one canonical encoding. `javascript:`, `data:` and every other scheme can never be signed or redirected to.
 - The click MAC also covers the link's position (0 to 99), so `email_events.link_position` and the dedupe per link come from the token itself.
 - Who an event belongs to comes from the email row (tracked mail has exactly one recipient). A valid token whose email is gone still gets its GIF or redirect; the recorder finds no row and records nothing.
 - Rotating `DKIM_ENCRYPTION_KEY` breaks every tracking link already sent (SECURITY.md, Rotation).
+- The two click layouts differ in their number of parts, so a later field (an expiry, say) can come as a new version the same way. There is no expiry today.
 
-**Click links are permanent (residual risk).** A click link is a permanent redirect to the URL signed for it. Any API key allowed to send tracked mail from an opted-in domain can mint one for any `http(s)` URL by sending a tracked email to itself, and the link keeps working after the email is deleted, the domain opts out, the key is revoked or `TRACKING_ENABLED` is turned off. The only revocation today is rotating `DKIM_ENCRYPTION_KEY`, which also breaks every unsubscribe link and signed return path already sent. A per-domain revocation is tracked in a follow-up issue.
+## Revoking click links (#424)
+
+A click link is a redirect through the operator's host, and any key allowed to send tracked mail from an opted-in domain can mint one for any `http(s)` URL by sending a tracked email to itself. An admin can revoke every click link already sent from one domain: **Revoke tracking links** on the domain page in the dashboard, or `POST /api/v1/domains/:id/tracking-revocation` (admin keys). It bumps `domains.tracking_epoch` (audited as `domain.tracking_links_revoked`), and the redirect then refuses every link of the old epoch. Links in mail sent afterwards carry the new epoch and work, retries of queued mail included. It cannot be undone. At the highest epoch (2^31 - 1, unreachable in practice) it is refused with `409 TRACKING_EPOCH_EXHAUSTED` and nothing changes.
+
+**Stop the abuse first.** A revocation does not stop the key that minted the links from minting new ones: it only kills links already sent. Revoke the abusing API key (or turn click tracking off for the domain) first, then revoke the links.
+
+- **v2 links** (sent since #424) name their domain and the epoch they were minted under, both covered by the MAC. A link redirects only while its domain exists and is still at that epoch, so deleting a domain also revokes its links. It needs no email row: a v2 link still works once its email is purged.
+- **v1 links** (sent before #424, between 0.12.0 and this change) carry no domain. Their domain is the email row's `domain_id`, and they count as epoch 0: they redirect while that row exists, has a domain, and the domain was never revoked. **A v1 link whose email was deleted and purged from the trash stops redirecting** (its domain can no longer be known, so it can no longer be revoked: refused rather than kept as a permanent redirector).
+- **Order of checks.** The MAC first, without the database (a forged token never costs a query), then the domain's epoch. A revoked link, a link of a deleted domain and a purged v1 link get exactly the `404` of an invalid token and count against the same per-client limit; each refusal is logged at `info` (`Tracking click link refused`, with `reason` `revoked`, `unknown_domain`, `email_gone` or `no_domain`, the email id, domain id, link position and token version, never the URL). A database failure on that check answers `503` (logged at `error` by error name and SQLSTATE), never a redirect.
+- **Cache.** Each process caches, for 30 seconds (`TRACKING_EPOCH_TTL_MS`, at most 10,000 entries each), the domains' epochs (unknown domains included) and the email domain of each v1 link, so a click costs no query; concurrent misses of one key share one read, and a read that raced a bump is not stored. A bump or a domain delete clears the domain's entry in the process that made it, so its links stop there at once; **another replica keeps redirecting them for up to 30 seconds** (until its cached entry expires). A v1 link whose email is purged stops within 30 seconds on every replica (its cached email domain expires; an email's `domain_id` only ever becomes null, when its domain is deleted, and the epoch check then refuses the link anyway).
+- **Open pixels are not covered.** A pixel token redirects nowhere (it only returns a GIF and records an open), so it keeps verifying without the database and is not affected by a revocation.
 
 ## What the body gets
 
@@ -52,10 +65,10 @@ An `href` is tracked only when the URL BunMail signs is exactly the one the reci
 ## Endpoints
 
 - `GET /t/o/<token>.gif`: the 43-byte transparent GIF for a valid token, whether or not its email still exists; otherwise `404`.
-- `GET /t/c/<token>`: `302` to the signed URL, re-checked as `http(s)` before redirecting; otherwise a neutral `404` page that never shows the URL.
+- `GET /t/c/<token>`: `302` to the signed URL, re-checked as `http(s)` before redirecting, while the link's domain is at the link's epoch (#424); otherwise a neutral `404` page that never shows the URL (`503` when the epoch cannot be read).
 - `HEAD` is answered like `GET` and never recorded (link scanners).
 - Headers: `Cache-Control: no-store, private`, `Referrer-Policy: no-referrer`, `X-Robots-Tag: noindex` (also set for `/t/` by `security-headers.ts`), no cookie.
-- Rate limit: only invalid tokens count, 30 a minute per client IP (IPv6 per /64, `DASHBOARD_TRUSTED_PROXY_HOPS` honoured), then `429` with `Retry-After` and one `warn` per burst. Valid requests are never limited: mail proxies fetch for millions of people from a few addresses. Neither route queries the database before answering.
+- Rate limit: only invalid tokens count, 30 a minute per client IP (IPv6 per /64, `DASHBOARD_TRUSTED_PROXY_HOPS` honoured), then `429` with `Retry-After` and one `warn` per burst. Valid requests are never limited: mail proxies fetch for millions of people from a few addresses. A revoked click link counts as invalid. The open route never queries the database before answering; the click route reads only its domain's epoch (cached) and, for a v1 link, its email's domain, and only once the MAC verified.
 
 **Logs.** BunMail's request line masks every path segment after `/t/o/`, `/t/c/` and `/u/` (`:token`), whatever its encoding. A reverse proxy's access log does not: it records the full token, and a click token carries the target URL with its query (which may hold the recipient's own tokens). Mask those paths in the proxy log too (or turn the access log off for them). For example, with Caddy's log filter (check the syntax for your Caddy version):
 
@@ -105,14 +118,15 @@ Metrics: `bunmail_tracking_requests_total{kind, result}` and the `tracking` HTTP
 
 - **Email page:** an "Opens and clicks" timeline (time in UTC, type, link URL, client kind, a "Likely automated" badge for `machine`), with the reliability caveat next to it. Shown when the email is tracked or has events, trashed emails included.
 - **Emails list:** "Opened" and "Clicked" badges next to the status, from `first_opened_at` / `first_clicked_at`.
-- Every value from the database is rendered escaped (`safe`). No new dashboard route.
+- **Domain page:** the tracking opt-in and **Revoke tracking links** (#424, admins only, `POST /dashboard/domains/:id/tracking-revoke`, asks for confirmation), see [Revoking click links](#revoking-click-links-424).
+- Every value from the database is rendered escaped (`safe`).
 
 **Reliability.** Open and click numbers are both inflated and deflated: Apple Mail Privacy Protection fetches every image at delivery (nearly every Apple Mail recipient shows as opened), Gmail and Yahoo proxies cache images (repeat opens undercounted), Outlook and others block images (opens undercounted), link scanners click every link (fake clicks, partly caught by `machine`), and forwarded mail is attributed to the original recipient. The dashboard and API say so; treat the numbers as signals, not facts.
 
 ## Service Methods
 
-#### `trackingForEmail(email, unsubscribeUrl, settings?): BodyTracking | undefined`
-The pixel URL and link options for one email, or `undefined` when nothing is tracked (row flags off, `TRACKING_ENABLED` off, several recipients, or a non-https `APP_BASE_URL`). Links to the `APP_BASE_URL` host and the domain's `unsubscribe_url` are never rewritten.
+#### `trackingForEmail(email, domain, settings?): BodyTracking | undefined`
+The pixel URL and link options for one email, or `undefined` when nothing is tracked (row flags off, `TRACKING_ENABLED` off, several recipients, or a non-https `APP_BASE_URL`). `domain` is the sender domain (`id`, `trackingEpoch`, `unsubscribeUrl`): click tokens carry its id and current epoch, and without a domain no link is rewritten. Links to the `APP_BASE_URL` host and the domain's `unsubscribe_url` are never rewritten.
 
 #### `rewriteLinks(html, options): { html, rewritten }` / `matchesUnsubscribeUrl(url, unsubscribeUrl)` / `applyBodyTracking(html, tracking)` / `insertOpenPixel(html, url)`
 Pure; see above. The unsubscribe URL matches exactly, or a path under it on a `/` boundary when it has no query and is not a site root (a root URL matches only itself).
@@ -120,8 +134,14 @@ Pure; see above. The unsubscribe URL matches exactly, or a path under it on a `/
 #### `scanMarkup(html, visit)` / `lastBodyClose(html)` / `decodeHref(raw)`
 The scan and the href reading behind the rewriter and the pixel.
 
-#### `mintOpenToken` / `verifyOpenToken` / `mintClickToken` / `verifyClickToken` / `trackableUrl` / `deriveTrackingKeys`
-Token helpers; see Tokens.
+#### `mintOpenToken` / `verifyOpenToken` / `mintClickToken(subject, domain, keys?)` / `verifyClickToken` / `trackableUrl` / `deriveTrackingKeys`
+Token helpers; see Tokens. `mintClickToken` only mints v2 tokens; `verifyClickToken` returns `version: 2` with `domainId` and `epoch`, or `version: 1` for a link from before #424.
+
+#### `checkClickLink(token, deps?): ClickLinkCheck` / `forgetTrackingEpoch(domainId)` / `createTtlCache(load, options?)`
+The epoch check of a verified click token (`{ ok: true, domainId }` or `{ ok: false, reason, domainId }`, throws when the database does), dropping a domain's cached epoch after a bump or a delete, and the cache behind the epochs and the v1 email domains (TTL, one load per key at a time, a load that raced a `forget` is not stored, a failed load is not cached).
+
+#### `revokeTrackingLinks(id, audit): Domain | undefined` (domains module)
+Bumps the domain's tracking epoch and records `domain.tracking_links_revoked` (`{ epoch }`) in one transaction, then clears the cached epoch; `undefined` for an unknown domain; throws `TrackingEpochExhaustedError` (`409`) at the highest epoch.
 
 #### `createTrackingRecorder(options?): (hit) => Promise<result | null>`
 A recorder with its own gate (`budgetPerSecond`, `maxInFlight`, `now` for tests); `null` means it failed and logged it.
@@ -130,8 +150,8 @@ A recorder with its own gate (`budgetPerSecond`, `maxInFlight`, `now` for tests)
 The events of one email, oldest first; `null` when the email is not visible to the key (`null` key: the dashboard, trashed emails included).
 
 #### `trackingPlugin(options?)`
-The Elysia plugin, mounted by `src/app.ts` next to the unsubscribe pages. Options (tests): `limit`, `recorder`, `onRecord`.
+The Elysia plugin, mounted by `src/app.ts` next to the unsubscribe pages. Options (tests): `limit`, `recorder`, `onRecord`, `checkClick`.
 
 ## Tests
 
-`test/unit/tracking-token.test.ts`, `test/unit/link-rewriter.test.ts` (adversarial HTML, ambiguous entities, raw-text elements, the unsubscribe and own-host rules, linear time), `test/unit/tracking-body.test.ts` (composition order, determinism, pixel placement, client helpers), `test/unit/tracking-guards.test.ts` (the in-process gate) and `test/integration/tracking.integration.test.ts` (routes, headers, no query before an invalid token is refused, rate limit, recording, lock timeout, sanitized failures, metrics, the full path from send to event).
+`test/unit/tracking-token.test.ts` (v1 links built by hand in `test/legacy-click-token.ts`), `test/unit/tracking-epoch.test.ts` (the epoch check, the cache), `test/unit/link-rewriter.test.ts` (adversarial HTML, ambiguous entities, raw-text elements, the unsubscribe and own-host rules, linear time), `test/unit/tracking-body.test.ts` (composition order, determinism, pixel placement, client helpers), `test/unit/tracking-guards.test.ts` (the in-process gate) and `test/integration/tracking.integration.test.ts` (routes, headers, no query before an invalid token is refused, rate limit, recording, lock timeout, sanitized failures, metrics, the full path from send to event, revocation: v1 at epoch 0, a bump refusing v1 and v2 at once, deleted domains, purged v1 emails, the `503`) and `test/integration/tracking-revocation.integration.test.ts` (the REST and dashboard routes, admins only, the audit event).

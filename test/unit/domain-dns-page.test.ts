@@ -38,6 +38,7 @@ const domain = {
   notifyEmail: null,
   trackOpens: false,
   trackClicks: false,
+  trackingEpoch: 0,
   createdAt: now,
   updatedAt: now,
   createdByUserId: null,

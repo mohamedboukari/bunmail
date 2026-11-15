@@ -690,6 +690,7 @@ A new flash: add its code (lower snake case, never reused for another meaning) t
 - Cancel the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/cancel` (admin, #250; confirmation; a form cannot send `DELETE`, the REST route is `DELETE /api/v1/domains/:id/dkim/rotate`)
 - Set or clear the inbound notification address → `POST /dashboard/domains/:id/notify-email` (#106)
 - Set or clear the List-Unsubscribe overrides → `POST /dashboard/domains/:id/unsubscribe` (#243)
+- Revoke the domain's click tracking links → `POST /dashboard/domains/:id/tracking-revoke` (admin, #424; the **Revoke tracking links** button on the domain page asks for confirmation; bumps the domain's tracking epoch, so every click link sent from it so far answers the invalid-link `404`; success flash, audited as `domain.tracking_links_revoked`; see [tracking.md](tracking.md#revoking-click-links-424))
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`
 - Delete template → `POST /dashboard/templates/:id/delete`

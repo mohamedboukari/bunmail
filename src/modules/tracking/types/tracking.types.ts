@@ -12,7 +12,9 @@ export type TrackingKind = "open" | "click";
  *   - `deduped`: the same email, type and link within 60 seconds;
  *   - `capped`: the email's cap (20 opens, 50 clicks) or the process's
  *     per-second recording budget was reached;
- *   - `invalid`: the token did not verify (404);
+ *   - `invalid`: the token did not verify, or the click link was revoked
+ *     (#424: its domain's epoch moved on, the domain is gone, or a link
+ *     from before #424 whose email is gone) (404);
  *   - `untracked`: served, but nothing to record (`TRACKING_ENABLED` off,
  *     the email not tracked for that kind, or gone).
  */

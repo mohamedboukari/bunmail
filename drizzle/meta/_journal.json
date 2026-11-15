@@ -316,6 +316,13 @@
       "when": 1794153015940,
       "tag": "0044_export_keyset_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794748255690,
+      "tag": "0045_domain_tracking_epoch",
+      "breakpoints": true
     }
   ]
 }

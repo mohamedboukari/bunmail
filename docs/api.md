@@ -486,6 +486,7 @@ Register a new sender domain. Automatically generates a 2048-bit RSA keypair for
     "notifyEmail": null,
     "trackOpens": false,
     "trackClicks": false,
+    "trackingEpoch": 0,
     "dnsRecords": [
       {
         "type": "TXT",
@@ -533,6 +534,7 @@ Every domain response also carries (#250):
 - `verifiedAt`: when SPF, DKIM and DMARC all passed; kept while they keep passing (or a lookup fails), `null` when not verified or after the domain flipped to failing (two definitive failures in a row). Before #250 it was set by every verify, whatever the result.
 - `lastCheckedAt` and `lastCheckResult`: when the DNS checks last ran (by verify or the daily re-verification loop) and what each found: `{ spf, dkim, dmarc, checkedAt }`, each `{ status, reason }` with `status` `pass`, `fail` (record missing or wrong) or `unknown` (the lookup failed; it changes nothing). Both `null` before the first check. See [docs/domains.md](domains.md#scheduled-re-verification-250).
 - `mx`: `{ status, hosts }`, where the domain's MX points: `here` (`MAIL_HOSTNAME`), `elsewhere`, `none` or `error`. Informational: nothing requires the MX to point at BunMail.
+- `trackingEpoch` (#424): the tracking epoch of the domain's click links, `0` until the first [revocation](#post-apiv1domainsidtracking-revocation), then bumped by each one.
 
 `dmarc` and `mx` come from live DNS on `GET` (list and single) and on verify, cached for an hour (five minutes after an error). Each domain's DMARC and MX lookups run in parallel under one 5 s deadline, after which a status is `error`; a DNS failure never fails the request. The list looks up at most 8 domains at once. Create (`POST`), update (`PATCH`) and `DELETE` never wait on DNS: they return `dmarc` and `mx` as `null` (not checked yet), so a new domain shows `null` until the next `GET` or verify. The example above is a `GET` response.
 
@@ -679,6 +681,18 @@ Switch to the pending key (#250). BunMail looks up `<pending selector>._domainke
 #### `DELETE /api/v1/domains/:id/dkim/rotate`
 
 Cancel the pending rotation (#250): the pending key is dropped, the active key is untouched. `409 DKIM_NO_PENDING_ROTATION` when none is pending; `404` for an unknown domain.
+
+---
+
+#### `POST /api/v1/domains/:id/tracking-revocation`
+
+Revoke every click tracking link already sent from the domain (#424). No body. Bumps the domain's tracking epoch, which every click link's MAC covers: links of the old epoch (and links sent before #424) then answer the invalid-link `404` instead of redirecting, at once on the replica that handled the request and within 30 seconds on the others. Links in mail sent afterwards work; open pixels are not affected. It cannot be undone. Recorded in the audit log as `domain.tracking_links_revoked` with the new epoch.
+
+Returns the updated domain (`trackingEpoch` is the new value; `dmarc` and `mx` are `null`, like the DKIM rotation routes), `404` for an unknown domain, or `409 TRACKING_EPOCH_EXHAUSTED` when the epoch is already at its highest value (2^31 - 1; nothing changes). Admin keys only, like every domain route. A revocation does not stop a key from minting new links: revoke the abusing key (or set `trackClicks: false`) first.
+
+```json
+{ "success": true, "data": { "id": "dom_a1b2c3d4e5f6...", "...domain...": "...", "trackingEpoch": 1 } }
+```
 
 ---
 

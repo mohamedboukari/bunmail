@@ -16,6 +16,7 @@ import {
   DomainAlreadyRegisteredError,
   InvalidDkimSelectorError,
   InvalidDomainNameError,
+  TrackingEpochExhaustedError,
 } from "./modules/domains/errors.ts";
 import { BlockedUrlError } from "./utils/ssrf-guard.ts";
 import {
@@ -192,6 +193,12 @@ export function startApp(appVersion: string) {
 
       /** A DKIM key rotation step refused on the domain's state (#250) → 409. */
       if (error instanceof DkimRotationError) {
+        set.status = error.status;
+        return { success: false, error: error.message, code: error.code };
+      }
+
+      /** Click tracking links revoked at the highest epoch (#424) → 409. */
+      if (error instanceof TrackingEpochExhaustedError) {
         set.status = error.status;
         return { success: false, error: error.message, code: error.code };
       }

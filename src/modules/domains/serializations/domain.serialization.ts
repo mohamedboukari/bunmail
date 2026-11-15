@@ -69,6 +69,11 @@ export interface SerializedDomain {
   trackOpens: boolean;
   /** Click tracking opt-in for mail from this domain (#187). */
   trackClicks: boolean;
+  /**
+   * Tracking epoch of the domain's click links (#424): bumped by
+   * `POST /api/v1/domains/:id/tracking-revocation`, 0 until then.
+   */
+  trackingEpoch: number;
   /** The DNS records to publish for this domain (#250). */
   dnsRecords: RequiredDnsRecord[];
   /** The current DMARC check (#250); null when not looked up (create, update, delete). */
@@ -107,6 +112,7 @@ export function serializeDomain(
     notifyEmail: domain.notifyEmail,
     trackOpens: domain.trackOpens,
     trackClicks: domain.trackClicks,
+    trackingEpoch: domain.trackingEpoch,
     dnsRecords: getRequiredDnsRecords(domain),
     dmarc: dns?.dmarc ?? null,
     mx: dns?.mx ?? null,
