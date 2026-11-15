@@ -35,3 +35,13 @@ export const WEBHOOK_EVENT_TYPES = [
 
 /** One webhook event type BunMail can fire, derived from `WEBHOOK_EVENT_TYPES`. */
 export type WebhookEventType = (typeof WEBHOOK_EVENT_TYPES)[number];
+
+/**
+ * Narrows a submitted string to a `WebhookEventType` (#437): true only for
+ * an exact entry of `WEBHOOK_EVENT_TYPES`. The dashboard create form posts
+ * plain strings, so its route checks each one with this guard against the
+ * same names the REST DTO accepts, without a cast.
+ */
+export function isWebhookEventType(value: string): value is WebhookEventType {
+  return WEBHOOK_EVENT_TYPES.some((event) => event === value);
+}

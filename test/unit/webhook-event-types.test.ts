@@ -1,7 +1,10 @@
 import { describe, test, expect } from "bun:test";
 import { TypeCompiler } from "@sinclair/typebox/compiler";
 import { createWebhookDto } from "../../src/modules/webhooks/dtos/create-webhook.dto.ts";
-import { WEBHOOK_EVENT_TYPES } from "../../src/modules/webhooks/types/webhook.types.ts";
+import {
+  WEBHOOK_EVENT_TYPES,
+  isWebhookEventType,
+} from "../../src/modules/webhooks/types/webhook.types.ts";
 import { WebhooksPage } from "../../src/pages/routes/webhooks.tsx";
 
 /**
@@ -26,6 +29,27 @@ describe("WEBHOOK_EVENT_TYPES", () => {
       "domain.verification_failed",
     ]);
     expect(new Set(WEBHOOK_EVENT_TYPES).size).toBe(WEBHOOK_EVENT_TYPES.length);
+  });
+});
+
+describe("isWebhookEventType (#437)", () => {
+  test("accepts every listed event type", () => {
+    for (const event of WEBHOOK_EVENT_TYPES) {
+      expect(isWebhookEventType(event)).toBe(true);
+    }
+  });
+
+  test("refuses unknown names, a different case, padding and the empty string", () => {
+    for (const value of [
+      "email.viewed",
+      "Email.Sent",
+      " email.sent",
+      "email.sent ",
+      "",
+      "email",
+    ]) {
+      expect(isWebhookEventType(value)).toBe(false);
+    }
   });
 });
 
