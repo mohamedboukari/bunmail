@@ -651,8 +651,9 @@ describe("Ownership transfer hardening (#218)", () => {
   /**
    * Runs `maxAttempts` argon2id verifies in parallel: slow on a busy CI
    * runner. Up to 30 queries in flight (15 requests, two account reads
-   * each): past the default pool of 10 this hung on Bun 1.3.14's pool
-   * stall, so the integration preload sizes the pool at 32 (#423).
+   * each): past the default pool of 10 this hung now and then on Bun
+   * 1.3.14's pool stall (#423, fixed in 1.4.4, #447); the integration
+   * preload sizes the pool at 32.
    */
   test("a parallel burst of wrong passwords runs at most the budget of verifies", async () => {
     const verify = spyOn(Bun.password, "verify");

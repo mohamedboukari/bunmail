@@ -3,6 +3,7 @@ import { db } from "../../../db/index.ts";
 import { config } from "../../../config.ts";
 import { generateId } from "../../../utils/id.ts";
 import { logger } from "../../../utils/logger.ts";
+import { finiteDate } from "../../../utils/finite-date.ts";
 import { sqlStateOf } from "../../../utils/db-error.ts";
 import { emails, type EmailTags } from "../../emails/models/email.schema.ts";
 import { enqueueEvent } from "../../webhooks/services/webhook-dispatch.service.ts";
@@ -197,7 +198,8 @@ async function recordInTransaction(
     const clientKind = clientKindOf(hit.userAgent);
     let machine = clientKind === "image_proxy";
     if (!machine && hit.kind === "click") {
-      const sentAt = email.sentAt?.getTime();
+      /** A Postgres `infinity` sent_at (#457) counts as not sent: no scanner window. */
+      const sentAt = finiteDate(email.sentAt)?.getTime();
       const otherLinkBurst =
         hit.position === null
           ? 0

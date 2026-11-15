@@ -36,7 +36,8 @@ import { maskEmailsInText, redactUrl } from "./redact.ts";
  * Context: spans become active only through `startActiveSpan` and
  * `context.with`, which use `AsyncLocalStorage.run`. Never call
  * `context.attach()`: on Bun it falls back to `AsyncLocalStorage.enterWith`,
- * which segfaults inside Elysia hooks (see docs/logging.md).
+ * which the log context rule forbids (unscoped, see `log-context.ts`; it
+ * also segfaulted Bun 1.3.14 inside Elysia hooks).
  */
 
 /**

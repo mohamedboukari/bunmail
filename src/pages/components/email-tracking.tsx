@@ -1,5 +1,6 @@
 import type { Email } from "../../modules/emails/types/email.types.ts";
 import type { EmailEvent } from "../../modules/emails/services/email-events.service.ts";
+import { finiteDate } from "../../utils/finite-date.ts";
 
 /**
  * Open and click tracking in the dashboard (#187): the Opened / Clicked
@@ -35,9 +36,19 @@ export function EngagementBadges({
   );
 }
 
-/** A timestamp in UTC, `YYYY-MM-DD HH:MM:SS UTC`: the timeline stays in UTC on purpose. */
-function utc(value: Date): string {
-  return `${value.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+/**
+ * A timestamp in UTC, `YYYY-MM-DD HH:MM:SS UTC`: the timeline stays in UTC
+ * on purpose. `n/a` for a Postgres `infinity` timestamp (#457).
+ */
+function UtcTime({ value }: { value: Date }) {
+  const at = finiteDate(value);
+  if (at === null) return "n/a";
+  const iso = at.toISOString();
+  return (
+    <time datetime={iso} safe>
+      {`${iso.slice(0, 19).replace("T", " ")} UTC`}
+    </time>
+  );
 }
 
 /**
@@ -86,9 +97,7 @@ export function TrackingTimeline({
               {events.map((event) => (
                 <tr class="border-b last:border-b-0 border-gray-100 dark:border-gray-800 align-top">
                   <td class="px-4 py-2 whitespace-nowrap">
-                    <time datetime={event.occurredAt.toISOString()} safe>
-                      {utc(event.occurredAt)}
-                    </time>
+                    <UtcTime value={event.occurredAt} />
                   </td>
                   <td class="px-4 py-2">{event.type === "click" ? "Click" : "Open"}</td>
                   <td class="px-4 py-2 break-all text-gray-700 dark:text-gray-300" safe>
