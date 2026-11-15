@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboard webhook form lists every event (#425).** The create form on the Webhooks page had its own hand-written event list, which missed `email.complained` and `email.received`, so dashboard users could not subscribe to them (the REST API always accepted them). The form now renders one checkbox per entry of `WEBHOOK_EVENT_TYPES`, a runtime list in `src/modules/webhooks/types/webhook.types.ts` from which the `WebhookEventType` union is derived and the REST create DTO builds its literals, so a new event can no longer be missed in either place. The REST contract and the OpenAPI schema are unchanged; `email.received` and the domain events still need an admin key. Docs: `docs/webhooks.md`, `docs/dashboard.md`.
 ### Security
 
 - **More custom header names are reserved (#422).** The `headers` field of `POST /api/v1/emails/send` now refuses `Errors-To`, `Disposition-Notification-To`, `Return-Receipt-To` and any name starting with `Resent-` (`Resent-From`, `Resent-Sender`, `Resent-To`, `Resent-Cc`, `Resent-Bcc`, `Resent-Date`, `Resent-Message-ID`, `Resent-Reply-To`, ...), in any case, with `422 INVALID_CUSTOM_HEADER` like the other reserved names; the mailer drops them from a stored set. A key limited by `allowed_senders` could otherwise name another identity in `Resent-From` (DMARC ignores it, mail clients may show it) or have bounces and read receipts sent to any address. SMTP submission already never copied these headers (only `In-Reply-To`, `References` and `X-*` are relayed). Found by the internal security review of 2026-11-07 (Info). Docs: `docs/api.md`, `docs/emails.md`, `docs/smtp-submission.md`, `THREAT_MODEL.md`.
