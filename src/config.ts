@@ -36,7 +36,7 @@ import {
   readSubmissionTls,
 } from "./config/smtp.ts";
 import { readMetricsToken, readTracingSettings } from "./config/observability.ts";
-import { readRedisUrl } from "./config/storage.ts";
+import { readDatabasePoolMax, readRedisUrl } from "./config/storage.ts";
 import { buildTlsRptConfig } from "./config/tls-rpt.ts";
 import { buildDaneConfig } from "./config/dane.ts";
 import { buildTrackingConfig } from "./config/tracking.ts";
@@ -168,6 +168,12 @@ export const config = {
   database: {
     /** PostgreSQL connection URL (required) */
     url: requiredEnv("DATABASE_URL"),
+    /**
+     * Most connections the pool opens (`DATABASE_POOL_MAX`, default 10):
+     * kept above the peak of concurrent queries, Bun 1.3.14's pool never
+     * queues and never stalls (#423, see `readDatabasePoolMax`).
+     */
+    poolMax: readDatabasePoolMax(),
   },
 
   metrics: {
