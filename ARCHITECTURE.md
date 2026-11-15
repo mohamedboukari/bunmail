@@ -227,6 +227,10 @@ bunmail/
 │   │   │   │   ├── dmarc-check.service.ts ← One DMARC record, org-domain fallback, strict tags (#250)
 │   │   │   │   ├── domain-dns-status.service.ts ← Cached live DMARC check + MX status per domain (#250)
 │   │   │   │   ├── required-dns-records.ts ← The DNS records to publish (`dnsRecords`, #250)
+│   │   │   │   ├── bimi-check.service.ts ← BIMI readiness check, last result per domain in memory (#415)
+│   │   │   │   ├── bimi-record.ts        ← BIMI record lookup and parse, DMARC prerequisite (#415)
+│   │   │   │   ├── bimi-logo.ts          ← SSRF-guarded logo fetch: https, pinned, no redirects, 32 KB (#415)
+│   │   │   │   ├── bimi-svg.ts           ← SVG Tiny PS rules of the logo, no DOCTYPE, no entities (#415)
 │   │   │   │   ├── sending-ip-dnsbl.service.ts ← Daily DNSBL self-check of the sending IPs (#250)
 │   │   │   │   ├── sending-ips.service.ts ← Sending IPs and the reverse DNS check (#247, #248)
 │   │   │   │   ├── spf-evaluator.ts      ← SPF check_host(), RFC 7208 strict: limits, deadline (#373)
@@ -242,6 +246,7 @@ bunmail/
 │   │   │   └── types/
 │   │   │       ├── domain.types.ts
 │   │   │       ├── domain-check.types.ts ← Check outcome and result (#250)
+│   │   │       ├── bimi.types.ts         ← BIMI check, record and findings (#415)
 │   │   │       └── spf.types.ts          ← SPF result, resolver, check_host() input (#373)
 │   │   ├── webhooks/
 │   │   │   ├── webhooks.plugin.ts                 ← CRUD + deliveries inspection + replay
@@ -450,7 +455,7 @@ bunmail/
 │   │           └── dmarc-report.types.ts
 │   └── pages/                            ← Dashboard (presentation layer)
 │       ├── pages.plugin.tsx              ← Parent plugin for /dashboard: public routes, session guard, then the area plugins (#291)
-│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387)
+│       ├── plugins/                      ← One functional plugin per dashboard area (auth, home, account, passkeys (#223), sso and sso-login (#224), emails, api-keys, invitations, users, audit-log, domains, templates, webhooks, inbound, dmarc, suppressions, exports (#430)); auth, account, passkeys and emails are composed of one group per concern (`auth-*`, `account-*`, `passkey-*`, `emails-*`, #387), and domains of `domains-bimi` (#415)
 │       ├── lib/                          ← Shared dashboard helpers: session guard, session cookie, same-origin check, redirect, flash codes (#421), record ownership, two-factor attempt budget (#220), DNS-verify throttle (#133, #185), sign-in helpers shared by password, passkey and SSO sign-in (#223, #224), SSO route helpers (#224), passkey route helpers (#223), Two-factor page helpers (#220), client IP for the account pages (#387), the CSV writer, export stream and export budget (#430)
 │       ├── guards.tsx                    ← Per-route role and assurance checks (#222)
 │       ├── reveal-store.ts               ← One-time secret reveal (keys, webhook secrets, invitation and reset links, recovery codes) bound to kind, user and session (#132, #280, #217, #277, #220)
@@ -496,6 +501,7 @@ bunmail/
 │       │   ├── domain-detail-dns.tsx     ← Failing banner, verification cards, DMARC panel, records table
 │       │   ├── domain-detail-dkim.tsx    ← DKIM key and rotation panel
 │       │   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel
+│       │   ├── domain-detail-bimi.tsx    ← BIMI section: what it needs, record to publish, Check BIMI, findings (#415)
 │       │   ├── templates.tsx             ← Templates list + create
 │       │   ├── template-detail.tsx       ← Template edit form
 │       │   ├── webhooks.tsx              ← Webhooks list + create
@@ -1297,6 +1303,7 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | POST   | /dashboard/domains/:id/unsubscribe | Set/clear List-Unsubscribe overrides (#243) | Admin |
 | POST   | /dashboard/domains/:id/tracking | Set the open and click tracking opt-in (#187) | Admin |
 | POST   | /dashboard/domains/:id/tracking-revoke | Revoke the domain's click tracking links (#424) | Admin |
+| POST   | /dashboard/domains/:id/bimi | Check BIMI readiness: record, DMARC, logo fetch (#415) | Admin |
 | GET    | /dashboard/domains/:id             | Domain detail           | Member |
 | GET    | /dashboard/templates               | Templates management    | Member |
 | POST   | /dashboard/templates               | Create template         | Member |

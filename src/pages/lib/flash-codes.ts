@@ -138,6 +138,21 @@ export const FLASH_MESSAGES = {
   domain_tracking_saved_off: success(
     "Tracking settings saved. Nothing is tracked while TRACKING_ENABLED is off.",
   ),
+  /* BIMI check (#415): one code per verdict, the details are in the BIMI section. */
+  bimi_ready: success("BIMI check done: the domain is BIMI-ready (details below)"),
+  bimi_not_ready: failure(
+    "BIMI check done: the domain is not BIMI-ready yet. The BIMI section lists what to fix.",
+  ),
+  bimi_missing: failure(
+    "BIMI check done: the domain has no BIMI record. The BIMI section shows the record to publish.",
+  ),
+  bimi_declined: success("BIMI check done: the domain's BIMI record declines a logo"),
+  bimi_check_failed: failure(
+    "The BIMI check could not finish: a lookup or the logo fetch failed. Try again later.",
+  ),
+  bimi_throttled: failure(
+    "Too many DNS checks for this domain: wait a minute and try again",
+  ),
   /* Click tracking link revocation (#424). */
   tracking_links_revoked: success(
     "Tracking links revoked: click links already sent from this domain no longer redirect",

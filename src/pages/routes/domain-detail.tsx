@@ -18,6 +18,8 @@ import {
 import { DkimKeyPanel } from "./domain-detail-dkim.tsx";
 import { MailFlowPanel } from "./domain-detail-mail-flow.tsx";
 import { TrackingPanel } from "./domain-detail-tracking.tsx";
+import { BimiPanel } from "./domain-detail-bimi.tsx";
+import type { BimiCheck } from "../../modules/domains/types/bimi.types.ts";
 
 interface DomainDetailPageProps {
   domain: Domain;
@@ -29,12 +31,15 @@ interface DomainDetailPageProps {
   smtpEnabled: boolean;
   /** `TRACKING_ENABLED` (#187): the tracking panel says when it keeps everything off. */
   trackingEnabled: boolean;
+  /** The last BIMI check still kept (#415), or null (the default). */
+  bimi?: BimiCheck | null;
   flash?: { message: string; type: "success" | "error" };
 }
 
 /**
  * Domain detail page: shows DNS verification status, the DMARC policy,
- * the DNS records to publish, where the MX points, and a verify button.
+ * the DNS records to publish, where the MX points, a verify button, and
+ * the BIMI section (#415).
  */
 export function DomainDetailPage({
   domain,
@@ -42,6 +47,7 @@ export function DomainDetailPage({
   dns,
   smtpEnabled,
   trackingEnabled,
+  bimi = null,
   flash,
 }: DomainDetailPageProps) {
   return (
@@ -141,6 +147,9 @@ export function DomainDetailPage({
       <DkimKeyPanel domain={domain} />
 
       <MailFlowPanel mx={dns.mx} smtpEnabled={smtpEnabled} />
+
+      {/* BIMI readiness (#415) */}
+      <BimiPanel domain={domain} check={bimi} />
 
       {/* Inbound notifications (#106) */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 mb-6">

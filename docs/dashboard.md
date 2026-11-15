@@ -392,7 +392,7 @@ a Redis outage it falls back to per-replica memory).
 | GET /dashboard/users             | Every account, role and status, with the actions the viewer may take, one-time reset link reveal (admin, #218, #277) |
 | GET /dashboard/audit-log         | Security-relevant actions (sign-ins, account, 2FA, API key, domain, webhook, suppression changes), filter by action, actor and outcome; read-only (admin, #221) |
 | GET /dashboard/domains           | Domains list (with who added each, #219) + add form (name, optional DKIM selector, #250) |
-| GET /dashboard/domains/:id       | Domain detail + DNS status + DKIM key panel (rotation, previous selector, #250) |
+| GET /dashboard/domains/:id       | Domain detail + DNS status + DKIM key panel (rotation, previous selector, #250) + BIMI section (#415): what BIMI needs, the `default._bimi` record to publish, and the last Check BIMI result (verdict and each finding, escaped; the logo is never rendered) |
 | GET /dashboard/templates         | Templates list (with creators, #219) + create form (live HTML preview) |
 | GET /dashboard/templates/:id     | Template detail + edit form (live HTML preview); read-only for a member on someone else's template (#219) |
 | GET /dashboard/webhooks          | Webhooks list (with creators, #219) + create form, one event checkbox per `WEBHOOK_EVENT_TYPES` entry (#425) |
@@ -517,6 +517,7 @@ src/pages/
 │   ├── sso-login.plugin.tsx  ← SSO sign-in start and the callback: sign-in or link (public, #224)
 │   ├── sso.plugin.tsx        ← The Sign-in methods page: link, unlink (#224)
 │   ├── domains.plugin.tsx    ← Domains, DNS verify (with its throttle), DKIM key rotation (#250), detail
+│   ├── domains-bimi.plugin.tsx ← The domain page's Check BIMI (#415), composed by domains.plugin.tsx
 │   ├── templates.plugin.tsx  ← Templates
 │   ├── webhooks.plugin.tsx   ← Webhooks, deliveries, replay
 │   ├── inbound.plugin.tsx    ← Inbound list, trash, detail, reply
@@ -586,6 +587,7 @@ src/pages/
 │   ├── domain-detail-dns.tsx ← Failing banner, verification cards, DMARC panel, records table
 │   ├── domain-detail-dkim.tsx ← DKIM key and rotation panel (#250)
 │   ├── domain-detail-mail-flow.tsx ← MX and mail flow panel (#250)
+│   ├── domain-detail-bimi.tsx ← BIMI section: requirements, record to publish, Check BIMI, findings (#415)
 │   ├── templates.tsx         ← Templates list + create
 │   ├── template-detail.tsx   ← Template edit form
 │   ├── webhooks.tsx          ← Webhooks list + create
@@ -697,6 +699,7 @@ A new flash: add its code (lower snake case, never reused for another meaning) t
 - Cancel the DKIM key rotation → `POST /dashboard/domains/:id/dkim/rotate/cancel` (admin, #250; confirmation; a form cannot send `DELETE`, the REST route is `DELETE /api/v1/domains/:id/dkim/rotate`)
 - Set or clear the inbound notification address → `POST /dashboard/domains/:id/notify-email` (#106)
 - Set or clear the List-Unsubscribe overrides → `POST /dashboard/domains/:id/unsubscribe` (#243)
+- Check BIMI → `POST /dashboard/domains/:id/bimi` (admin, #415; the **Check BIMI** button in the domain page's BIMI section): looks up the `default._bimi` record and DMARC and fetches the logo through the SSRF guard (see [domains.md](domains.md#bimi-415)), keeps the result in memory for 30 minutes for the page, and redirects with one flash per verdict (`bimi_ready`, `bimi_not_ready`, `bimi_missing`, `bimi_declined`, `bimi_check_failed`). Shares the Verify throttle (`bimi_throttled`). Read-only: not audited. Nothing is checked on page load
 - Revoke the domain's click tracking links → `POST /dashboard/domains/:id/tracking-revoke` (admin, #424; the **Revoke tracking links** button on the domain page asks for confirmation; bumps the domain's tracking epoch, so every click link sent from it so far answers the invalid-link `404`; success flash, audited as `domain.tracking_links_revoked`; see [tracking.md](tracking.md#revoking-click-links-424))
 - Create template → `POST /dashboard/templates`
 - Edit template → `POST /dashboard/templates/:id/edit`

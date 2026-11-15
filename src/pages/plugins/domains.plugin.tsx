@@ -22,6 +22,7 @@ import {
 import { revokeTrackingLinks } from "../../modules/domains/services/tracking-revocation.service.ts";
 import { getDomainDnsStatus } from "../../modules/domains/services/domain-dns-status.service.ts";
 import { getRequiredDnsRecords } from "../../modules/domains/services/required-dns-records.ts";
+import { lastBimiCheck } from "../../modules/domains/services/bimi-check.service.ts";
 import { FLASH_QUERY, flashUrl, toFlash, type Flash } from "../lib/flash.ts";
 import type { FlashCode } from "../lib/flash-codes.ts";
 import { isDnsVerifyThrottled } from "../lib/dns-verify-throttle.ts";
@@ -30,6 +31,7 @@ import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { dashboardAudit } from "../lib/audit.ts";
 import { recordAuditEvent } from "../../modules/audit/services/audit.service.ts";
 import { config } from "../../config.ts";
+import { domainBimiPages } from "./domains-bimi.plugin.tsx";
 
 /** The domain page with a flash banner (#421: a code, never text). */
 function domainFlashUrl(id: string, flash: Flash): string {
@@ -74,11 +76,12 @@ async function dkimRotationStep(
 
 /**
  * Domain pages (#291): list, add, delete, DNS verify, DKIM rotation,
- * settings, tracking link revocation (#424), detail.
+ * settings, tracking link revocation (#424), detail, and the BIMI check
+ * (#415, `domains-bimi.plugin.tsx`, registered first on this instance).
  */
 export function domainPages(app: GuardedDashboard) {
   return (
-    app
+    domainBimiPages(app)
       /**
        * GET /dashboard/domains
        * Domains list with add form. Shows flash messages from query params.
@@ -540,6 +543,7 @@ export function domainPages(app: GuardedDashboard) {
               dns={dns}
               smtpEnabled={config.smtp.enabled}
               trackingEnabled={config.tracking.enabled}
+              bimi={lastBimiCheck(domain.id)}
               flash={flash}
             />
           );

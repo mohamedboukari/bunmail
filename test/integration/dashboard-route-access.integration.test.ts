@@ -230,6 +230,8 @@ const ROUTES: Record<string, RouteSpec> = {
   },
   /** Revoke the domain's click tracking links (#424). */
   "POST /dashboard/domains/:id/tracking-revoke": { access: "admin" },
+  /** The BIMI check (#415): fetches a URL from the domain's DNS, so admins only. */
+  "POST /dashboard/domains/:id/bimi": { access: "admin" },
 
   "GET /dashboard/templates": { access: "member" },
   "GET /dashboard/templates/:id": { access: "member" },
