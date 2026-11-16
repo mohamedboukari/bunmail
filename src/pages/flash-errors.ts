@@ -1,12 +1,16 @@
 import {
+  AttachmentTypeNotAllowedError,
+  AttachmentsTooLargeError,
   BodyRequiredError,
   EmailSendRejectedError,
+  InvalidAttachmentError,
   InvalidCustomHeaderError,
   InvalidFromAddressError,
   InvalidFromNameError,
   SenderDomainNotRegisteredError,
   SenderDomainUnverifiedError,
   SubjectRequiredError,
+  TooManyAttachmentsError,
   TooManyRecipientsError,
 } from "../modules/emails/errors.ts";
 import {
@@ -25,6 +29,7 @@ import {
   WebhookLimitReachedError,
 } from "../modules/webhooks/errors.ts";
 import { BlockedUrlError } from "../utils/ssrf-guard.ts";
+import { BYTES_PER_MB } from "../config/smtp.ts";
 import type { FlashCode } from "./lib/flash-codes.ts";
 import type { Flash } from "./lib/flash.ts";
 
@@ -56,6 +61,19 @@ export function sendErrorFlash(error: unknown): Flash {
       n: error.max,
     };
   }
+  /** Attachment refusals (#488): the form can now reach them. */
+  if (error instanceof TooManyAttachmentsError) {
+    return { code: "send_too_many_attachments", n: error.max };
+  }
+  if (error instanceof AttachmentsTooLargeError) {
+    return {
+      code: "send_attachments_too_large",
+      n: Math.floor(error.maxBytes / BYTES_PER_MB),
+    };
+  }
+  if (error instanceof AttachmentTypeNotAllowedError)
+    return "send_attachment_type_blocked";
+  if (error instanceof InvalidAttachmentError) return "send_invalid_attachment";
   if (error instanceof SuppressedRecipientError) return "send_recipient_suppressed";
   if (error instanceof UnauthorizedSenderError) return "send_sender_not_allowed";
   if (error instanceof InactiveApiKeyError) return "send_key_revoked";

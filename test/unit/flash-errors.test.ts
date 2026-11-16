@@ -14,14 +14,18 @@ import {
   InvalidDomainNameError,
 } from "../../src/modules/domains/errors.ts";
 import {
+  AttachmentTypeNotAllowedError,
+  AttachmentsTooLargeError,
   BodyRequiredError,
   IdempotencyKeyReusedError,
+  InvalidAttachmentError,
   InvalidCustomHeaderError,
   InvalidFromAddressError,
   InvalidFromNameError,
   SenderDomainNotRegisteredError,
   SenderDomainUnverifiedError,
   SubjectRequiredError,
+  TooManyAttachmentsError,
   TooManyRecipientsError,
 } from "../../src/modules/emails/errors.ts";
 import {
@@ -55,6 +59,11 @@ const SEND_CASES: Array<[unknown, Flash]> = [
   [new SenderDomainNotRegisteredError("example.com"), "send_domain_unregistered"],
   [new SenderDomainUnverifiedError("example.com"), "send_domain_unverified"],
   [new SubjectRequiredError(), "send_subject_required"],
+  [new AttachmentTypeNotAllowedError(0, "extension"), "send_attachment_type_blocked"],
+  [
+    new InvalidAttachmentError("too_long", "attachments[0].filename", "bad"),
+    "send_invalid_attachment",
+  ],
   [new BodyRequiredError(), "send_body_required"],
   [new InvalidFromAddressError(), "send_invalid_from"],
   [new InvalidFromNameError("too_long", "x"), "send_invalid_from_name"],
@@ -88,6 +97,22 @@ describe("sendErrorFlash", () => {
     expect(url).toBe("/dashboard/send?flash=send_too_many_recipients&flashN=100");
     expect(flashOfLocation(url)).toEqual({
       message: "At most 100 unique recipients across to, cc and bcc.",
+      type: "error",
+    });
+  });
+
+  test("attachment limits travel as the code's number (#488)", () => {
+    expect(sendErrorFlash(new TooManyAttachmentsError(10))).toEqual({
+      code: "send_too_many_attachments",
+      n: 10,
+    });
+    const url = flashUrl(
+      "/dashboard/send",
+      sendErrorFlash(new AttachmentsTooLargeError(18_000_000)),
+    );
+    expect(url).toBe("/dashboard/send?flash=send_attachments_too_large&flashN=18");
+    expect(flashOfLocation(url)).toEqual({
+      message: "Attachments may total at most 18 MB.",
       type: "error",
     });
   });

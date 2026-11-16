@@ -4,6 +4,8 @@ import { loggableError } from "../../utils/db-error.ts";
 import { redactEmail } from "../../utils/redact.ts";
 import { serializeSendError } from "../../modules/emails/serializations/send-error.serialization.ts";
 import { SendEmailPage } from "../routes/send-email.tsx";
+import { sendFormAttachmentLimits } from "../lib/attachment-limits.ts";
+import type { AttachmentInput } from "../../modules/emails/services/attachments.ts";
 import { memberGuard } from "../guards.tsx";
 import { sendSuccessFlash } from "../send-warnings.ts";
 import { sendErrorFlash } from "../flash-errors.ts";
@@ -45,6 +47,7 @@ export function emailSendPages(app: GuardedDashboard) {
               flash={flash}
               apiKeys={activeKeys}
               defaultApiKeyId={defaultApiKeyId}
+              attachmentLimits={sendFormAttachmentLimits()}
             />
           );
         },
@@ -90,6 +93,7 @@ export function emailSendPages(app: GuardedDashboard) {
              * validated, stored ids, then go through the custom-header
              * rules like any other (#177).
              */
+            const attachments = await formAttachments(body.attachments);
             const headers = body.inboundId
               ? await replyThreading.replyHeadersForInbound(body.inboundId)
               : undefined;
@@ -104,6 +108,7 @@ export function emailSendPages(app: GuardedDashboard) {
                 html: body.html || undefined,
                 text: body.text || undefined,
                 ...(headers ? { headers } : {}),
+                ...(attachments.length > 0 ? { attachments } : {}),
                 /**
                  * Never tracked (#187): a message written by hand (often a
                  * reply) and the form has no opt-out, so it always opts out.
@@ -178,8 +183,38 @@ export function emailSendPages(app: GuardedDashboard) {
             text: t.Optional(t.String()),
             /** The inbound email a reply answers (#192): an id, never header text. */
             inboundId: t.Optional(t.String({ maxLength: 36 })),
+            /**
+             * Files to attach (#488). Count, size, type and filename are
+             * checked by `createEmail`, as for a REST send.
+             */
+            attachments: t.Optional(t.Files()),
           }),
         },
       )
+  );
+}
+
+/**
+ * The files of the Send form as attachments (#488). A browser posts one
+ * empty, unnamed part when no file is chosen: it is dropped, not sent as an
+ * empty attachment. One file may arrive as a single `File`, not a list. A
+ * nameless part with content is kept with an empty filename, which the
+ * attachment rules refuse with their own flash.
+ */
+async function formAttachments(
+  files: File | File[] | undefined,
+): Promise<AttachmentInput[]> {
+  const list = files === undefined ? [] : Array.isArray(files) ? files : [files];
+  /** Bun parses `filename=""` as a File whose name is undefined, despite its type. */
+  const named = list.map((file) => ({
+    file,
+    filename: typeof file.name === "string" ? file.name : "",
+  }));
+  const chosen = named.filter(({ file, filename }) => filename !== "" || file.size > 0);
+  return Promise.all(
+    chosen.map(async ({ file, filename }) => ({
+      filename,
+      content: new Uint8Array(await file.arrayBuffer()),
+    })),
   );
 }

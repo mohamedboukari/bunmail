@@ -13,6 +13,8 @@ interface SendEmailPageProps {
   /** Key id pre-selected in the dropdown: default-first-active matches
    *  the pre-#89 silent behaviour but now it's visible and overridable. */
   defaultApiKeyId?: string;
+  /** Attachment limits shown under the file field (#488). */
+  attachmentLimits: { maxFiles: number; maxTotalMb: number };
   /**
    * Pre-fill values for the compose form (#86). Set by callers like
    * the "Reply to inbound" route; the operator can still edit each
@@ -41,6 +43,7 @@ export function SendEmailPage({
   flash,
   apiKeys,
   defaultApiKeyId,
+  attachmentLimits,
   prefill,
 }: SendEmailPageProps) {
   return (
@@ -52,7 +55,12 @@ export function SendEmailPage({
 
       {/* Compose form */}
       <div class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-4 mb-6">
-        <form method="POST" action="/dashboard/send" class="space-y-4">
+        <form
+          method="POST"
+          action="/dashboard/send"
+          enctype="multipart/form-data"
+          class="space-y-4"
+        >
           {prefill?.inboundId !== undefined && (
             <input type="hidden" name="inboundId" value={prefill.inboundId} />
           )}
@@ -233,6 +241,26 @@ export function SendEmailPage({
             >
               {prefill?.text ?? ""}
             </textarea>
+          </div>
+
+          {/* Attachments (#488): checked on the server like a REST send. */}
+          <div>
+            <label
+              for="attachments"
+              class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+            >
+              Attachments (optional)
+            </label>
+            <input
+              type="file"
+              id="attachments"
+              name="attachments"
+              multiple
+              class="block w-full text-sm text-gray-700 dark:text-gray-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-md file:border-0 file:bg-gray-100 dark:file:bg-gray-800 file:text-gray-900 dark:file:text-gray-100 file:text-sm file:font-medium"
+            />
+            <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" safe>
+              {`Up to ${attachmentLimits.maxFiles} files, ${attachmentLimits.maxTotalMb} MB in total. Executables and scripts are refused.`}
+            </p>
           </div>
 
           <button

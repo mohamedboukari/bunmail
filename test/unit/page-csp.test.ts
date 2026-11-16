@@ -128,7 +128,12 @@ const pages: Array<[string, () => string | Promise<string>]> = [
   ],
   [
     "send (chip inputs)",
-    () => SendEmailPage({ apiKeys: [apiKey], defaultApiKeyId: apiKey.id }),
+    () =>
+      SendEmailPage({
+        apiKeys: [apiKey],
+        defaultApiKeyId: apiKey.id,
+        attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
+      }),
   ],
   ["login", () => LoginPage({})],
   [

@@ -367,24 +367,49 @@ describe("Dashboard page render smoke tests", () => {
     ).toBe("string");
   });
 
+  test("SendEmailPage has a multipart form with a file input and its limits (#488)", async () => {
+    const html = await SendEmailPage({
+      apiKeys: [apiKey],
+      defaultApiKeyId: apiKey.id,
+      attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
+    });
+    expect(html).toContain('enctype="multipart/form-data"');
+    expect(html).toMatch(/<input[^>]*type="file"[^>]*name="attachments"[^>]*multiple/);
+    expect(html).toContain("Up to 10 files, 18 MB in total.");
+  });
+
   test("SendEmailPage has a Reply-To input (#169)", async () => {
-    const html = await SendEmailPage({ apiKeys: [apiKey], defaultApiKeyId: apiKey.id });
+    const html = await SendEmailPage({
+      apiKeys: [apiKey],
+      defaultApiKeyId: apiKey.id,
+      attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
+    });
     expect(html).toContain('name="replyTo"');
   });
 
   test("SendEmailPage", () => {
-    expect(typeof SendEmailPage({ apiKeys: [apiKey], defaultApiKeyId: apiKey.id })).toBe(
-      "string",
-    );
     expect(
       typeof SendEmailPage({
         apiKeys: [apiKey],
         defaultApiKeyId: apiKey.id,
+        attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
+      }),
+    ).toBe("string");
+    expect(
+      typeof SendEmailPage({
+        apiKeys: [apiKey],
+        defaultApiKeyId: apiKey.id,
+        attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
         flash: { message: "queued", type: "success" },
       }),
     ).toBe("string");
     /** Empty-keys path renders the "create one first" notice (#89). */
-    expect(typeof SendEmailPage({ apiKeys: [] })).toBe("string");
+    expect(
+      typeof SendEmailPage({
+        apiKeys: [],
+        attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
+      }),
+    ).toBe("string");
     /** Pre-fill path used by the inbound-reply route (#86): every
      *  field populated, including HTML that needs escaping in the
      *  textarea. */
@@ -392,6 +417,7 @@ describe("Dashboard page render smoke tests", () => {
       typeof SendEmailPage({
         apiKeys: [apiKey],
         defaultApiKeyId: apiKey.id,
+        attachmentLimits: { maxFiles: 10, maxTotalMb: 18 },
         prefill: {
           from: "hello@example.com",
           to: "sender@other.com",
