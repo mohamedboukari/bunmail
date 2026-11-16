@@ -119,6 +119,8 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /api/v1/inbound/": { access: "admin" },
   "GET /api/v1/inbound/trash": { access: "admin" },
   "GET /api/v1/inbound/:id": { access: "admin" },
+  "GET /api/v1/inbound/:id/attachments": { access: "admin" },
+  "GET /api/v1/inbound/:id/attachments/:position": { access: "admin" },
   "DELETE /api/v1/inbound/:id": { access: "admin" },
   "DELETE /api/v1/inbound/:id/permanent": { access: "admin" },
   "POST /api/v1/inbound/:id/restore": { access: "admin" },

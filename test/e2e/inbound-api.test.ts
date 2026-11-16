@@ -31,6 +31,24 @@ interface InboundListResponse {
   pagination: { page: number; limit: number; total: number };
 }
 
+interface SerializedAttachment {
+  position: number;
+  filename: string;
+  contentType: string;
+  size: number;
+  contentId: string | null;
+}
+
+interface InboundAttachmentsEmbedded {
+  success: boolean;
+  data: SerializedInboundEmail & { attachments: SerializedAttachment[] };
+}
+
+interface AttachmentListResponse {
+  success: boolean;
+  data: SerializedAttachment[];
+}
+
 interface BulkResponse {
   success: boolean;
   deleted: number;
@@ -96,6 +114,31 @@ const mockInbound = {
   inReplyToEmailId: null,
 };
 
+/** A received email with one PDF attachment in its raw message (#486). */
+const mockInboundWithAttachment = {
+  ...mockInbound,
+  id: "inb_files",
+  rawMessage: [
+    "From: sender@gmail.com",
+    "To: hello@example.com",
+    "Subject: Files",
+    'Content-Type: multipart/mixed; boundary="b"',
+    "",
+    "--b",
+    "Content-Type: text/plain",
+    "",
+    "See attached.",
+    "--b",
+    'Content-Type: application/pdf; name="invoice.pdf"',
+    'Content-Disposition: attachment; filename="invoice.pdf"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    Buffer.from("%PDF-1.4 test").toString("base64"),
+    "--b--",
+    "",
+  ].join("\r\n"),
+};
+
 const mockTrashedInbound = {
   ...mockInbound,
   id: "inb_trashed",
@@ -109,7 +152,13 @@ void mock.module("../../src/modules/inbound/services/inbound.service.ts", () => 
     Promise.resolve({ data: [mockTrashedInbound], total: 1 }),
   ),
   getInboundEmailById: mock((id: string) =>
-    Promise.resolve(id === "inb_test123" ? mockInbound : undefined),
+    Promise.resolve(
+      id === "inb_test123"
+        ? mockInbound
+        : id === "inb_files"
+          ? mockInboundWithAttachment
+          : undefined,
+    ),
   ),
   getTrashedInboundEmailById: mock((id: string) =>
     Promise.resolve(id === "inb_trashed" ? mockTrashedInbound : undefined),
@@ -182,6 +231,26 @@ describe("Inbound API E2E", () => {
       const body = await readJson<InboundResponse>(response);
       expect(body.success).toBe(true);
       expect(body.data.id).toBe("inb_test123");
+    });
+
+    test("includes attachment metadata", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_files", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = await readJson<InboundAttachmentsEmbedded>(response);
+      expect(body.data.attachments).toEqual([
+        {
+          position: 0,
+          filename: "invoice.pdf",
+          contentType: "application/pdf",
+          size: 13,
+          contentId: null,
+        },
+      ]);
     });
 
     test("returns 404 when inbound email not found", async () => {
@@ -278,6 +347,85 @@ describe("Inbound API E2E", () => {
       expect(response.status).toBe(200);
       const body = await readJson<BulkResponse>(response);
       expect(body.deleted).toBe(2);
+    });
+  });
+
+  describe("GET /api/v1/inbound/:id/attachments (#486)", () => {
+    test("lists the attachments", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_files/attachments", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      const body = await readJson<AttachmentListResponse>(response);
+      expect(body.data.map((a) => a.filename)).toEqual(["invoice.pdf"]);
+    });
+
+    test("is empty when the raw message has none", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_test123/attachments", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      const body = await readJson<AttachmentListResponse>(response);
+      expect(body.data).toEqual([]);
+    });
+
+    test("returns 404 for an unknown email", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_nope/attachments", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe("GET /api/v1/inbound/:id/attachments/:position (#486)", () => {
+    test("downloads the bytes with forced-attachment headers", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_files/attachments/0", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("%PDF-1.4 test");
+      expect(response.headers.get("content-type")).toBe("application/octet-stream");
+      expect(response.headers.get("content-disposition")).toBe(
+        "attachment; filename*=UTF-8''invoice.pdf",
+      );
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("content-security-policy")).toBe(
+        "sandbox; default-src 'none'",
+      );
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    });
+
+    test("returns 404 past the last attachment or for a bad position", async () => {
+      for (const position of ["1", "abc", "-1", "1000"]) {
+        const response = await app.handle(
+          new Request(
+            `http://localhost/api/v1/inbound/inb_files/attachments/${position}`,
+            {
+              headers: { authorization: "Bearer test_key" },
+            },
+          ),
+        );
+        expect(response.status).toBe(404);
+      }
+    });
+
+    test("returns 404 for an unknown email", async () => {
+      const response = await app.handle(
+        new Request("http://localhost/api/v1/inbound/inb_nope/attachments/0", {
+          headers: { authorization: "Bearer test_key" },
+        }),
+      );
+      expect(response.status).toBe(404);
     });
   });
 });

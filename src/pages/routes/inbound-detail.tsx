@@ -2,7 +2,11 @@ import { BaseLayout } from "../layouts/base.tsx";
 import { HtmlPreview } from "../components/html-preview.tsx";
 import { TimeDisplay } from "../components/time-display.tsx";
 import { BackArrowIcon } from "../assets/icons.tsx";
-import type { InboundEmail } from "../../modules/inbound/types/inbound.types.ts";
+import { AttachmentsTable } from "../components/attachments-table.tsx";
+import type {
+  InboundAttachmentMeta,
+  InboundEmail,
+} from "../../modules/inbound/types/inbound.types.ts";
 import type { RepliedEmail } from "../../modules/inbound/services/reply-threading.service.ts";
 
 /**
@@ -16,6 +20,8 @@ interface InboundDetailPageProps {
   repliedTo?: RepliedEmail;
   /** True when the viewer asked for remote images in the HTML preview (`?images=1`, #419). */
   remoteImages?: boolean;
+  /** Attachments parsed from the raw message (#486); always downloadable. */
+  attachments?: InboundAttachmentMeta[];
 }
 
 /**
@@ -27,6 +33,7 @@ export function InboundDetailPage({
   isTrashed,
   repliedTo,
   remoteImages = false,
+  attachments = [],
 }: InboundDetailPageProps) {
   const backHref = isTrashed ? "/dashboard/inbound/trash" : "/dashboard/inbound";
   const backLabel = isTrashed ? "Back to trash" : "Back to inbound";
@@ -145,6 +152,16 @@ export function InboundDetailPage({
           )}
         </div>
       </div>
+
+      <AttachmentsTable
+        attachments={attachments.map((attachment) => ({
+          ...attachment,
+          available: true,
+        }))}
+        downloadHref={(position) =>
+          `/dashboard/inbound/${encodeURIComponent(email.id)}/attachments/${position}`
+        }
+      />
 
       {/* HTML content */}
       {!!email.html && (

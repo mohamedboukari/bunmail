@@ -838,7 +838,19 @@ List received emails (paginated, newest first).
 
 #### `GET /api/v1/inbound/:id`
 
-Get a received email by ID. Trashed inbound emails are excluded: fetch them via `GET /api/v1/inbound/trash`.
+Get a received email by ID. Trashed inbound emails are excluded: fetch them via `GET /api/v1/inbound/trash`. The response carries `attachments` (#486), the same entries as `GET /api/v1/inbound/:id/attachments`.
+
+---
+
+#### `GET /api/v1/inbound/:id/attachments`
+
+List the attachments of a received email (#486), parsed from its stored raw message, in MIME order. Each entry: `position` (0-based, the download key), `filename` (the sender's, or `attachment-<n>` when the part has none), `contentType` (as the sender declared it), `size` (decoded bytes) and `contentId` (an inline part's Content-ID, else `null`). Empty when the message has none. `404` when the email does not exist or is trashed.
+
+---
+
+#### `GET /api/v1/inbound/:id/attachments/:position`
+
+Download one attachment (#486). Always `application/octet-stream` with `Content-Disposition: attachment` (RFC 5987 filename), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox; default-src 'none'` and `Cache-Control: no-store`, whatever the file is: the sender chose both the bytes and the type. `404` for an unknown or trashed email, or a position that is not a number of at most three digits or has no attachment.
 
 ---
 

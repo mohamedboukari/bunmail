@@ -1207,6 +1207,8 @@ A successful send also returns `warnings` (#245): the sender domain's records th
 | GET    | /api/v1/inbound                     | List received emails (excludes trash)      | Yes  |
 | GET    | /api/v1/inbound/trash               | List trashed inbound                       | Yes  |
 | GET    | /api/v1/inbound/:id                 | Get received email                         | Yes  |
+| GET    | /api/v1/inbound/:id/attachments     | List its attachments (#486)                | Yes  |
+| GET    | /api/v1/inbound/:id/attachments/:position | Download one attachment (#486)       | Yes  |
 | DELETE | /api/v1/inbound/:id                 | Move to trash                              | Yes  |
 | POST   | /api/v1/inbound/bulk-delete         | Bulk move to trash (`{ ids: [] }`)         | Yes  |
 | POST   | /api/v1/inbound/:id/restore         | Restore from trash                         | Yes  |

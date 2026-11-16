@@ -1,6 +1,15 @@
 import { Elysia, t } from "elysia";
-import { serializeInboundEmail } from "./serializations/inbound.serialization.ts";
+import {
+  serializeInboundAttachment,
+  serializeInboundEmail,
+} from "./serializations/inbound.serialization.ts";
 import * as inboundService from "./services/inbound.service.ts";
+import {
+  getInboundAttachment,
+  listInboundAttachments,
+  parseAttachmentPosition,
+} from "./services/inbound-attachments.service.ts";
+import { attachmentDownloadHeaders } from "../emails/services/attachments.ts";
 import { authMiddleware, adminMiddleware } from "../../middleware/auth.ts";
 import { rateLimitMiddleware } from "../../middleware/rate-limit.ts";
 import { logger } from "../../utils/logger.ts";
@@ -12,6 +21,8 @@ import { logger } from "../../utils/logger.ts";
  * - GET    /                  → List inbound emails (excludes trashed)
  * - GET    /trash             → List trashed inbound emails
  * - GET    /:id               → Get a single inbound email by ID (excludes trashed)
+ * - GET    /:id/attachments   → List its attachments (#486)
+ * - GET    /:id/attachments/:position → Download one attachment (#486)
  * - DELETE /:id               → Move inbound email to trash
  * - POST   /bulk-delete       → Bulk-trash inbound emails
  * - POST   /:id/restore       → Restore a trashed inbound email
@@ -48,7 +59,7 @@ export const inboundPlugin = new Elysia({
 
       return {
         success: true,
-        data: data.map(serializeInboundEmail),
+        data: data.map((email) => serializeInboundEmail(email)),
         pagination: { page, limit, total },
       };
     },
@@ -86,7 +97,7 @@ export const inboundPlugin = new Elysia({
 
       return {
         success: true,
-        data: data.map(serializeInboundEmail),
+        data: data.map((email) => serializeInboundEmail(email)),
         pagination: { page, limit, total },
       };
     },
@@ -117,14 +128,101 @@ export const inboundPlugin = new Elysia({
         return { success: false, error: "Inbound email not found" };
       }
 
-      return { success: true, data: serializeInboundEmail(email) };
+      const attachments = await listInboundAttachments(email);
+      return { success: true, data: serializeInboundEmail(email, attachments) };
     },
     {
       params: t.Object({ id: t.String() }),
       detail: {
         tags: ["Inbound"],
         summary: "Get inbound email by ID",
-        description: "Returns a single inbound email by its ID.",
+        description:
+          "Returns a single inbound email by its ID, with its attachment metadata.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * GET /api/v1/inbound/:id/attachments (#486)
+   * Attachment metadata, parsed from the stored raw message. Trashed
+   * emails are excluded, like GET /:id.
+   */
+  .get(
+    "/:id/attachments",
+    async ({ params, set }) => {
+      const email = await inboundService.getInboundEmailById(params.id);
+      if (!email) {
+        logger.info("Inbound attachments: email not found", {
+          inboundEmailId: params.id,
+        });
+        set.status = 404;
+        return { success: false, error: "Inbound email not found" };
+      }
+
+      const attachments = await listInboundAttachments(email);
+      logger.info("Inbound attachments listed", {
+        inboundEmailId: email.id,
+        count: attachments.length,
+      });
+      return { success: true, data: attachments.map(serializeInboundAttachment) };
+    },
+    {
+      params: t.Object({ id: t.String() }),
+      detail: {
+        tags: ["Inbound"],
+        summary: "List attachments of an inbound email",
+        description:
+          "Returns the attachments of a received email: position, filename, content type, size and inline Content-ID.",
+        security: [{ bearerAuth: [] }],
+      },
+    },
+  )
+
+  /**
+   * GET /api/v1/inbound/:id/attachments/:position (#486)
+   * Downloads one attachment. Always served as an `application/octet-stream`
+   * attachment with a sandbox CSP: the sender chose the bytes and the type.
+   */
+  .get(
+    "/:id/attachments/:position",
+    async ({ params, set }) => {
+      const position = parseAttachmentPosition(params.position);
+      const email =
+        position === null
+          ? undefined
+          : await inboundService.getInboundEmailById(params.id);
+      const attachment =
+        email === undefined || position === null
+          ? undefined
+          : await getInboundAttachment(email, position);
+
+      if (!attachment) {
+        logger.info("Inbound attachment download: not found", {
+          inboundEmailId: params.id,
+          position,
+        });
+        set.status = 404;
+        return { success: false, error: "Attachment not found" };
+      }
+
+      /** Size only: the filename may carry personal data. */
+      logger.info("Inbound attachment downloaded", {
+        inboundEmailId: params.id,
+        position,
+        sizeBytes: attachment.sizeBytes,
+      });
+      return new Response(attachment.content, {
+        headers: attachmentDownloadHeaders(attachment.filename),
+      });
+    },
+    {
+      params: t.Object({ id: t.String(), position: t.String() }),
+      detail: {
+        tags: ["Inbound"],
+        summary: "Download an attachment of an inbound email",
+        description:
+          "Returns the attachment bytes as application/octet-stream with a forced attachment disposition.",
         security: [{ bearerAuth: [] }],
       },
     },

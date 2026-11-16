@@ -154,6 +154,8 @@ All endpoints (except `/health`, the public unsubscribe pages at `/u/:token`, th
 | GET | `/api/v1/inbound` | List received emails |
 | GET | `/api/v1/inbound/trash` | List trashed inbound |
 | GET | `/api/v1/inbound/:id` | Get inbound email by ID |
+| GET | `/api/v1/inbound/:id/attachments` | List attachments of an inbound email |
+| GET | `/api/v1/inbound/:id/attachments/:position` | Download an inbound attachment |
 | DELETE | `/api/v1/inbound/:id` | Move to trash |
 | POST | `/api/v1/inbound/bulk-delete` | Bulk move to trash |
 | POST | `/api/v1/inbound/:id/restore` | Restore from trash |

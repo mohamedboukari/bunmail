@@ -255,6 +255,7 @@ const ROUTES: Record<string, RouteSpec> = {
   "GET /dashboard/inbound": { access: "member" },
   "GET /dashboard/inbound/trash": { access: "member" },
   "GET /dashboard/inbound/:id": { access: "member" },
+  "GET /dashboard/inbound/:id/attachments/:position": { access: "member" },
   "GET /dashboard/inbound/:id/reply": { access: "member" },
   "POST /dashboard/inbound/:id/trash": { access: "admin" },
   "POST /dashboard/inbound/:id/restore": { access: "member" },
