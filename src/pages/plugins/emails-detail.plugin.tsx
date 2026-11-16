@@ -2,7 +2,7 @@ import { t } from "elysia";
 import { logger } from "../../utils/logger.ts";
 import { EmailDetailPage } from "../routes/email-detail.tsx";
 import { AttachmentGonePage } from "../routes/attachment-gone.tsx";
-import { attachmentContentDisposition } from "../../modules/emails/services/attachments.ts";
+import { attachmentDownloadHeaders } from "../../modules/emails/services/attachments.ts";
 import { memberGuard } from "../guards.tsx";
 import * as emailService from "../../modules/emails/services/email.service.ts";
 import { listEmailEvents } from "../../modules/emails/services/email-events.service.ts";
@@ -117,19 +117,5 @@ export function emailDetailPages(app: ReturnType<typeof emailTrashPages>) {
   );
 }
 
-/**
- * Headers of an attachment download (#181), whatever the file is: a
- * generic binary type and a forced `attachment` disposition so the
- * browser saves it instead of rendering it, `nosniff` so it never guesses
- * another type, a CSP that sandboxes the response and allows nothing
- * should it be rendered anyway, and no caching.
- */
-export function attachmentDownloadHeaders(filename: string): Record<string, string> {
-  return {
-    "content-type": "application/octet-stream",
-    "content-disposition": attachmentContentDisposition(filename),
-    "x-content-type-options": "nosniff",
-    "content-security-policy": "sandbox; default-src 'none'",
-    "cache-control": "no-store",
-  };
-}
+/** @public Moved to the emails service (#486) so the inbound API shares it. */
+export { attachmentDownloadHeaders };

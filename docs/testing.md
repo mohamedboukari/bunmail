@@ -121,6 +121,16 @@ On a pull request, a separate `changelog` job runs `bun run changelog:check HEAD
 
 Total CI test time: about a minute and a half across all three tiers, almost all of it the integration tier (argon2id and real Postgres).
 
+## Sample inbound mail (#486)
+
+`scripts/seed-inbound.ts` sends sample messages into a running inbound SMTP server, to check the inbound pages by hand: plain text, styled HTML, remote images, an inline `cid:` image, PDF, PNG, text and CSV attachments, unicode names and risky HTML (script, form, iframe).
+
+```bash
+bun run scripts/seed-inbound.ts [host] [port] [domain]   # defaults: 127.0.0.1 2525 sandbox.test
+```
+
+The recipient domain must be registered in BunMail (recipient validation answers `550` otherwise), and the server reachable on that port: with Docker Compose, publish the container's port 25 on `127.0.0.1:2525` in your `docker-compose.override.yml`.
+
 ## Upgrading Bun
 
 The Dockerfile's `FROM oven/bun:<version>` lines are the one source of the Bun version (#447). Every workflow that sets up Bun (`ci.yml`, both jobs, and `dependabot-lockfile.yml`) reads it from there in a first step, which fails the job unless every stage names the same `X.Y.Z` version. Dependabot's `docker` ecosystem (`.github/dependabot.yml`) opens a weekly PR when a new `oven/bun` release is out, so a bump changes one file and CI runs on the new Bun in that same PR. Locally, match it with `bun upgrade` (or a private binary called by path).

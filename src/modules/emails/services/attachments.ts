@@ -477,3 +477,21 @@ export function rfc5987Encode(value: string): string {
 export function attachmentContentDisposition(filename: string): string {
   return `attachment; filename*=UTF-8''${rfc5987Encode(filename)}`;
 }
+
+/**
+ * Headers of an attachment download (#181), whatever the file is: a
+ * generic binary type and a forced `attachment` disposition so the
+ * browser saves it instead of rendering it, `nosniff` so it never guesses
+ * another type, a CSP that sandboxes the response and allows nothing
+ * should it be rendered anyway, and no caching. Shared by outbound and
+ * inbound (#486) downloads, dashboard and API.
+ */
+export function attachmentDownloadHeaders(filename: string): Record<string, string> {
+  return {
+    "content-type": "application/octet-stream",
+    "content-disposition": attachmentContentDisposition(filename),
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox; default-src 'none'",
+    "cache-control": "no-store",
+  };
+}

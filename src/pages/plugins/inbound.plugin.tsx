@@ -11,6 +11,12 @@ import { parsePagination } from "../pagination.ts";
 import * as apiKeyService from "../../modules/api-keys/services/api-key.service.ts";
 import * as inboundService from "../../modules/inbound/services/inbound.service.ts";
 import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
+import {
+  getInboundAttachment,
+  listInboundAttachments,
+  parseAttachmentPosition,
+} from "../../modules/inbound/services/inbound-attachments.service.ts";
+import { attachmentDownloadHeaders } from "../../modules/emails/services/attachments.ts";
 import { toIdArray } from "../lib/form.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
@@ -247,12 +253,14 @@ export function inboundPages(app: GuardedDashboard) {
           const live = await inboundService.getInboundEmailById(params.id);
           if (live) {
             const repliedTo = await replyThreading.getRepliedEmail(live);
+            const attachments = await listInboundAttachments(live);
             return (
               <InboundDetailPage
                 email={live}
                 isTrashed={false}
                 repliedTo={repliedTo}
                 remoteImages={remoteImages}
+                attachments={attachments}
               />
             );
           }
@@ -260,12 +268,14 @@ export function inboundPages(app: GuardedDashboard) {
           const trashed = await inboundService.getTrashedInboundEmailById(params.id);
           if (trashed) {
             const repliedTo = await replyThreading.getRepliedEmail(trashed);
+            const attachments = await listInboundAttachments(trashed);
             return (
               <InboundDetailPage
                 email={trashed}
                 isTrashed={true}
                 repliedTo={repliedTo}
                 remoteImages={remoteImages}
+                attachments={attachments}
               />
             );
           }
@@ -277,6 +287,54 @@ export function inboundPages(app: GuardedDashboard) {
           beforeHandle: memberGuard,
           params: t.Object({ id: t.String() }),
           query: t.Object({ images: t.Optional(t.String()) }),
+        },
+      )
+
+      /**
+       * GET /dashboard/inbound/:id/attachments/:position (#486)
+       *
+       * Downloads one attachment of a received email, live or trashed (the
+       * detail page shows both). Same headers as an outbound download: a
+       * forced `attachment`, `nosniff`, a sandbox CSP and `no-store`.
+       */
+      .get(
+        "/inbound/:id/attachments/:position",
+        async ({ params, set, auth }) => {
+          const position = parseAttachmentPosition(params.position);
+          const email =
+            position === null
+              ? undefined
+              : ((await inboundService.getInboundEmailById(params.id)) ??
+                (await inboundService.getTrashedInboundEmailById(params.id)));
+          const attachment =
+            email === undefined || position === null
+              ? undefined
+              : await getInboundAttachment(email, position);
+
+          if (!attachment) {
+            logger.info("Dashboard inbound attachment download: not found", {
+              inboundEmailId: params.id,
+              position,
+              userId: auth.user.id,
+            });
+            set.status = 404;
+            return "Attachment not found";
+          }
+
+          /** Size only: the filename may carry personal data. */
+          logger.info("Dashboard inbound attachment downloaded", {
+            inboundEmailId: params.id,
+            position,
+            sizeBytes: attachment.sizeBytes,
+            userId: auth.user.id,
+          });
+          return new Response(attachment.content, {
+            headers: attachmentDownloadHeaders(attachment.filename),
+          });
+        },
+        {
+          beforeHandle: memberGuard,
+          params: t.Object({ id: t.String(), position: t.String() }),
         },
       )
 

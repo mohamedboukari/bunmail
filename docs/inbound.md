@@ -53,7 +53,7 @@ ARF complaint reports (`multipart/report; report-type=feedback-report`, RFC 5965
 
 ```
 src/modules/inbound/
-├── inbound.plugin.ts                ← Elysia plugin: list, get, trash/restore/permanent/empty
+├── inbound.plugin.ts                ← Elysia plugin: list, get, attachments, trash/restore/permanent/empty
 ├── services/
 │   ├── smtp-receiver.service.ts     ← SMTP server (smtp-server + mailparser): start()/stop(), the public surface (#387)
 │   ├── smtp-receiver-session.service.ts ← per-connection stats, log context, trace spans, SMTP errors
@@ -74,11 +74,12 @@ src/modules/inbound/
 │   ├── notify-throttle.ts           ← Notification budgets: 5 per address, 30 per domain, per 10 min (#250)
 │   ├── threading.ts                 ← Pure msg-id extraction and reply chain rules (#192)
 │   ├── reply-threading.service.ts   ← Threading columns, reply headers, reply link (#192)
+│   ├── inbound-attachments.service.ts ← Attachments parsed from the stored raw message on view (#486), no DB
 │   └── inbound.service.ts           ← Reads + trash/restore/permanent/empty (DB layer)
 ├── models/
 │   └── inbound-email.schema.ts      ← Drizzle pgTable definition
 ├── serializations/
-│   └── inbound.serialization.ts     ← Response mapper (strips raw message)
+│   └── inbound.serialization.ts     ← Response mapper (strips raw message), attachment metadata (#486)
 └── types/
     ├── inbound.types.ts             ← InboundEmail type
     ├── feedback-report.types.ts     ← Parsed ARF report, action, outcome (#191)
@@ -222,6 +223,22 @@ Layers 1 to 3 fail open on errors (DNS timeout, DB unreachable). This means legi
 Unsubscribe requests, mail to return paths, feedback-loop reports, bounces (DSNs) and DMARC aggregate reports are detected earlier and routed to their own handlers; they are **not** stored in `inbound_emails` and never fire steps 5 to 6.
 
 The `info` line logged for a stored message (`Inbound email received and stored`) carries its id, the redacted sender and recipient and the size in bytes, never the subject or body text (#250); only the subject's length is logged, at `debug`.
+
+## Attachments (#486)
+
+Attachments are not extracted when mail arrives: `inbound-attachments.service.ts` parses the stored `raw_message` with `mailparser` when they are asked for, so mail stored before #486 shows its attachments too and no column or table holds them. A parse costs at most the inbound message size cap. An email without a stored raw message, or one that does not parse (logged at `warn` with the email id and the error name), lists none.
+
+- **Dashboard:** the inbound detail page lists them (name, type, size, inline Content-ID, all escaped) for live and trashed mail; `GET /dashboard/inbound/:id/attachments/:position` downloads one, `memberGuard`, like the page.
+- **API:** `GET /api/v1/inbound/:id/attachments` and `GET /api/v1/inbound/:id/attachments/:position` (admin keys), and `attachments` on `GET /api/v1/inbound/:id`. See [api.md](api.md).
+- **Downloads** use the outbound download headers (`attachmentDownloadHeaders`, #181): a forced `application/octet-stream` attachment, `nosniff`, a sandbox CSP and `no-store`, so a sender's HTML or SVG never renders on the dashboard's origin.
+- **Positions** are 0-based in MIME order, which can differ from the order the sender attached them (a mail client nests inline images in `multipart/related` ahead of the rest).
+- **Inline images** need nothing extra: `mailparser` rewrites `cid:` references to `data:` URIs when the message is stored, and the preview CSP allows `data:` images.
+
+### Service methods (`inbound-attachments.service.ts`)
+
+- `listInboundAttachments(email): Promise<InboundAttachmentMeta[]>`: metadata of every attachment.
+- `getInboundAttachment(email, position): Promise<InboundAttachment | undefined>`: one attachment with its bytes.
+- `parseAttachmentPosition(segment): number | null`: a download path segment, one to three digits.
 
 ## Inbound Notifications (#106)
 
