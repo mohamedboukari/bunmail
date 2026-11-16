@@ -12,6 +12,7 @@ import * as apiKeyService from "../../modules/api-keys/services/api-key.service.
 import * as inboundService from "../../modules/inbound/services/inbound.service.ts";
 import * as replyThreading from "../../modules/inbound/services/reply-threading.service.ts";
 import { toIdArray } from "../lib/form.ts";
+import { sendFormAttachmentLimits } from "../lib/attachment-limits.ts";
 import { recordActorOf } from "../lib/record-ownership.ts";
 import type { GuardedDashboard } from "../lib/session-guard.ts";
 import { FLASH_QUERY, flashUrl, toFlash } from "../lib/flash.ts";
@@ -366,6 +367,7 @@ export function inboundPages(app: GuardedDashboard) {
               flash={undefined}
               apiKeys={activeKeys}
               defaultApiKeyId={activeKeys[0]?.id}
+              attachmentLimits={sendFormAttachmentLimits()}
               prefill={{
                 from: inbound.toAddress,
                 to: inbound.fromAddress,

@@ -315,7 +315,7 @@ Responses carry `tracking: { opens, clicks }`, `firstOpenedAt` and `firstClicked
 
 ## Attachments (#181)
 
-A send may carry up to 10 files, `[{ filename, content, contentType?, contentId? }]` (base64 `content` on REST, the parsed parts on SMTP submission). The rules live in `services/attachments.ts`, applied by `createEmail` after the other input rules and before any database work, so they hold on every ingress:
+A send may carry up to 10 files, `[{ filename, content, contentType?, contentId? }]` (base64 `content` on REST, the parsed parts on SMTP submission, the uploaded files of the dashboard Send form, #488, which sets no `contentId`). The rules live in `services/attachments.ts`, applied by `createEmail` after the other input rules and before any database work, so they hold on every ingress:
 
 - **Limits:** at most 10 (`TooManyAttachmentsError`, `422 TOO_MANY_ATTACHMENTS`); at most `ATTACHMENTS_MAX_TOTAL_MB` (default 5, 1 to 18, MB of 1,000,000 bytes) decoded in total, which is also the per-file limit (`AttachmentsTooLargeError`, `422 ATTACHMENTS_TOO_LARGE`, SMTP `552`). The total is checked from the base64 length before anything is decoded, then exactly.
 - **Input rules** (`InvalidAttachmentError`, `422 VALIDATION_ERROR` at `/attachments/<i>/<field>`): the filename (1 to 255 characters after trimming; no control, line-separator or bidi-control character, no lone surrogate, no `/` or `\`, not only dots), the `contentId` (`^[A-Za-z0-9._%+-]+(@[A-Za-z0-9.-]+)?$`, 1 to 128 characters), and strict base64 (decoded, then re-encoded: only the canonical padded standard encoding is accepted).

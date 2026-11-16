@@ -223,6 +223,12 @@ export const FLASH_MESSAGES = {
     "The sender address is not in this API key's allowed-senders list.",
   ),
   send_key_revoked: failure("This API key has been revoked."),
+  send_attachment_type_blocked: failure(
+    "An attachment's file type is not allowed (executables and scripts are blocked).",
+  ),
+  send_invalid_attachment: failure(
+    "An attachment is not valid: check its filename and try again.",
+  ),
 
   /* ─── Emails and inbound: trash ─── */
   email_not_found: failure("Email not found"),
@@ -418,6 +424,16 @@ export const NUMERIC_FLASH_MESSAGES = {
   },
   /** `n`: the limit of addresses in `to`. */
   send_too_many_to: { type: "error", text: (n) => `At most ${n} addresses in to.` },
+  /** `n`: the limit of attachments per email (#488). */
+  send_too_many_attachments: {
+    type: "error",
+    text: (n) => `At most ${n} attachments per email.`,
+  },
+  /** `n`: the attachment budget in MB (#488). */
+  send_attachments_too_large: {
+    type: "error",
+    text: (n) => `Attachments may total at most ${n} MB.`,
+  },
   /** `n`: the limit of unique recipients. */
   send_too_many_recipients: {
     type: "error",
